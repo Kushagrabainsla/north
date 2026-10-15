@@ -290,6 +290,7 @@ body { font-size: 13px; }
 .bootstrap-row > .status { justify-self: end; align-self: center; width: max-content; }
 .facts-panel { margin-bottom: 18px; }
 .fact-editor { display: flex; gap: 8px; margin-bottom: 10px; }.fact-editor input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--text); padding: 9px 10px; }.fact-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }.fact-actions button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }.fact-actions button:hover { color: var(--accent); }.fact-actions button:last-child:hover { color: var(--red); }
+/* A fact's dates sit beside its text; an ended or replaced fact is history, so it reads quieter. */.fact-editor { flex-wrap: wrap; }.fact-editor .fact-date { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; white-space: nowrap; }.fact-editor .fact-date input { flex: 0 0 auto; width: 140px; }.fact-row.fact-past b { color: var(--muted); font-weight: 500; }
 .primary-button, .new-chat { box-shadow: 0 0 18px rgba(181,243,109,.18); }
 
 /* North's self-checks, surfaced with the answer rather than buried in the ledger. */

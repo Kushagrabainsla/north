@@ -111,7 +111,7 @@ from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
 from utils.runtime_resources import builtin_skills_dir, web_dist_dir
 from utils.tasks import drain
-from utils.time import utcnow
+from utils.time import localnow, utcnow
 from utils.version import NORTH_VERSION
 from web.api import configure as configure_web
 from web.api import router as web_api_router
@@ -338,6 +338,9 @@ _PROFILE_TOPIC_ORDER = [
 ]
 
 
+_FACT_DAY_CHECK_SECONDS = 3600
+
+
 async def _refresh_fact_store(fact_store, context_store=None) -> None:
     """Bring the fact store into the current embedding space, then merge duplicates.
 
@@ -349,13 +352,38 @@ async def _refresh_fact_store(fact_store, context_store=None) -> None:
     embedded = await fact_store.backfill_embeddings()
     merged = await fact_store.deduplicate()
     explained = await fact_store.expand_identifiers()
-    if embedded or merged or explained:
+    dated = await fact_store.date_facts()
+    if embedded or merged or explained or dated:
         logger.info(
-            "Fact store: re-embedded %d fact(s), merged %d duplicate(s), explained %d identifier use(s)",
+            "Fact store: re-embedded %d fact(s), merged %d duplicate(s), explained %d identifier use(s), dated %d",
             embedded,
             merged,
             explained,
+            dated,
         )
+    await _rebuild_profile(fact_store, context_store)
+
+
+async def _maintain_fact_store(fact_store, context_store=None) -> None:
+    """Refresh the fact store at startup, then on each new day.
+
+    A fact whose last day has passed stops being recalled at once, but the profile
+    is a document written from the facts, so it is rewritten each day as well:
+    otherwise an ended internship stays in it until North restarts. The day is
+    checked hourly against the wall clock, which keeps counting while the Mac
+    sleeps, unlike a timer set for midnight.
+    """
+    await _refresh_fact_store(fact_store, context_store)
+    day = localnow().date()
+    while True:
+        await asyncio.sleep(_FACT_DAY_CHECK_SECONDS)
+        if localnow().date() != day:
+            day = localnow().date()
+            await fact_store.date_facts()
+            await _rebuild_profile(fact_store, context_store)
+
+
+async def _rebuild_profile(fact_store, context_store) -> None:
     # Rebuild the readable profile from the store rather than leaving whatever
     # bootstrap happened to write. Facts learned, superseded or recovered since
     # then belong in it, and re-deriving costs a query where re-running bootstrap
@@ -1136,7 +1164,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if deps.fact_store is not None:
             background_tasks.append(
                 asyncio.create_task(
-                    _guarded(_refresh_fact_store(deps.fact_store, deps.context_store), "fact_maintenance"),
+                    _guarded(_maintain_fact_store(deps.fact_store, deps.context_store), "fact_maintenance"),
                     name="fact_maintenance",
                 )
             )

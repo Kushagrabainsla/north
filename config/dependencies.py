@@ -25,7 +25,7 @@ from config.settings import settings
 from config.strategy import NorthSettings
 from inference import InferenceRouter
 from inference.exceptions import EmbeddingCountMismatchError
-from inference.models import EmbedFn, GlossaryFn, SupersedeFn
+from inference.models import DatesFn, EmbedFn, GlossaryFn, SupersedeFn
 from inference.runtime import build_inference_router_from_settings
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerEntry, LedgerSource, LedgerStatus, LedgerWriter, SQLiteLedgerWriter
@@ -252,6 +252,32 @@ def _build_glossary_fn(cost_tracker: CostTracker) -> GlossaryFn:
     return _glossary_fn
 
 
+def _build_dates_fn(cost_tracker: CostTracker) -> DatesFn:
+    async def _dates_fn(facts: list[tuple[str, str]]) -> dict[int, tuple[str | None, str | None]]:
+        """The days each fact's own text says it is true from and until, keyed by index.
+
+        Only stated dates: a guessed end date would retire a true fact from every
+        prompt, while a missing one only leaves it labelled with when it was learned.
+        """
+        from inference.models import CompletionRequest
+        from utils.text import extract_json
+
+        numbered = "\n".join(f"{i}. [{learned or 'unknown'}] {content}" for i, (content, learned) in enumerate(facts))
+        prompt = load_prompt("prompts/fact_dates.md").format(numbered=numbered)
+        response = await cost_tracker.complete(CompletionRequest(prompt=prompt, component="fact_dates", json_mode=True))
+        parsed = extract_json(response.text.strip())
+        raw = parsed.get("dates") if isinstance(parsed, dict) else None
+        if not isinstance(raw, list):
+            return {}
+        return {
+            int(item["index"]): (item.get("from"), item.get("until"))
+            for item in raw
+            if isinstance(item, dict) and str(item.get("index", "")).isdigit()
+        }
+
+    return _dates_fn
+
+
 def _migrate_legacy_public_document(context_dir: Path) -> None:
     """2b memory model: public.md was renamed to user.md.
 
@@ -317,6 +343,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         embedding_model=embedding_model,
         supersede_fn=_build_supersede_fn(cost_tracker),
         glossary_fn=_build_glossary_fn(cost_tracker),
+        dates_fn=_build_dates_fn(cost_tracker),
     )
     code_index = CodeIndex(
         db_path=settings.north_home / "code_index.db", embed_fn=embed_fn, embedding_model=embedding_model

@@ -25,6 +25,14 @@ export function formatDateTime(value: string | number | Date) {
   }).format(date);
 }
 
+/** A calendar day ("2026-08-14") as text. A day is not an instant: formatting it
+ * through a time zone would show Aug 13 west of UTC, so it is read as UTC. */
+export function formatDay(day: string) {
+  const date = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return day;
+  return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", dateStyle: "medium" }).format(date);
+}
+
 export function dateInNorthTimezone(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: displayTimezone, year: "numeric", month: "2-digit", day: "2-digit",

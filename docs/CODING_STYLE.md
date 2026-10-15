@@ -227,9 +227,10 @@ utils/
 Every instant is stored as a Unix epoch (seconds, UTC) - in SQLite as a `REAL`, never as
 formatted text - and rendered in the user's local zone at the edges (CLI, TUI, API, tool
 output, prompts) via `utils/time.py`. Anything a user says or reads is their local time; a
-naive timestamp coming in means local, not UTC. A recurring schedule is the one exception:
-a rule is not an instant, so it stores wall-clock hour/minute plus an IANA zone, which is
-what keeps it fixed across a DST shift.
+naive timestamp coming in means local, not UTC. Two things are not instants and are the
+exceptions: a recurring schedule stores wall-clock hour/minute plus an IANA zone, which keeps
+it fixed across a DST shift; a fact's "true from/until" is a calendar day, stored as
+`YYYY-MM-DD` text and shown without a zone shift (`formatDay`).
 
 **"Local" means the zone set on the Settings page, never the Mac's own.** Server, CLI,
 dashboard and Telegram all show times in it: `utils/time.py` helpers (`epoch_to_local`,

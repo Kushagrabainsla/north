@@ -24,7 +24,7 @@ from memory.models import ContextDocument
 from utils.ids import generate_id
 from utils.prompts import load_prompt
 from utils.text import STOPWORDS, extract_json
-from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context, utcnow
+from utils.time import RUNTIME_CONTEXT_INSTRUCTION, local_timezone, runtime_context, utcnow
 
 if TYPE_CHECKING:
     from memory.facts import FactStore
@@ -74,6 +74,11 @@ _DEDUP_MIN_SHARED = 2
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
+def _day(value: object) -> str | None:
+    """The model's "from"/"until", passed on only when it is a string; the store checks it is a real day."""
+    return value if isinstance(value, str) and value.lower() != "null" else None
+
+
 def _content_tokens(text: str) -> frozenset[str]:
     """Lowercased, punctuation-free, stopword-free tokens of a fact line."""
     return frozenset(t for t in _TOKEN_RE.findall(text.lower()) if t not in STOPWORDS)
@@ -84,6 +89,11 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
         return 0.0
     return len(a & b) / len(a | b)
 
+
+# Facts kept from one message. A message once kept only its first fact, so "I start
+# at Acme Monday, my manager is Priya" lost the manager; the cap only bounds a
+# runaway reply.
+_MAX_FACTS_PER_MESSAGE = 10
 
 _MAX_DOCUMENT_CHARS = 8_000  # trim when a context doc exceeds this
 _TRIM_TARGET_CHARS = 5_000  # target size after trimming
@@ -210,10 +220,10 @@ class ExtractionPipeline:
             last = entry
         return selected, last
 
-    async def _run_extractions_concurrently(self, entries: list[LedgerEntry]) -> list[bool | Exception]:
+    async def _run_extractions_concurrently(self, entries: list[LedgerEntry]) -> list[int | Exception]:
         """Perform concurrent extraction checks with a semaphore rate-limit cap."""
         sem = asyncio.Semaphore(self._max_concurrent)
-        results: list[bool | Exception] = [False] * len(entries)
+        results: list[int | Exception] = [0] * len(entries)
 
         async def _bounded(idx: int, entry: LedgerEntry) -> None:
             async with sem:
@@ -228,7 +238,7 @@ class ExtractionPipeline:
     def _process_extraction_results(
         self,
         entries: list[LedgerEntry],
-        results: list[bool | Exception],
+        results: list[int | Exception],
         last_batch_entry: LedgerEntry | None = None,
     ) -> tuple[int, bool]:
         """Save watermarks in order until any error; return extractions made and whether all succeeded."""
@@ -241,8 +251,7 @@ class ExtractionPipeline:
                     exc_info=result,
                 )
                 return extractions, False
-            if result:
-                extractions += 1
+            extractions += result
             self._save_watermark(entry.timestamp)
         if last_batch_entry is not None:
             self._save_watermark(last_batch_entry.timestamp)
@@ -282,9 +291,13 @@ class ExtractionPipeline:
                 return extractions  # an error to retry, or a task still running
             since = self._load_watermark()
 
-    async def _process_entry(self, entry: LedgerEntry) -> bool:
-        """Ask the LLM whether the user's message yields a fact worth storing."""
-        prompt = load_prompt("prompts/fact_extraction.md").format(message=(entry.input or "").strip()[:2000])
+    async def _process_entry(self, entry: LedgerEntry) -> int:
+        """Ask the LLM for the durable facts in the user's message; return how many were stored."""
+        # The day it was said, so "Monday" and "next week" can become real dates.
+        said_on = entry.timestamp.astimezone(local_timezone()).strftime("%A, %B %-d, %Y")
+        prompt = load_prompt("prompts/fact_extraction.md").format(
+            message=(entry.input or "").strip()[:2000], day=said_on
+        )
 
         response = await self._inference_router.complete(
             CompletionRequest(
@@ -296,15 +309,34 @@ class ExtractionPipeline:
         )
 
         try:
-            result = extract_json(response.text)
-        except (json.JSONDecodeError, ValueError):
-            return False
+            facts = extract_json(response.text).get("facts")
+        except (json.JSONDecodeError, ValueError, AttributeError):
+            facts = None
+        if not isinstance(facts, list):
+            # Visible, not silent: a reply in the wrong shape would otherwise drop every fact unseen.
+            logger.warning("ExtractionPipeline: reply for entry %s has no facts list: %.200s", entry.id, response.text)
+            return 0
 
-        if not result.get("extract"):
-            return False
+        # One at a time, in order: a later fact is deduplicated against the earlier ones.
+        stored = 0
+        for fact in facts[:_MAX_FACTS_PER_MESSAGE]:
+            if isinstance(fact, dict) and await self._store_fact(
+                entry,
+                str(fact.get("document", "user")),
+                str(fact.get("delta", "")).strip(),
+                (fact.get("from"), fact.get("until")),
+            ):
+                stored += 1
+        return stored
 
-        doc_key = result.get("document", "user")
-        delta = str(result.get("delta", "")).strip()
+    async def _store_fact(
+        self, entry: LedgerEntry, doc_key: str, delta: str, dates: tuple[object, object] = (None, None)
+    ) -> bool:
+        """Store one extracted fact where its document says; False if it was empty, unknown or known.
+
+        *dates* are the days the user said it is true from and until; the fact
+        store keeps the ones that are real days.
+        """
         if not delta or doc_key not in _DOCUMENT_MAP:
             return False
 
@@ -315,7 +347,9 @@ class ExtractionPipeline:
         # store replaced and leaves the dashboard showing stale information.
         if doc is ContextDocument.USER and self._fact_store is not None:
             try:
-                inserted = await self._fact_store.add_fact(delta, doc_key)
+                inserted = await self._fact_store.add_fact(
+                    delta, doc_key, valid_from=_day(dates[0]), valid_until=_day(dates[1])
+                )
             except Exception:
                 logger.warning("FactStore: failed to persist fact '%s'", delta[:80])
                 return False
@@ -332,7 +366,7 @@ class ExtractionPipeline:
 
         if self._fact_store is not None:
             try:
-                await self._fact_store.add_fact(delta, doc_key)
+                await self._fact_store.add_fact(delta, doc_key, valid_from=_day(dates[0]), valid_until=_day(dates[1]))
             except Exception:
                 logger.warning("FactStore: failed to persist fact '%s'", delta[:80])
 

@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { LearningStatus } from "./Memory";
+import { formatDay } from "../components";
+import { factDates, LearningStatus } from "./Memory";
 
 let learning: unknown;
 
@@ -26,5 +27,22 @@ describe("learning status", () => {
   it("marks a count that stopped at the cap", () => {
     learning = { read_up_to: null, waiting: 500, more: true };
     expect(renderToStaticMarkup(createElement(LearningStatus))).toContain("500+ messages not read yet");
+  });
+});
+
+describe("fact dates", () => {
+  const base = { id: "f", content: "x", category: "jobs", confidence: 0.8, status: "active", updated_at: "", valid_from: null, valid_until: null, ended: false };
+
+  it("never shifts a calendar day by the time zone", () => {
+    expect(formatDay("2026-08-14")).toContain("14");
+  });
+
+  it("says when a fact is true, and when it has ended", () => {
+    expect(factDates({ ...base, valid_until: "2026-08-14", ended: true })).toMatch(/^ended .*14/);
+    expect(factDates({ ...base, valid_from: "2026-05-26", valid_until: "2099-08-14" })).toMatch(/^true .*26.* – .*14/);
+    expect(factDates({ ...base, valid_until: "2099-08-14" })).toMatch(/^true until/);
+    expect(factDates({ ...base, valid_from: "2026-05-26" })).toMatch(/^true from/);
+    expect(factDates(base)).toBe("");
+    expect(factDates({ ...base, status: "superseded" })).toBe("replaced by a newer fact");
   });
 });

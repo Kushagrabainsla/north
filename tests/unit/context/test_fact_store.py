@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 import pytest
 
 from memory import facts as fact_store_module
 from memory.facts import FactStore
+
+
+def _bare(recalled: list[str]) -> list[str]:
+    """Recalled facts without the date note recall adds; these tests are about which facts come back."""
+    return [re.sub(r" \((?:noted|true) [^)]*\)$", "", fact) for fact in recalled]
 
 
 def _embedder(vectors: dict[str, list[float]] | None = None, default: list[float] | None = None):
@@ -87,7 +93,7 @@ async def test_embed_failure_still_stores_distinct_facts(db_path: Path) -> None:
 
     assert await store.count() == 2
     recents = await store.search("anything")  # embed raises → recency fallback
-    assert set(recents) == {"fact one", "fact two"}
+    assert set(_bare(recents)) == {"fact one", "fact two"}
 
 
 async def test_search_falls_back_when_query_embed_is_empty(db_path: Path) -> None:
@@ -101,7 +107,7 @@ async def test_search_falls_back_when_query_embed_is_empty(db_path: Path) -> Non
     await store.add_fact("fact one")
     await store.add_fact("fact two")
 
-    assert set(await store.search("anything")) == {"fact one", "fact two"}
+    assert set(_bare(await store.search("anything"))) == {"fact one", "fact two"}
 
 
 async def test_search_falls_back_when_no_facts_embedded(db_path: Path) -> None:
@@ -113,7 +119,7 @@ async def test_search_falls_back_when_no_facts_embedded(db_path: Path) -> None:
     # Query time: embedder works again, but the store has no embedded facts.
     store._embed_fn = _embedder(default=[1.0, 0.0])  # type: ignore[method-assign]
 
-    assert await store.search("anything") == ["fact one"]
+    assert _bare(await store.search("anything")) == ["fact one"]
 
 
 async def test_count_filters_by_category(db_path: Path) -> None:
@@ -159,7 +165,7 @@ async def test_concurrent_searches_rebuild_cache_once(db_path: Path) -> None:
     store._load_all_sync = counting_load  # type: ignore[method-assign]
 
     results = await asyncio.gather(*[store.search("sky") for _ in range(8)])
-    assert all(r == ["the sky is blue"] for r in results)
+    assert all(_bare(r) == ["the sky is blue"] for r in results)
     assert rebuilds == 1, "concurrent searches must share one cache rebuild"
 
 

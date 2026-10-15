@@ -907,12 +907,15 @@ async def restore_unattended_rules() -> dict[str, int]:
 class FactCreate(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
     category: str = Field(default="user", max_length=80)
+    # The days the fact is true from and until, in the zone set on the Settings page.
+    valid_from: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    valid_until: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 @router.post("/memory/facts", status_code=201)
 async def create_memory_fact(body: FactCreate) -> dict[str, Any]:
     store = current_services().require("fact_store")
-    await store.add_fact(body.content, body.category)
+    await store.add_fact(body.content, body.category, valid_from=body.valid_from, valid_until=body.valid_until)
     match = next(
         (fact for fact in await store.all_facts(body.category) if fact["content"] == body.content.strip()),
         None,
@@ -925,7 +928,9 @@ async def create_memory_fact(body: FactCreate) -> dict[str, Any]:
 @router.patch("/memory/facts/{fact_id}")
 async def update_memory_fact(fact_id: str, body: FactCreate) -> dict[str, Any]:
     store = current_services().require("fact_store")
-    if not await store.update_fact(fact_id, body.content, body.category):
+    # Dates change only when sent; sending null clears one.
+    dates = (body.valid_from, body.valid_until) if body.model_fields_set & {"valid_from", "valid_until"} else None
+    if not await store.update_fact(fact_id, body.content, body.category, dates):
         raise HTTPException(status_code=404, detail="Fact not found or rejected")
     return next(fact for fact in await store.all_facts() if fact["id"] == fact_id)
 

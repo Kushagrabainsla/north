@@ -39,7 +39,7 @@ class _Model:
 
     async def complete(self, request) -> SimpleNamespace:
         self.asked.append(request.prompt)
-        return SimpleNamespace(text='{"extract": false}')
+        return SimpleNamespace(text='{"facts": []}')
 
     def read(self, text: str) -> bool:
         return any(text in prompt for prompt in self.asked)

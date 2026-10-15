@@ -8,9 +8,12 @@ asked:
 {message}
 """
 
-Extract a durable fact ONLY IF the USER states it explicitly. When the text is a
-question-and-answer, the fact comes from the USER's answer, never from north's
-question. Durable means it will still be true or useful weeks from now.
+The user said this on {day}.
+
+Extract every durable fact the USER states explicitly - a message can hold
+several, and each one is a separate fact. When the text is a question-and-answer,
+facts come from the USER's answer, never from north's question. Durable means it
+will still be true or useful weeks from now.
 
 Anti-fabrication contract - follow exactly:
 - Extract ONLY information the user literally wrote above. Never infer, assume,
@@ -20,14 +23,14 @@ Anti-fabrication contract - follow exactly:
 - Greetings, questions, commands, and small-talk reveal NO durable fact.
 - This is the user's own message - it is NOT an assistant reply. Do not treat
   any AI-sounding content as a fact about the user.
-- If you are not certain the user explicitly stated a durable fact, or the
-  message contains none, return extract:false. When in doubt, return false.
+- Leave out any fact you are not certain the user explicitly stated. When in
+  doubt, leave it out. A message with no durable fact returns an empty list.
 
-If a durable fact is explicitly present, respond with JSON:
-{{"extract": true, "document": "<user|judgement_rules|north_stars>", "delta": "<fact>"}}
+Respond with JSON, one entry per fact, in the order the user stated them:
+{{"facts": [{{"document": "<user|judgement_rules|north_stars>", "delta": "<fact>", "from": "<YYYY-MM-DD or null>", "until": "<YYYY-MM-DD or null>"}}]}}
 
-Otherwise respond with:
-{{"extract": false}}
+With no durable fact:
+{{"facts": []}}
 
 Document rules:
 - "user": stable identity facts the user stated - their name, role, employer,
@@ -38,7 +41,8 @@ Document rules:
   this week's focus.
 
 Fact format:
-- One sentence, third-person neutral, grounded only in the user's words.
+- One fact per entry: one sentence, third-person neutral, grounded only in the
+  user's words. Never join two facts into one sentence, and never repeat a fact.
 - The fact must stand alone. It is retrieved on its own, without the message it
   came from and without any other fact, so it has to carry the context that makes
   it meaningful. Keep an identifier together with what it means in the SAME
@@ -46,8 +50,22 @@ Fact format:
   "User's CS 272 class is on Mondays", which answers no question anyone would ask.
 - Fill the fact with the user's ACTUAL words. Never emit a placeholder, a single
   letter, a bracketed slot, or an example token (e.g. "X", "Y", "<company>") - if
-  you cannot name the real value from the message, return extract:false instead.
+  you cannot name the real value from the message, leave that fact out.
 - "user"/"judgement_rules": present tense. Shape: "User <verb> <real detail>"
   - e.g. for a message saying "I use Postgres", write "User uses Postgres".
 - "north_stars": goal-oriented. Shape: "User wants to <real goal> by <real
   horizon>" - only include the horizon if the user actually stated one.
+- Write dates as real dates, never relative words: said on a Wednesday, "I start
+  Monday" becomes "User starts at Acme on October 19, 2026".
+
+Dates:
+- "from" is the first day the fact holds and "until" the last, as YYYY-MM-DD,
+  only when the user said them - "my internship runs May 26 to August 14", "the
+  offer expires Friday", "I'm in Austin until the 30th". Resolve relative words
+  against the day the user said it.
+- Something that already happened is history and stays true, so it gets no
+  "until", even with dates in the sentence: "I signed the offer on Monday", "I
+  worked at X from 2020 to 2022". Only a state or plan that is true now and will
+  stop has an "until" - a job, an offer that expires, a stay somewhere.
+- Leave both null when the user gave no dates. Never guess an end date: a wrong
+  one makes North forget a fact that is still true.

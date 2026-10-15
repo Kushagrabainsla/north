@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../api";
-import { Empty, Loading, Markdown, PageHeader, Panel, Status, timeAgo, reveal } from "../components";
+import { Empty, formatDay, Loading, Markdown, PageHeader, Panel, Status, timeAgo, reveal } from "../components";
 import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -89,6 +89,32 @@ export function LearningStatus() {
   );
 }
 
+export interface Fact {
+  id: string;
+  content: string;
+  category: string;
+  confidence: number | null;
+  status: string;
+  updated_at: string;
+  valid_from: string | null;
+  valid_until: string | null;
+  ended: boolean;
+}
+
+/** When a fact is true, or that it has ended: an ended fact no longer reaches North's prompts. */
+export function factDates(fact: Fact): string {
+  if (fact.status === "superseded") return "replaced by a newer fact";
+  if (fact.ended && fact.valid_until) return `ended ${formatDay(fact.valid_until)}`;
+  if (fact.valid_from && fact.valid_until) return `true ${formatDay(fact.valid_from)} – ${formatDay(fact.valid_until)}`;
+  if (fact.valid_until) return `true until ${formatDay(fact.valid_until)}`;
+  if (fact.valid_from) return `true from ${formatDay(fact.valid_from)}`;
+  return "";
+}
+
+// A recalled fact carries a date note, "(true until Aug 14, 2026)", so a link from
+// a decision that used it matches the stored text it starts with.
+const isFound = (fact: Fact, find: string) => !!find && (find === fact.content || find.startsWith(`${fact.content} (`));
+
 export function Memory() {
   const dialog = useDialog();
   const [tab, setTab] = usePersistentState<MemoryTab>(
@@ -121,10 +147,18 @@ export function Memory() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
   const resource = useResource<ContextDoc>(`/orchestrator/context/${doc}`);
-  const facts = useResource<any[]>("/web/api/memory/facts", 10000);
+  const facts = useResource<Fact[]>("/web/api/memory/facts", 10000);
   const [draft, setDraft] = useState<string | null>(null);
   const [factDraft, setFactDraft] = useState("");
-  const [editingFact, setEditingFact] = useState<string | null>(null);
+  const [factFrom, setFactFrom] = useState("");
+  const [factUntil, setFactUntil] = useState("");
+  const [editingFact, setEditingFact] = useState<Fact | null>(null);
+  const resetFactDraft = () => {
+    setFactDraft("");
+    setFactFrom("");
+    setFactUntil("");
+    setEditingFact(null);
+  };
   const content = draft ?? resource.data?.content ?? "";
   const save = async () => {
     await api(`/orchestrator/context/${doc}`, {
@@ -152,18 +186,17 @@ export function Memory() {
   };
   const saveFact = async () => {
     if (!factDraft.trim()) return;
+    // An edit keeps the fact's own topic; it used to refile every edited fact under "user".
+    const body = {
+      content: factDraft,
+      category: editingFact?.category || "user",
+      valid_from: factFrom || null,
+      valid_until: factUntil || null,
+    };
     if (editingFact)
-      await api(`/web/api/memory/facts/${editingFact}`, {
-        method: "PATCH",
-        body: JSON.stringify({ content: factDraft, category: "user" }),
-      });
-    else
-      await post("/web/api/memory/facts", {
-        content: factDraft,
-        category: "user",
-      });
-    setFactDraft("");
-    setEditingFact(null);
+      await api(`/web/api/memory/facts/${editingFact.id}`, { method: "PATCH", body: JSON.stringify(body) });
+    else await post("/web/api/memory/facts", body);
+    resetFactDraft();
     await facts.reload();
   };
   const removeFact = async (id: string) => {
@@ -265,17 +298,19 @@ export function Memory() {
                 onChange={(e) => setFactDraft(e.target.value)}
                 placeholder="Add one atomic fact…"
               />
+              <label className="fact-date">
+                True from
+                <input type="date" value={factFrom} onChange={(e) => setFactFrom(e.target.value)} />
+              </label>
+              <label className="fact-date">
+                until
+                <input type="date" value={factUntil} onChange={(e) => setFactUntil(e.target.value)} />
+              </label>
               <button className="ghost-button" onClick={saveFact}>
                 {editingFact ? "Update" : "Add fact"}
               </button>
               {editingFact && (
-                <button
-                  className="ghost-button"
-                  onClick={() => {
-                    setEditingFact(null);
-                    setFactDraft("");
-                  }}
-                >
+                <button className="ghost-button" onClick={resetFactDraft}>
                   Cancel
                 </button>
               )}
@@ -286,15 +321,16 @@ export function Memory() {
               ) : (
                 (facts.data || []).map((fact) => (
                   <article
-                    className={`fact-row${fact.content === find ? " memory-found" : ""}`}
+                    className={`fact-row${isFound(fact, find) ? " memory-found" : ""}${fact.ended || fact.status === "superseded" ? " fact-past" : ""}`}
                     key={fact.id}
-                    ref={fact.content === find ? reveal : undefined}
+                    ref={isFound(fact, find) ? reveal : undefined}
                   >
                     <div>
                       <b>{fact.content}</b>
                       <small>
-                        {fact.category || "general"} · updated{" "}
-                        {timeAgo(fact.updated_at)}
+                        {[fact.category || "general", factDates(fact), `updated ${timeAgo(fact.updated_at)}`]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </small>
                     </div>
                     <div className="fact-actions">
@@ -305,8 +341,10 @@ export function Memory() {
                       </span>
                       <button
                         onClick={() => {
-                          setEditingFact(fact.id);
+                          setEditingFact(fact);
                           setFactDraft(fact.content);
+                          setFactFrom(fact.valid_from || "");
+                          setFactUntil(fact.valid_until || "");
                         }}
                       >
                         Edit

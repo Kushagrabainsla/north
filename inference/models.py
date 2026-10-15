@@ -15,6 +15,9 @@ EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 SupersedeFn = Callable[[str, list[str]], Awaitable[list[int]]]
 # Given short names and the facts that mention them, say what each one means.
 GlossaryFn = Callable[[dict[str, list[str]]], Awaitable[dict[str, str]]]
+# Given facts and the day each was learned, return the dates each one states it is
+# true from and until (YYYY-MM-DD or None), keyed by the fact's index.
+DatesFn = Callable[[list[tuple[str, str]]], Awaitable[dict[int, tuple[str | None, str | None]]]]
 
 
 class ModelEntry(BaseModel):
