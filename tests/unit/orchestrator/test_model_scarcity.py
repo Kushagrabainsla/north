@@ -165,3 +165,28 @@ async def test_execute_agent_group_tags_real_exhaustion_as_model_unavailable():
     assert failures == ["reviewer"]
     assert failures[0].error_type == "model_unavailable"
     assert is_model_scarcity(failures) is True
+
+
+# --------------------------------------------------------------- failure note
+
+
+@pytest.mark.asyncio
+async def test_a_task_waiting_for_a_model_streams_no_failure_note():
+    """It runs again, so nothing is final: each retry used to leave a note above the real answer."""
+    orch = _orch()
+
+    await orch._report_execution_failures("t1", [AgentFailure("general", "model_unavailable")])
+
+    assert "token" not in _emitted_events(orch)
+
+
+@pytest.mark.asyncio
+async def test_a_real_failure_note_ends_in_its_own_paragraph():
+    """An answer streamed after the note must not run on from "missing."."""
+    orch = _orch()
+
+    await orch._report_execution_failures("t1", [AgentFailure("reviewer", "logic_error")])
+
+    (call,) = orch._stream_manager.emit.call_args_list
+    assert call.args[1] == "token"
+    assert call.args[2]["text"].endswith("Partial results may be missing.\n\n")

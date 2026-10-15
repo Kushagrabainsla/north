@@ -20,6 +20,13 @@ const SIGNALS: Record<string, (data: any) => Omit<Signal, "event" | "timestamp">
   north_star_check_failed: d => ({ tone: "warn", text: "Goal alignment could not be evaluated", details: d.reason ? [d.reason] : [] }),
 };
 
+/** The reply to show. While a task runs, its live text is the newest; once it ends, the
+ *  saved answer is the one a reopened page shows, so a page that watched the task live
+ *  shows it too, not the stream it pieced together along the way. */
+export function replyText(isActive: boolean, streamed = "", output = ""): string {
+  return isActive ? streamed || output : output || streamed;
+}
+
 function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprovals: () => Promise<void>) {
   const [live, setLive] = useState<Record<string, string>>({});
   const [signals, setSignals] = useState<Record<string, Signal[]>>({});
@@ -38,6 +45,11 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
           setSignals(current => ({ ...current, [taskId]: [...(current[taskId] || []), signal] }));
         });
       }
+      // A retry starts the task over: what the failed try streamed and warned no longer applies.
+      stream.addEventListener("task_retrying", () => {
+        setLive(current => ({ ...current, [taskId]: "" }));
+        setSignals(current => ({ ...current, [taskId]: [] }));
+      });
       for (const eventName of ["task_completed", "task_failed", "task_cancelled", "task_skipped", "task_rejected", "task_needs_attention"]) {
         stream.addEventListener(eventName, () => { stream.close(); void reload(); });
       }
@@ -146,6 +158,7 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
     : runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
   const responseTimestamp = [...entries].reverse().find(entry => entry.action === "agent_completed" && entry.output)?.timestamp;
   const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued", "retrying", "working"].includes(status);
+  const reply = replyText(isActive, streamed, detail?.output);
   const control = async (action: "pause" | "resume" | "cancel") => {
     if (!turn.task_id) return;
     if (action === "cancel") await api(`/orchestrator/task/${turn.task_id}`, { method: "DELETE" });
@@ -162,8 +175,8 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
       </div></div>
       {pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} respond={respondApproval}/>)}
       {isActive && <div className={`thinking thinking-${status}`}><span className="pulse"/>{status === "waiting_for_approval" ? "North is waiting for you" : status === "paused" ? "Task paused" : "North is working on this prompt"}</div>}
-      {(streamed || detail?.output) && <Markdown>{streamed || detail?.output || ""}</Markdown>}
-      {!isActive && !(streamed || detail?.output) && <Empty>No response was recorded for this task.</Empty>}
+      {reply && <Markdown>{reply}</Markdown>}
+      {!isActive && !reply && <Empty>No response was recorded for this task.</Empty>}
       <SignalStrip signals={signals}/>
       <details className="turn-detail-drawer"><summary><span>Details</span><small>{agents.length || "–"} agents · {tools.length} tool events</small><i>⌄</i></summary><div><div className="turn-summary"><span>{runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0).toLocaleString()} tokens</span><span>${cost.toFixed(4)}</span></div><div className="execution-details">
         <DetailSection title="Plan and routing" count={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || "")).length}>
@@ -283,6 +296,12 @@ export function Chat() {
   const [submitting, setSubmitting] = useState(false);
   const [recording, setRecording] = useState(false);
   const [notice, setNotice] = useState("");
+  // A confirmation fades on its own; an error stays until clicked. "Response received.
+  // North is continuing the task." used to stay on screen long after the task ended.
+  const flash = (message: string) => {
+    setNotice(message);
+    window.setTimeout(() => setNotice(current => (current === message ? "" : current)), 5000);
+  };
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -323,9 +342,9 @@ export function Chat() {
     if (name === "/new") { updatePrompt(""); await createSession(); return true; }
     if (name === "/flows" || name === "/schedule") { updatePrompt(""); navigate("/flows"); return true; }
     if (name === "/approvals") { updatePrompt(""); navigate("/approvals"); return true; }
-    if (name === "/clear") { updatePrompt(""); setNotice("Draft cleared."); return true; }
+    if (name === "/clear") { updatePrompt(""); flash("Draft cleared."); return true; }
     if (name === "/help") { setNotice("Commands: /new, /clear, /status, /pause, /resume, /cancel, /flows, /approvals"); return true; }
-    if (name === "/status") { await Promise.all([room.reload(), approvalResource.reload()]); setNotice("Task status refreshed."); updatePrompt(""); return true; }
+    if (name === "/status") { await Promise.all([room.reload(), approvalResource.reload()]); flash("Task status refreshed."); updatePrompt(""); return true; }
     if (["/pause", "/resume", "/cancel"].includes(name)) {
       const turn = [...(room.data?.turns || [])].reverse().find(item => item.task_id && !["completed", "failed", "cancelled"].includes(item.detail?.task.status || ""));
     if (!turn?.task_id) { setNotice("No active task in this session."); return true; }
@@ -365,7 +384,7 @@ export function Chat() {
     await appendFiles(Array.from(event.target.files || []));
     event.target.value = "";
   };
-  const respondApproval = async (card: Approval, decision: string, answer = "", values: Record<string, unknown> = {}) => { try { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option: answer, values }); setNotice("Response received. North is continuing the task."); await Promise.all([approvalResource.reload(), room.reload()]); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
+  const respondApproval = async (card: Approval, decision: string, answer = "", values: Record<string, unknown> = {}) => { try { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option: answer, values }); flash("Response received. North is continuing the task."); await Promise.all([approvalResource.reload(), room.reload()]); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
   const rename = async () => {
     if (!room.data) return;
     const title = await dialog.prompt("What should this session be called?", room.data.title,
@@ -394,7 +413,7 @@ export function Chat() {
     setSavingWorkspace(true);
     try {
       await patch(`/web/api/conversations/${room.data.id}`, { workspace });
-      setNotice("Workspace updated for this session.");
+      flash("Workspace updated for this session.");
       await Promise.all([room.reload(), chats.reload()]);
       return true;
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); return false; }

@@ -4,7 +4,7 @@
 // yet) or hides a search that just has no results.
 
 import { describe, expect, it } from "vitest";
-import { sessionsEmptyMessage } from "./Chat";
+import { replyText, sessionsEmptyMessage } from "./Chat";
 
 describe("sessions empty-state copy", () => {
   it("blames the search first, regardless of which tab is open", () => {
@@ -15,5 +15,21 @@ describe("sessions empty-state copy", () => {
   it("distinguishes a genuinely empty archive from a fresh install", () => {
     expect(sessionsEmptyMessage("", "archived")).toBe("No archived sessions.");
     expect(sessionsEmptyMessage("", "active")).toBe("No sessions have been created yet.");
+  });
+});
+
+describe("which reply a turn shows", () => {
+  it("shows live text while the task runs", () => {
+    expect(replyText(true, "Opening LinkedIn…", "")).toBe("Opening LinkedIn…");
+  });
+
+  it("shows the saved answer once the task ends, not the stream pieced together live", () => {
+    const streamed = "> **Note:** 1 agent(s) did not complete.LinkedIn is open";
+    expect(replyText(false, streamed, "LinkedIn is open")).toBe("LinkedIn is open");
+  });
+
+  it("falls back to whatever exists", () => {
+    expect(replyText(false, "only streamed", "")).toBe("only streamed");
+    expect(replyText(true, "", "only saved")).toBe("only saved");
   });
 });

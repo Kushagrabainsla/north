@@ -919,7 +919,7 @@ class BrowserTool(Tool):
                 message=f"Use {label} for {action}. Existing profiles expose sessions, cookies, tabs and extensions. "
                 "Connection and profile identity will be checked before the requested action. "
                 "Existing profiles work in a background window of the same profile through North's pinned "
-                "TaskWindow bridge (Node 18+ and npm required on first use).",
+                "TaskWindow bridge (Node 20+ and npm required on first use).",
             )
         try:
             command = self._get_cmd()

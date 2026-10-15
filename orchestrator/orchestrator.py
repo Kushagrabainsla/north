@@ -1274,9 +1274,20 @@ class Orchestrator:
         await self._stream_manager.emit_done(task_id)
 
     async def _report_execution_failures(self, task_id: str, failures: list[str]) -> None:
-        """Format and emit a message showing which agents failed to complete."""
+        """Format and emit a message showing which agents failed to complete.
+
+        Not when a model was unavailable: the task waits and runs again, so nothing
+        is final, and each retry used to leave one more "did not complete" note
+        above the answer the last try gave. The note ends with a blank line, so a
+        later answer streamed after it starts its own paragraph rather than
+        running on from "missing.".
+        """
+        if _has_model_scarcity(failures):
+            return
         names = ", ".join(f"`{n}`" for n in failures)
-        note = f"\n\n> **Note:** {len(failures)} agent(s) did not complete: {names}. Partial results may be missing."
+        note = (
+            f"\n\n> **Note:** {len(failures)} agent(s) did not complete: {names}. Partial results may be missing.\n\n"
+        )
         await self._stream_manager.emit(task_id, "token", {"text": note})
 
     async def _stage_execute(
