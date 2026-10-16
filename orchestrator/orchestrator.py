@@ -810,7 +810,8 @@ class Orchestrator:
             await self._run_forced_agent(task_id, request)
             return
 
-        classification, plan = await self._stage_plan(task_id, request.prompt, request.context)
+        context = self._with_earlier_decisions(task_id, request.context)
+        classification, plan = await self._stage_plan(task_id, request.prompt, context)
         # Stamp the domain on the running_task row so other agents
         # can see which domain this session belongs to.
         if self._running_task_store is not None:
@@ -821,9 +822,33 @@ class Orchestrator:
             request.prompt,
             plan,
             request.workspace,
-            context=request.context,
+            context=context,
             edit_scope=request.edit_scope,
         )
+
+    def _with_earlier_decisions(self, task_id: str, context: str) -> str:
+        """*context* plus what you already decided in this task, when it is running again.
+
+        A task retried after a model outage starts over. The new run asked again
+        which Chrome profile to use, after you had approved one, because nothing
+        told it you had. Decisions North made for you are listed too; a rejection
+        matters as much as an approval.
+        """
+        decided = self._approval_store.decided_for_task(task_id) if self._approval_store is not None else []
+        if not decided:
+            return context
+        lines = [
+            f'- Asked "{card.message[:200]}" and the user answered: {card.chosen_option}'
+            if card.status == ApprovalDecision.ANSWERED
+            else f"- {card.status.capitalize()}: {card.title} - {card.message[:200]}"
+            for card in decided
+        ]
+        block = (
+            "## Already decided in this task\n"
+            "This task started over (for example after a model outage). These were already decided; "
+            "continue from them and do not ask again:\n" + "\n".join(lines)
+        )
+        return f"{context}\n\n{block}" if context else block
 
     async def _reject_conflicting_task(self, task_id: str, task_start: float, error: Exception) -> None:
         logger.warning("Task %s rejected: conflicts with North Star goals", task_id)

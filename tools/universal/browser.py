@@ -63,6 +63,23 @@ _RAW_ATTACH_KEYS = ("connect", "copy_cookies")
 _RETIRED_CONTEXT_KEYS = ("browser_context", "context_confirmed")
 
 
+def _site(url: str) -> str:
+    """The site a URL is on, as a task's approval names it: its host without "www."."""
+    return (urlparse(url).hostname or "").lower().removeprefix("www.")
+
+
+def _profile_ask(label: str, action: str, params: dict[str, Any]) -> str:
+    """What the card asks: opening a site covers reading it for the rest of the task, so it says so."""
+    url = str(params.get("url") or "") if action in _NAVIGATING_ACTIONS else ""
+    if site := _site(url):
+        return (
+            f"Open {site} in {label}. For the rest of this task North can read pages on {site} in this "
+            "profile without asking again; it asks before other sites and before clicking, typing, "
+            "uploading or submitting."
+        )
+    return f"Use {label} to {action} on this page."
+
+
 def _find_chrome_agent_binary() -> list[str] | None:
     """Locate the chrome-agent executable or return an npx fallback command."""
     # 1. Check PATH
@@ -558,6 +575,9 @@ class BrowserTool(Tool):
         "decides who answers. Never silently switch profiles or copy cookies as a fallback. "
         "Existing profiles run through North's own bridge in a background window of that same Chrome "
         "profile; nothing is brought to the front, so never ask the user to select or focus a window. "
+        "Open the page directly: every call checks the profile's connection and identity first, so do not "
+        "call preflight before it - that is one more approval for the user. Use preflight only to diagnose "
+        "a failed connection or when the user asks to test one. "
         "If preflight says the profile is not connected, stop and ask_user with requires_user_action=true "
         "to connect it once from the dashboard's Browser profiles; then retry preflight, not the interrupted action. "
         "Reuse it for "
@@ -726,6 +746,8 @@ class BrowserTool(Tool):
         self._north_settings = north_settings
         self._existing_browser = existing_browser
         self._verified_bindings: dict[tuple[str, str], tuple[str, str]] = {}
+        # Sites each (task, profile) has opened with your approval; reading there needs no more.
+        self._task_sites: dict[tuple[str, str], set[str]] = {}
 
     @property
     def existing_browser(self) -> TaskWindowBrowser | None:
@@ -836,16 +858,36 @@ class BrowserTool(Tool):
         )
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
-        """Classify writes and sensitive existing-browser attachment per call."""
+        """Classify writes and sensitive existing-browser use per call; True means it asks.
+
+        In a profile, the first visit to a site in a task asks. After that the task
+        reads and moves around that site without asking again: "open my LinkedIn"
+        used to ask to check the connection and again to open the page. Another
+        site, and any click, typing, upload or script, asks every time, so data
+        read on one site can only leave through a call you saw. Listing profiles
+        never asks; a preflight always does, because when the profile is not
+        connected it opens that profile in the background.
+        """
         values = params or {}
-        if values.get("action") == "list_profiles":
+        action = str(values.get("action") or "").strip().lower()
+        if action == "list_profiles":
             return False
         if values.get("profile_id"):
-            # Reads can attach to a personal session or launch a managed window.
-            # The existing central policy decides, not a separate profile policy.
-            return True
-        action = str(values.get("action") or "").strip().lower()
+            return not self._approved_in_task(values, action)
         return action in self._MUTATING_ACTIONS
+
+    def _approved_in_task(self, values: dict[str, Any], action: str) -> bool:
+        """Whether this read is on a site this task already opened, in this same, unedited profile."""
+        if action in self._MUTATING_ACTIONS:
+            return False
+        key = (str(values.get("task_id") or "default"), str(values["profile_id"]))
+        sites = self._task_sites.get(key)
+        binding = self._verified_bindings.get(key)
+        profile = next((p for p in self._profiles() if p.id == key[1]), None)
+        if not sites or binding is None or profile is None or binding[0] != profile.model_dump_json():
+            return False
+        url = values.get("url") if action in _NAVIGATING_ACTIONS else None
+        return _site(str(url)) in sites if url else True
 
     async def describe(self, input: ToolInput) -> ApprovalRequest:
         """Look at the page first, so the card says what the action lands on (`browser_describe`)."""
@@ -916,8 +958,8 @@ class BrowserTool(Tool):
                 ),
                 title=f"Browser: {label}",
                 prepared=binding_config,
-                message=f"Use {label} for {action}. Existing profiles expose sessions, cookies, tabs and extensions. "
-                "Connection and profile identity will be checked before the requested action. "
+                message=f"{_profile_ask(label, action, params)} Existing profiles expose sessions, cookies, tabs "
+                "and extensions. Connection and profile identity will be checked before the requested action. "
                 "Existing profiles work in a background window of the same profile through North's pinned "
                 "TaskWindow bridge (Node 20+ and npm required on first use).",
             )
@@ -987,11 +1029,14 @@ class BrowserTool(Tool):
             params = {**params, "filename": str(path)}
         output = await self._native_call(profile, params)
         output.data.update(profile_id=profile.id, profile_name=profile.name)
+        key = (str(params.get("task_id") or "default"), profile.id)
         if output.success and output.data.get("profile_verified") is True:
-            key = (str(params.get("task_id") or "default"), profile.id)
             self._verified_bindings[key] = (profile.model_dump_json(), output.data["connection_id"])
+        if output.success and params.get("action") in _NAVIGATING_ACTIONS and params.get("url"):
+            self._task_sites.setdefault(key, set()).add(_site(str(params["url"])))
         if params.get("action") == "close":
-            self._verified_bindings.pop((str(params.get("task_id") or "default"), profile.id), None)
+            self._verified_bindings.pop(key, None)
+            self._task_sites.pop(key, None)
         return output
 
     async def aclose(self) -> None:

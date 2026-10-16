@@ -351,6 +351,16 @@ class ApprovalStore:
             key=lambda c: c.created_at,
         )
 
+    def decided_for_task(self, task_id: str) -> list[Card]:
+        """What you approved, rejected or answered in *task_id*, oldest first."""
+        decided = [
+            card
+            for card in self._cards.values()
+            if card.task_id == task_id
+            and card.status in (ApprovalDecision.APPROVED, ApprovalDecision.REJECTED, ApprovalDecision.ANSWERED)
+        ]
+        return sorted(decided, key=lambda card: card.created_at)
+
     def all(self, limit: int = 100) -> list[Card]:
         cards = list(self._cards.values())
         cards.sort(key=lambda c: c.created_at, reverse=True)
