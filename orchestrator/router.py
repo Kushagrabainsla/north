@@ -36,15 +36,14 @@ _DEEP_WORK_TERMS = re.compile(
     r"\b(audit|benchmark|compare|debug|design|fix|implement|investigate|modify|performance|research|security|test|trace|verify)\b"
 )
 
+# A safety floor for the goal check: asks the planner may not mark consequential.
+# Merely using a signed-in browser profile is not here. It made "open my LinkedIn"
+# run a goal review for reading a page; the browser asks before using a profile on
+# each site, and acting there (submit, send, apply, buy) is caught below.
 _CONSEQUENTIAL_PATTERNS = (
     re.compile(
         r"\b(?:apply|applying|submit|send)\b[^.\n]{0,100}\b(?:job|application|form|message|email)\b"
         r"|\b(?:job|application|form|message|email)\b[^.\n]{0,100}\b(?:apply|submit|send)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:existing|logged[- ]in|personal)\b[^.\n]{0,100}\b(?:browser|profile|session|cookies?|tabs?|cdp)\b"
-        r"|\b(?:browser|cdp)\b[^.\n]{0,100}\b(?:cookies?|logged[- ]in|profile|sessions?|tabs?|extensions?)\b",
         re.IGNORECASE,
     ),
     re.compile(

@@ -186,17 +186,34 @@ def test_repository_action_question_does_not_look_like_an_overview() -> None:
 @pytest.mark.parametrize(
     "prompt",
     [
-        "Use my existing browser over CDP and inspect my logged-in LinkedIn session.",
         "Fill and submit job applications for matching roles.",
+        "In my logged-in profile, send the message to the recruiter.",
         "Create a North flow for this recurring task.",
     ],
 )
-def test_sensitive_browser_external_actions_and_capabilities_are_consequential(prompt: str) -> None:
+def test_external_actions_and_capabilities_are_consequential(prompt: str) -> None:
     assert _requires_consequential_guard(prompt)
 
 
-def test_plain_read_only_browser_research_is_not_forced_consequential() -> None:
-    assert not _requires_consequential_guard("Open the public documentation in an isolated browser and summarize it.")
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Open the public documentation in an isolated browser and summarize it.",
+        "Using my sjsu.edu profile, open my LinkedIn",
+        "Use my existing browser and inspect my logged-in LinkedIn session.",
+    ],
+)
+def test_reading_in_a_browser_profile_is_not_forced_consequential(prompt: str) -> None:
+    """The browser already asks before using a profile on each site; a goal review adds nothing."""
+    assert not _requires_consequential_guard(prompt)
+
+
+def test_the_planner_is_told_reading_in_a_profile_is_not_consequential() -> None:
+    from pathlib import Path
+
+    planner = (Path(__file__).parents[3] / "resources" / "prompts" / "planner.md").read_text(encoding="utf-8")
+    assert "Accessing an existing logged-in browser" not in planner
+    assert "Only opening or reading pages in a signed-in profile is not consequential" in planner
 
 
 @pytest.mark.parametrize(

@@ -55,13 +55,15 @@ Set `mode` to `single_agent` and leave `agents` empty. The system runs the gener
 
 ### Is it consequential?
 
-Set `is_consequential: true` when the task performs an external action, uses sensitive authenticated context, or creates an executable capability. This includes:
+Set `is_consequential: true` when the task performs an external action or creates an executable capability. This includes:
 - Sending emails/messages (not drafting)
 - Moving money, buying/selling
 - Deleting or permanently altering data
 - Creating calendar events involving others
 - Filling or submitting forms, including job applications
-- Accessing an existing logged-in browser/profile through CDP, cookies, tabs, sessions, or extensions
+- Acting in a signed-in browser profile: filling, submitting, sending or buying there
+
+Only opening or reading pages in a signed-in profile is not consequential by itself: the browser asks the user before it uses the profile on each site.
 - Creating, activating, or scheduling a North flow, skill, tool, agent, or automation
 
 Set `false` for: ordinary reading, reasoning, drafting, planning, searching, computing, creating inert local files, and answering questions.

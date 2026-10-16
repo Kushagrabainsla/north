@@ -210,3 +210,13 @@ async def test_history_plus_a_new_action_still_selects_the_action_skill(tmp_path
     selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=_fake_embed, min_similarity=0.0)
 
     assert [s.name for s in await selector.select("Summarize last month and implement subtract")] == ["implement"]
+
+
+async def test_one_call_can_ask_for_a_stricter_floor(tmp_path):
+    """The agent's suggestions need a near-certain match; skill validation keeps the loose floor."""
+    selector = SkillSelector(_registry(tmp_path), embed_fn=_fake_embed, min_similarity=0.4)
+    loose = await selector.select("write a database migration")
+
+    strict = await selector.select("write a database migration", min_similarity=1.01)
+
+    assert loose and strict == []

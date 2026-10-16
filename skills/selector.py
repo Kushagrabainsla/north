@@ -49,12 +49,15 @@ class SkillSelector:
         # changed a skill and whether that caller remembered to invalidate us.
         self._embeddings: dict[str, tuple[str, list[float]]] | None = None
 
-    async def select(self, task_text: str, candidates: list[Skill] | None = None) -> list[Skill]:
+    async def select(
+        self, task_text: str, candidates: list[Skill] | None = None, *, min_similarity: float | None = None
+    ) -> list[Skill]:
         """Return a primary skill and optionally one distinct secondary skill.
 
         ``candidates`` restricts scoring to a caller-provided subset (e.g. only the
         skills eligible for the caller's domain); it defaults to every registered
-        skill. Returns [] when embeddings are unavailable or nothing clears the
+        skill. ``min_similarity`` replaces this selector's floor for one call.
+        Returns [] when embeddings are unavailable or nothing clears the
         threshold, so the caller injects nothing rather than irrelevant noise.
         """
         if self._embed_fn is None or not task_text.strip():
@@ -81,7 +84,8 @@ class SkillSelector:
             if skill.name in embeddings
         ]
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        eligible = [(score, skill) for score, skill in scored if score >= self._min_similarity]
+        floor = self._min_similarity if min_similarity is None else min_similarity
+        eligible = [(score, skill) for score, skill in scored if score >= floor]
         if not eligible or self._top_k <= 0:
             return []
 

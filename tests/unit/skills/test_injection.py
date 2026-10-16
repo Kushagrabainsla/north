@@ -224,3 +224,42 @@ async def test_no_skill_body_ever_reaches_the_prompt(tmp_path):
 
     assert block  # something was offered
     assert not any(f"BODY-{name}" in block for name in ("alpha", "beta", "gamma", "delta"))
+
+
+class _RecordingSelector:
+    """Records the floor the agent asks for, and returns what a loose floor would pass."""
+
+    def __init__(self, picks) -> None:
+        self.floors: list[float | None] = []
+        self._picks = picks
+
+    async def select(self, task_text, candidates=None, *, min_similarity=None):
+        self.floors.append(min_similarity)
+        return list(self._picks)
+
+
+async def test_a_skill_is_suggested_only_when_the_match_is_near_certain(tmp_path):
+    """ "Open my LinkedIn" used to be offered the job-application and flow-authoring procedures."""
+    from agents.base import _SUGGESTED_SKILL_MIN_SIMILARITY
+
+    _write_skill(tmp_path, "preparing-job-applications", "Use when applying to jobs")
+    registry = SkillRegistry(builtin_dir=tmp_path)
+    selector = _RecordingSelector([])
+    agent = _agent(registry, selector)
+
+    await agent._select_skills("Can you open my linkedin?")
+
+    assert selector.floors == [_SUGGESTED_SKILL_MIN_SIMILARITY]
+    assert _SUGGESTED_SKILL_MIN_SIMILARITY >= 0.7
+
+
+async def test_every_skill_name_is_listed_when_none_is_suggested(tmp_path):
+    """The list is how the agent finds a skill itself; it used to stop at twelve of eighteen."""
+    for n in range(18):
+        _write_skill(tmp_path, f"skill-{n:02d}", f"Use for job number {n}")
+    registry = SkillRegistry(builtin_dir=tmp_path)
+    agent = _agent(registry, _RecordingSelector([]))
+
+    block = await agent._load_skills_block(AgentPayload(task_id="t", prompt="anything"), [])
+
+    assert all(f"skill-{n:02d}" in block for n in range(18))

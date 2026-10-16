@@ -28,9 +28,21 @@ logger = logging.getLogger(__name__)
 # loop and therefore do not appear here.
 _ESSENTIAL_TOOL_NAMES: frozenset[str] = frozenset({"update_plan", "use_skill"})
 
-# Cap on how many non-selected skill names are listed as "available via use_skill",
-# so the hint stays a light pointer and never becomes prompt-bloating noise.
-_MAX_SKILL_NAMES_LISTED: int = 12
+# Cap on how many non-selected skill names are listed as "available via use_skill".
+# High enough to list every skill an agent has (general has 18, ~110 tokens of
+# names), because the list is how the agent finds a skill when none is suggested.
+_MAX_SKILL_NAMES_LISTED: int = 40
+
+# How sure a similarity match must be before a skill is suggested by name and
+# description. The selector's own 0.35 floor dates from before embeddings moved
+# on-device: with bge-small-en-v1.5 every skill scores 0.42-0.82 against any ask,
+# so the top two were always suggested - "open my LinkedIn" got the job-application
+# and flow-authoring procedures. Measured on 16 asks against the general agent's
+# skills, no floor separates right from wrong below 0.70 (a wrong match scored
+# 0.63, right ones 0.61-0.63); at or above it every match was right. Below it the
+# agent reads the full list of names and loads a skill itself, which judges fit
+# better than a score. Re-measure if the embedding model changes.
+_SUGGESTED_SKILL_MIN_SIMILARITY: float = 0.70
 
 # Domains whose agents receive procedural skills. Each skill also declares the
 # domains it serves via `Skill.domains`, and `_load_skills_block` filters to those,
@@ -171,7 +183,9 @@ class Agent(ABC):
         if not candidates:
             return []
         try:
-            return await selector.select(task_prompt, candidates=candidates)
+            return await selector.select(
+                task_prompt, candidates=candidates, min_similarity=_SUGGESTED_SKILL_MIN_SIMILARITY
+            )
         except Exception:
             logger.debug("Skill selection failed for agent %s", self.name, exc_info=True)
             return []
