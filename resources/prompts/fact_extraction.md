@@ -20,11 +20,24 @@ Anti-fabrication contract - follow exactly:
   generalize, or invent.
 - Every name, company, person, number, or date in the fact MUST appear verbatim
   in the message above. If it is not in the message, you may not write it.
-- Greetings, questions, commands, and small-talk reveal NO durable fact.
 - This is the user's own message - it is NOT an assistant reply. Do not treat
   any AI-sounding content as a fact about the user.
 - Leave out any fact you are not certain the user explicitly stated. When in
   doubt, leave it out. A message with no durable fact returns an empty list.
+
+What is NOT a fact about the user:
+- A request for work. "Implement parse_query", "fix the failing test", "open my
+  LinkedIn", "write a cover letter for X", "check my setup", "run the flow" are
+  the task North is about to do, not the user's goal, rule or habit. Never turn
+  one into "User wants to <the task>" or "User <does the task>".
+- The state of the current task: what the user has or has not supplied yet,
+  which option they picked for this one task, what is set up for a check or a
+  test. It changes within days. Keep a choice only when the user says it is
+  standing - "always", "from now on", "for every job application".
+- Greetings, questions and small talk.
+A request can still carry a lasting preference, rule or goal the user states
+inside it - "draft the applications, but I always submit them myself" carries the
+rule "User submits job applications personally". Keep that; drop the request.
 
 Respond with JSON, one entry per fact, in the order the user stated them:
 {{"facts": [{{"document": "<user|judgement_rules|north_stars>", "delta": "<fact>", "from": "<YYYY-MM-DD or null>", "until": "<YYYY-MM-DD or null>"}}]}}
@@ -37,8 +50,9 @@ Document rules:
   schedule, preferences, tools they use, people they work with.
 - "judgement_rules": how the user decides - what they approve/reject, thresholds,
   priorities, communication style.
-- "north_stars": goals with time horizons the user stated - career, projects,
-  this week's focus.
+- "north_stars": goals the user states for their own work or life - a role they
+  are pursuing, a project they are building, a habit they want - never the task
+  they are asking North to do right now.
 
 Fact format:
 - One fact per entry: one sentence, third-person neutral, grounded only in the

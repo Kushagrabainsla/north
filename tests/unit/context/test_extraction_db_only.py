@@ -123,3 +123,15 @@ async def test_the_day_said_and_each_facts_dates_reach_the_store(tmp_path: Path)
     first, second = facts.add_fact.await_args_list
     assert first.kwargs == {"valid_from": None, "valid_until": "2026-08-14"}
     assert second.kwargs == {"valid_from": None, "valid_until": None}
+
+
+def test_the_extraction_prompt_keeps_requests_and_task_state_out_of_memory() -> None:
+    """Catching up on old test prompts turned "Implement parse_query" into a life goal,
+    and one-off answers ("sjsu.edu" for this task) into standing facts."""
+    prompt = (Path(__file__).parents[3] / "resources" / "prompts" / "fact_extraction.md").read_text(encoding="utf-8")
+
+    assert 'Never turn\n  one into "User wants to <the task>"' in prompt
+    assert "The state of the current task" in prompt
+    assert "Keep a choice only when the user says it is\n  standing" in prompt
+    assert "never the task\n  they are asking North to do right now" in prompt
+    assert "this week's focus" not in prompt
