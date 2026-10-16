@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest
@@ -11,12 +12,16 @@ from ledger.base import LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory.base import ContextStore
 from memory.models import ContextDocument
+from memory.profile import rebuild_profile
 from utils.documents import docx_text, pdf_text
 from utils.ids import generate_id
 from utils.prompts import load_prompt
 from utils.tasks import spawn
 from utils.text import extract_json, strip_html
 from utils.time import utcnow
+
+if TYPE_CHECKING:
+    from memory.facts import FactStore
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +47,12 @@ class ContextInjector:
         context_store: ContextStore,
         inference_router: InferenceRouter,
         ledger: LedgerWriter,
+        fact_store: FactStore | None = None,
     ) -> None:
         self._context_store = context_store
         self._inference_router = inference_router
         self._ledger = ledger
+        self._fact_store = fact_store
 
     async def inject_text(self, text: str, task_id: str | None = None) -> ContextDocument:
         """Ingest raw text into the appropriate context document."""
@@ -92,7 +99,7 @@ class ContextInjector:
         )
 
         doc, delta = await self._route(text)
-        await self._context_store.append(doc, delta)
+        await self._store(doc, delta)
 
         self._fire_ledger(
             LedgerEntry(
@@ -107,6 +114,19 @@ class ContextInjector:
             )
         )
         return doc
+
+    async def _store(self, doc: ContextDocument, delta: str) -> None:
+        """Keep the delta in its one home, then refresh the profile that shows it.
+
+        Something about you is a fact. It used to be appended to user.md, the
+        profile North rebuilds from your facts, so the next rebuild erased it.
+        A rule or goal goes into its document.
+        """
+        if doc is ContextDocument.USER and self._fact_store is not None:
+            await self._fact_store.add_fact(delta, "user")
+        else:
+            await self._context_store.append(doc, delta)
+        await rebuild_profile(self._fact_store, self._context_store)
 
     def _fire_ledger(self, entry: LedgerEntry) -> None:
         """Schedule a ledger write as a supervised background task."""

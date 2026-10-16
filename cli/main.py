@@ -432,27 +432,37 @@ def context_show(
 def context_edit(
     document: str = typer.Argument(..., help=f"Document name: {', '.join(_VALID_DOCS)}"),
 ) -> None:
-    """Open a context document in $EDITOR."""
-    from config.settings import settings
+    """Open a context document in $EDITOR, then save it back to North.
 
-    doc_name = f"{document}.md" if not document.endswith(".md") else document
-    doc_path = settings.north_home / "context" / doc_name
-    doc_path.parent.mkdir(parents=True, exist_ok=True)
-    if not doc_path.exists():
-        if doc_name == "soul.md":
-            from utils.prompts import load_prompt
-
-            try:
-                doc_path.write_text(load_prompt("prompts/soul.md"), encoding="utf-8")
-            except Exception:
-                doc_path.touch()
-        else:
-            doc_path.touch()
-
-    editor = os.environ.get("EDITOR", "nano")
-    rc = subprocess.call([editor, str(doc_path)])
+    It used to edit ~/.north/context/<doc>.md, which North stopped reading when
+    the documents moved into its database, so every edit was silently ignored.
+    """
+    name = document.removesuffix(".md")
+    if name == "user":
+        typer.secho(
+            "Your profile is built from your facts and your goal and rule documents. "
+            "Edit facts on the dashboard's Memory page, or edit north_stars or judgement_rules here.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    content = _api("GET", f"/orchestrator/context/{name}").json().get("content") or ""
+    with tempfile.NamedTemporaryFile("w", suffix=f"-{name}.md", delete=False, encoding="utf-8") as handle:
+        handle.write(content)
+        draft = Path(handle.name)
+    try:
+        rc = subprocess.call([os.environ.get("EDITOR", "nano"), str(draft)])
+        edited = draft.read_text(encoding="utf-8")
+    finally:
+        draft.unlink(missing_ok=True)
     if rc != 0:
-        typer.echo(f"Editor exited with code {rc}.", err=True)
+        typer.echo(f"Editor exited with code {rc}; nothing saved.", err=True)
+        raise typer.Exit(rc)
+    if edited == content:
+        typer.echo("No changes.")
+        return
+    _api("PUT", f"/orchestrator/context/{name}", json={"content": edited})
+    typer.secho(f"✓ Saved {name}.", fg=typer.colors.GREEN)
 
 
 @context_app.command("add")

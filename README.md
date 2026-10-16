@@ -66,7 +66,7 @@ Onboarding walks you through each connection: AI providers, coding agents, brows
 | Command | What it does |
 |---|---|
 | `north context show <doc>` | Show a context document (`user`, `north_stars`, `judgement_rules`, `soul`) |
-| `north context edit <doc>` | Edit it in `$EDITOR` |
+| `north context edit <doc>` | Edit it in `$EDITOR` and save it to North (`north_stars`, `judgement_rules`, `soul`; `user` is built from your facts) |
 | `north context add --text "..."` | Add to your context (`--file <path>`, `--url <url>`) |
 
 **Models**

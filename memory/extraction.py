@@ -21,6 +21,7 @@ from ledger.models import TASK_ENDINGS, LedgerEntry, LedgerSource, LedgerStatus
 from memory.backup import snapshot_memory
 from memory.base import ContextStore
 from memory.models import ContextDocument
+from memory.profile import rebuild_profile
 from utils.ids import generate_id
 from utils.prompts import load_prompt
 from utils.text import STOPWORDS, extract_json
@@ -362,16 +363,14 @@ class ExtractionPipeline:
         if await self._is_duplicate(doc, delta, entry.task_id):
             return False
 
+        # A rule or goal lives in its document only. It used to be copied into the
+        # fact store too, and an edit on the Documents tab changed one copy.
         await self._context_store.append(doc, delta)
-
-        if self._fact_store is not None:
-            try:
-                await self._fact_store.add_fact(delta, doc_key, valid_from=_day(dates[0]), valid_until=_day(dates[1]))
-            except Exception:
-                logger.warning("FactStore: failed to persist fact '%s'", delta[:80])
 
         # Trim document if it has grown too large.
         await self._maybe_trim(doc, entry.task_id)
+        # The profile shows the document, so it changes with it.
+        await rebuild_profile(self._fact_store, self._context_store)
 
         await self._record_extraction(entry, doc, delta)
         return True

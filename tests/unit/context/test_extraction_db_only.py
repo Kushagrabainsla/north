@@ -19,6 +19,7 @@ def _setup(tmp_path: Path, reply: str):
     inference.complete.return_value = SimpleNamespace(text=reply)
     facts = AsyncMock()
     facts.add_fact.return_value = True
+    facts.render_profile.return_value = ""
     documents = FileContextStore(tmp_path / "context")
     ledger = AsyncMock()
     pipeline = ExtractionPipeline(ledger, documents, inference, tmp_path, fact_store=facts)
@@ -59,8 +60,8 @@ async def test_every_fact_in_a_message_is_kept(tmp_path: Path) -> None:
     assert [call.args for call in facts.add_fact.await_args_list] == [
         ("User starts a job at Acme on Monday.", "user"),
         ("User's manager at Acme is Priya.", "user"),
-        ("User wants to lead a team by 2028.", "north_stars"),
     ]
+    # A goal lives in its document only; it used to be copied into the fact store too.
     assert "lead a team by 2028" in await documents.read(ContextDocument.NORTH_STARS)
     assert ledger.write.await_count == 3  # one "extraction: ... updated" record per fact
 

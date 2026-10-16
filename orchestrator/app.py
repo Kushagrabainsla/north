@@ -53,7 +53,7 @@ from memory.consolidator import EpisodeConsolidator
 from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
 from memory.injection import ContextInjector
-from memory.models import ContextDocument
+from memory.profile import move_rule_and_goal_facts, rebuild_profile
 from orchestrator.api import coding_ask_router, coding_gate_router, health_router, webhook_router
 from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
@@ -322,22 +322,6 @@ def _build_tool_index(deps) -> ToolIndex | None:
     )
 
 
-# Identity first: a profile is read top-down, and who someone is comes before
-# what they are working on.
-_PROFILE_TOPIC_ORDER = [
-    "identity",
-    "preferences",
-    "jobs",
-    "education",
-    "projects",
-    "skills",
-    "schedule",
-    "health",
-    "finances",
-    "other",
-]
-
-
 _FACT_DAY_CHECK_SECONDS = 3600
 
 
@@ -353,6 +337,8 @@ async def _refresh_fact_store(fact_store, context_store=None) -> None:
     merged = await fact_store.deduplicate()
     explained = await fact_store.expand_identifiers()
     dated = await fact_store.date_facts()
+    if context_store is not None:
+        await move_rule_and_goal_facts(fact_store, context_store)
     if embedded or merged or explained or dated:
         logger.info(
             "Fact store: re-embedded %d fact(s), merged %d duplicate(s), explained %d identifier use(s), dated %d",
@@ -389,15 +375,7 @@ async def _rebuild_profile(fact_store, context_store) -> None:
     # then belong in it, and re-deriving costs a query where re-running bootstrap
     # costs hours.
     if context_store is not None:
-        try:
-            profile = await fact_store.render_profile(
-                topic_order=_PROFILE_TOPIC_ORDER,
-                always_full=frozenset({"identity", "preferences"}),
-            )
-            if profile:
-                await context_store.write(ContextDocument.USER, profile)
-        except Exception:
-            logger.warning("Could not rebuild the user profile document", exc_info=True)
+        await rebuild_profile(fact_store, context_store)
 
 
 async def _populate_tool_index(tool_index: ToolIndex, tool_registry: ToolRegistry) -> None:
@@ -514,6 +492,7 @@ def _build_context_injector(deps) -> ContextInjector:
         context_store=deps.context_store,
         inference_router=deps.cost_tracker,
         ledger=deps.ledger,
+        fact_store=deps.fact_store,
     )
 
 

@@ -7,7 +7,9 @@ from pydantic import BaseModel
 
 from memory.gateway import LocalMemoryGateway
 from memory.models import ContextDocument
+from memory.profile import rebuild_profile
 from orchestrator.api.deps import _get_context_injector, _get_context_store, router
+from orchestrator.api_context import current_services
 
 _VALID_DOCS = {d.value.replace(".md", ""): d for d in ContextDocument}
 
@@ -47,21 +49,37 @@ async def read_context(doc: str) -> ContextDocOut:
     return ContextDocOut(document=document.value, content=content)
 
 
+def _writable(doc: str) -> ContextDocument:
+    """A document you may change. The profile is not one: North rebuilds it from your facts."""
+    document = _resolve_doc(doc)
+    if document is ContextDocument.USER:
+        raise HTTPException(
+            status_code=409,
+            detail="Your profile is built from your facts and your goal and rule documents, and "
+            "rebuilt when they change. Edit facts on the Memory page's Facts tab instead.",
+        )
+    return document
+
+
 @router.put("/context/{doc}", status_code=204)
 async def write_context(doc: str, body: ContextWriteRequest) -> None:
-    """Overwrite a context document entirely."""
-    document = _resolve_doc(doc)
-    await _get_context_store().write(document, body.content)
+    """Overwrite a context document entirely, and refresh the profile that shows it."""
+    document = _writable(doc)
+    store = _get_context_store()
+    await store.write(document, body.content)
+    await rebuild_profile(current_services().fact_store, store)
 
 
 @router.delete("/context/{doc}", status_code=204)
 async def delete_context(doc: str) -> None:
-    """Delete a user-customized context document."""
-    document = _resolve_doc(doc)
-    delete = getattr(_get_context_store(), "delete", None)
+    """Delete a user-customized context document, and refresh the profile that shows it."""
+    document = _writable(doc)
+    store = _get_context_store()
+    delete = getattr(store, "delete", None)
     if delete is None:
         raise HTTPException(status_code=405, detail="This context store does not support deletion")
     await delete(document)
+    await rebuild_profile(current_services().fact_store, store)
 
 
 @router.post("/context/add", status_code=202)
