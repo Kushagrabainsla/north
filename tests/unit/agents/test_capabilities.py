@@ -51,7 +51,7 @@ def test_build_platform_capabilities_summary_with_registries() -> None:
 
     assert "coder" in summary
     assert "gh" in summary
-    assert "debug_workflow" in summary
+    assert "debug_workflow" not in summary  # the task message lists the skills an agent may use
     assert "job-application-review" in summary
     assert "active, 2 steps" in summary
     assert "Run GitHub operations via the gh CLI" not in summary

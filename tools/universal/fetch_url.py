@@ -3,12 +3,14 @@
 Fetches the page via the SSRF-guarded helper in utils/net (private/internal
 addresses are blocked, redirects re-validated, size and time capped), strips
 HTML tags, and returns the plain-text content capped at _MAX_CHARS so it fits
-in a model context window.
+in a model context window. An Atom or RSS feed comes back as one compact block
+per entry, cut only between entries.
 """
 
 from __future__ import annotations
 
 import asyncio
+from xml.etree import ElementTree
 
 import httpx
 
@@ -59,9 +61,12 @@ def _fetch_sync(url: str) -> ToolOutput:
     except httpx.RequestError as e:
         return ToolOutput(success=False, error=f"Request failed: {e}")
 
-    text = strip_html(fetched.text) if "html" in fetched.content_type else fetched.text
+    feed = _feed_text(fetched.text) if _is_xml(fetched.content_type, fetched.text) else None
+    text = fetched.text if feed is None else feed
+    if feed is None and "html" in fetched.content_type:
+        text = strip_html(text)
 
-    if len(text) > _MAX_CHARS:
+    if feed is None and len(text) > _MAX_CHARS:
         omitted = len(text) - _MAX_CHARS
         text = text[:_MAX_CHARS] + f"\n\n[…{omitted} chars truncated]"
 
@@ -74,3 +79,69 @@ def _fetch_sync(url: str) -> ToolOutput:
             "chars": len(text),
         },
     )
+
+
+def _is_xml(content_type: str, text: str) -> bool:
+    return any(kind in content_type for kind in ("xml", "rss", "atom")) or text.lstrip().startswith("<?xml")
+
+
+def _feed_text(xml: str) -> str | None:
+    """An Atom or RSS feed as one block per entry, or None for any other document.
+
+    A raw arXiv feed runs about 2,560 characters a paper, a third of it markup,
+    so the cap cut a 25-paper search to its first 11. Compact, 18 fit in the
+    same space, and the cut falls between entries instead of inside one.
+    """
+    try:
+        root = ElementTree.fromstring(xml)
+    except ElementTree.ParseError:
+        return None
+    entries = [element for element in root.iter() if _local(element.tag) in ("entry", "item")]
+    if not entries:
+        return None
+    blocks: list[str] = []
+    used = 0
+    for entry in entries:
+        block = _entry_text(entry)
+        if blocks and used + len(block) > _MAX_CHARS:
+            break
+        blocks.append(block[:_MAX_CHARS])
+        used += len(block) + 2
+    text = "\n\n".join(blocks)
+    if len(blocks) < len(entries):
+        text += f"\n\n[{len(entries) - len(blocks)} more entries not shown]"
+    return text
+
+
+def _entry_text(entry: ElementTree.Element) -> str:
+    fields: dict[str, list[str]] = {}
+    for child in entry:
+        name = _local(child.tag)
+        if name == "link" and child.get("href"):
+            value = child.get("href", "") if child.get("rel", "alternate") == "alternate" else ""
+        else:
+            value = " ".join("".join(child.itertext()).split())
+        if value:
+            fields.setdefault(name, []).append(value)
+
+    def first(*names: str) -> str:
+        return next((fields[name][0] for name in names if name in fields), "")
+
+    summary = first("summary", "description", "content")
+    where = first("link", "id", "guid")
+    when = first("published", "pubDate", "date", "updated")
+    lines = [first("title"), " | ".join(part for part in (where, when) if part)]
+    authors = fields.get("author", []) + fields.get("creator", [])
+    if authors:
+        lines.append("Authors: " + ", ".join(authors))
+    if comment := first("comment"):
+        lines.append(f"Comment: {comment}")
+    if journal := first("journal_ref"):
+        lines.append(f"Journal: {journal}")
+    lines.append(strip_html(summary) if "<" in summary else summary)
+    return "\n".join(line for line in lines if line)
+
+
+def _local(tag: object) -> str:
+    """A tag without its namespace: {http://www.w3.org/2005/Atom}entry is entry."""
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""

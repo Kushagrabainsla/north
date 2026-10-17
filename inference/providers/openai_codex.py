@@ -612,6 +612,13 @@ class OpenAICodexProvider:
         try:
             headers = dict(await self._request_headers())
             headers["X-Client-Request-Id"] = trace.client_request_id
+            if run_id:
+                # The Codex backend reuses a cached prompt prefix only for requests
+                # in one session, named by this header as the official client does.
+                # Without it each step of a run re-sent everything uncached: a
+                # 4-step task was 0% cached; a repeated 26k-token prompt went from
+                # 0% to 98% reused with it. A prompt_cache_key alone did nothing.
+                headers["session_id"] = run_id
             async with self._client.stream("POST", "/responses", json=body, headers=headers) as response:
                 trace.observe(response.headers)
                 if response.status_code >= 400:

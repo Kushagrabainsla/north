@@ -435,3 +435,35 @@ async def test_spent_credits_need_billing_not_a_timer() -> None:
         await _limited({"error": {"code": "credit_balance_exhausted"}}).complete(
             "codex-model", CompletionRequest(prompt="hi", component="test")
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("run_id", "session"), [("run-7", "run-7"), (None, None)])
+async def test_a_run_names_its_session_so_codex_reuses_the_cached_prefix(run_id, session) -> None:
+    """Without the header every step of a run was re-sent uncached (0% on a 4-step task)."""
+    seen: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("session_id"))
+        return httpx.Response(
+            200,
+            content=_sse(
+                {"type": "response.output_text.delta", "delta": "ok"},
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "r",
+                        "model": "m",
+                        "output": [],
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                },
+            ),
+        )
+
+    client = httpx.AsyncClient(base_url="https://example.test", transport=httpx.MockTransport(handler))
+    provider = OpenAICodexProvider(ApiKeyCredentialProvider("test", "token"), client=client)
+    await provider.complete("m", CompletionRequest(prompt="hi", component="test", run_id=run_id))
+    await client.aclose()
+
+    assert seen == [session]

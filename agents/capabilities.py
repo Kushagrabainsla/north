@@ -13,9 +13,9 @@ if TYPE_CHECKING:
 
 
 def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
-    """Build a lean summary of tools, agents, and skills registered in North.
+    """Build a lean summary of the tools, agents, and flows registered in North.
 
-    Queries runtime registries so whenever a new tool, subagent, or skill is
+    Queries runtime registries so whenever a new tool, subagent, or flow is
     added, North knows it exists without carrying every tool description.
     """
     lines: list[str] = [
@@ -51,24 +51,11 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
         except Exception:
             pass
 
-    # 3. Procedural Skills
-    skill_registry = getattr(deps, "skill_registry", None)
-    if skill_registry is not None:
-        try:
-            skills = skill_registry.all()
-            if skills:
-                lines.append("\n### Procedural Skills")
-                for s in sorted(skills, key=lambda x: x.name):
-                    contract = (
-                        f", executable by {s.execution.agent} with [{', '.join(s.execution.tools) or 'no tools'}]"
-                        if s.execution is not None
-                        else ", advisory"
-                    )
-                    lines.append(f"- **{s.name}** ({s.status}{contract}): {s.description}")
-        except Exception:
-            pass
+    # Skills are not listed here. The task message names the ones this agent may
+    # use, matching ones with their descriptions; the full catalog here was about
+    # 2,700 tokens on every step, and it showed skills the agent may not use.
 
-    # 4. Declarative Flows
+    # 3. Declarative Flows
     flow_registry = getattr(deps, "flow_registry", None)
     if flow_registry is not None:
         try:
@@ -80,7 +67,7 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
         except Exception:
             pass
 
-    # 5. Meta-Capabilities & Self-Extension
+    # 4. Meta-Capabilities & Self-Extension
     lines.append("\n### Meta-Capabilities (Self-Extension)")
     lines.append(
         "- **create_tool**: Stage a Python tool candidate, validate and test it, then activate it with confirmation."
