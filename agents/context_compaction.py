@@ -521,28 +521,28 @@ async def compact_if_needed(
 ) -> None:
     """LLM-summarise old exchanges when token usage exceeds the compaction threshold.
 
-    Keeps [0] system, [1] user-task, and the last `keep_recent` tool exchanges
-    verbatim. Everything in between is replaced with a single summarised block.
-    Falls back to deterministic reduction if the summarisation call fails. When
+    Below the threshold nothing changes. Above it, keeps [0] system, [1]
+    user-task, and the last `keep_recent` tool exchanges verbatim, and replaces
+    everything in between with a single summarised block, falling back to
+    deterministic reduction if the summarisation call fails. When
     `deterministic_only` is set, no summarisation request is made; this is the
     cheaper policy for bounded quick tasks.
     """
-    if deterministic_only:
-        compact_history(messages, keep_recent=keep_recent)
-        return
-
     context_window = context_window_for(model_used, router=inference_router)
     estimated_tokens = estimate_messages_tokens(messages)
     effective_tokens = max(tokens_in, estimated_tokens)
 
+    # Below the threshold the history stays exactly as the model saw it. It used
+    # to retire every result but the newest two on every step, from the third
+    # tool call on: each retirement cost a model call (~10 s) to summarise a
+    # result the agent might still need, and rewrote the history, so the cached
+    # prompt broke from that point - 29% of a step cached after a summary against
+    # 80% otherwise. Shrinking early paid off only while nothing was cached.
     if effective_tokens < context_window * COMPACTION_THRESHOLD:
-        await compact_history_with_summaries(
-            messages,
-            keep_recent=keep_recent,
-            inference_router=inference_router,
-            component=component,
-            task_id=task_id,
-        )
+        return
+
+    if deterministic_only:
+        compact_history(messages, keep_recent=keep_recent)
         return
 
     exchanges = exchange_boundaries(messages)

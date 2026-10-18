@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from agents.context_compaction import (
@@ -276,3 +278,31 @@ def test_render_exchange_preserves_multi_round_compacted_summary() -> None:
     assert "[previous summary:" in rendered
     assert long_summary in rendered
     assert len(rendered) > 500
+
+
+@pytest.mark.asyncio
+async def test_below_the_threshold_old_tool_results_stay_as_the_model_saw_them() -> None:
+    """Four arXiv feeds, read one per step: the first was summarised before step 5.
+
+    That cost a model call and broke the cached prompt from that point, for a
+    history using a fraction of the window.
+    """
+    router = DummyRouter(windows={"large-model": 200_000})
+    messages = [{"role": "system", "content": "System prompt"}, {"role": "user", "content": "Find this week's papers"}]
+    for i in range(4):
+        messages += [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": f"call_{i}", "function": {"name": "fetch_url", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": f"call_{i}", "content": f"paper {i}\n" * 3_000},
+        ]
+    before = copy.deepcopy(messages)
+
+    await compact_if_needed(
+        messages, tokens_in=30_000, model_used="large-model", inference_router=router, keep_recent=10
+    )
+
+    assert router.complete_calls == []
+    assert messages == before
