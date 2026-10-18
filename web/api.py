@@ -22,7 +22,7 @@ from config.approval_mode import ApprovalMode
 from config.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
-from jobs.models import display_job_status
+from jobs.models import display_job_status, late_note
 from ledger.base import LedgerFilters
 from ledger.models import LedgerSource
 from memory.extraction import learning_status
@@ -1355,6 +1355,7 @@ async def dashboard() -> dict[str, Any]:
                 "task": job.task,
                 "status": display_job_status(job),
                 "scheduled_at": job.scheduled_at.isoformat(),
+                "late_note": late_note(job),
             }
             for job in jobs
         ],

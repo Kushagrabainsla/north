@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum, StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from utils.time import format_local
 
 
 class JobType(StrEnum):
@@ -60,6 +62,26 @@ class Job(BaseModel):
     max_retries: int = 3
     retry_after: datetime | None = None
     created_at: datetime | None = None
+
+
+# A run that starts this long after its slot is late, and says so beside the slot.
+_LATE_AFTER = timedelta(minutes=2)
+
+
+def late_note(job: Job) -> str:
+    """When a run started after its slot: "ran 08:58, 1 h 58 min late: the computer was asleep".
+
+    Empty for a run on time or not started. Listed by its slot alone, a briefing
+    that ran two hours late read as having run on time.
+    """
+    if job.started_at is None or job.started_at - job.scheduled_at <= _LATE_AFTER:
+        return ""
+    minutes = round((job.started_at - job.scheduled_at).total_seconds() / 60)
+    hours, rest = divmod(minutes, 60)
+    by = f"{minutes} min" if not hours else f"{hours} h {rest} min" if rest else f"{hours} h"
+    note = f"ran {format_local(job.started_at, '%H:%M')}, {by} late"
+    reason = (job.payload or {}).get("late_because")
+    return f"{note}: {reason}" if reason else note
 
 
 def display_job_status(job: Job) -> str:

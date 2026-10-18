@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from jobs.models import Job, JobPriority, JobStatus, JobType, display_job_status
+from jobs.models import Job, JobPriority, JobStatus, JobType, display_job_status, late_note
 from orchestrator.api.deps import _get_job_processor, router
 from utils.ids import generate_id
 from utils.time import format_local, from_epoch, parse_local, to_epoch, utcnow
@@ -38,6 +38,8 @@ class JobOut(BaseModel):
     label: str = ""
     # The flow a run of this job executes, when it is a flow's firing.
     flow: str = ""
+    # When it started after its slot, by how much and why (jobs.models.late_note).
+    late_note: str = ""
 
 
 class JobCreateRequest(BaseModel):
@@ -64,6 +66,7 @@ def _job_to_out(j: Job) -> JobOut:
         cron_entry=(j.payload or {}).get("cron_entry"),
         label=(j.payload or {}).get("label") or "",
         flow=(j.payload or {}).get("flow") or "",
+        late_note=late_note(j),
     )
 
 

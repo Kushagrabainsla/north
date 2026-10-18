@@ -464,7 +464,7 @@ function RunRow({
       <div className="schedule-main">
         <b>{showFlow ? run.flow : how || "run"}</b>
         <small title={formatDateTime(run.started_at)}>
-          {[showFlow ? how : "", agoText(run.started_at), progressText(run)]
+          {[showFlow ? how : "", agoText(run.started_at), run.late_note, progressText(run)]
             .filter(Boolean)
             .join(" · ")}
         </small>

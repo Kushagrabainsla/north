@@ -631,6 +631,7 @@ def show_jobs(
             f"[{status_style}]{status}[/{status_style}]  "
             f"[dim]{job['type']}[/dim]  {job['agent']}  "
             f"[bright_black]{job.get('scheduled_local', '')}[/bright_black]"
+            + (f"  [yellow]{job['late_note']}[/yellow]" if job.get("late_note") else "")
         )
     _console.print()
 

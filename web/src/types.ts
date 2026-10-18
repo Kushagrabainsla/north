@@ -202,7 +202,7 @@ export interface DashboardData {
   active_tasks: { task_id: string; status: string; created_at: string }[];
   conversations: Conversation[];
   agents: { name: string; domain: string }[];
-  jobs: { job_id: string; agent: string; task: string; status: string; scheduled_at: string }[];
+  jobs: { job_id: string; agent: string; task: string; status: string; scheduled_at: string; late_note?: string }[];
   cron: { name: string; agent: string; task: string; hour: number; minute: number; weekday?: number }[];
   metrics: Record<string, unknown>;
   activity: LedgerEntry[];

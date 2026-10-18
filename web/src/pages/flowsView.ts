@@ -61,6 +61,8 @@ export interface RunLike {
   started_at: string;
   updated_at: string;
   error: string;
+  // A scheduled run that started after its slot: by how much and why.
+  late_note?: string;
 }
 
 // "daily at 07:00", or "every 5 minutes" - an interval has no time of day.

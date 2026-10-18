@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import jobs.scheduler as scheduler_module
 from jobs import CronEntry, CronScheduler, JobType, next_due_entry, next_firing, previous_firing
 from jobs.sqlite_processor import SQLiteJobProcessor
 
@@ -260,3 +261,52 @@ async def test_slots_that_came_due_while_the_mac_slept_all_fire_on_wake(tmp_path
     assert fired == {"cleanup", "news", "research"}
     await scheduler._execute_due_entry(next_due_entry(entries, went_to_sleep), went_to_sleep, entries)
     assert len(await processor.list_jobs()) == 3  # waking twice never fires a slot twice
+
+
+async def _no_wait(_seconds: float) -> None:
+    return None
+
+
+def _late_reasons(jobs) -> dict[str, str]:
+    return {(j.payload or {}).get("cron_entry"): (j.payload or {}).get("late_because", "") for j in jobs}
+
+
+async def test_a_slot_missed_while_the_computer_slept_says_so(tmp_path, monkeypatch) -> None:
+    """Lid closed 01:16-08:58: the 07:00 briefing ran at 08:58 and was listed at 07:00, as if on time."""
+    monkeypatch.setattr(scheduler_module.asyncio, "sleep", _no_wait)
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    news = CronEntry(name="news", agent="general", task="brief", hour=7, minute=0, tz="UTC")
+    went_to_sleep = datetime(2026, 10, 17, 1, 16, tzinfo=UTC)
+    awake = iter([0.0, 60.0])  # one minute awake while the wall clock ran 7h42m
+    scheduler = CronScheduler(
+        processor, [news], clock=lambda: datetime(2026, 10, 17, 8, 58, tzinfo=UTC), awake_clock=lambda: next(awake)
+    )
+
+    await scheduler._execute_due_entry(next_due_entry([news], went_to_sleep), went_to_sleep, [news])
+
+    assert _late_reasons(await processor.list_jobs()) == {"news": scheduler_module.ASLEEP}
+
+
+async def test_a_slot_fired_awake_and_on_time_gives_no_reason(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(scheduler_module.asyncio, "sleep", _no_wait)
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    news = CronEntry(name="news", agent="general", task="brief", hour=7, minute=0, tz="UTC")
+    just_before = datetime(2026, 10, 15, 6, 59, 30, tzinfo=UTC)
+    awake = iter([0.0, 30.0])
+    scheduler = CronScheduler(
+        processor, [news], clock=lambda: datetime(2026, 10, 15, 7, 0, tzinfo=UTC), awake_clock=lambda: next(awake)
+    )
+
+    await scheduler._execute_due_entry(next_due_entry([news], just_before), just_before, [news])
+
+    assert _late_reasons(await processor.list_jobs()) == {"news": ""}
+
+
+async def test_a_slot_caught_up_at_startup_was_missed_because_north_was_off(tmp_path) -> None:
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    now = datetime(2026, 10, 14, 10, 36, tzinfo=UTC)
+    news = CronEntry(name="news", agent="general", task="brief", hour=7, minute=0, tz="UTC")
+
+    await CronScheduler(processor, [news], clock=lambda: now)._catch_up([news], now)
+
+    assert _late_reasons(await processor.list_jobs()) == {"news": scheduler_module.NORTH_WAS_OFF}

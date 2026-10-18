@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from jobs.base import JobProcessor
 from jobs.models import Job, JobPriority, JobStatus, JobType
 from utils.ids import generate_id
-from utils.time import from_epoch, local_timezone_name, now_epoch, resolve_timezone, to_epoch
+from utils.time import awake_seconds, from_epoch, local_timezone_name, now_epoch, resolve_timezone, to_epoch
 
 if TYPE_CHECKING:
     from jobs.cron_store import UserCronStore
@@ -26,6 +26,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+# Why a firing ran after its slot, kept on the job so the run can say so. A
+# sleeping Mac runs nothing: the 07:00 briefings ran at 07:47 and 08:58 on two
+# mornings the lid was closed, and were listed at 07:00 as if on time.
+ASLEEP = "the computer was asleep"
+NORTH_WAS_OFF = "north was not running"
+# A wait in which the wall clock ran this far ahead of the awake clock was spent asleep.
+_ASLEEP_AFTER = timedelta(seconds=60)
 
 
 WEEKDAYS = frozenset({0, 1, 2, 3, 4})
@@ -283,11 +291,13 @@ class CronScheduler:
         entries: list[CronEntry],
         cron_store: UserCronStore | None = None,
         clock: Callable[[], datetime] | None = None,
+        awake_clock: Callable[[], float] = awake_seconds,
     ) -> None:
         self._processor = processor
         self._builtin_entries = list(entries)
         self._cron_store = cron_store
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._awake_clock = awake_clock
 
     async def _all_entries(self) -> list[CronEntry]:
         """Every entry that should fire: built-ins, plus the user's own that are not paused.
@@ -304,8 +314,11 @@ class CronScheduler:
                 logger.exception("CronScheduler: failed to load user cron entries")
         return [entry for entry in entries if entry.enabled]
 
-    def build_job(self, entry: CronEntry, scheduled_at: datetime) -> Job:
-        """Construct the `Job` that will be enqueued for one firing of `entry`."""
+    def build_job(self, entry: CronEntry, scheduled_at: datetime, late_because: str = "") -> Job:
+        """Construct the `Job` that will be enqueued for one firing of `entry`.
+
+        *late_because* is why the firing is late (`ASLEEP`, `NORTH_WAS_OFF`), when it is.
+        """
         return Job(
             job_id=generate_id(),
             type=JobType.CRON,
@@ -315,6 +328,7 @@ class CronScheduler:
                 "cron_entry": entry.name,
                 **({"skill": entry.skill} if entry.skill else {}),
                 **({"flow": entry.flow} if entry.flow else {}),
+                **({"late_because": late_because} if late_because else {}),
             },
             priority=JobPriority.MEDIUM,
             scheduled_at=scheduled_at,
@@ -362,7 +376,7 @@ class CronScheduler:
             if slot < window_start or await self._already_fired(entry, slot):
                 continue
             logger.info("CronScheduler: catching up missed firing %s (slot %s)", entry.name, slot.isoformat())
-            await self._processor.enqueue(self.build_job(entry, slot))
+            await self._processor.enqueue(self.build_job(entry, slot, late_because=NORTH_WAS_OFF))
 
     async def _is_already_running(self, entry: CronEntry) -> bool:
         """Return True if a prior firing of this entry is still pending or running."""
@@ -377,8 +391,11 @@ class CronScheduler:
     ) -> None:
         entry, firing = due
         delay = max(0.0, (firing - now).total_seconds())
+        awake_before = self._awake_clock()
         await asyncio.sleep(min(delay, 60.0))
         now_after_sleep = self._clock()
+        asleep_for = (now_after_sleep - now) - timedelta(seconds=self._awake_clock() - awake_before)
+        late_because = ASLEEP if asleep_for > _ASLEEP_AFTER else ""
         if firing <= now_after_sleep:
             oldest = now_after_sleep - self._STARTUP_CATCHUP
             for e in entries:
@@ -393,7 +410,7 @@ class CronScheduler:
                     if await self._is_already_running(e):
                         logger.info("CronScheduler: skipping %s - prior run still active", e.name)
                         continue
-                    await self._processor.enqueue(self.build_job(e, slot))
+                    await self._processor.enqueue(self.build_job(e, slot, late_because=late_because))
 
     async def run(self) -> None:
         """Loop forever: pick the next due entry, sleep, enqueue, repeat.

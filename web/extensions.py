@@ -18,7 +18,7 @@ from flows.registry import parse_flow_document
 from flows.store import FlowRun
 from flows.validation import schedulable_flow_error, validate_flow_capabilities
 from inference.registry import PROVIDER_DEFINITIONS
-from jobs.models import JobStatus
+from jobs.models import JobStatus, late_note
 from orchestrator.api_context import current_services
 from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME, SkillSource
@@ -599,7 +599,15 @@ async def list_flow_runs(flow: str | None = None, limit: int = 50) -> list[dict[
         except FlowNotFoundError:
             return None
 
-    return [flow_run_view(run, total(run.flow_name)) for run in runs]
+    views = [flow_run_view(run, total(run.flow_name)) for run in runs]
+    # A scheduled run's task id is its job's id; the job knows the slot it was due
+    # at, so a run hours late says so instead of reading as on time.
+    if any(view["trigger"] == "schedule" for view in views) and services.job_processor is not None:
+        jobs = {job.job_id: job for job in await services.job_processor.list_jobs(limit=200)}
+        for view in views:
+            job = jobs.get(view["task_id"]) if view["trigger"] == "schedule" else None
+            view["late_note"] = late_note(job) if job is not None else ""
+    return views
 
 
 class FlowRunRequest(BaseModel):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
@@ -63,6 +64,21 @@ def runtime_context(now: datetime.datetime | None = None) -> str:
 def now_epoch() -> float:
     """Return the current instant as Unix epoch seconds."""
     return utcnow().timestamp()
+
+
+# macOS's clock of time spent awake. Python's own monotonic clock stops during
+# sleep on macOS today, but that is an implementation detail it may change; on
+# Linux, CLOCK_MONOTONIC (behind time.monotonic) already stops in suspend.
+_AWAKE_CLOCK = getattr(time, "CLOCK_UPTIME_RAW", None)
+
+
+def awake_seconds() -> float:
+    """Seconds this computer has spent awake: a clock that stops while it sleeps.
+
+    How far the wall clock ran ahead of it over a wait is how long the computer
+    slept during that wait.
+    """
+    return time.clock_gettime(_AWAKE_CLOCK) if _AWAKE_CLOCK is not None else time.monotonic()
 
 
 def to_epoch(dt: datetime.datetime) -> float:
