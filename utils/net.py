@@ -10,7 +10,10 @@ both response size and total time.
 from __future__ import annotations
 
 import ipaddress
+import math
 import socket
+import threading
+import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -19,6 +22,26 @@ import httpx
 _MAX_REDIRECTS = 5
 _MAX_RESPONSE_BYTES = 2_000_000  # 2 MB of body is plenty for readable text
 _DEFAULT_TIMEOUT = 20.0
+
+# Hosts that ask for a gap between requests. arXiv's API terms allow one request
+# every three seconds and answer 429 "Rate exceeded" to faster callers; a
+# briefing fetches six feeds and then checks its papers with one more request.
+_MIN_INTERVAL_S: dict[str, float] = {"export.arxiv.org": 3.0}
+_last_request_at: dict[str, float] = {}
+_spacing = threading.Lock()
+
+
+def _wait_for_turn(url: str) -> None:
+    """Block until *url*'s host may be asked again. Hosts not listed never wait."""
+    host = (urlparse(url).hostname or "").lower()
+    gap = _MIN_INTERVAL_S.get(host)
+    if gap is None:
+        return
+    with _spacing:
+        wait = _last_request_at.get(host, -math.inf) + gap - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at[host] = time.monotonic()
 
 
 @dataclass
@@ -90,6 +113,7 @@ def fetch_url_text(url: str, *, timeout: float = _DEFAULT_TIMEOUT) -> FetchedTex
     with httpx.Client(timeout=timeout, follow_redirects=False) as client:
         for _ in range(_MAX_REDIRECTS + 1):
             validate_public_url(current)
+            _wait_for_turn(current)
             request = client.build_request("GET", current, headers={"User-Agent": "north/1.0 (personal AI assistant)"})
             response = client.send(request, stream=True)
             try:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 import tools.universal.fetch_url as fetch_url
+from tools.models import ToolInput
 from utils.net import FetchedText
 
 _ARXIV_ENTRY = """
@@ -91,3 +92,45 @@ def test_xml_that_is_not_a_feed_comes_back_as_it_was(
     monkeypatch: pytest.MonkeyPatch, text: str, content_type: str
 ) -> None:
     assert _fetch(monkeypatch, text, content_type) == text
+
+
+_BROKEN = (
+    "https://export.arxiv.org/api/query?search_query=all:%22World%20Models%22"
+    "%26sortBy=submittedDate%26sortOrder=descending%26max_results=25"
+)
+_MEANT = (
+    "https://export.arxiv.org/api/query?search_query=all:%22World%20Models%22"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=25"
+)
+
+
+def test_an_arxiv_query_with_its_ampersands_encoded_is_repaired() -> None:
+    """As written, arXiv read the whole string as the search and returned papers from 2024 to Oct 2."""
+    url, note = fetch_url._repair_arxiv_query(_BROKEN)
+
+    assert url == _MEANT
+    assert note.startswith("Repaired the arXiv query")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [_MEANT, "https://example.com/search?q=a%26b", "https://export.arxiv.org/abs/2610.22041"],
+)
+def test_every_other_url_is_left_exactly_as_given(url: str) -> None:
+    assert fetch_url._repair_arxiv_query(url) == (url, "")
+
+
+@pytest.mark.asyncio
+async def test_the_result_says_the_query_was_repaired(monkeypatch: pytest.MonkeyPatch) -> None:
+    fetched: list[str] = []
+
+    def fake_fetch(url: str) -> FetchedText:
+        fetched.append(url)
+        return FetchedText(url=url, text=_arxiv_feed(1), content_type="application/atom+xml")
+
+    monkeypatch.setattr(fetch_url, "fetch_url_text", fake_fetch)
+
+    output = await fetch_url.FetchUrlTool().run(ToolInput(params={"url": _BROKEN}))
+
+    assert fetched == [_MEANT]
+    assert output.data["note"].startswith("Repaired the arXiv query")
