@@ -25,7 +25,11 @@ dependencies = [
     "psutil>=5.9.0",
     "rich>=13.0.0",
     "textual>=0.80.0",
-    "ddgs>=1.0.0",
+    # Pinned: ddgs scrapes search sites, and an upgrade can break them. With
+    # 9.16.0, 9 of 24 searches for the daily news came back empty ("No results
+    # found"); with 9.14.4, none of 36. Raise the pin only after re-running
+    # that check.
+    "ddgs==9.14.4",
     "python-kasa>=0.7.0",
     "playwright>=1.40.0",
     # Bundled ripgrep binary for fast .gitignore-aware search_files. Wheels only

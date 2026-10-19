@@ -10,6 +10,8 @@ from typing import Any
 
 from tools import Tool, ToolInput, ToolOutput
 
+_RETRY_AFTER_EMPTY_S = 1.5
+
 
 class WebSearchTool(Tool):
     """Searches the web using DuckDuckGo and returns real results."""
@@ -67,10 +69,25 @@ class WebSearchTool(Tool):
         max_results = min(max(1, max_results), 10)
 
         try:
-            results = await asyncio.to_thread(self._search, query, max_results)
+            results = await self._search_with_retry(query, max_results)
             return ToolOutput(success=True, data={"query": query, "results": results})
         except Exception as exc:
             return ToolOutput(success=False, error=f"Search failed: {exc}")
+
+    async def _search_with_retry(self, query: str, max_results: int) -> list[dict]:
+        """Search, and once more after a pause when nothing came back.
+
+        ddgs picks its search sites at random and some answer nothing, so an
+        empty result is often that pick, not the query: a second try lands on
+        others.
+        """
+        from ddgs.exceptions import DDGSException  # imported where used, like DDGS itself
+
+        try:
+            return await asyncio.to_thread(self._search, query, max_results)
+        except DDGSException:
+            await asyncio.sleep(_RETRY_AFTER_EMPTY_S)
+            return await asyncio.to_thread(self._search, query, max_results)
 
     def _search(self, query: str, max_results: int) -> list[dict]:
         from ddgs import DDGS
