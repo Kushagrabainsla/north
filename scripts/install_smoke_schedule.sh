@@ -1,46 +1,43 @@
 #!/usr/bin/env bash
-# Run scripts/smoke.sh every night at 03:30, live tests included (macOS launchd).
+# Turn on north's nightly check of itself, run in this project folder: lint, the
+# whole suite, and the live Claude Code and Codex tests (scripts/smoke.sh).
 #
-#   scripts/install_smoke_schedule.sh            # install or update
-#   scripts/install_smoke_schedule.sh --remove   # uninstall
+#   scripts/install_smoke_schedule.sh            # turn on, or point it at this folder
+#   scripts/install_smoke_schedule.sh --remove   # turn off
 #
-# A Mac asleep at 03:30 runs it on wake. PATH is captured from this shell so the
-# job finds `claude` and `codex` the way you do.
+# north runs it, on the "Nightly check" schedule at 03:30, so the north server must
+# be running. This used to install a launchd job instead. macOS keeps launchd jobs
+# out of the Desktop, Documents and Downloads folders, so with the project on the
+# Desktop it ended "Operation not permitted" every night from Oct 7, and the failure
+# it exists to report was never reported. A laptop asleep at 03:30 is checked as soon
+# as it is awake.
 
 set -euo pipefail
 
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+smoke="${NORTH_HOME:-$HOME/.north}/smoke"
 label="com.north.smoke"
 plist="$HOME/Library/LaunchAgents/$label.plist"
-repo="$(cd "$(dirname "$0")/.." && pwd)"
-logs="${NORTH_HOME:-$HOME/.north}/smoke"
+mkdir -p "$smoke"
 
+# The old launchd job, if there is one: stopped, and its file kept beside the reports.
 launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+if [ -f "$plist" ]; then
+    mv "$plist" "$smoke/$label.plist.removed"
+    echo "stopped the old launchd job; its file is kept at $smoke/$label.plist.removed"
+fi
+
+scheduled() { north cron list 2>/dev/null | grep -q "nightly_check"; }
+
 if [ "${1:-}" = "--remove" ]; then
-    rm -f "$plist"
-    echo "removed $label"
+    rm -f "$smoke/checkout"
+    if scheduled; then north cron rm nightly_check; fi
+    echo "nightly check turned off"
     exit 0
 fi
 
-mkdir -p "$logs" "$(dirname "$plist")"
-cat >"$plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>$label</string>
-    <key>ProgramArguments</key>
-    <array><string>$repo/scripts/smoke.sh</string></array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>SMOKE_LIVE</key><string>1</string>
-        <key>PATH</key><string>$PATH</string>
-    </dict>
-    <key>StartCalendarInterval</key>
-    <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
-    <key>StandardOutPath</key><string>$logs/launchd.out</string>
-    <key>StandardErrorPath</key><string>$logs/launchd.err</string>
-</dict>
-</plist>
-EOF
-launchctl bootstrap "gui/$(id -u)" "$plist"
-echo "installed $label: nightly at 03:30, reports in $logs"
+printf '%s\n' "$repo" >"$smoke/checkout"
+if ! scheduled; then
+    north cron add nightly-check --hour 3 --minute 30 --name nightly_check --label "Nightly check"
+fi
+echo "nightly check on: north checks $repo every night at 03:30"

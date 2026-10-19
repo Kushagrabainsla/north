@@ -274,6 +274,19 @@ _WAITING_FOR_A_MODEL = (
     ModelRateLimitedError,
     ProviderUnavailableError,
 )
+class WaitingFor(Exception):
+    """Work that cannot run yet because *resource* is missing, and will run when it is back.
+
+    For a resource that is not a model or the network: the nightly check waits
+    for an awake laptop, rather than running in the minute macOS wakes a closed
+    one to fetch mail.
+    """
+
+    def __init__(self, resource: str, message: str) -> None:
+        super().__init__(message)
+        self.resource = resource
+
+
 # Connection-level failures of the HTTP clients north uses, by name, so this
 # module does not import them.
 _NETWORK_ERROR_NAMES = frozenset({"ConnectError", "ConnectTimeout", "NetworkError", "ReadError", "RemoteProtocolError"})
@@ -292,6 +305,8 @@ def missing_resource(exc: BaseException) -> str:
         seen.add(id(current))
         if isinstance(current, _WAITING_FOR_A_MODEL):
             return "a model"
+        if isinstance(current, WaitingFor):
+            return current.resource
         if isinstance(current, ConnectionError) or type(current).__name__ in _NETWORK_ERROR_NAMES:
             return "the network"
         current = current.__cause__ or current.__context__

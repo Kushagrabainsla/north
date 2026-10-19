@@ -68,6 +68,7 @@ from orchestrator.constants import WATCHDOG_POLL_INTERVAL_SECONDS
 from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
+from orchestrator.nightly_check import nightly_check
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.reconcile import recover_interrupted_tasks
@@ -766,6 +767,7 @@ def _launch_background_tasks(
     # north's built-in flow actions: deterministic code, no model.
     if flow_runner is not None:
         flow_runner.register_action("task_context_cleanup", _nightly_cleanup)
+        flow_runner.register_action("nightly_check", nightly_check)
         if approvals is not None and approvals.interaction is not None:
             flow_runner.register_action("remind_waiting_cards", approvals.interaction.remind_waiting)
 

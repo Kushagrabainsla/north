@@ -1,0 +1,10 @@
+name: nightly-check
+description: Checks north on itself, on the machine that has its project folder - lint,
+  the whole test suite, and a live run of Claude Code and Codex, the agents north hands
+  its coding to. Says which part failed. A laptop asleep at the scheduled time is
+  checked as soon as it is awake. Scheduled by scripts/install_smoke_schedule.sh.
+domains:
+  - general
+steps:
+  - name: check
+    action: nightly_check
