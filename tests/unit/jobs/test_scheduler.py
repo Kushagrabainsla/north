@@ -310,3 +310,47 @@ async def test_a_slot_caught_up_at_startup_was_missed_because_north_was_off(tmp_
     await CronScheduler(processor, [news], clock=lambda: now)._catch_up([news], now)
 
     assert _late_reasons(await processor.list_jobs()) == {"news": scheduler_module.NORTH_WAS_OFF}
+
+
+async def test_a_slot_from_before_the_schedule_existed_is_not_caught_up(tmp_path) -> None:
+    """The 03:30 nightly check was added at 11:06 and ran at 15:16, when north restarted."""
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    created = datetime(2026, 10, 19, 11, 6, tzinfo=UTC)
+    check = CronEntry(
+        name="nightly_check",
+        agent="system",
+        task="check",
+        hour=3,
+        minute=30,
+        tz="UTC",
+        created_epoch=created.timestamp(),
+    )
+    restart = datetime(2026, 10, 19, 15, 16, tzinfo=UTC)
+
+    await CronScheduler(processor, [check], clock=lambda: restart)._catch_up([check], restart)
+
+    assert await processor.list_jobs() == []
+
+
+async def test_a_slot_after_the_schedule_existed_is_still_caught_up(tmp_path) -> None:
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    check = CronEntry(
+        name="nightly_check",
+        agent="system",
+        task="check",
+        hour=3,
+        minute=30,
+        tz="UTC",
+        created_epoch=datetime(2026, 10, 18, 11, 6, tzinfo=UTC).timestamp(),
+    )
+    restart = datetime(2026, 10, 19, 15, 16, tzinfo=UTC)
+
+    await CronScheduler(processor, [check], clock=lambda: restart)._catch_up([check], restart)
+
+    assert [job.scheduled_at for job in await processor.list_jobs()] == [datetime(2026, 10, 19, 3, 30, tzinfo=UTC)]
+
+
+def test_a_stored_schedule_brings_its_creation_time() -> None:
+    row = {"name": "user_x", "agent": "general", "task": "t", "hour": 3, "minute": 30, "created_epoch": 1_792_000_000.0}
+
+    assert CronEntry.from_row(row).created_epoch == 1_792_000_000.0

@@ -105,6 +105,10 @@ class CronEntry:
     # built-in whose prompt is an internal slug does not. "task_context_cleanup"
     # told the reader nothing about what runs at 3 a.m. or why they want it to.
     description: str = ""
+    # When the schedule was made, for a stored one. A slot before it was never
+    # missed: a 03:30 check added at 11:06 ran at 15:16, when north restarted
+    # and caught up "today's 03:30". None for the built-ins, which ship with north.
+    created_epoch: float | None = None
 
     def __post_init__(self) -> None:
         if not (0 <= self.hour <= 23):
@@ -138,6 +142,7 @@ class CronEntry:
             label=row.get("label") or "",
             skill=row.get("skill") or "",
             flow=row.get("flow") or "",
+            created_epoch=row.get("created_epoch"),
         )
 
     @property
@@ -373,7 +378,7 @@ class CronScheduler:
         window_start = now - self._STARTUP_CATCHUP
         for entry in entries:
             slot = previous_firing(entry, now)
-            if slot < window_start or await self._already_fired(entry, slot):
+            if slot < window_start or not _existed_at(entry, slot) or await self._already_fired(entry, slot):
                 continue
             logger.info("CronScheduler: catching up missed firing %s (slot %s)", entry.name, slot.isoformat())
             await self._processor.enqueue(self.build_job(entry, slot, late_because=NORTH_WAS_OFF))
@@ -405,7 +410,7 @@ class CronScheduler:
                 # capped sleep; firing only "the last minute" ran the 03:00 job the
                 # loop was waiting on and silently dropped both 07:00 briefings.
                 if slot == firing or max(now, oldest) < slot <= now_after_sleep:
-                    if await self._already_fired(e, slot):
+                    if not _existed_at(e, slot) or await self._already_fired(e, slot):
                         continue
                     if await self._is_already_running(e):
                         logger.info("CronScheduler: skipping %s - prior run still active", e.name)
@@ -437,6 +442,11 @@ class CronScheduler:
                 await asyncio.sleep(60)
                 continue
             await self._execute_due_entry(due, now, entries)
+
+
+def _existed_at(entry: CronEntry, slot: datetime) -> bool:
+    """Whether *entry* was there at *slot*: a run can only be missed by a schedule that existed."""
+    return entry.created_epoch is None or to_epoch(slot) >= entry.created_epoch
 
 
 # See docs/ARCHITECTURE.md Section 11.3 and docs/design/schedule-provisioning.md.
