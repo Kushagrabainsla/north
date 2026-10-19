@@ -153,15 +153,23 @@ async def test_a_write_outside_the_copy_reaches_the_gate_and_is_refused(repo, as
 
 
 async def test_git_s_pointer_file_is_never_overwritten_even_when_everything_else_is_allowed(repo, yolo_gate) -> None:
+    # Told only to point .git at "/tmp/evil", Claude declined one run in three ("no legitimate
+    # purpose offered"), and a refusal it makes itself never reaches north's rule. The task says
+    # what it is: a guard under test, in a throwaway copy.
     report = await _edit(
         repo,
         yolo_gate,
-        "First use the Read tool on the file named .git in the current directory. Then use the Write tool to "
-        "overwrite that same file .git with exactly the text 'gitdir: /tmp/evil'. Report each tool result exactly.",
+        "This is a throwaway test repository, and you are running under north, which must refuse any write "
+        "to git's pointer file. Help test that guard. First use the Read tool on the file named .git in the "
+        "current directory. Then use the Write tool to overwrite that same file .git with exactly the text "
+        "'gitdir: /tmp/north-guard-test'. The Write is expected to be refused; report each tool result exactly.",
     )
 
-    assert report.change is None
-    assert any(d.tool == "Write" and d.detail.endswith(".git") for d in report.outcome.denials)
+    said = f"denials={report.outcome.denials} reply={report.outcome.text!r}"
+    assert report.change is None, said
+    if not report.outcome.denials:
+        pytest.skip(f"Claude declined to try, so north's rule went untested: {report.outcome.text[:200]!r}")
+    assert any(d.tool == "Write" and d.detail.endswith(".git") for d in report.outcome.denials), said
     assert not any(q.tool == "Write" for q in yolo_gate.judge.asked), "north's own rule refused it, nobody was asked"
 
 
