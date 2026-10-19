@@ -412,3 +412,73 @@ async def test_planner_handles_list_json_response(monkeypatch) -> None:
     classification, plan = await planner.plan_all(prompt="list files", task_id="t1")
     assert classification.domain == "general"
     assert plan.agents == ["general"]
+
+
+def _one_agent_planner(inference: MagicMock) -> ExecutionPlanner:
+    reg = MagicMock()
+    agent = MagicMock()
+    agent.name = "general"
+    agent.domain = "general"
+    agent.config.accepts = ""
+    reg.all.return_value = [agent]
+    reg.names.return_value = ["general"]
+    return ExecutionPlanner(agent_registry=reg, inference_router=inference, tool_registry=None)
+
+
+@pytest.mark.asyncio
+async def test_the_planner_waits_out_a_short_cooldown_instead_of_failing_the_task(monkeypatch) -> None:
+    """Three tasks failed on a 40-45 s cooldown: three attempts 2-3 s apart gave up inside it."""
+    from inference.exceptions import AllModelsRateLimitedError
+    from orchestrator import router as router_mod
+
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(router_mod.asyncio, "sleep", fake_sleep)
+    good = MagicMock(spec=CompletionResponse)
+    good.text = (
+        '{"confidence": 0.9, "is_consequential": false, "domain": "general",'
+        ' "reasoning": "ok", "mode": "single_agent", "agents": ["general"]}'
+    )
+    cooling = AllModelsRateLimitedError("No model could serve planner - 1 cooling down (42s)", retry_after=42.0)
+    inference = MagicMock()
+    inference.complete = AsyncMock(side_effect=[cooling, good])
+
+    _, plan = await _one_agent_planner(inference).plan_all(prompt="list files", task_id="t1")
+
+    assert plan.agents == ["general"]
+    assert slept == [43.0]
+
+
+@pytest.mark.asyncio
+async def test_a_spent_allowance_fails_at_once_instead_of_retrying_into_it(monkeypatch) -> None:
+    from inference.exceptions import AllModelsRateLimitedError
+    from orchestrator import router as router_mod
+    from orchestrator.exceptions import RoutingError
+
+    monkeypatch.setattr(router_mod.asyncio, "sleep", AsyncMock())
+    spent = AllModelsRateLimitedError("1 FREE_SPENT (free allowance spent) until 12:51 PM", retry_after=3_600.0)
+    inference = MagicMock()
+    inference.complete = AsyncMock(side_effect=spent)
+
+    with pytest.raises(RoutingError, match="until 12:51 PM"):
+        await _one_agent_planner(inference).plan_all(prompt="list files", task_id="t1")
+    assert inference.complete.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_every_planner_call_shares_one_cache_session() -> None:
+    """Its 6k-token prompt is mostly the same each time: 0-4% cached without a key, 95% with one."""
+    good = MagicMock(spec=CompletionResponse)
+    good.text = (
+        '{"confidence": 0.9, "is_consequential": false, "domain": "general",'
+        ' "reasoning": "ok", "mode": "single_agent", "agents": ["general"]}'
+    )
+    inference = MagicMock()
+    inference.complete = AsyncMock(return_value=good)
+
+    await _one_agent_planner(inference).plan_all(prompt="list files", task_id="t1")
+
+    assert inference.complete.await_args.args[0].cache_key == "north-planner"

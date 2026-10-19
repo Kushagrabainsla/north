@@ -41,6 +41,10 @@ class CompletionRequest(BaseModel):
     component: str
     task_id: str | None = None
     run_id: str | None = None
+    # Names the prompt-cache session for a call that has no run, so calls sharing
+    # a long fixed prefix reuse it: the planner's 6k-token prompt was 0-4% cached,
+    # 95% with one key for every planner call. A run's own id takes precedence.
+    cache_key: str | None = None
     max_tokens: int | None = None
     temperature: float | None = None
     # When True the provider is instructed to return valid JSON (response_format

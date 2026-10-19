@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from agents import AgentRegistry
 from inference import CompletionRequest, InferenceRouter
+from inference.exceptions import AllModelsRateLimitedError
 from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPath, ExecutionPlan, IntentClassification
 from orchestrator.task_intent import is_repository_overview
@@ -150,6 +151,13 @@ logger = logging.getLogger(__name__)
 _PLANNER_MAX_ATTEMPTS: int = 3
 _PLANNER_RETRY_DELAY_S: float = 2.0
 _PLANNER_ATTEMPT_TIMEOUT_S: float = 45.0
+# A cooldown up to this long is waited out before the next attempt. The three
+# planner failures that were not a spent allowance were each a cooldown of 40-45 s,
+# and three attempts 2-3 s apart gave up inside it. A longer wait - an allowance
+# spent until 12:51 PM - fails at once instead of retrying into it.
+_PLANNER_MAX_COOLDOWN_WAIT_S: float = 120.0
+# One cache session for every planner call: the prompt's long fixed part is the same each time.
+_PLANNER_CACHE_KEY = "north-planner"
 
 if TYPE_CHECKING:
     from utils.tools import ToolRegistryPort
@@ -473,6 +481,7 @@ class ExecutionPlanner:
                             prompt=full_prompt,
                             component="planner",
                             task_id=task_id,
+                            cache_key=_PLANNER_CACHE_KEY,
                             json_mode=True,
                             temperature=0.0,
                         )
@@ -486,6 +495,11 @@ class ExecutionPlanner:
                 logger.warning("Planner attempt %d/%d failed: %s", attempt, max_attempts, exc)
                 if attempt < max_attempts:
                     sleep_s = base_delay * (backoff_factor ** (attempt - 1))
+                    cooldown = exc.retry_after if isinstance(exc, AllModelsRateLimitedError) else None
+                    if cooldown:
+                        if cooldown > _PLANNER_MAX_COOLDOWN_WAIT_S:
+                            break
+                        sleep_s = max(sleep_s, cooldown + 1)
                     await asyncio.sleep(sleep_s)
         raise RoutingError(f"planner failed after {max_attempts} attempts: {last_exc}")
 

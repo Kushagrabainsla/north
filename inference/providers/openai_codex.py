@@ -550,7 +550,7 @@ class OpenAICodexProvider:
             body["text"] = {"format": {"type": "json_schema", **schema}}
         elif request.json_mode:
             body["text"] = {"format": {"type": "json_object"}}
-        result = await self._stream(model_id, body, run_id=request.run_id)
+        result = await self._stream(model_id, body, run_id=request.run_id, session=request.run_id or request.cache_key)
         if result["calls"]:
             raise InferenceError("OpenAI Codex unexpectedly returned a tool call for a completion request")
         return CompletionResponse(
@@ -583,7 +583,7 @@ class OpenAICodexProvider:
         }
         if instructions:
             body["instructions"] = instructions
-        result = await self._stream(model_id, body, token_callback, run_id=request.run_id)
+        result = await self._stream(model_id, body, token_callback, run_id=request.run_id, session=request.run_id)
         calls = result["calls"]
         return ToolCallResponse(
             type="tool_calls" if calls else "message",
@@ -606,19 +606,20 @@ class OpenAICodexProvider:
         token_callback: Callable[[str], Awaitable[None]] | None = None,
         *,
         run_id: str | None = None,
+        session: str | None = None,
     ) -> dict[str, Any]:
         trace = _RequestTrace(client_request_id=f"{run_id or 'north'}:{generate_id()}")
         stream = _ResponsesStream(token_callback)
         try:
             headers = dict(await self._request_headers())
             headers["X-Client-Request-Id"] = trace.client_request_id
-            if run_id:
+            if session:
                 # The Codex backend reuses a cached prompt prefix only for requests
                 # in one session, named by this header as the official client does.
                 # Without it each step of a run re-sent everything uncached: a
                 # 4-step task was 0% cached; a repeated 26k-token prompt went from
                 # 0% to 98% reused with it. A prompt_cache_key alone did nothing.
-                headers["session_id"] = run_id
+                headers["session_id"] = session
             async with self._client.stream("POST", "/responses", json=body, headers=headers) as response:
                 trace.observe(response.headers)
                 if response.status_code >= 400:
