@@ -8,6 +8,20 @@ from pathlib import Path
 
 import pytest
 
+# Each live test's time limit. A test that waited on an agent which never
+# answered ran for 14 days, and in the nightly check one hang stalls every stage
+# after it until the check's own hour runs out, reported as nothing more than
+# "failed". Ten minutes is twice what a throttled one needs: Codex, answered
+# 429 by the plan's rate limit, waits about 278 s and tries again.
+LIVE_TEST_TIME_LIMIT_S = 600
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Every live test without its own limit gets the shared one."""
+    for item in items:
+        if item.get_closest_marker("timeout") is None and "tests/live/" in item.nodeid.replace("\\", "/"):
+            item.add_marker(pytest.mark.timeout(LIVE_TEST_TIME_LIMIT_S))
+
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
