@@ -13,10 +13,12 @@ import asyncio
 import datetime
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from inference.base import InferenceRouter
+from inference.exceptions import missing_resource
 from inference.models import CompletionRequest
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource
@@ -47,6 +49,17 @@ _TERMINAL_OUTCOME: dict[str, str] = {
     "task_cancelled": "cancelled",
 }
 _APPROVAL_ACTION_PREFIX = "approval_responded:"
+
+# Not lessons, so not episodes. An episode is recalled into later prompts as
+# "relevant past context", three per run, and 32 of the 33 that were not
+# successes taught nothing: 25 were test runs in throwaway temp folders
+# (benchmarks, the live tests), 7 were "No model could serve planner" - the
+# model rate-limited or an allowance spent, which says nothing about the task.
+_TEMP_ROOTS = tuple(
+    {str(Path(tempfile.gettempdir()).resolve()), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"}
+)
+# north's own words for "the model was not there", as its routing and planner write them.
+_NO_MODEL_PHRASES = ("No model could serve", "model pool unavailable", "every model is rate-limited")
 
 # Ledger sources whose `input` is the user's original task prompt.
 _PROMPT_SOURCES = frozenset(
@@ -138,10 +151,12 @@ class EpisodeConsolidator:
         prompt = self._extract_prompt(rows)
         if not prompt:
             return False
+        workspace = self._extract_workspace(rows)
+        if _in_temp_folder(workspace) or (outcome != "success" and _ended_for_want_of_a_model(rows)):
+            return False
         domain = self._extract_domain(rows)
         result = self._extract_result(rows, outcome)
         summary = await self._summarize(prompt, result, outcome)
-        workspace = self._extract_workspace(rows)
         identity = repository_identity(workspace) if workspace else None
         await self._episodic_store.record(
             task_id=task_id,
@@ -198,6 +213,9 @@ class EpisodeConsolidator:
                 "",
             )
             outputs.append(f"Failure: {terminal}".strip() if terminal else "The task failed.")
+        tools = list(dict.fromkeys(tool for entry in reversed(rows) for tool in entry.tools_used or []))
+        if tools:
+            outputs.append("Tools used: " + ", ".join(tools))
         feedback = EpisodeConsolidator._extract_approval_feedback(rows)
         if feedback:
             outputs.append("Approval feedback:\n" + "\n".join(feedback))
@@ -243,7 +261,9 @@ class EpisodeConsolidator:
         try:
             response = await self._inference_router.complete(
                 CompletionRequest(
-                    prompt=load_prompt("prompts/episode_summary.md").format(prompt=prompt, result=result[:3000]),
+                    prompt=load_prompt("prompts/episode_summary.md").format(
+                        prompt=prompt, result=result[:3000], outcome=outcome
+                    ),
                     component="episode_consolidator",
                     task_id=None,  # task already finished; no live cost to attribute
                 )
@@ -255,7 +275,11 @@ class EpisodeConsolidator:
                 return fallback
             except ValueError:
                 return text or fallback
-        except Exception:
+        except Exception as exc:
+            # With the model away, try again later: the raw fallback cut a task
+            # and its error off mid-sentence and was recalled like a lesson.
+            if missing_resource(exc):
+                raise
             logger.warning("EpisodeConsolidator: summarization failed, using fallback", exc_info=True)
             return fallback
 
@@ -278,3 +302,21 @@ class EpisodeConsolidator:
             os.replace(tmp, self._watermark_path)
         except OSError:
             logger.warning("EpisodeConsolidator: failed to persist watermark", exc_info=True)
+
+
+def _in_temp_folder(workspace: str) -> bool:
+    """A run in a throwaway temp folder is a test: a benchmark or a live test, not the user's work."""
+    if not workspace:
+        return False
+    resolved = str(Path(workspace).resolve())
+    return any(resolved == root or resolved.startswith(root.rstrip("/") + "/") for root in _TEMP_ROOTS)
+
+
+def _ended_for_want_of_a_model(rows: list[LedgerEntry]) -> bool:
+    """The task stopped because no model could answer, so it says nothing about the task."""
+    return any(
+        phrase in (entry.output or "")
+        for entry in rows
+        if entry.source == LedgerSource.SYSTEM or entry.action in ("agent_execution_failed", "task_failed")
+        for phrase in _NO_MODEL_PHRASES
+    )
