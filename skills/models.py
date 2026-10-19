@@ -9,6 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from skills.checks import CheckSpec
 from utils.step_approval import approval_fingerprint_value
 
 # Every skill lives in its own folder as this file.
@@ -48,6 +49,9 @@ class SkillExecution:
     outputs: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
     approval: str = "on_mutation"
     success_criteria: tuple[str, ...] = ()
+    # Checks run in code on the step's result (skills/checks.py). The criteria
+    # above are words the model reads; these decide whether the step passed.
+    checks: tuple[CheckSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,6 +123,9 @@ def skill_fingerprint(skill: Skill) -> str:
                 "outputs": skill.execution.outputs,
                 "approval": approval_fingerprint_value(skill.execution.approval),
                 "success_criteria": list(skill.execution.success_criteria),
+                # `checks` is left out on purpose: a check can only stop a run,
+                # never widen what it may do, so adding one must not send an
+                # active, scheduled flow back to be tested again.
             }
             if skill.execution is not None
             else None

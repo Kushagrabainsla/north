@@ -13,6 +13,7 @@ import re
 import shutil
 from pathlib import Path
 
+from skills.checks import parse_checks
 from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME, Skill, SkillExecution, SkillIntent, SkillSource
 from skills.parser import parse_skill_document
@@ -56,7 +57,7 @@ def parse_execution_contract(raw: object) -> SkillExecution | None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("execution must be a mapping")
-    known = {"agent", "tools", "inputs", "outputs", "approval", "success_criteria"}
+    known = {"agent", "tools", "inputs", "outputs", "approval", "success_criteria", "checks"}
     unknown = set(raw) - known
     if unknown:
         raise ValueError(f"Unknown execution fields: {sorted(unknown, key=str)}. Use only {sorted(known)}.")
@@ -77,6 +78,7 @@ def parse_execution_contract(raw: object) -> SkillExecution | None:
         raise ValueError("execution.success_criteria must be a list of non-empty strings")
     if not success_criteria:
         raise ValueError("execution.success_criteria must contain at least one check")
+    checks = parse_checks(raw.get("checks"))
     return SkillExecution(
         agent=agent,
         tools=tuple(dict.fromkeys(name.strip() for name in tools)),
@@ -84,6 +86,7 @@ def parse_execution_contract(raw: object) -> SkillExecution | None:
         outputs=_object_schema(raw.get("outputs", {"type": "object", "properties": {}}), "outputs"),
         approval=approval,
         success_criteria=tuple(item.strip() for item in success_criteria),
+        checks=checks,
     )
 
 

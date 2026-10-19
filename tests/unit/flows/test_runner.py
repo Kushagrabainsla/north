@@ -960,3 +960,74 @@ async def test_a_run_started_by_hand_is_not_announced(tmp_path):
     await runner.run("demo", trigger="schedule", test_mode=True)
 
     assert interaction.informed == []
+
+
+class SavingAgent(FakeAgent):
+    """Reports a saved file; saves it only from the attempt numbered *saves_on*."""
+
+    def __init__(self, path, saves_on: int | None) -> None:
+        super().__init__()
+        self.path = path
+        self.saves_on = saves_on
+
+    async def run(self, payload):
+        self.payloads.append(payload)
+        if self.saves_on is not None and len(self.payloads) >= self.saves_on:
+            self.path.write_text("# Briefing\n", encoding="utf-8")
+        return AgentResult(output="", summary="briefing", data={"file": str(self.path)}, tools_used=["write_file"])
+
+
+def _checked_skill(skills: SkillRegistry) -> SkillRegistry:
+    from skills.checks import CheckSpec
+
+    skill = skills.get("review-item")
+    skills._skills[skill.name] = replace(
+        skill, execution=replace(skill.execution, checks=(CheckSpec("saved_file", {"field": "file"}),))
+    )
+    return skills
+
+
+_ONE_STEP = """name: demo
+description: One briefing
+steps:
+  - name: brief
+    skill: review-item
+    approval: never
+"""
+
+
+async def test_a_step_that_fails_its_checks_is_told_what_failed_and_fixes_it(tmp_path):
+    """The research briefing said "completed" with a made-up title in it; now the check decides."""
+    agent = SavingAgent(tmp_path / "2026-10-17.md", saves_on=2)
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(agent),
+        _checked_skill(_skills(tmp_path)),
+        FlowRunStore(tmp_path / "r.db"),
+    )
+
+    run = await runner.run("demo")
+
+    assert run.status == "completed"
+    assert len(agent.payloads) == 2
+    assert "failed these checks" not in agent.payloads[0].prompt
+    assert f"- the file at {tmp_path / '2026-10-17.md'} was not saved, or is empty" in agent.payloads[1].prompt
+
+
+async def test_a_step_that_fails_its_checks_twice_stops_with_the_reason(tmp_path):
+    agent = SavingAgent(tmp_path / "2026-10-17.md", saves_on=None)
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(agent),
+        _checked_skill(_skills(tmp_path)),
+        FlowRunStore(tmp_path / "r.db"),
+    )
+
+    run = await runner.run("demo")
+
+    assert run.status == "paused"
+    assert len(agent.payloads) == 2
+    assert (
+        run.error
+        == f"Skill step 'brief' failed its checks: the file at {tmp_path / '2026-10-17.md'} was not saved, or is empty"
+    )

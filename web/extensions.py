@@ -164,6 +164,7 @@ def _execution_view(execution) -> dict[str, Any] | None:
         "outputs": execution.outputs,
         "approval": execution.approval,
         "success_criteria": list(execution.success_criteria),
+        "checks": [{check.name: check.args} if check.args else check.name for check in execution.checks],
     }
 
 

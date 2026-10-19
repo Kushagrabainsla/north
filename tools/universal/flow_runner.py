@@ -22,6 +22,7 @@ from flows.validation import (
     validate_flow_capabilities,
 )
 from inference.exceptions import missing_resource
+from skills.checks import run_checks
 from utils.handoff import declared_artifact_paths, missing_artifact_paths
 from utils.tasks import spawn
 from utils.time import localnow
@@ -347,110 +348,130 @@ class FlowRunner:
                     )
 
             step_task_id = run.task_id or f"flow:{run.run_id}"
-            try:
-                selected_agent = self._agents.get(selected_agent_name)
-                result = await selected_agent.run(
-                    AgentPayload(
-                        allow_candidate_skills=test_mode,
-                        task_id=step_task_id,
-                        prompt=_step_prompt(
-                            flow.name,
-                            step,
-                            step_inputs,
-                            outputs,
-                            success_criteria,
-                            output_schema,
-                            resumed_error=resumed_error if index == resume_at else "",
-                        ),
-                        workspace=self._workspace,
-                        # Configured by the operator (settings), so the server grants it.
-                        granted_workspace=self._workspace or "",
-                        skills=[step.skill] if step.skill else [],
-                        allowed_tools=list(allowed_tools),
-                        # "on_mutation" needs nothing here: every change a step
-                        # makes already goes to the approval layer.
-                        mutation_policy="deny" if approval == "never" else "allow",
-                        allow_delegation=False,
+            # The step, then once more if its result fails the skill's checks: told
+            # exactly what failed, an agent fixes it; a second failure stops the run.
+            failed_checks = ""
+            for check_round in range(2):
+                try:
+                    selected_agent = self._agents.get(selected_agent_name)
+                    result = await selected_agent.run(
+                        AgentPayload(
+                            allow_candidate_skills=test_mode,
+                            task_id=step_task_id,
+                            prompt=_step_prompt(
+                                flow.name,
+                                step,
+                                step_inputs,
+                                outputs,
+                                success_criteria,
+                                output_schema,
+                                resumed_error=resumed_error if index == resume_at and not failed_checks else "",
+                                failed_checks=failed_checks,
+                            ),
+                            workspace=self._workspace,
+                            # Configured by the operator (settings), so the server grants it.
+                            granted_workspace=self._workspace or "",
+                            skills=[step.skill] if step.skill else [],
+                            allowed_tools=list(allowed_tools),
+                            # "on_mutation" needs nothing here: every change a step
+                            # makes already goes to the approval layer.
+                            mutation_policy="deny" if approval == "never" else "allow",
+                            allow_delegation=False,
+                        )
                     )
-                )
-            except Exception as exc:
-                return self._store.update(
-                    run.run_id,
-                    status=_status_for(exc),
-                    current_step=index,
-                    outputs=outputs,
-                    error=_waiting_note(exc) or f"Skill step '{step.name}' failed: {exc}",
-                )
+                except Exception as exc:
+                    return self._store.update(
+                        run.run_id,
+                        status=_status_for(exc),
+                        current_step=index,
+                        outputs=outputs,
+                        error=_waiting_note(exc) or f"Skill step '{step.name}' failed: {exc}",
+                    )
 
-            if result.requires_approval or result.has_question:
-                return self._store.update(
-                    run.run_id,
-                    status="paused",
-                    current_step=index,
-                    outputs=outputs,
-                    error=result.question or f"Skill step '{step.name}' needs user attention.",
-                )
-
-            # What the agent promises to leave behind (its config's `produces`) is
-            # the durable result a schedule exists for. A model saying it wrote the
-            # file is not the file: unattended runs fail when it is absent, so a
-            # briefing that was never saved is not recorded as a success.
-            declared = declared_artifact_paths(
-                getattr(selected_agent.config, "produces", None) or [],
-                step_task_id,
-                localnow().date().isoformat(),
-            )
-            missing = missing_artifact_paths(declared)
-            if missing and run.trigger == "schedule":
-                return self._store.update(
-                    run.run_id,
-                    status="paused",
-                    current_step=index,
-                    outputs=outputs,
-                    error=f"Skill step '{step.name}': {selected_agent_name} completed without writing: "
-                    + ", ".join(missing),
-                )
-            written = [path for path in declared if path not in missing]
-
-            contract_output = _contract_output(result, output_schema)
-            output_errors = schema_errors(contract_output, output_schema, path="output")
-            if output_errors:
-                return self._store.update(
-                    run.run_id,
-                    status="paused",
-                    current_step=index,
-                    outputs=outputs,
-                    error=(
-                        f"Skill step '{step.name}' returned data outside skill "
-                        f"'{step.skill or 'inline instructions'}'s output contract: {'; '.join(output_errors)}"
-                    ),
-                )
-
-            # A skill can promise files in its structured output, too. Verify
-            # that contract with the same helper as configured `produces`;
-            # prose and schema-valid paths are not evidence of saved work.
-            artifact_schema = output_schema.get("properties", {}).get("artifacts", {})
-            if artifact_schema.get("type") == "array" and artifact_schema.get("items", {}).get("type") == "string":
-                reported = contract_output.get("artifacts", [])
-                paths = [
-                    str(Path(self._workspace) / path) if self._workspace and not Path(path).is_absolute() else path
-                    for path in reported
-                ]
-                # Without a granted workspace a relative path is ambiguous;
-                # the daemon's working directory must not count as evidence.
-                unresolved = [path for path in paths if not Path(path).is_absolute()]
-                missing = [*unresolved, *missing_artifact_paths(path for path in paths if path not in unresolved)]
-                if missing:
+                if result.requires_approval or result.has_question:
                     return self._store.update(
                         run.run_id,
                         status="paused",
                         current_step=index,
                         outputs=outputs,
-                        error=f"Skill step '{step.name}' reported missing or empty artifacts: "
-                        + ", ".join(missing)
-                        + (". Use absolute paths when no workspace is configured." if unresolved else ""),
+                        error=result.question or f"Skill step '{step.name}' needs user attention.",
                     )
-                written = list(dict.fromkeys([*written, *paths]))
+
+                # What the agent promises to leave behind (its config's `produces`) is
+                # the durable result a schedule exists for. A model saying it wrote the
+                # file is not the file: unattended runs fail when it is absent, so a
+                # briefing that was never saved is not recorded as a success.
+                declared = declared_artifact_paths(
+                    getattr(selected_agent.config, "produces", None) or [],
+                    step_task_id,
+                    localnow().date().isoformat(),
+                )
+                missing = missing_artifact_paths(declared)
+                if missing and run.trigger == "schedule":
+                    return self._store.update(
+                        run.run_id,
+                        status="paused",
+                        current_step=index,
+                        outputs=outputs,
+                        error=f"Skill step '{step.name}': {selected_agent_name} completed without writing: "
+                        + ", ".join(missing),
+                    )
+                written = [path for path in declared if path not in missing]
+
+                contract_output = _contract_output(result, output_schema)
+                output_errors = schema_errors(contract_output, output_schema, path="output")
+                if output_errors:
+                    return self._store.update(
+                        run.run_id,
+                        status="paused",
+                        current_step=index,
+                        outputs=outputs,
+                        error=(
+                            f"Skill step '{step.name}' returned data outside skill "
+                            f"'{step.skill or 'inline instructions'}'s output contract: {'; '.join(output_errors)}"
+                        ),
+                    )
+
+                # A skill can promise files in its structured output, too. Verify
+                # that contract with the same helper as configured `produces`;
+                # prose and schema-valid paths are not evidence of saved work.
+                artifact_schema = output_schema.get("properties", {}).get("artifacts", {})
+                if artifact_schema.get("type") == "array" and artifact_schema.get("items", {}).get("type") == "string":
+                    reported = contract_output.get("artifacts", [])
+                    paths = [
+                        str(Path(self._workspace) / path) if self._workspace and not Path(path).is_absolute() else path
+                        for path in reported
+                    ]
+                    # Without a granted workspace a relative path is ambiguous;
+                    # the daemon's working directory must not count as evidence.
+                    unresolved = [path for path in paths if not Path(path).is_absolute()]
+                    missing = [*unresolved, *missing_artifact_paths(path for path in paths if path not in unresolved)]
+                    if missing:
+                        return self._store.update(
+                            run.run_id,
+                            status="paused",
+                            current_step=index,
+                            outputs=outputs,
+                            error=f"Skill step '{step.name}' reported missing or empty artifacts: "
+                            + ", ".join(missing)
+                            + (". Use absolute paths when no workspace is configured." if unresolved else ""),
+                        )
+                    written = list(dict.fromkeys([*written, *paths]))
+
+                problems = (
+                    await run_checks(execution.checks, contract_output, today=localnow().date()) if execution else []
+                )
+                if not problems:
+                    break
+                if check_round == 1:
+                    return self._store.update(
+                        run.run_id,
+                        status="paused",
+                        current_step=index,
+                        outputs=outputs,
+                        error=f"Skill step '{step.name}' failed its checks: " + "; ".join(problems),
+                    )
+                failed_checks = "\n".join(f"- {problem}" for problem in problems)
 
             outputs.append(
                 {
@@ -520,6 +541,7 @@ def _step_prompt(
     output_schema: dict[str, Any],
     *,
     resumed_error: str = "",
+    failed_checks: str = "",
 ) -> str:
     previous = {item["step"]: item.get("data", {}) for item in outputs}
     criteria = "\n".join(f"- {item}" for item in success_criteria)
@@ -530,9 +552,16 @@ def _step_prompt(
         if resumed_error
         else ""
     )
+    checked = (
+        f"Your last attempt at this step failed these checks:\n{failed_checks}\n"
+        "Fix exactly these problems and keep what already passed. A file you saved is still "
+        "there: correct it rather than starting over.\n\n"
+        if failed_checks
+        else ""
+    )
     return (
         f"Execute flow '{flow_name}', step '{step.name}', using {step.skill or 'the inline procedure'}.\n\n"
-        f"{resumed}"
+        f"{resumed}{checked}"
         f"Step instructions:\n{step.instructions}\n\n"
         f"Resolved inputs:\n{json.dumps(inputs, indent=2, default=str)}\n\n"
         f"Previous step outputs:\n{json.dumps(previous, indent=2, default=str)}\n\n"
