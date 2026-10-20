@@ -10,8 +10,7 @@ per entry, cut only between entries.
 from __future__ import annotations
 
 import asyncio
-import re
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -42,6 +41,15 @@ class FetchUrlTool(Tool):
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "The URL to fetch"},
+            "params": {
+                "type": "object",
+                "description": (
+                    "Query values, which north encodes and adds to the URL, e.g. "
+                    '{"search_query": "all:\\"world models\\"", "max_results": 25}. '
+                    "Give values here rather than encoding them into the URL by hand."
+                ),
+                "additionalProperties": {"type": ["string", "number", "boolean"]},
+            },
         },
         "required": ["url"],
     }
@@ -50,11 +58,23 @@ class FetchUrlTool(Tool):
         url = input.params.get("url", "").strip()
         if not url:
             return ToolOutput(success=False, error="Parameter 'url' is required.")
-        url, repaired = _repair_arxiv_query(url)
-        output = await asyncio.to_thread(_fetch_sync, url)
-        if repaired and output.success and isinstance(output.data, dict):
-            output.data["note"] = repaired
-        return output
+        values = input.params.get("params") or {}
+        if not isinstance(values, dict):
+            return ToolOutput(success=False, error="Parameter 'params' must be an object of query values.")
+        return await asyncio.to_thread(_fetch_sync, _with_query(url, values))
+
+
+def _with_query(url: str, values: dict) -> str:
+    """*url* with *values* encoded onto its query.
+
+    The model encoding a query by hand is how an arXiv search lost its "&"s to
+    "%26" and its "newest first" with them; north encodes the values instead.
+    """
+    if not values:
+        return url
+    parts = urlsplit(url)
+    added = urlencode({key: str(value) for key, value in values.items()}, quote_via=quote, safe=":")
+    return urlunsplit(parts._replace(query=f"{parts.query}&{added}" if parts.query else added))
 
 
 def _fetch_sync(url: str) -> ToolOutput:
@@ -85,31 +105,6 @@ def _fetch_sync(url: str) -> ToolOutput:
             "chars": len(text),
         },
     )
-
-
-# The arXiv API's own parameters. One found inside another's value was an "&"
-# written as "%26": the model asked for
-# search_query=all:%22World%20Models%22%26sortBy=submittedDate%26sortOrder=descending,
-# arXiv read the whole string as the search, ignored "newest first", and the
-# briefing reported no new World Models papers in a week that had them.
-_ARXIV_PARAMS = ("search_query", "id_list", "start", "max_results", "sortBy", "sortOrder")
-_ARXIV_PARAM_INSIDE = re.compile(r"&(?=(?:" + "|".join(_ARXIV_PARAMS) + r")=)")
-
-
-def _repair_arxiv_query(url: str) -> tuple[str, str]:
-    """An arXiv API URL with its encoded "&"s restored, and a note saying so; other URLs unchanged."""
-    parts = urlsplit(url)
-    if (parts.hostname or "").lower() != "export.arxiv.org" or not parts.path.startswith("/api/query"):
-        return url, ""
-    pairs: list[tuple[str, str]] = []
-    for key, value in parse_qsl(parts.query, keep_blank_values=True):
-        head, *rest = _ARXIV_PARAM_INSIDE.split(value)
-        pairs.append((key, head))
-        pairs.extend(tuple(chunk.split("=", 1)) for chunk in rest)  # type: ignore[misc]
-    if len(pairs) == len(parse_qsl(parts.query, keep_blank_values=True)):
-        return url, ""
-    repaired = urlunsplit(parts._replace(query=urlencode(pairs, quote_via=quote, safe=":")))
-    return repaired, f"Repaired the arXiv query: '%26' inside a value was meant as '&'. Fetched {repaired}"
 
 
 def _is_xml(content_type: str, text: str) -> bool:

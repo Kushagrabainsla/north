@@ -94,43 +94,44 @@ def test_xml_that_is_not_a_feed_comes_back_as_it_was(
     assert _fetch(monkeypatch, text, content_type) == text
 
 
-_BROKEN = (
-    "https://export.arxiv.org/api/query?search_query=all:%22World%20Models%22"
-    "%26sortBy=submittedDate%26sortOrder=descending%26max_results=25"
-)
-_MEANT = (
-    "https://export.arxiv.org/api/query?search_query=all:%22World%20Models%22"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=25"
-)
-
-
-def test_an_arxiv_query_with_its_ampersands_encoded_is_repaired() -> None:
-    """As written, arXiv read the whole string as the search and returned papers from 2024 to Oct 2."""
-    url, note = fetch_url._repair_arxiv_query(_BROKEN)
-
-    assert url == _MEANT
-    assert note.startswith("Repaired the arXiv query")
-
-
 @pytest.mark.parametrize(
-    "url",
-    [_MEANT, "https://example.com/search?q=a%26b", "https://export.arxiv.org/abs/2610.22041"],
+    ("url", "values", "fetched"),
+    [
+        (
+            "https://export.arxiv.org/api/query",
+            {
+                "search_query": 'all:"World Models"',
+                "sortBy": "submittedDate",
+                "sortOrder": "descending",
+                "max_results": 25,
+            },
+            "https://export.arxiv.org/api/query?search_query=all:%22World%20Models%22"
+            "&sortBy=submittedDate&sortOrder=descending&max_results=25",
+        ),
+        ("https://example.com/search?lang=en", {"q": "a&b"}, "https://example.com/search?lang=en&q=a%26b"),
+        ("https://example.com/page", {}, "https://example.com/page"),
+    ],
 )
-def test_every_other_url_is_left_exactly_as_given(url: str) -> None:
-    assert fetch_url._repair_arxiv_query(url) == (url, "")
-
-
 @pytest.mark.asyncio
-async def test_the_result_says_the_query_was_repaired(monkeypatch: pytest.MonkeyPatch) -> None:
-    fetched: list[str] = []
+async def test_query_values_are_encoded_by_north_not_by_the_model(
+    monkeypatch: pytest.MonkeyPatch, url: str, values: dict, fetched: str
+) -> None:
+    """Hand-encoded, an arXiv search's "&"s became "%26" and the papers came unsorted, from 2024 to Oct 2."""
+    asked: list[str] = []
 
-    def fake_fetch(url: str) -> FetchedText:
-        fetched.append(url)
-        return FetchedText(url=url, text=_arxiv_feed(1), content_type="application/atom+xml")
+    def fake_fetch(address: str) -> FetchedText:
+        asked.append(address)
+        return FetchedText(url=address, text="ok", content_type="text/plain")
 
     monkeypatch.setattr(fetch_url, "fetch_url_text", fake_fetch)
 
-    output = await fetch_url.FetchUrlTool().run(ToolInput(params={"url": _BROKEN}))
+    output = await fetch_url.FetchUrlTool().run(ToolInput(params={"url": url, "params": values}))
 
-    assert fetched == [_MEANT]
-    assert output.data["note"].startswith("Repaired the arXiv query")
+    assert output.success and asked == [fetched]
+
+
+@pytest.mark.asyncio
+async def test_params_that_are_not_an_object_are_refused() -> None:
+    output = await fetch_url.FetchUrlTool().run(ToolInput(params={"url": "https://example.com", "params": "q=a"}))
+
+    assert not output.success and "object" in output.error
