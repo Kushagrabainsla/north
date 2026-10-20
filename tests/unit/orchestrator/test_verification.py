@@ -353,3 +353,20 @@ def test_claimed_relative_file_path_in_workspace_ok(tmp_path) -> None:
     output = "Report saved to docs/report.md"
     violations = verify_claims(output, ["write_file"], workspace=str(tmp_path))
     assert violations == []
+
+
+def test_naming_create_skill_to_validate_and_activate_is_not_a_request_to_create_one() -> None:
+    """The real task was flagged for a create it never asked for, and its correction pass ran it again."""
+    prompt = (
+        "Re-activate the research-paper-briefing skill, which I edited. Use create_skill: validate it, "
+        "then ask me to confirm and activate it."
+    )
+
+    assert (
+        evidence_sufficiency_violations(
+            prompt,
+            ["create_skill", "request_approval"],
+            evidence_actions={"create_skill:validate": 1, "request_approval": 1, "create_skill:activate": 1},
+        )
+        == []
+    )

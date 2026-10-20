@@ -60,12 +60,13 @@ _REPO_CONTENT_TOOLS = frozenset({"read_file", "search_files", "search_code"})
 _CODING_AGENT = "coding_agent"
 _WEB_EVIDENCE_TOOLS = frozenset({"web_search", "fetch_url"})
 
+# A request to author one, in words. Naming the tool is not one: "Use create_skill: validate
+# it, then activate it" asked for neither a create nor an update, and was flagged as missing both.
 _CAPABILITY_REQUESTS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
     (
         "flow creation or update",
         re.compile(
-            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\b(?:north\s+)?flow\b"
-            r"|\bcreate_flow\b",
+            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\b(?:north\s+)?flow\b",
             re.IGNORECASE,
         ),
         frozenset({"create_flow:create", "create_flow:update"}),
@@ -73,8 +74,7 @@ _CAPABILITY_REQUESTS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = 
     (
         "skill creation or update",
         re.compile(
-            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\b(?:north\s+)?skill\b"
-            r"|\bcreate_skill\b",
+            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\b(?:north\s+)?skill\b",
             re.IGNORECASE,
         ),
         frozenset({"create_skill:create", "create_skill:update"}),
@@ -82,8 +82,7 @@ _CAPABILITY_REQUESTS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = 
     (
         "North tool creation or update",
         re.compile(
-            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\bnorth\s+tool\b"
-            r"|\bcreate_tool\b",
+            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\bnorth\s+tool\b",
             re.IGNORECASE,
         ),
         frozenset({"create_tool:create", "create_tool:update"}),

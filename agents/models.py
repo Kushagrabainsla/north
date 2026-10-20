@@ -87,6 +87,10 @@ class AgentPayload(BaseModel):
     # delegates a fix back to the coder - the orchestrator owns that fix loop, and a
     # second delegation path would duplicate work and bypass the bounded cap.
     allow_delegation: bool = True
+    # Whether the run may ask the user (ask_user, request_approval). A correction
+    # pass after a finished run may not: it repeats nothing the run already did,
+    # questions included. Actions still go to the approval layer as always.
+    allow_questions: bool = True
     # Server-owned edit scope for this run. When set, mutating file tools consult
     # it (via ToolInput.edit_scope) before writing, so a task can be confined to
     # its permitted modules/paths. None means unrestricted - the default, which

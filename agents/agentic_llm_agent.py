@@ -102,7 +102,9 @@ _EVIDENCE_LOCATOR_KEYS: tuple[str, ...] = (
 _SUMMARY_CHARS = 120
 
 
-def _tool_schemas(tool_map: dict[str, Tool], *, allow_delegation: bool, agent_names: Sequence[str] = ()) -> list[dict]:
+def _tool_schemas(
+    tool_map: dict[str, Tool], *, allow_delegation: bool, allow_questions: bool = True, agent_names: Sequence[str] = ()
+) -> list[dict]:
     """Every tool definition sent to the model this turn.
 
     Sorted by name, not by confidence. Tool definitions are the largest stable
@@ -116,7 +118,7 @@ def _tool_schemas(tool_map: dict[str, Tool], *, allow_delegation: bool, agent_na
     order, which would reorder the delegation schema between runs and cost the
     cached prefix that sorting the tools above exists to protect.
     """
-    internal = [FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
+    internal = [FIND_TOOLS_SCHEMA, *((REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA) if allow_questions else ())]
     if allow_delegation:
         internal.insert(0, delegate_task_schema(sorted(agent_names)))
     return [tool_map[name].schema() for name in sorted(tool_map)] + internal
@@ -547,6 +549,7 @@ class AgenticLLMAgent(LLMAgent):
             tools = _tool_schemas(
                 visible_tools,
                 allow_delegation=payload.allow_delegation and payload.execution_profile != "quick_readonly",
+                allow_questions=payload.allow_questions,
                 agent_names=self._delegatable_agent_names(),
             )
             token_cb = self._make_token_callback(payload.task_id)
@@ -850,6 +853,13 @@ class AgenticLLMAgent(LLMAgent):
             result_str = await self._delegate_task(payload, params)
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
+        if call.name in {"request_approval", "ask_user"} and not payload.allow_questions:
+            return (
+                call,
+                _failed_json("This run may not ask the user: finish with what you have, and say what is still open."),
+                False,
+                [],
+            )
         if call.name == "request_approval" and params.get("wait") is False:
             card = await self._hand_over_card(payload, params)
             if card is None:

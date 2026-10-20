@@ -37,8 +37,9 @@ _CRITIC_REQUEST_CHARS = 1500
 _CRITIC_ANSWER_CHARS = 3000
 
 _SELF_REPAIR_INSTRUCTION = (
-    "Either actually perform those actions using your tools, or rewrite your answer to "
-    "remove any claim you did not verify with a tool. Never state something was done unless a tool did it."
+    "Do only what is still missing to close those gaps, with your tools, or rewrite your answer to "
+    "remove any claim you did not verify with a tool. Never state something was done unless a tool did it. "
+    "If a gap is not one, because the check misread the task, say why in the answer."
 )
 
 
@@ -132,8 +133,14 @@ class ResultAuditor:
         folding its cost/tokens into *result*. On any failure the original answer
         and its violations are kept.
         """
+        # The pass continues the finished run; it does not start the task again.
+        # Given only the task and the gaps, an agent asked to re-activate a skill
+        # validated it again and asked the user again to confirm what was done.
+        done = ", ".join(sorted(_evidence_actions(result) or set(result.successful_tools or []))) or "nothing"
         feedback = (
-            "A verification check found claims in your previous answer with no tool evidence:\n"
+            f"Your previous answer was:\n{result.output}\n\n"
+            f"Already done in this task, by tools that succeeded: {done}. Do not repeat any of it.\n\n"
+            "A verification check found gaps in that answer:\n"
             + "\n".join(f"- {v}" for v in violations)
             + f"\n\n{_SELF_REPAIR_INSTRUCTION}"
         )
@@ -143,6 +150,7 @@ class ResultAuditor:
                 "parent_run_id": result.run_id or payload.run_id,
                 "attempt": payload.attempt + 1,
                 "prompt": f"{payload.prompt}\n\n[correction required]\n{feedback}",
+                "allow_questions": False,
             }
         )
         await self._journal.emit(task_id, "self_repair_started", {"agent": agent.name, "violations": violations})
