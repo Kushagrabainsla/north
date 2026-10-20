@@ -1396,6 +1396,15 @@ class Orchestrator:
             result = await tool.execute(
                 self._tool_input_factory(params=params, edit_scope=edit_scope, granted_workspace=workspace or None)
             )
+            # A direct call that failed, other than by your refusal, goes to the agent,
+            # which reads the error and tries again. Shown the error itself, the
+            # planner's "screen=Alienware" ended the task, though a step that read the
+            # screens' names, "AW3425DWM" among them, would have done it.
+            if not result.success and result.failure_kind != "refused":
+                await self._fall_back_to_agent(
+                    task_id, prompt, workspace, context, edit_scope, f"{plan.direct_tool} answered: {result.error}"
+                )
+                return
             success = result.success
             output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
             # No image-interpretation branch here on purpose: every tool that returns
@@ -1408,19 +1417,14 @@ class Orchestrator:
                 await self._running_task_store.mark_side_effect(task_id)
         except ToolNotFoundError:
             logger.warning("single_tool fallback: tool %r not found, re-routing to agent", plan.direct_tool)
-            fallback = self._execution_planner.build_fallback_plan("general", task_id)
-            await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
-            fallback_failures = await self._execute_parallel_groups(
-                task_id, prompt, fallback, workspace, context=context, edit_scope=edit_scope
-            )
-            if fallback_failures:
-                await self._report_execution_failures(task_id, fallback_failures)
-            await self._finish_task(task_id, failures=fallback_failures, total_agents=len(fallback.agents))
+            await self._fall_back_to_agent(task_id, prompt, workspace, context, edit_scope, "")
             return
         except Exception as exc:
             logger.warning("Direct tool execution error in task %s: %s", task_id, exc, exc_info=True)
-            output = f"Tool execution error: {exc}"
-            success = False
+            await self._fall_back_to_agent(
+                task_id, prompt, workspace, context, edit_scope, f"{plan.direct_tool} raised: {exc}"
+            )
+            return
 
         await self._stream_manager.emit(task_id, "tool_result", {"tool": plan.direct_tool, "success": success})
 
@@ -1434,6 +1438,27 @@ class Orchestrator:
             payload={"text": output},
         )
         await self._finish_task(task_id, skip_extraction=True)
+
+    async def _fall_back_to_agent(
+        self,
+        task_id: str,
+        prompt: str,
+        workspace: str,
+        context: str,
+        edit_scope: EditAuthorizer | None,
+        attempt: str,
+    ) -> None:
+        """Run the task with the general agent, told what the direct attempt answered, if there was one."""
+        fallback = self._execution_planner.build_fallback_plan("general", task_id)
+        if attempt:
+            context = f"{context}\n\n## A direct tool call already failed\n{attempt}".strip()
+        await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
+        failures = await self._execute_parallel_groups(
+            task_id, prompt, fallback, workspace, context=context, edit_scope=edit_scope
+        )
+        if failures:
+            await self._report_execution_failures(task_id, failures)
+        await self._finish_task(task_id, failures=failures, total_agents=len(fallback.agents))
 
     async def _finish_task(
         self,

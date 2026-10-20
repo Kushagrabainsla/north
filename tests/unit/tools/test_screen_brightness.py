@@ -107,16 +107,13 @@ async def test_a_set_without_a_screen_sets_all_and_reports_what_each_reads_back(
     ("screen", "chosen"),
     [
         ("aw3425dwm", ["AW3425DWM"]),
-        ("Dell monitor", ["DELL P2419H"]),
-        ("Alienware", ["AW3425DWM"]),  # the planner's words for "my Alienware monitor"
-        ("my Alienware monitor", ["AW3425DWM"]),
-        ("laptop", ["Built-in Retina Display"]),
-        ("my macbook", ["Built-in Retina Display"]),
-        ("the monitors", ["AW3425DWM", "DELL P2419H"]),
+        ("dell", ["DELL P2419H"]),
+        ("Built-in", ["Built-in Retina Display"]),
+        ("p2419", ["DELL P2419H"]),
     ],
 )
 @pytest.mark.asyncio
-async def test_screens_are_picked_by_name_brand_or_as_the_laptop(
+async def test_screens_are_picked_by_their_name_or_a_part_of_it(
     monkeypatch: pytest.MonkeyPatch, screen: str, chosen: list[str]
 ) -> None:
     calls = _display(monkeypatch, {_LAPTOP: 24, _ALIENWARE: 100, _DELL: 50})
@@ -124,6 +121,20 @@ async def test_screens_are_picked_by_name_brand_or_as_the_laptop(
     await _run(brightness=30, screen=screen)
 
     assert calls == [(name, 30) for name in chosen]
+
+
+@pytest.mark.parametrize("screen", ["Alienware", "laptop"])
+@pytest.mark.asyncio
+async def test_a_word_no_name_contains_lists_the_names_to_ask_with(
+    monkeypatch: pytest.MonkeyPatch, screen: str
+) -> None:
+    """No brand table or list of words for the laptop: the agent reads the names and asks again."""
+    calls = _display(monkeypatch, {_LAPTOP: 24, _ALIENWARE: 100})
+
+    result = await _run(brightness=30, screen=screen)
+
+    assert result.text == f"No screen matches '{screen}'. Screens: Built-in Retina Display, AW3425DWM."
+    assert calls == []
 
 
 @pytest.mark.asyncio

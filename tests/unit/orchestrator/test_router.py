@@ -482,3 +482,23 @@ async def test_every_planner_call_shares_one_cache_session() -> None:
     await _one_agent_planner(inference).plan_all(prompt="list files", task_id="t1")
 
     assert inference.complete.await_args.args[0].cache_key == "north-planner"
+
+
+@pytest.mark.asyncio
+async def test_a_planner_out_of_models_says_so_so_the_task_waits_instead_of_failing(monkeypatch) -> None:
+    """Unchained, "No model could serve planner" read as a logic_error and failed the task."""
+    from inference.exceptions import AllModelsRateLimitedError, missing_resource
+    from orchestrator import router as router_mod
+    from orchestrator.exceptions import RoutingError
+    from orchestrator.failure_handler import classify_error
+
+    monkeypatch.setattr(router_mod.asyncio, "sleep", AsyncMock())
+    spent = AllModelsRateLimitedError("1 FREE_SPENT (free allowance spent) until 12:51 PM", retry_after=3_600.0)
+    inference = MagicMock()
+    inference.complete = AsyncMock(side_effect=spent)
+
+    with pytest.raises(RoutingError) as failure:
+        await _one_agent_planner(inference).plan_all(prompt="list files", task_id="t1")
+
+    assert classify_error(failure.value) == "model_unavailable"
+    assert missing_resource(failure.value) == "a model"

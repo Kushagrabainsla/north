@@ -15,16 +15,6 @@ from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._display import Display, Screen, current
 
-# Words for the laptop's own screen, whose name macOS gives as "Built-in Retina Display".
-_BUILT_IN_WORDS = frozenset({"built-in", "builtin", "internal", "laptop", "macbook"})
-_FILLER_WORDS = frozenset(
-    {"my", "the", "all", "monitor", "monitors", "screen", "screens", "display", "displays", "external"}
-)
-# Brands a monitor's own name leaves out. Most carry theirs ("DELL P2419H",
-# "LG HDR 4K"); Alienware's do not: asked for "my Alienware monitor", the
-# planner passed screen="Alienware", and the only name was "AW3425DWM".
-_BRAND_PREFIXES: dict[str, tuple[str, ...]] = {"alienware": ("aw",)}
-
 
 class ScreenBrightnessTool(Tool):
     """Read or set the brightness of this computer's screens."""
@@ -34,8 +24,8 @@ class ScreenBrightnessTool(Tool):
     description = (
         "Read or set the brightness of this computer's screens - the laptop's own screen and any "
         "external monitors - from 0 to 100%. action='get' reads each screen's level and name; "
-        "action='set' with brightness changes it. Pass screen to pick one (a name from a get, or "
-        "'laptop'); leave it out for every screen. For a relative change (\"a bit brighter\"), get "
+        "action='set' with brightness changes it. Pass screen to pick one by a name from a get; "
+        'leave it out for every screen. For a relative change ("a bit brighter"), get '
         "first, then set. Lamps and smart bulbs use the kasa tool instead. "
         "Setting follows the approval mode; reading never asks."
     )
@@ -60,7 +50,9 @@ class ScreenBrightnessTool(Tool):
             },
             "screen": {
                 "type": "string",
-                "description": "One screen by name (e.g. 'AW3425DWM', 'laptop'). Omit it for every screen.",
+                "description": (
+                    "One screen, by its name or a part of it, as action='get' lists them. Omit it for every screen."
+                ),
             },
         },
     }
@@ -119,25 +111,16 @@ async def _apply(display: type[Display], screen: Screen, level: int | None) -> d
 
 
 def _pick(screens: list[Screen], wanted: str) -> list[Screen]:
-    """The screens *wanted* names: an exact name, the laptop, a brand or model word, or "the monitors"."""
+    """The screens *wanted* names, by their name or any part of it; every screen when nothing is named.
+
+    A word the names do not contain ("laptop", a brand) matches nothing, and the
+    error lists the names, so the agent asks again with one of them.
+    """
     if not wanted:
         return screens
     query = wanted.lower()
     exact = [screen for screen in screens if screen.name.lower() == query]
-    if exact:
-        return exact
-    words = [word for word in query.replace(",", " ").split() if word not in _FILLER_WORDS]
-    if any(word in _BUILT_IN_WORDS for word in words):
-        return [screen for screen in screens if screen.built_in]
-    if not words:
-        monitors_only = "monitor" in query or "external" in query
-        return [screen for screen in screens if not (monitors_only and screen.built_in)]
-    return [screen for screen in screens if all(_answers_to(screen, word) for word in words)]
-
-
-def _answers_to(screen: Screen, word: str) -> bool:
-    name = screen.name.lower()
-    return word in name or name.startswith(_BRAND_PREFIXES.get(word, ()))
+    return exact or [screen for screen in screens if query in screen.name.lower()]
 
 
 def _lines(results: list[dict[str, Any]], changed: bool) -> str:

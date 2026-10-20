@@ -501,7 +501,10 @@ class ExecutionPlanner:
                             break
                         sleep_s = max(sleep_s, cooldown + 1)
                     await asyncio.sleep(sleep_s)
-        raise RoutingError(f"planner failed after {max_attempts} attempts: {last_exc}")
+        # Chained, so the cause is seen: unchained, "No model could serve planner"
+        # read as a logic_error, failed the task instead of queueing it until the
+        # model was back, and was learned as a failed task.
+        raise RoutingError(f"planner failed after {max_attempts} attempts: {last_exc}") from last_exc
 
     def build_fallback_plan(self, domain: str, task_id: str) -> ExecutionPlan:
         """Simple fallback: single agent matching the classified domain."""

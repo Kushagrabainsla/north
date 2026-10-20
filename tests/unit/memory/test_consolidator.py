@@ -149,6 +149,7 @@ def _task(
     workspace: str = "/Users/me/projects/app",
     ending: str = "task_completed",
     failure: str = "",
+    error_type: str | None = None,
     tools: list[str] | None = None,
 ) -> list[LedgerEntry]:
     start = datetime.now(UTC)
@@ -167,6 +168,7 @@ def _task(
     work.tools_used = tools or []
     end = _entry(timestamp=start + timedelta(seconds=2), task_id=task_id, source=LedgerSource.SYSTEM, action=ending)
     end.output = failure
+    end.error_type = error_type
     return [received, work, end]
 
 
@@ -189,6 +191,7 @@ async def test_a_task_that_failed_for_want_of_a_model_is_not_a_lesson(tmp_path: 
         "Reply with the single word ok",
         ending="task_failed",
         failure="planner failed after 3 attempts: No model could serve planner - 1 FREE_SPENT until 12:51 PM",
+        error_type="model_unavailable",  # as the orchestrator records it, not read from the wording
     )
     store = EpisodicStore(tmp_path / "episodic.db")
 

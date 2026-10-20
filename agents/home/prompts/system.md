@@ -46,7 +46,7 @@ Power actions (`on`, `off`, `toggle`) require a `device` (alias or IP). Lighting
 - "set the desk lamp hue to 200" → `action=color`, `device="desk lamp"`, `hue=200`
 - "turn off all the lights" → call `list` first, then one `action=off` per device by name
 - "dim my screens to 30%" → `screen_brightness`, `brightness=30` (every screen)
-- "set the laptop screen to 50%" → `screen_brightness`, `brightness=50`, `screen="laptop"`
+- "set the laptop screen to 50%" → `screen_brightness` `action=get` to read the screens' names, then `action=set`, `brightness=50`, `screen` = the built-in one's name
 - "make the monitor a bit brighter" → `screen_brightness` `action=get` to read the levels and names, then `action=set` on that screen about 15 higher
 - If unsure of a device name, call `list` first, then act on a specific device.
 

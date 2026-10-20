@@ -67,6 +67,37 @@ def _bare_orchestrator(*, registry, factory) -> Orchestrator:
     return orch
 
 
+def _with_tool(answer) -> tuple[Orchestrator, dict[str, Any], list[str]]:
+    """An orchestrator whose one tool answers *answer* (or raises it), recording output and fallbacks."""
+
+    class _Tool:
+        is_mutating = False
+
+        async def execute(self, _tool_input):
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        def format_output(self, _data):  # pragma: no cover - not reached on failure
+            return "unused"
+
+    registry = MagicMock()
+    registry.get.return_value = _Tool()
+    orch = _bare_orchestrator(registry=registry, factory=ToolInput)
+    recorded: dict[str, Any] = {}
+    fallbacks: list[str] = []
+
+    async def _record(task_id, *_a, **kw):
+        recorded["output"] = kw.get("output")
+
+    async def _fall_back(task_id, prompt, workspace, context, edit_scope, attempt):
+        fallbacks.append(attempt)
+
+    orch._journal.record = _record
+    orch._fall_back_to_agent = _fall_back
+    return orch, recorded, fallbacks
+
+
 def _plan(tool: str = "write_file") -> MagicMock:
     plan = MagicMock()
     plan.direct_tool = tool
@@ -128,29 +159,33 @@ class TestDirectSingleToolExecution:
         assert tool.captured["params"]["workspace"] == "."
         assert tool.captured["params"]["task_id"] == "t1"
 
-    async def test_error_result_renders_tool_error_line(self) -> None:
-        class _FailingTool:
-            is_mutating = False
-
-            async def execute(self, _tool_input):
-                return MagicMock(success=False, data={}, error="boom")
-
-            def format_output(self, _data):  # pragma: no cover - not reached on failure
-                return "unused"
-
-        registry = MagicMock()
-        registry.get.return_value = _FailingTool()
-        recorded: dict[str, Any] = {}
-
-        orch = _bare_orchestrator(registry=registry, factory=ToolInput)
-
-        async def _record(task_id, *_a, **kw):
-            recorded["output"] = kw.get("output")
-
-        orch._journal.record = _record
+    async def test_a_refused_call_ends_with_the_refusal_and_never_asks_again(self) -> None:
+        orch, recorded, fallbacks = _with_tool(
+            MagicMock(success=False, data={}, error="Brightness change cancelled by user.", failure_kind="refused")
+        )
 
         await orch._execute_single_tool("t1", "prompt", _plan(), workspace=".", context="")
-        assert recorded["output"] == "Tool error: boom"
+
+        assert recorded["output"] == "Tool error: Brightness change cancelled by user."
+        assert fallbacks == []
+
+    async def test_a_failed_call_goes_to_the_agent_with_what_it_answered(self) -> None:
+        """The planner's screen="Alienware" matched no screen; an agent reading the names finds AW3425DWM."""
+        orch, recorded, fallbacks = _with_tool(
+            MagicMock(success=False, data={}, error="No screen matches 'Alienware'.", failure_kind="error")
+        )
+
+        await orch._execute_single_tool("t1", "prompt", _plan("screen_brightness"), workspace=".", context="")
+
+        assert fallbacks == ["screen_brightness answered: No screen matches 'Alienware'."]
+        assert recorded == {}
+
+    async def test_a_call_that_raises_goes_to_the_agent_too(self) -> None:
+        orch, _recorded, fallbacks = _with_tool(RuntimeError("osascript did not answer"))
+
+        await orch._execute_single_tool("t1", "prompt", _plan("screen_brightness"), workspace=".", context="")
+
+        assert fallbacks == ["screen_brightness raised: osascript did not answer"]
 
     async def test_mutating_tool_success_marks_side_effect(self) -> None:
         class _MutatingTool(_RecordingTool):

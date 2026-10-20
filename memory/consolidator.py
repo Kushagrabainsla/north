@@ -58,8 +58,8 @@ _APPROVAL_ACTION_PREFIX = "approval_responded:"
 _TEMP_ROOTS = tuple(
     {str(Path(tempfile.gettempdir()).resolve()), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"}
 )
-# north's own words for "the model was not there", as its routing and planner write them.
-_NO_MODEL_PHRASES = ("No model could serve", "model pool unavailable", "every model is rate-limited")
+# The failure types the orchestrator records when the model was not there (failure_handler.classify_error).
+_NO_MODEL_ERRORS = frozenset({"model_unavailable", "rate_limit"})
 
 # Ledger sources whose `input` is the user's original task prompt.
 _PROMPT_SOURCES = frozenset(
@@ -314,9 +314,4 @@ def _in_temp_folder(workspace: str) -> bool:
 
 def _ended_for_want_of_a_model(rows: list[LedgerEntry]) -> bool:
     """The task stopped because no model could answer, so it says nothing about the task."""
-    return any(
-        phrase in (entry.output or "")
-        for entry in rows
-        if entry.source == LedgerSource.SYSTEM or entry.action in ("agent_execution_failed", "task_failed")
-        for phrase in _NO_MODEL_PHRASES
-    )
+    return any(entry.error_type in _NO_MODEL_ERRORS for entry in rows)
