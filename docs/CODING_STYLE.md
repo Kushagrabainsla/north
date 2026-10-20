@@ -58,6 +58,9 @@ Parallel things are built the same way: every mode, request kind and layer follo
 **Every Surface Shows the Same State**
 The dashboard, TUI, CLI and Telegram read the same state from the same API; none keeps its own copy (such as a hard-coded list of modes). A change is not done until the dashboard shows it.
 
+**General Solutions, No Edge-Case Branches**
+Make the general solution reliable enough that it has no edge cases. Never add a separate branch for a rare case: one that needs it means the general solution is wrong, so fix that instead, or fix the bad data.
+
 **Open Source First**
 north is public. Every contributor should be able to read the codebase, understand it, and contribute without needing to ask questions. Clarity is more important than cleverness.
 
