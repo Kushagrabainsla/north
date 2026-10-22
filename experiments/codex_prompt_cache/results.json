@@ -23,5 +23,12 @@
       {"session_key": "per agent", "cache_life_minutes": 60, "cached_on_first_calls": 85604, "share_of_all_uncached": 0.037, "runs_helped": 13}
     ]
   },
+  "later_call_misses": {
+    "whole_window": {"since": "2026-10-17", "until": "2026-10-22T19:10", "calls": 178, "misses": 45,
+                     "before_session_id_5e6e089": 33, "before_history_kept_d55a91d": 9, "tool_list_changed_after": 3},
+    "since_d55a91d": {"since": "2026-10-18T07:18:25", "until": "2026-10-22T19:10", "calls": 98, "tokens_in": 3910179,
+                      "cached": 3380736, "uncached": 529443, "new": 443602, "misses": 3,
+                      "misses_with_tool_change": 3, "lost_to_misses": 34660}
+  },
   "decision": "not shipped: session_id stays the run id"
 }

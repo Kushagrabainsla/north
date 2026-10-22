@@ -48,8 +48,8 @@ same primitives, but it must not import recorded results.
   approval requests, waits, runs and restarts connect to north's real cards, queue,
   dashboard and recovery, before the feature is built.
 - [`codex_prompt_cache/`](codex_prompt_cache/) — whether a run's first Codex
-  call can reuse an earlier run's prompt cache. It can't, enough to matter;
-  see the section below.
+  call can reuse an earlier run's prompt cache (no, not enough to matter), and
+  where calls inside a run lose it. See the section below.
 
 ## Browser and custom-flow completion regression (2026-10-10)
 
@@ -368,8 +368,16 @@ A per-agent key also puts every run on one key. OpenAI says a key spills to
 other machines above about 15 requests a minute, which would lose part of the
 74% cache reuse inside runs (4.46M tokens); losing 2% of that cancels the gain.
 
-Same cause inside a run: when `find_tools` adds a tool mid-run, the next call
-is 0% cached (6 of 178 later calls, 81k tokens).
+Inside a run ([`misses.py`](codex_prompt_cache/misses.py)): a later call has to
+send fresh only what was added since the call before. Anything else it sends
+uncached is a miss. From Oct 17 to Oct 22, 45 of 178 later calls missed. 33
+ran before north sent `session_id` (5e6e089), and 9 before north stopped
+rewriting older tool results as summaries (d55a91d). Since d55a91d, 98 later
+calls were 86.5% cached. Of the 529k uncached tokens, 444k were new and could
+not be cached yet. Only 3 calls missed, all when `find_tools` added a tool
+(34.7k tokens). The rest is about 500 tokens a call. So the context is already
+append-only, except when `find_tools` adds a tool, and a soft-budget note sent as
+a system message would also break it (it last fired on 2026-09-18).
 
 The only lever left is a tool list that stays the same across runs, such as
 the full catalog (41 tools, about 12.7k tokens, against 3-5k selected). That
@@ -383,6 +391,7 @@ published; 5, 10 and 60 minutes bracket it.
 ```sh
 .venv/bin/python -m experiments.codex_prompt_cache.probe    # about 45k tokens of Codex plan quota
 .venv/bin/python -m experiments.codex_prompt_cache.replay --since 2026-10-17 --until 2026-10-22T19:10
+.venv/bin/python -m experiments.codex_prompt_cache.misses --since 2026-10-18T07:18:25 --until 2026-10-22T19:10
 ```
 
 Recorded numbers: [`results.json`](codex_prompt_cache/results.json).
