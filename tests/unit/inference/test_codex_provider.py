@@ -475,3 +475,20 @@ async def test_a_run_names_its_session_so_codex_reuses_the_cached_prefix(run_id,
     await client.aclose()
 
     assert seen == [session]
+
+
+def test_a_mid_run_system_note_leaves_the_instructions_and_earlier_items_unchanged() -> None:
+    """Merged into the instructions, the note cost the cache of everything after them: 2,816 of ~7,200 reused."""
+    before = [
+        {"role": "system", "content": "Be concise"},
+        {"role": "user", "content": "Check it"},
+        {"role": "assistant", "content": "Checking"},
+    ]
+    instructions, items = _message_items(before)
+    next_instructions, next_items = _message_items([*before, {"role": "system", "content": "Budget reached."}])
+
+    assert next_instructions == instructions == "Be concise"
+    assert next_items[: len(items)] == items
+    assert next_items[len(items) :] == [
+        {"role": "user", "content": [{"type": "input_text", "text": "[System note] Budget reached."}]}
+    ]

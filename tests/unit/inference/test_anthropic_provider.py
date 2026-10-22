@@ -67,8 +67,7 @@ def test_mid_conversation_system_message_folds_into_a_user_aside():
         ]
     )
     assert system == "Top-level prompt."
-    assert messages[-1]["role"] == "user"
-    assert "[System note] Soft efficiency budget reached." in messages[-1]["content"][0]["text"]
+    assert messages[-1] == {"role": "user", "content": "[System note] Soft efficiency budget reached."}
 
 
 def test_assistant_tool_calls_become_tool_use_blocks():

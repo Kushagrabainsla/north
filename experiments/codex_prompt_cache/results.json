@@ -2,33 +2,149 @@
   "recorded_at": "2026-10-22",
   "model": "gpt-5.6-terra",
   "probe": [
-    {"call": 1, "session": "S", "prompt": "tools A + task 1", "tokens_in": 10869, "cached_tokens": 0},
-    {"call": 2, "session": "S", "prompt": "tools B (first tool differs) + task 2", "tokens_in": 10373, "cached_tokens": 0},
-    {"call": 3, "session": "S", "prompt": "tools A + task 2", "tokens_in": 11353, "cached_tokens": 6656},
-    {"call": 4, "session": "T (new)", "prompt": "copy of call 1", "tokens_in": 10869, "cached_tokens": 0}
+    {
+      "call": 1,
+      "session": "S",
+      "prompt": "tools A + task 1",
+      "tokens_in": 10869,
+      "cached_tokens": 0
+    },
+    {
+      "call": 2,
+      "session": "S",
+      "prompt": "tools B (first tool differs) + task 2",
+      "tokens_in": 10373,
+      "cached_tokens": 0
+    },
+    {
+      "call": 3,
+      "session": "S",
+      "prompt": "tools A + task 2",
+      "tokens_in": 11353,
+      "cached_tokens": 6656
+    },
+    {
+      "call": 4,
+      "session": "T (new)",
+      "prompt": "copy of call 1",
+      "tokens_in": 10869,
+      "cached_tokens": 0
+    }
   ],
   "replay": {
     "since": "2026-10-17",
     "until": "2026-10-22T19:10",
     "runs": 46,
-    "same_tool_set_as_previous_run": [11, 45],
-    "uncached_input": {"first_calls": 715689, "all": 2284946},
+    "same_tool_set_as_previous_run": [
+      11,
+      45
+    ],
+    "uncached_input": {
+      "first_calls": 715689,
+      "all": 2284946
+    },
     "later_calls_cached_share": 0.74,
     "estimates": [
-      {"session_key": "per run (today)", "cache_life_minutes": 60, "cached_on_first_calls": 0, "share_of_all_uncached": 0.0, "runs_helped": 0},
-      {"session_key": "per task", "cache_life_minutes": 5, "cached_on_first_calls": 9369, "share_of_all_uncached": 0.004, "runs_helped": 2},
-      {"session_key": "per task", "cache_life_minutes": 60, "cached_on_first_calls": 9369, "share_of_all_uncached": 0.004, "runs_helped": 2},
-      {"session_key": "per agent", "cache_life_minutes": 5, "cached_on_first_calls": 43877, "share_of_all_uncached": 0.019, "runs_helped": 8},
-      {"session_key": "per agent", "cache_life_minutes": 10, "cached_on_first_calls": 56513, "share_of_all_uncached": 0.025, "runs_helped": 9},
-      {"session_key": "per agent", "cache_life_minutes": 60, "cached_on_first_calls": 85604, "share_of_all_uncached": 0.037, "runs_helped": 13}
+      {
+        "session_key": "per run (today)",
+        "cache_life_minutes": 60,
+        "cached_on_first_calls": 0,
+        "share_of_all_uncached": 0.0,
+        "runs_helped": 0
+      },
+      {
+        "session_key": "per task",
+        "cache_life_minutes": 5,
+        "cached_on_first_calls": 9369,
+        "share_of_all_uncached": 0.004,
+        "runs_helped": 2
+      },
+      {
+        "session_key": "per task",
+        "cache_life_minutes": 60,
+        "cached_on_first_calls": 9369,
+        "share_of_all_uncached": 0.004,
+        "runs_helped": 2
+      },
+      {
+        "session_key": "per agent",
+        "cache_life_minutes": 5,
+        "cached_on_first_calls": 43877,
+        "share_of_all_uncached": 0.019,
+        "runs_helped": 8
+      },
+      {
+        "session_key": "per agent",
+        "cache_life_minutes": 10,
+        "cached_on_first_calls": 56513,
+        "share_of_all_uncached": 0.025,
+        "runs_helped": 9
+      },
+      {
+        "session_key": "per agent",
+        "cache_life_minutes": 60,
+        "cached_on_first_calls": 85604,
+        "share_of_all_uncached": 0.037,
+        "runs_helped": 13
+      }
     ]
   },
   "later_call_misses": {
-    "whole_window": {"since": "2026-10-17", "until": "2026-10-22T19:10", "calls": 178, "misses": 45,
-                     "before_session_id_5e6e089": 33, "before_history_kept_d55a91d": 9, "tool_list_changed_after": 3},
-    "since_d55a91d": {"since": "2026-10-18T07:18:25", "until": "2026-10-22T19:10", "calls": 98, "tokens_in": 3910179,
-                      "cached": 3380736, "uncached": 529443, "new": 443602, "misses": 3,
-                      "misses_with_tool_change": 3, "lost_to_misses": 34660}
+    "whole_window": {
+      "since": "2026-10-17",
+      "until": "2026-10-22T19:10",
+      "calls": 178,
+      "misses": 45,
+      "before_session_id_5e6e089": 33,
+      "before_history_kept_d55a91d": 9,
+      "tool_list_changed_after": 3
+    },
+    "since_d55a91d": {
+      "since": "2026-10-18T07:18:25",
+      "until": "2026-10-22T19:10",
+      "calls": 98,
+      "tokens_in": 3910179,
+      "cached": 3380736,
+      "uncached": 529443,
+      "new": 443602,
+      "misses": 3,
+      "misses_with_tool_change": 3,
+      "lost_to_misses": 34660
+    }
   },
-  "decision": "not shipped: session_id stays the run id"
+  "decision": "not shipped: session_id stays the run id",
+  "mid_run_note": {
+    "pause_seconds": 5,
+    "merged": [
+      {
+        "second_tokens_in": 7528,
+        "second_cached": 2816
+      },
+      {
+        "second_tokens_in": 7285,
+        "second_cached": 2816
+      }
+    ],
+    "in_place": [
+      {
+        "second_tokens_in": 6930,
+        "second_cached": 5888
+      },
+      {
+        "second_tokens_in": 7173,
+        "second_cached": 6912
+      }
+    ],
+    "no_pause": {
+      "merged": [
+        2816,
+        2816
+      ],
+      "in_place": [
+        5888,
+        0
+      ]
+    },
+    "decision": "shipped: every provider sends a mid-run system note in place, as a user note"
+  }
 }

@@ -390,3 +390,13 @@ The same approval flow is shared by every gated tool (`BashTool`, `ShellTool`, `
 **Why:** a bare `asyncio.create_task(...)` can be garbage-collected before it finishes, and any exception it raises vanishes silently. Several places had hand-rolled "create a task and attach a logging callback" code that did the same thing in slightly different ways.
 
 **How:** `spawn` keeps a strong reference to the task until it completes and attaches a done-callback that logs any exception under the given name. Cancellation is logged at debug, not as an error. Re-indexing, episode recording, ledger writes, confidence recording, and pool refresh all use it.
+
+---
+
+## 18. Append-Only Prompts for the Provider Cache
+
+**What:** within a run, each model call sends the previous call's prompt unchanged, plus what is new at the end. `inference/transcript.py:system_notes_in_place` is the one rule every provider (Codex, Anthropic, OpenAI-compatible) applies: only the opening system messages are the system prompt; a system message added mid-run is sent where it arrived, as a user note.
+
+**Why:** providers serve a prompt from cache only up to its first changed token. On Codex the tool list comes first, then the instructions, then the conversation, so changing the tools or the instructions mid-run loses the cache of the whole history. The Codex provider used to merge a mid-run note into its instructions: the next call reused 2,816 of about 7,200 tokens. Sent in place, it reused 5,888 and 6,912 (`experiments/codex_prompt_cache/mid_run_note.py`).
+
+**How:** Codex caches only within the session named by the `session_id` header, which is the run id. History is not rewritten until the prompt nears the model's limit. The one known exception left is `find_tools` adding a tool mid-run: the tool list changes, and that call is uncached (3 of 98 later calls since Oct 18). Measurements: `experiments/codex_prompt_cache/` and its section in `experiments/README.md`.

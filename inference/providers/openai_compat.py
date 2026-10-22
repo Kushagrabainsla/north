@@ -43,6 +43,7 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from inference.transcript import system_notes_in_place
 from inference.usage import cache_tokens
 
 logger = logging.getLogger(__name__)
@@ -728,7 +729,11 @@ class OpenAICompatibleProvider:
     ) -> ToolCallResponse:
         body: dict = {
             "model": model_id,
-            "messages": request.messages,
+            # A mid-run system note is sent where it arrived, as a user note. Not
+            # every OpenAI-compatible backend documents whether it keeps a later
+            # system message in place or folds it into the system prompt, which
+            # would change the cached start of the prompt.
+            "messages": system_notes_in_place(request.messages),
             "stream": True,
             **self._extra_body_fields(),
             **self._request_body_fields(request),

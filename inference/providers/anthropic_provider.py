@@ -48,6 +48,7 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from inference.transcript import message_text, system_notes_in_place
 
 logger = logging.getLogger(__name__)
 
@@ -97,19 +98,6 @@ def _model_price(model_id: str) -> tuple[float, bool]:
 # ---------------------------------------------------------------------- #
 
 
-def _text_of(content: Any) -> str:
-    """Flatten OpenAI-shaped message content (string or a list of parts) to plain text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                parts.append(str(part.get("text", "")))
-        return "\n".join(parts)
-    return "" if content is None else str(content)
-
-
 def _to_anthropic_user_content(content: Any) -> str | list[dict]:
     """A user turn's content, translating OpenAI vision blocks to Anthropic's image shape.
 
@@ -140,7 +128,7 @@ def _to_anthropic_assistant_content(message: dict) -> list[dict]:
     """An assistant turn's content: prior text plus any tool calls it made."""
     blocks: list[dict] = []
     content = message.get("content")
-    text = _text_of(content) if content else ""
+    text = message_text(content) if content else ""
     if text:
         blocks.append({"type": "text", "text": text})
     for call in message.get("tool_calls") or []:
@@ -173,13 +161,11 @@ def _is_tool_result_message(message: dict) -> bool:
 def _to_anthropic_messages(messages: list[dict]) -> tuple[str, list[dict]]:
     """Translate one OpenAI-format transcript into (system_text, anthropic_messages).
 
-    The leading system message becomes the top-level `system` field, matching
-    every other message in this transcript's construction. Anything after it
-    is a mid-conversation operator note (the agent loop's soft-budget nudge is
-    the one produced today) - folded into a user aside rather than sent as
-    Anthropic's own mid-conversation system role, since that role is not
-    supported on every current Claude model and this provider has no way to
-    know in advance which model will serve the call.
+    The leading system message becomes the top-level `system` field. A later
+    one (the agent loop's soft-budget nudge) arrives as a user note in its place
+    (see `system_notes_in_place`): Anthropic's own mid-conversation system role
+    is not supported on every current Claude model, and merging it into `system`
+    would change the cached start of the prompt.
 
     Adjacent OpenAI `tool` messages must merge into a single Anthropic user
     message: the API rejects a `tool_use` turn whose `tool_result`s are split
@@ -187,14 +173,10 @@ def _to_anthropic_messages(messages: list[dict]) -> tuple[str, list[dict]]:
     """
     system_parts: list[str] = []
     out: list[dict] = []
-    for message in messages:
+    for message in system_notes_in_place(messages):
         role = message.get("role")
         if role == "system":
-            if not out:
-                system_parts.append(_text_of(message.get("content")))
-            else:
-                note = _text_of(message.get("content"))
-                out.append({"role": "user", "content": [{"type": "text", "text": f"[System note] {note}"}]})
+            system_parts.append(message_text(message.get("content")))
             continue
         if role == "user":
             out.append({"role": "user", "content": _to_anthropic_user_content(message.get("content"))})
@@ -206,7 +188,7 @@ def _to_anthropic_messages(messages: list[dict]) -> tuple[str, list[dict]]:
             block = {
                 "type": "tool_result",
                 "tool_use_id": message.get("tool_call_id", ""),
-                "content": _text_of(message.get("content")),
+                "content": message_text(message.get("content")),
             }
             if out and _is_tool_result_message(out[-1]):
                 out[-1]["content"].append(block)

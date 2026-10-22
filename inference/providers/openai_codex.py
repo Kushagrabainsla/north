@@ -36,6 +36,7 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from inference.transcript import system_notes_in_place
 from inference.usage import cache_tokens
 from utils.ids import generate_id
 
@@ -410,10 +411,14 @@ def _content_item(role: str, content: Any) -> dict:
 
 
 def _message_items(messages: list[dict]) -> tuple[str, list[dict]]:
-    """Convert North's Chat Completions history to Responses input items."""
+    """Convert North's Chat Completions history to Responses input items.
+
+    Only the opening system messages become `instructions`; a later one stays
+    in place as a user note, so the cached start of the prompt never changes.
+    """
     instructions: list[str] = []
     items: list[dict] = []
-    for message in messages:
+    for message in system_notes_in_place(messages):
         role = str(message.get("role", "user"))
         content = message.get("content")
         if role in {"system", "developer"}:

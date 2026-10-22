@@ -376,8 +376,17 @@ rewriting older tool results as summaries (d55a91d). Since d55a91d, 98 later
 calls were 86.5% cached. Of the 529k uncached tokens, 444k were new and could
 not be cached yet. Only 3 calls missed, all when `find_tools` added a tool
 (34.7k tokens). The rest is about 500 tokens a call. So the context is already
-append-only, except when `find_tools` adds a tool, and a soft-budget note sent as
-a system message would also break it (it last fired on 2026-09-18).
+append-only, except when `find_tools` adds a tool.
+
+One more break, found in the code: the Codex provider merged a system message
+added mid-run (the soft-budget note, last fired on 2026-09-18) into its
+instructions. Every provider now sends such a note where it arrived, as a user
+note (`inference/transcript.py`). Measured with
+[`mid_run_note.py`](codex_prompt_cache/mid_run_note.py): call 2 (call 1 plus
+the reply and the note, 5 s later as in a real run) reused 2,816 of 7,528 and
+of 7,285 tokens merged (only the instructions), and 5,888 of 6,930 and 6,912 of
+7,173 in place. Sent with no pause, one in-place call found nothing cached yet,
+so the probe waits as a real run does.
 
 The only lever left is a tool list that stays the same across runs, such as
 the full catalog (41 tools, about 12.7k tokens, against 3-5k selected). That
@@ -392,6 +401,7 @@ published; 5, 10 and 60 minutes bracket it.
 .venv/bin/python -m experiments.codex_prompt_cache.probe    # about 45k tokens of Codex plan quota
 .venv/bin/python -m experiments.codex_prompt_cache.replay --since 2026-10-17 --until 2026-10-22T19:10
 .venv/bin/python -m experiments.codex_prompt_cache.misses --since 2026-10-18T07:18:25 --until 2026-10-22T19:10
+.venv/bin/python -m experiments.codex_prompt_cache.mid_run_note --arm merged in-place merged in-place    # about 56k tokens
 ```
 
 Recorded numbers: [`results.json`](codex_prompt_cache/results.json).
