@@ -46,6 +46,69 @@ async def test_a_failure_names_the_part_that_failed(tmp_path: Path, home: Path) 
         await nightly.nightly_check()
 
 
+_LOGGED_OUT = "BackendUnavailableError: claude: Claude Code is not logged in; run `claude auth login`"
+
+_FAILED_LIVE_RUN = f"""
+cat >"$SMOKE_REPORT" <<'REPORT'
+=== lint (03:30:00)
+All checks passed!
+--- lint: passed
+=== live coding agents (03:31:00)
+FFF.
+--- live coding agents: FAILED
+VERDICT: failed: live coding agents
+REPORT
+cat >"${{SMOKE_REPORT%.log}}.live-coding-agents.xml" <<'JUNIT'
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" tests="4" failures="3" errors="0" skipped="0">
+<testcase classname="tests.live.test_claude_live" name="test_a_plan_run">
+<failure message="{_LOGGED_OUT}">traceback</failure></testcase>
+<testcase classname="tests.live.test_claude_live" name="test_an_edit_lands">
+<failure message="{_LOGGED_OUT}">traceback</failure></testcase>
+<testcase classname="tests.live.test_telegram_live" name="test_a_task_lands">
+<failure message="AssertionError: the change did not land.&#10;replies: []">traceback</failure></testcase>
+<testcase classname="tests.live.test_codex_live" name="test_ok"/>
+</testsuite></testsuites>
+JUNIT
+echo "smoke failed: live coding agents - $SMOKE_REPORT"
+exit 1
+"""
+
+
+@pytest.mark.asyncio
+async def test_a_failure_names_its_causes_most_common_first(tmp_path: Path, home: Path) -> None:
+    """The run said only which stage failed; all its failures were one logged-out agent."""
+    _project(tmp_path, home, _FAILED_LIVE_RUN)
+
+    with pytest.raises(RuntimeError) as failure:
+        await nightly.nightly_check()
+
+    lines = str(failure.value).splitlines()
+    assert lines[0].startswith("The nightly check failed: live coding agents - ")
+    assert lines[1:] == [
+        "live coding agents: 3 of 4 tests failed",
+        f"- 2 × {_LOGGED_OUT} (e.g. tests.live.test_claude_live::test_a_plan_run)",
+        "- 1 × AssertionError: the change did not land. (e.g. tests.live.test_telegram_live::test_a_task_lands)",
+    ]
+    assert not list((home / "smoke").glob("*.xml")), "the results are read once; the report is what stays"
+
+
+@pytest.mark.asyncio
+async def test_a_stage_without_test_results_shows_the_start_of_its_output(tmp_path: Path, home: Path) -> None:
+    _project(
+        tmp_path,
+        home,
+        'printf "=== lint (03:30:00)\\nF401 unused import os\\n  --> a.py:1:8\\n\\n'
+        '--- lint: FAILED\\n" >"$SMOKE_REPORT"\n'
+        'echo "smoke failed: lint - $SMOKE_REPORT"\nexit 1\n',
+    )
+
+    with pytest.raises(RuntimeError) as failure:
+        await nightly.nightly_check()
+
+    assert str(failure.value).splitlines()[1:] == ["lint:", "F401 unused import os", "  --> a.py:1:8"]
+
+
 @pytest.mark.asyncio
 async def test_it_runs_at_the_lowest_cpu_priority(tmp_path: Path, home: Path) -> None:
     """After a night asleep it can run while you work.

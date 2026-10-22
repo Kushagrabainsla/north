@@ -14,18 +14,31 @@ or output breaks north's coding where no test with a fake can see it.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import re
 import signal
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
 from config.settings import settings
 from inference.exceptions import WaitingFor
 from utils.power import fully_awake
+from utils.time import localnow
+
+logger = logging.getLogger(__name__)
 
 # Written by scripts/install_smoke_schedule.sh, run from the project folder:
 # north can live anywhere, and only a machine with its project folder can check it.
 CHECKOUT_FILE_NAME = "checkout"
 _TIME_LIMIT_S = 60 * 60
+
+# A failure names its causes, most common first, so the run says what broke
+# without opening a report of thousands of lines. The report keeps the rest.
+_CAUSES_SHOWN = 5
+_CAUSE_CHARS = 240
+_STAGE_LINES_SHOWN = 8
+_FAILED_STAGE_RE = re.compile(r"^--- (.+): FAILED$", re.MULTILINE)
 
 
 def checkout_file() -> Path:
@@ -53,6 +66,7 @@ async def nightly_check() -> str:
     # would be cut off. It waits for a real wake instead, and runs then.
     if not fully_awake():
         raise WaitingFor("an awake laptop", "The laptop is asleep; the nightly check runs as soon as it is awake.")
+    report = settings.north_home / "smoke" / f"{localnow():%Y-%m-%d_%H%M}.log"
     # The lowest CPU priority: after a night asleep it can run while you work.
     process = await asyncio.create_subprocess_exec(
         "nice",
@@ -60,7 +74,7 @@ async def nightly_check() -> str:
         "19",
         str(folder / "scripts" / "smoke.sh"),
         cwd=folder,
-        env={**os.environ, "SMOKE_LIVE": "1", "NORTH_HOME": str(settings.north_home)},
+        env={**os.environ, "SMOKE_LIVE": "1", "NORTH_HOME": str(settings.north_home), "SMOKE_REPORT": str(report)},
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -73,6 +87,66 @@ async def nightly_check() -> str:
         await process.wait()
         raise RuntimeError(f"The nightly check did not finish within {_TIME_LIMIT_S // 60} minutes.") from None
     last = next((line for line in reversed(output.decode(errors="replace").splitlines()) if line.strip()), "")
+    causes = await asyncio.to_thread(_take_results, report, process.returncode != 0)
     if process.returncode != 0:
-        raise RuntimeError(f"The nightly check {last.removeprefix('smoke ') or 'failed'}")
+        raise RuntimeError("\n".join([f"The nightly check {last.removeprefix('smoke ') or 'failed'}", *causes]))
     return f"The nightly check {last.removeprefix('smoke ') or 'passed'}"
+
+
+def _take_results(report: Path, failed: bool) -> list[str]:
+    """The failure causes when the check failed. The JUnit files are read once, here; the report is what stays."""
+    causes = failure_causes(report) if failed else []
+    for junit in report.parent.glob(f"{report.stem}.*.xml"):
+        junit.unlink(missing_ok=True)
+    return causes
+
+
+def failure_causes(report: Path) -> list[str]:
+    """What each failed stage of a smoke report failed on, in a few lines.
+
+    A pytest stage writes JUnit XML beside the report, and its failures are
+    grouped by their error, so 16 tests failing for one reason read as one
+    line. Another stage shows the first lines of its output. The 11:45 check
+    on 2026-10-22 said only "failed: suite live coding agents" and a report
+    path, though all 18 failures were one cause: Claude Code was logged out.
+    """
+    try:
+        text = report.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    lines: list[str] = []
+    for stage in _FAILED_STAGE_RE.findall(text):
+        junit = report.with_name(f"{report.stem}.{stage.replace(' ', '-')}.xml")
+        try:
+            lines += _pytest_causes(stage, junit) if junit.is_file() else _stage_output(stage, text)
+        except (OSError, ElementTree.ParseError):
+            logger.debug("nightly check: could not read the %s results", stage, exc_info=True)
+    return lines
+
+
+def _pytest_causes(stage: str, junit: Path) -> list[str]:
+    root = ElementTree.parse(junit).getroot()
+    suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+    total = sum(int(suite.get("tests", 0)) for suite in suites)
+    tests_by_cause: dict[str, list[str]] = {}
+    for case in root.iter("testcase"):
+        problem = next((child for child in case if child.tag in {"failure", "error"}), None)
+        if problem is None:
+            continue
+        message = (problem.get("message") or problem.text or "no message").strip()
+        cause = message.splitlines()[0][:_CAUSE_CHARS] if message else "no message"
+        tests_by_cause.setdefault(cause, []).append(f"{case.get('classname', '')}::{case.get('name', '')}")
+    failed = sum(len(tests) for tests in tests_by_cause.values())
+    ranked = sorted(tests_by_cause.items(), key=lambda item: -len(item[1]))
+    shown = [f"- {len(tests)} × {cause} (e.g. {tests[0]})" for cause, tests in ranked[:_CAUSES_SHOWN]]
+    more = len(ranked) - _CAUSES_SHOWN
+    return [f"{stage}: {failed} of {total} tests failed", *shown, *([f"- and {more} other causes"] if more > 0 else [])]
+
+
+def _stage_output(stage: str, text: str) -> list[str]:
+    start = text.find(f"=== {stage} (")
+    end = text.find(f"--- {stage}: FAILED")
+    if start < 0 or end < 0:
+        return []
+    output = [line for line in text[start:end].splitlines()[1:] if line.strip()]
+    return [f"{stage}:", *output[:_STAGE_LINES_SHOWN]]

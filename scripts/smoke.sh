@@ -15,10 +15,17 @@ set -u
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 reports="${NORTH_HOME:-$HOME/.north}/smoke"
-mkdir -p "$reports"
-report="$reports/$(date +%Y-%m-%d_%H%M).log"
+# The nightly check names the report, so it can read the results beside it.
+report="${SMOKE_REPORT:-$reports/$(date +%Y-%m-%d_%H%M).log}"
+mkdir -p "$(dirname "$report")"
 python="$repo/.venv/bin/python"
 failed=()
+
+# A pytest stage's results as JUnit XML beside the report: each failure with its
+# error, which the nightly check groups into the causes it reports.
+junit() {
+    echo "${report%.log}.${1// /-}.xml"
+}
 
 cd "$repo" || exit 1
 
@@ -38,10 +45,10 @@ echo "north smoke run $(date '+%Y-%m-%d %H:%M') at $(git rev-parse --short HEAD)
 git status --short >>"$report"
 
 stage "lint" "$repo/.venv/bin/ruff" check .
-stage "suite" "$python" -m pytest -q --tb=short -m "not integration" -p no:cacheprovider
+stage "suite" "$python" -m pytest -q --tb=short -m "not integration" -p no:cacheprovider --junitxml "$(junit suite)"
 if [ "${SMOKE_LIVE:-0}" = "1" ]; then
     stage "live coding agents" env NORTH_LIVE_CLAUDE=1 NORTH_LIVE_CODEX=1 \
-        "$python" -m pytest tests/live -q --tb=short -p no:cacheprovider
+        "$python" -m pytest tests/live -q --tb=short -p no:cacheprovider --junitxml "$(junit "live coding agents")"
 fi
 
 if [ ${#failed[@]} -eq 0 ]; then
