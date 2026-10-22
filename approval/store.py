@@ -128,8 +128,10 @@ class ApprovalStore:
             if card.type is CardType.INFORMATION:
                 continue
             # A blocking card's waiter died with the process. Answering it would
-            # wake nobody, so it is retired rather than left asking.
-            if card.status == _PENDING and card.blocking:
+            # wake nobody, so it is retired rather than left asking - unless a
+            # source's continuation, registered again at startup, acts on the
+            # answer: a stopped flow run's card is how you resume the run.
+            if card.status == _PENDING and not card.outlives_task:
                 card = card.model_copy(update={"status": ApprovalDecision.TASK_ENDED})
                 self._write(card)
                 orphaned += 1

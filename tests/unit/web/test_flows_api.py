@@ -279,11 +279,13 @@ async def test_only_a_paused_unchanged_run_can_resume(flow_registry, tmp_path) -
 
 
 async def test_a_paused_run_can_be_discarded(flow_registry, tmp_path) -> None:
+    from tools.universal.flow_runner import FlowRunner
     from web import extensions
 
     store = _run_store(tmp_path)
     _paused_run(store, flow_registry)
-    with bind_services(ApiServices(flow_registry=flow_registry, flow_store=store)):
+    runner = FlowRunner(flow_registry, None, None, store)
+    with bind_services(ApiServices(flow_registry=flow_registry, flow_store=store, flow_runner=runner)):
         out = await extensions.discard_flow_run("r1")
 
     assert out["status"] == "cancelled"

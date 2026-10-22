@@ -21,6 +21,7 @@ import signal
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
+from coding_agents.discovery import check_agents
 from config.settings import settings
 from inference.exceptions import WaitingFor
 from utils.power import fully_awake
@@ -87,10 +88,37 @@ async def nightly_check() -> str:
         await process.wait()
         raise RuntimeError(f"The nightly check did not finish within {_TIME_LIMIT_S // 60} minutes.") from None
     last = next((line for line in reversed(output.decode(errors="replace").splitlines()) if line.strip()), "")
-    causes = await asyncio.to_thread(_take_results, report, process.returncode != 0)
+    # Killed before its verdict - north stopped mid-check on Oct 20 - is no result,
+    # not a failure: the run waits, and runs again once north is back.
+    cut_off = process.returncode is not None and process.returncode < 0
+    causes = await asyncio.to_thread(_take_results, report, process.returncode != 0 and not cut_off)
+    if cut_off:
+        raise WaitingFor(
+            "an uninterrupted check",
+            f"The nightly check was stopped by signal {-process.returncode} before it finished, so it has no "
+            "result. It runs again by itself.",
+        )
     if process.returncode != 0:
-        raise RuntimeError("\n".join([f"The nightly check {last.removeprefix('smoke ') or 'failed'}", *causes]))
+        headline = f"The nightly check {last.removeprefix('smoke ') or 'failed'}"
+        raise RuntimeError("\n".join([headline, *await _coding_agent_lines(), *causes]))
     return f"The nightly check {last.removeprefix('smoke ') or 'passed'}"
+
+
+async def _coding_agent_lines() -> list[str]:
+    """Each coding agent north can hand work to, and what one that cannot take a run needs.
+
+    The live stage runs every installed agent; when one is not ready, all of
+    its tests fail for that one reason. Its own probe says what it needs, such
+    as "Claude Code is not logged in; run `claude auth login`".
+    """
+    agents = [agent for agent in await check_agents() if agent.installed]
+    lines = [
+        f"- {agent.name}: ready{f', {agent.version}' if agent.version else ''}"
+        if agent.ready
+        else f"- {agent.name}: not ready. {agent.detail}"
+        for agent in agents
+    ]
+    return ["Coding agents:", *lines] if lines else []
 
 
 def _take_results(report: Path, failed: bool) -> list[str]:

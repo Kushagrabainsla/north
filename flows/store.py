@@ -184,6 +184,17 @@ class FlowRunStore:
             )
             return cursor.rowcount
 
+    def latest_for_task(self, task_id: str) -> FlowRun | None:
+        """The latest run started for *task_id*, the id a card about the run carries."""
+        if not task_id:
+            return None
+        with sqlite3.connect(self._path) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT * FROM flow_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1", (task_id,)
+            ).fetchone()
+        return _from_row(row) if row is not None else None
+
     def waiting_run(self, flow_name: str) -> FlowRun | None:
         """The run of *flow_name* waiting on a resource, if one is - there is at most one worth having."""
         with sqlite3.connect(self._path) as connection:

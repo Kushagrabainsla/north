@@ -79,6 +79,17 @@ def test_a_blocking_card_is_retired_on_restart(tmp_path: Path) -> None:
     assert reopened.pending() == []
 
 
+def test_a_blocking_card_whose_source_acts_on_the_answer_survives_a_restart(tmp_path: Path) -> None:
+    """A stopped flow run's card is how you resume the run; a restart must not close it."""
+    db = tmp_path / "approvals.db"
+    stopped = card(blocking=True, source="flow-run-stopped", options=["Resume", "Discard"])
+    ApprovalStore(db).add(stopped)
+
+    reopened = ApprovalStore(db)
+
+    assert reopened.get(stopped.id).status == "pending"
+
+
 def test_a_resolved_decision_survives_too(tmp_path: Path) -> None:
     db = tmp_path / "approvals.db"
     store = ApprovalStore(db)

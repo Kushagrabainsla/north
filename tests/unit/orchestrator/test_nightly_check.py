@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import orchestrator.nightly_check as nightly
+from coding_agents.discovery import Readiness
 from flows.registry import FlowRegistry
 from inference.exceptions import missing_resource
 from utils.runtime_resources import resource_path
@@ -17,7 +18,15 @@ from utils.runtime_resources import resource_path
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(nightly.settings, "north_home", tmp_path / "north")
     monkeypatch.setattr(nightly, "fully_awake", lambda: True)
+    _agents(monkeypatch)  # no coding agent installed, unless a test says otherwise
     return tmp_path / "north"
+
+
+def _agents(monkeypatch: pytest.MonkeyPatch, *agents: Readiness) -> None:
+    async def check_agents() -> list[Readiness]:
+        return list(agents)
+
+    monkeypatch.setattr(nightly, "check_agents", check_agents)
 
 
 def _project(tmp_path: Path, home: Path, script: str) -> Path:
@@ -91,6 +100,43 @@ async def test_a_failure_names_its_causes_most_common_first(tmp_path: Path, home
         "- 1 × AssertionError: the change did not land. (e.g. tests.live.test_telegram_live::test_a_task_lands)",
     ]
     assert not list((home / "smoke").glob("*.xml")), "the results are read once; the report is what stays"
+
+
+@pytest.mark.asyncio
+async def test_a_failure_says_what_each_installed_coding_agent_needs(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every installed agent is checked; one that cannot take a run says what it needs."""
+    _project(tmp_path, home, _FAILED_LIVE_RUN)
+    _agents(
+        monkeypatch,
+        Readiness("codex", installed=True, ready=True, version="0.130.0"),
+        Readiness("claude", installed=True, detail="Claude Code is not logged in; run `claude auth login`"),
+        Readiness("gemini", installed=False, detail="`gemini` is not installed"),
+    )
+
+    with pytest.raises(RuntimeError) as failure:
+        await nightly.nightly_check()
+
+    lines = str(failure.value).splitlines()
+    assert lines[1:4] == [
+        "Coding agents:",
+        "- codex: ready, 0.130.0",
+        "- claude: not ready. Claude Code is not logged in; run `claude auth login`",
+    ]
+    assert lines[4] == "live coding agents: 3 of 4 tests failed"
+
+
+@pytest.mark.asyncio
+async def test_a_check_cut_off_before_its_verdict_waits_and_runs_again(tmp_path: Path, home: Path) -> None:
+    """North stopped mid-check on Oct 20, and the cut-off check was recorded as a failure with no cause."""
+    _project(tmp_path, home, 'echo "=== live coding agents" >"$SMOKE_REPORT"\nkill -TERM $$\n')
+
+    with pytest.raises(Exception) as waiting:
+        await nightly.nightly_check()
+
+    assert missing_resource(waiting.value) == "an uninterrupted check"
+    assert "signal 15" in str(waiting.value)
 
 
 @pytest.mark.asyncio

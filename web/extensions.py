@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -894,10 +895,10 @@ async def resume_flow_run(run_id: str) -> dict[str, Any]:
 
 @router.post("/flow-runs/{run_id}/discard")
 async def discard_flow_run(run_id: str) -> dict[str, Any]:
-    """End a paused run without finishing it; the steps it finished stay on record."""
-    store = current_services().require("flow_store")
+    """End a paused run without finishing it; the steps it finished stay on record, and its stop card closes."""
+    runner = current_services().require("flow_runner")
     try:
-        run = store.discard(run_id)
+        run = runner.discard(run_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="No flow run with that id") from None
     except ValueError as exc:
@@ -1058,11 +1059,6 @@ async def get_setup():
     }
 
 
-# Coding agents North can delegate to; a missing one is reported, not hidden.
-_CODING_AGENT_NAMES = ("codex", "claude")
-_CODING_PROBE_SECONDS = 30
-
-
 @router.get("/setup/coding-agents")
 async def coding_agent_status():
     """Installed, recent enough and logged in, per agent, using the agents' own probes.
@@ -1070,24 +1066,9 @@ async def coding_agent_status():
     Each probe starts the agent's CLI, so this runs when the person asks rather
     than on the setup page's poll.
     """
-    from coding_agents.discovery import discover_backends
+    from coding_agents.discovery import check_agents
 
-    backends = discover_backends()
-
-    def row(name: str, *, installed: bool, ready: bool = False, version: str = "", detail: str = "") -> dict:
-        return {"name": name, "installed": installed, "ready": ready, "version": version, "detail": detail}
-
-    async def status(name: str) -> dict:
-        backend = backends.get(name)
-        if backend is None:
-            return row(name, installed=False, detail=f"`{name}` is not installed")
-        try:
-            found = await asyncio.wait_for(backend.probe(), _CODING_PROBE_SECONDS)
-        except TimeoutError:
-            return row(name, installed=True, detail="The check timed out")
-        return row(name, installed=True, ready=found.available, version=found.version, detail=found.reason)
-
-    return list(await asyncio.gather(*(status(name) for name in _CODING_AGENT_NAMES)))
+    return [asdict(agent) for agent in await check_agents()]
 
 
 @router.post("/setup")

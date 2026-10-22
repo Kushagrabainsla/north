@@ -928,21 +928,90 @@ async def test_a_scheduled_run_sends_the_user_what_it_wrote(tmp_path):
     assert str(tmp_path / "2026-10-07.md") in card["message"]
 
 
-async def test_a_scheduled_run_that_stops_says_why(tmp_path):
-    interaction = RecordingInteraction()
+class AllowEverything:
+    """A policy that would approve any card it was asked about: an autonomous mode at its most permissive."""
+
+    async def rule(self, action):
+        from approval.policy import Ruling, Verdict
+
+        return Ruling(Verdict.ALLOW, "allow everything")
+
+    async def answer(self, card):
+        return None
+
+
+def _stopping_runner(tmp_path):
+    """A scheduled run that stops on its first try, with the real approval layer and its continuations."""
+    from approval.continuation import CardContinuations
+    from approval.interaction import UserInteraction
+    from approval.store import ApprovalStore
+    from tools.universal.flow_runner import STOPPED_RUN_SOURCE
+
+    continuations = CardContinuations()
+    approvals = ApprovalStore(continuations=continuations)
+    agent = BriefingAgent(tmp_path, fail=True)
+    store = FlowRunStore(tmp_path / "runs.db")
     runner = FlowRunner(
         _flow(tmp_path, _ONE_STEP),
-        FakeAgents(BriefingAgent(tmp_path, fail=True)),
+        FakeAgents(agent),
         _skills(tmp_path),
-        FlowRunStore(tmp_path / "runs.db"),
-        interaction,
+        store,
+        UserInteraction(approvals, policy=AllowEverything()),
     )
+    continuations.register(STOPPED_RUN_SOURCE, runner.decide_stopped_run)
+    return runner, store, approvals, continuations, agent
 
-    run = await runner.run("demo", trigger="schedule")
+
+async def test_a_scheduled_run_that_stops_leaves_a_card_that_waits_for_you(tmp_path):
+    """Four failed nightly checks each sent one "no rush" message and were never mentioned again."""
+    runner, _, approvals, _, _ = _stopping_runner(tmp_path)
+
+    run = await runner.run("demo", task_id="job1", trigger="schedule")
 
     assert run.status == "paused"
-    [card] = interaction.informed
-    assert card["title"] == "demo stopped" and "the search tool broke" in card["message"]
+    [card] = approvals.pending()  # a policy that approves everything did not answer it for you
+    assert card.title == "demo stopped" and "the search tool broke" in card.message
+    assert card.options == ["Resume", "Discard"] and card.blocking and card.task_id == "job1"
+    assert card.outlives_task, "the run's task has ended; the card is how you resume it"
+
+
+async def test_choosing_resume_on_the_card_runs_the_stopped_step_again(tmp_path):
+    runner, store, approvals, continuations, agent = _stopping_runner(tmp_path)
+    run = await runner.run("demo", task_id="job1", trigger="schedule")
+    [card] = approvals.pending()
+    agent._fail = False  # the cause is fixed
+
+    approvals.resolve(card.id, ApprovalDecision.APPROVED, chosen_option="Resume")
+    await continuations.drain()
+
+    assert store.get(run.run_id).status == "completed"
+    assert approvals.pending() == []
+
+
+async def test_choosing_discard_on_the_card_ends_the_run(tmp_path):
+    runner, store, approvals, continuations, _ = _stopping_runner(tmp_path)
+    run = await runner.run("demo", task_id="job1", trigger="schedule")
+    [card] = approvals.pending()
+
+    approvals.resolve(card.id, ApprovalDecision.APPROVED, chosen_option="Discard")
+    await continuations.drain()
+
+    assert store.get(run.run_id).status == "cancelled"
+
+
+async def test_a_run_handled_on_the_flows_page_closes_its_card(tmp_path):
+    runner, store, approvals, continuations, agent = _stopping_runner(tmp_path)
+    first = await runner.run("demo", task_id="job1", trigger="schedule")
+    second = await runner.run("demo", task_id="job2", trigger="schedule")
+    agent._fail = False
+
+    await runner.run("demo", run_id=first.run_id, task_id="job1", trigger="schedule")  # Resume on the page
+    runner.discard(second.run_id)  # Discard on the page
+    await continuations.drain()
+
+    assert approvals.pending() == []
+    assert store.get(first.run_id).status == "completed"
+    assert store.get(second.run_id).status == "cancelled"
 
 
 async def test_a_run_started_by_hand_is_not_announced(tmp_path):

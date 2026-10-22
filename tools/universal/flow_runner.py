@@ -12,6 +12,7 @@ from typing import Any
 
 from agents.models import AgentPayload
 from approval import ApprovalDecision
+from approval.continuation import CardOutcome
 from approval.interaction import UserInteraction
 from flows.models import flow_fingerprint
 from flows.registry import FlowRegistry
@@ -34,6 +35,13 @@ logger = logging.getLogger(__name__)
 STOPPED = frozenset({"paused", "waiting"})
 # How long a waiting run waits before it is tried again. Cooldowns usually end within a minute.
 WAITING_RETRY_SECONDS = 60.0
+# A scheduled run that stops on an error leaves a card with these options. It
+# waits, and the 09:00 reminder repeats it, until you choose one or handle the run
+# on the Flows page. A one-off message saying "no rush" was all four failed
+# nightly checks from Oct 19 to Oct 22 ever produced.
+STOPPED_RUN_SOURCE = "flow-run-stopped"
+RESUME_OPTION = "Resume"
+DISCARD_OPTION = "Discard"
 
 
 def _status_for(exc: BaseException) -> str:
@@ -136,6 +144,27 @@ class FlowRunner:
         finally:
             self._resuming.discard(run.run_id)
 
+    async def decide_stopped_run(self, outcome: CardOutcome) -> None:
+        """Carry out the option you chose on the card a stopped scheduled run left."""
+        run = self._store.latest_for_task(outcome.card.task_id)
+        if run is None or run.status not in STOPPED:
+            return  # handled already, on the Flows page or by an earlier answer
+        if outcome.chosen_option == RESUME_OPTION and run.run_id not in self._resuming:
+            self._resuming.add(run.run_id)
+            await self._resume(run)
+        elif outcome.chosen_option == DISCARD_OPTION:
+            self.discard(run.run_id)
+
+    def discard(self, run_id: str) -> FlowRun:
+        """End a stopped run without finishing it, and close the card its stop left."""
+        run = self._store.discard(run_id)
+        self._withdraw_stop_card(run.task_id)
+        return run
+
+    def _withdraw_stop_card(self, task_id: str) -> None:
+        if task_id and self._interaction is not None:
+            self._interaction.withdraw(task_id=task_id, source=STOPPED_RUN_SOURCE)
+
     def register_action(self, name: str, handler: Callable[[], Awaitable[str]]) -> None:
         """Make a maintenance job runnable as a built-in flow's step.
 
@@ -156,6 +185,8 @@ class FlowRunner:
         test_mode: bool = False,
         trigger: str = "",
     ) -> FlowRun:
+        # Running a stopped run again, by whatever path, answers the card its stop left.
+        self._withdraw_stop_card(task_id)
         run = await self._execute(
             flow_name,
             run_id=run_id,
@@ -178,13 +209,28 @@ class FlowRunner:
         """
         if self._interaction is None or run.status not in _ENDED:
             return
-        if run.status == "completed":
-            title, message = f"{run.flow_name} is ready", _produced(run)
-        else:
-            title = f"{run.flow_name} stopped"
-            message = f"{run.error or 'It did not finish.'}\n\nResume it on the Flows page."
         try:
-            await self._interaction.inform(task_id=run.task_id or None, agent="flow", title=title, message=message)
+            if run.status == "completed":
+                await self._interaction.inform(
+                    task_id=run.task_id or None, agent="flow", title=f"{run.flow_name} is ready", message=_produced(run)
+                )
+            elif run.status in STOPPED:
+                await self._interaction.report(
+                    task_id=run.task_id or None,
+                    agent="flow",
+                    source=STOPPED_RUN_SOURCE,
+                    title=f"{run.flow_name} stopped",
+                    message=f"{run.error or 'It did not finish.'}\n\n"
+                    f"{RESUME_OPTION} runs the step it stopped on again. {DISCARD_OPTION} ends the run.",
+                    options=[RESUME_OPTION, DISCARD_OPTION],
+                )
+            else:
+                await self._interaction.inform(
+                    task_id=run.task_id or None,
+                    agent="flow",
+                    title=f"{run.flow_name} stopped",
+                    message=run.error or "It did not finish.",
+                )
         except Exception:
             logger.warning("Could not tell the user how scheduled flow %s ended", run.flow_name, exc_info=True)
 

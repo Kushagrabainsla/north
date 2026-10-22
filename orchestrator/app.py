@@ -97,7 +97,7 @@ from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.fetch_url import FetchUrlTool
-from tools.universal.flow_runner import FlowRunner
+from tools.universal.flow_runner import DISCARD_OPTION, RESUME_OPTION, STOPPED_RUN_SOURCE, FlowRunner
 from tools.universal.get_active_sessions import GetActiveSessionsTool
 from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.list_schedules import ListSchedulesTool
@@ -1037,6 +1037,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         tool_registry=tool_registry,
         workspace=settings.north_workspace,
     )
+    if deps.card_continuations is not None:
+        deps.card_continuations.register(
+            STOPPED_RUN_SOURCE,
+            flow_runner.decide_stopped_run,
+            describes=f"{RESUME_OPTION} runs the step the run stopped on again; {DISCARD_OPTION} ends the run.",
+        )
     tool_registry.register(RunFlowTool(flow_runner))
     # Replace the bootstrap instances now that the final live dependency exists.
     # This closes the construction cycle while still rejecting schedules that

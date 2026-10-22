@@ -159,6 +159,38 @@ class UserInteraction:
         ).model_copy(update={"blocking": False, "source": source})
         return await self.notify(card, event=CardEvent.APPROVAL)
 
+    async def report(
+        self,
+        *,
+        task_id: str | None,
+        agent: str,
+        source: str,
+        title: str,
+        message: str,
+        options: list[str],
+    ) -> Card:
+        """Leave a problem only you can act on, and return at once; it waits until you choose an option.
+
+        It skips the approval policy. The policy rules on what north may do; this
+        reports what stopped. Ruled on, a stopped nightly check could be approved
+        or rejected for you in an autonomous mode and never shown. `source`
+        names the continuation that carries out the option you choose, and keeps
+        the card past its task. It is blocking because what it reports is stopped
+        until you answer: sent at once, never batched as prepared work, and never
+        footed "no rush, nothing is blocked".
+        """
+        card = self._build(CardType.APPROVAL, task_id, agent, title, message, options).model_copy(
+            update={"blocking": True, "source": source}
+        )
+        await self._surface(card, CardEvent.APPROVAL)
+        return card
+
+    def withdraw(self, *, task_id: str, source: str) -> None:
+        """Close what *source* reported for *task_id*: it was handled another way, such as on the Flows page."""
+        for card in self._store.pending():
+            if card.task_id == task_id and card.source == source:
+                self._store.resolve(card.id, ApprovalDecision.TASK_ENDED)
+
     async def ask_user(
         self,
         *,
