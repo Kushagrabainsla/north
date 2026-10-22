@@ -17,11 +17,6 @@ _ACTIVITY_SUMMARY = re.compile(
     r"\b(?:recent|past|last|previous|progress|history|activity|activities|work\s+done)\b",
     re.IGNORECASE,
 )
-_EXPLANATORY_REQUEST = re.compile(
-    r"^\s*(?:(?:how|what)\b(?!\s+about\b)|why\b|where\b|when\b|which\b|"
-    r"explain\b|tell\s+me\b(?!\s+(?:once|after|when)\b)|can\s+you\s+explain\b)",
-    re.IGNORECASE,
-)
 _ADDITIONAL_ACTION = re.compile(
     r"(?:\band\b|\balso\b|[?!.,;\n])\s*"
     r"(?:(?:please|then|can\s+you|could\s+you|let'?s)\s+)*"
@@ -33,11 +28,6 @@ _ADDITIONAL_ACTION = re.compile(
 def is_activity_summary(prompt: str) -> bool:
     """A request to report previous work, not perform those actions again."""
     return bool(_ACTIVITY_SUMMARY.search(prompt)) and not _ADDITIONAL_ACTION.search(prompt)
-
-
-def is_explanatory_request(prompt: str) -> bool:
-    """A question about existing work, without an additional action request."""
-    return bool(_EXPLANATORY_REQUEST.search(prompt)) and not _ADDITIONAL_ACTION.search(prompt)
 
 
 # Em dash (—) and horizontal bar (―) read as an "AI tell" in prose; collapse the

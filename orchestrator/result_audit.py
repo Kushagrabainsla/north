@@ -27,7 +27,7 @@ from orchestrator.journal import TaskJournal
 from orchestrator.verification import evidence_sufficiency_violations, verify_claims
 from utils.ids import generate_id
 from utils.prompts import load_prompt
-from utils.text import extract_json, extract_markdown_section, is_explanatory_request
+from utils.text import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +90,10 @@ class ResultAuditor:
         if payload is not None:
             violations.extend(
                 evidence_sufficiency_violations(
-                    _evidence_task(payload),
+                    payload.prompt,
                     result.successful_tools,
                     _evidence_counts(result),
-                    _evidence_actions(result),
                     repository_context=bool(payload.workspace and agent.domain == "engineering"),
-                    outcome_status=_outcome_status(result),
                 )
             )
         if not violations:
@@ -172,12 +170,10 @@ class ResultAuditor:
         )
         remaining.extend(
             evidence_sufficiency_violations(
-                _evidence_task(payload),
+                payload.prompt,
                 repaired.successful_tools,
                 _evidence_counts(repaired),
-                _evidence_actions(repaired),
                 repository_context=bool(payload.workspace and agent.domain == "engineering"),
-                outcome_status=_outcome_status(repaired),
             )
         )
         if len(remaining) >= len(violations):
@@ -272,18 +268,3 @@ def _evidence_actions(result: AgentResult) -> dict[str, int]:
     if not isinstance(raw, dict):
         return {}
     return {str(name): max(0, int(count)) for name, count in raw.items() if isinstance(count, int | float)}
-
-
-def _outcome_status(result: AgentResult) -> str:
-    raw = result.data.get("outcome_status") if isinstance(result.data, dict) else None
-    return str(raw) if raw else "response_ready"
-
-
-def _evidence_task(payload: AgentPayload) -> str:
-    """Include a durable session goal when a short follow-up continues earlier work."""
-    # A session's original create request is context for "How is it triggered?",
-    # not a new instruction to recreate the capability on that turn.
-    if is_explanatory_request(payload.prompt):
-        return payload.prompt
-    goal = extract_markdown_section(payload.context, "Active session goal")
-    return f"{payload.prompt}\n\n{goal}" if goal else payload.prompt

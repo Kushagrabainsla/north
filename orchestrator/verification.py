@@ -18,24 +18,31 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from orchestrator.task_intent import is_repository_overview
-from utils.text import is_activity_summary, is_explanatory_request
+from utils.text import is_activity_summary
 
-# Words that frame a claim verb as an intention, plan, or hypothetical rather
-# than a completed action: "I should create the file", "let's write a test",
-# "we need to generate the spec", "the files I created earlier were too brief".
-# When one of these governs the claim verb, the sentence is not a completion
-# claim, so it must not be checked against tool evidence. Reflective past-tense
-# narration ("the file I created") is caught by the relative-pronoun markers.
+# Words that frame a claim verb as an intention, plan, hypothetical, or denial
+# rather than a completed action: "I should create the file", "let's write a
+# test", "the files I created earlier were too brief", "I did not create the
+# flow". When one of these governs the claim verb, the sentence is not a
+# completion claim, so it must not be checked against tool evidence. A denial
+# is the honest answer the correction pass asks for; reading "I didn't write
+# the report" as a claim flagged it again. Reflective past-tense narration
+# ("the file I created") is caught by the relative-pronoun markers.
 _NON_COMPLETION_RE = re.compile(
     r"\b(?:should|would|could|will|shall|can|might|may|let'?s|going\s+to|gonna|"
     r"plan(?:ning)?\s+to|need(?:s|ed)?\s+to|want(?:s|ed)?\s+to|try(?:ing)?\s+to|"
     r"intend(?:s|ed)?\s+to|about\s+to|hope\s+to|aim\s+to|propose\s+to|"
-    r"(?:file|files|script|test|tests|spec|code)\s+(?:i|we|you))\b",
+    r"not|never|no|nothing|none|neither|nor|without|"
+    r"(?:file|files|script|test|tests|spec|code)\s+(?:i|we|you))\b"
+    r"|n['’]t\b",
     re.IGNORECASE,
 )
 
-# How far back to look for a non-completion marker governing a claim verb.
+# How far back to look for a non-completion marker governing a claim verb. The
+# look stops at the start of the verb's clause, so "I didn't run the build, but
+# I created the file" is still a claim to have created the file.
 _GOVERNING_WINDOW_CHARS = 40
+_CLAUSE_BREAK_RE = re.compile(r"[,;:.!?\n]")
 _CURRENT_EXECUTION = re.compile(
     r"\b(?:now|just|today|currently|this\s+(?:run|session|turn|chat)|"
     r"i\s+(?:have\s+)?(?:ran|executed|tested|verified))\b",
@@ -60,35 +67,9 @@ _REPO_CONTENT_TOOLS = frozenset({"read_file", "search_files", "search_code"})
 _CODING_AGENT = "coding_agent"
 _WEB_EVIDENCE_TOOLS = frozenset({"web_search", "fetch_url"})
 
-# A request to author one, in words. Naming the tool is not one: "Use create_skill: validate
-# it, then activate it" asked for neither a create nor an update, and was flagged as missing both.
-_CAPABILITY_REQUESTS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
-    (
-        "flow creation or update",
-        re.compile(
-            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\b(?:north\s+)?flow\b",
-            re.IGNORECASE,
-        ),
-        frozenset({"create_flow:create", "create_flow:update"}),
-    ),
-    (
-        "skill creation or update",
-        re.compile(
-            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\b(?:north\s+)?skill\b",
-            re.IGNORECASE,
-        ),
-        frozenset({"create_skill:create", "create_skill:update"}),
-    ),
-    (
-        "North tool creation or update",
-        re.compile(
-            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\bnorth\s+tool\b",
-            re.IGNORECASE,
-        ),
-        frozenset({"create_tool:create", "create_tool:update"}),
-    ),
-)
-
+# A claim to have authored a capability needs the mutating action itself. What
+# the task asked for is not checked: an answer may rightly decline, ask first, or
+# explain instead, and every flag read from the request alone was a false one.
 _CAPABILITY_COMPLETION_CLAIMS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
     (
         "creating or updating a flow",
@@ -170,13 +151,19 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
 )
 
 
+def _is_governed_as_non_completion(output: str, verb_start: int) -> bool:
+    """True if a marker earlier in the claim verb's clause makes it a plan or a denial."""
+    window = output[max(0, verb_start - _GOVERNING_WINDOW_CHARS) : verb_start]
+    clause = _CLAUSE_BREAK_RE.split(window)[-1]
+    return bool(_NON_COMPLETION_RE.search(clause))
+
+
 def _verify_path_existence(output: str, workspace: str | None = None) -> list[str]:
     """Check explicit path claims against physical filesystem reality."""
     violations: list[str] = []
     ws_path = Path(workspace).expanduser().resolve() if workspace else None
     for match in _EXPLICIT_PATH_CLAIM_RE.finditer(output):
-        window = output[max(0, match.start() - _GOVERNING_WINDOW_CHARS) : match.start()]
-        if _NON_COMPLETION_RE.search(window):
+        if _is_governed_as_non_completion(output, match.start()):
             continue
         raw_path = match.group(1)
         try:
@@ -194,12 +181,17 @@ def _has_completion_claim(output: str, pattern: re.Pattern[str], *, historical: 
     """True if *output* asserts the claim as a completed action.
 
     A match governed by an intent/hypothetical marker (a plan, a suggestion, a
-    past-tense reflection) in the preceding window does not count - only an
-    unqualified assertion that the action was done.
+    past-tense reflection, a denial) earlier in its clause does not count - only
+    an unqualified assertion that the action was done.
+
+    A skipped match does not hide a claim inside it: in "I didn't run the build,
+    but I created the file", the denied "build" match runs on to "file", so the
+    search resumes one character in rather than after it.
     """
-    for m in pattern.finditer(output):
-        window = output[max(0, m.start() - _GOVERNING_WINDOW_CHARS) : m.start()]
-        if _NON_COMPLETION_RE.search(window):
+    position = 0
+    while (m := pattern.search(output, position)) is not None:
+        position = m.start() + 1
+        if _is_governed_as_non_completion(output, m.start()):
             continue
         if historical:
             start = max(output.rfind("\n", 0, m.start()), output.rfind(". ", 0, m.start())) + 1
@@ -264,10 +256,8 @@ def evidence_sufficiency_violations(
     task: str,
     successful_tools: Iterable[str],
     evidence_counts: dict[str, int] | None = None,
-    evidence_actions: dict[str, int] | None = None,
     *,
     repository_context: bool = False,
-    outcome_status: str = "response_ready",
 ) -> list[str]:
     """Return task-level gaps where successful calls are not relevant enough.
 
@@ -294,15 +284,5 @@ def evidence_sufficiency_violations(
 
     if _EXTERNAL_RESEARCH_RE.search(task) and not (succeeded & _WEB_EVIDENCE_TOOLS):
         violations.append("external/current research used no successful `web_search` or `fetch_url` evidence")
-
-    # Waiting and blocked answers are honest intermediate states. Any other
-    # answer to an explicit capability-authoring request must include evidence
-    # of the actual create/update action, not merely list/read discovery.
-    if outcome_status not in {"waiting_for_user", "blocked"} and not is_explanatory_request(task):
-        actions = {name for name, count in (evidence_actions or {}).items() if count > 0}
-        for label, pattern, required in _CAPABILITY_REQUESTS:
-            if pattern.search(task) and not (required & actions):
-                action_list = " or ".join(f"`{action}`" for action in sorted(required))
-                violations.append(f"{label} used no successful {action_list} evidence")
 
     return violations

@@ -1280,7 +1280,8 @@ action claims in the final answer against the tools that actually **succeeded**
 output is annotated and a `claims_unverified` ledger entry is recorded, so a
 fabricated completion is visible rather than silently marked clean. Patterns
 favour precision (flag, don't cry wolf); `successful_tools is None` (a non-tool
-agent) skips the check.
+agent) skips the check. Check what the answer says was done, never what the
+request seemed to ask for: a right answer may decline, ask first, or explain.
 
 ### 16.1.3 Task-owned Browser Windows
 

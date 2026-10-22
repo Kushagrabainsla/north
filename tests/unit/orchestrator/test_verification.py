@@ -105,6 +105,27 @@ def test_intent_is_not_a_completion_claim() -> None:
     assert verify_claims("I plan to commit the changes.", []) == []
 
 
+@pytest.mark.parametrize(
+    "output",
+    [
+        "I have not created the flow yet.",
+        "I did not create the file.",
+        "I didn't write the report.",
+        "I didn’t write the report.",
+        "Nothing was committed.",
+        "I never ran the tests.",
+    ],
+)
+def test_a_denial_is_not_a_completion_claim(output) -> None:
+    """Saying an action was not done is the honest answer the correction pass asks for."""
+    assert verify_claims(output, [], evidence_actions={}) == []
+
+
+def test_a_denial_in_an_earlier_clause_does_not_hide_a_later_claim() -> None:
+    violations = verify_claims("I didn't run the build, but I created the file config.py.", [])
+    assert any("creating or editing a file or briefing" in v for v in violations)
+
+
 def test_multiple_independent_violations() -> None:
     output = "I created app.py, all tests pass, and I pushed to main."
     violations = verify_claims(output, [])
@@ -172,67 +193,25 @@ def test_ordinary_task_does_not_invent_evidence_requirements() -> None:
     assert evidence_sufficiency_violations("Explain this error message", []) == []
 
 
-def test_listing_flows_does_not_count_as_creating_one() -> None:
-    violations = evidence_sufficiency_violations(
-        "Create a North flow that applies for jobs.",
-        ["create_flow"],
-        {"create_flow": 1},
-        {"create_flow:list": 1},
-    )
-    assert any("flow creation" in violation for violation in violations)
-
-
-def test_explaining_flow_creation_does_not_require_creating_another_flow() -> None:
-    assert (
-        evidence_sufficiency_violations(
-            "How does the create_flow tool work?",
-            ["create_flow"],
-            evidence_actions={"create_flow:read": 1},
-        )
-        == []
-    )
-
-
 @pytest.mark.parametrize(
-    "prompt",
+    ("task", "answer"),
     [
-        "How does it work? Create a North flow for jobs.",
-        "Explain it and create a North flow for jobs.",
-        "How is it triggered? Then please create a North flow for jobs.",
-        "What does it do and can you create a North flow for jobs?",
-        "How about we create a North flow for jobs?",
-        "Tell me once you create a North flow for jobs.",
-        "Explain it; create a North flow for jobs.",
-        "How is it triggered, and let's create a North flow for jobs?",
+        (
+            "Create a flow that fills this form every minute with 101 email aliases. "
+            "Before implementing the flow, provide me the details of what you're going to do.",
+            "I can't build a loop that submits 101 email aliases. I have not created or scheduled anything.",
+        ),
+        (
+            "Create a North flow that applies for jobs.",
+            "Here is the plan: one step per job, stopping at the review boundary. Shall I create it?",
+        ),
+        ("How is it triggered?", "It is manually triggered. The flow is still a candidate."),
     ],
 )
-def test_explanation_plus_action_still_requires_creation_evidence(prompt) -> None:
-    assert evidence_sufficiency_violations(prompt, ["create_flow"], evidence_actions={"create_flow:read": 1})
-
-
-def test_flow_create_action_satisfies_capability_request() -> None:
-    assert (
-        evidence_sufficiency_violations(
-            "Create a North flow that applies for jobs.",
-            ["create_flow"],
-            {"create_flow": 1},
-            {"create_flow:create": 1},
-        )
-        == []
-    )
-
-
-def test_waiting_for_user_is_not_a_false_capability_completion() -> None:
-    assert (
-        evidence_sufficiency_violations(
-            "Create a North flow that applies for jobs.",
-            ["create_flow"],
-            {"create_flow": 1},
-            {"create_flow:list": 1},
-            outcome_status="waiting_for_user",
-        )
-        == []
-    )
+def test_an_answer_that_creates_nothing_and_claims_nothing_is_not_flagged(task, answer) -> None:
+    """A refusal, a plan to approve, or an explanation is a right answer to a create request."""
+    assert verify_claims(answer, ["create_flow"], evidence_actions={"create_flow:list": 1}, task=task) == []
+    assert evidence_sufficiency_violations(task, ["create_flow"], {"create_flow": 1}) == []
 
 
 def test_created_flow_claim_requires_create_action_not_list_action() -> None:
@@ -353,20 +332,3 @@ def test_claimed_relative_file_path_in_workspace_ok(tmp_path) -> None:
     output = "Report saved to docs/report.md"
     violations = verify_claims(output, ["write_file"], workspace=str(tmp_path))
     assert violations == []
-
-
-def test_naming_create_skill_to_validate_and_activate_is_not_a_request_to_create_one() -> None:
-    """The real task was flagged for a create it never asked for, and its correction pass ran it again."""
-    prompt = (
-        "Re-activate the research-paper-briefing skill, which I edited. Use create_skill: validate it, "
-        "then ask me to confirm and activate it."
-    )
-
-    assert (
-        evidence_sufficiency_violations(
-            prompt,
-            ["create_skill", "request_approval"],
-            evidence_actions={"create_skill:validate": 1, "request_approval": 1, "create_skill:activate": 1},
-        )
-        == []
-    )

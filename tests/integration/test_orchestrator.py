@@ -891,23 +891,27 @@ async def test_trigger_question_does_not_inherit_the_original_flow_creation_requ
 
 
 @pytest.mark.asyncio
-async def test_action_followup_still_inherits_the_original_flow_creation_requirement(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path, self_repair=False)
+async def test_declining_a_flow_request_runs_no_correction_pass(tmp_path):
+    """Each refusal of a create request ran the task again and still showed a warning."""
+    auditor, ledger, _ = _make_auditor(tmp_path)
+    agent = _StubbornClaimAgent()
     result = AgentResult(
-        output="Done.",
-        summary="done",
-        successful_tools=["create_flow"],
-        data={"evidence_actions": {"create_flow:list": 1}},
+        output="I can't change the flow to use a new email alias each run. No flow was created or updated.",
+        summary="Declined",
+        successful_tools=["use_skill"],
+        data={"evidence_actions": {}},
     )
     payload = AgentPayload(
         task_id="t1",
-        prompt="Go ahead",
-        context="## Active session goal\nCreate a North flow that applies for jobs.\n",
+        prompt="Lets use the email name+{TIME_IN_EPOCHS}@example.edu, so that when I run the flow it gets the time",
+        context="## Active session goal\nCreate a one time flow.\n",
     )
 
-    await auditor.verify_claims("t1", _StubbornClaimAgent(), result, payload)
+    await auditor.verify_claims("t1", agent, result, payload)
 
-    assert "Unverified claims" in result.output
+    assert agent.runs == 0
+    assert "Unverified claims" not in result.output
+    assert not await ledger.query(LedgerFilters(task_id="t1"))
 
 
 @pytest.mark.asyncio
