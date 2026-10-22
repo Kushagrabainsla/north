@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, del, patch, post } from "../api";
 import {
   Empty,
@@ -22,11 +23,13 @@ import {
   flowDeletionPrompt,
   flowScheduleBody,
   flowStepsComplete,
+  inactiveSkillLabel,
   lastRunOf,
   lastRunText,
   progressText,
   scheduleSummary,
   schedulesByFlow,
+  stoppedStepText,
   triggerLabel,
   usesSystemAction,
 } from "./flowsView";
@@ -238,7 +241,9 @@ function FlowStepCard({
           >
             {step.skill &&
               !activeSkills.some((skill) => skill.name === step.skill) && (
-                <option value={step.skill}>{step.skill} (unavailable)</option>
+                <option value={step.skill}>
+                  {step.skill} ({inactiveSkillLabel(selectedSkill?.status)})
+                </option>
               )}
             {activeSkills.map((skill) => (
               <option key={skill.name} value={skill.name}>
@@ -472,8 +477,7 @@ function RunRow({
         {actionError && <small className="run-error">{actionError}</small>}
         {open && (
           <dl className="run-details">
-            {run.steps.length ? (
-              run.steps.map((step) => (
+            {run.steps.map((step) => (
                 <div key={step.step}>
                   <dt>
                     {step.step}
@@ -487,11 +491,28 @@ function RunRow({
                       `\nUsed ${step.tools_used.join(", ")}`}
                   </dd>
                 </div>
-              ))
-            ) : (
+            ))}
+            {run.stopped_at ? (
               <div>
-                <dt>Steps</dt>
-                <dd>No step finished before this run stopped.</dd>
+                <dt>
+                  {run.stopped_at.step} · {run.stopped_at.runs}
+                </dt>
+                <dd>{stoppedStepText(run, formatDateTime)}</dd>
+              </div>
+            ) : (
+              !run.steps.length && (
+                <div>
+                  <dt>Steps</dt>
+                  <dd>No step finished before this run stopped.</dd>
+                </div>
+              )
+            )}
+            {run.task_id && (
+              <div>
+                <dt>Task</dt>
+                <dd>
+                  <Link to={`/tasks/${run.task_id}`}>Open its timeline</Link>
+                </dd>
               </div>
             )}
           </dl>

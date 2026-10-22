@@ -12,6 +12,8 @@ import {
   progressText,
   scheduleSummary,
   schedulesByFlow,
+  inactiveSkillLabel,
+  stoppedStepText,
   triggerLabel,
 } from "./flowsView";
 import type { JobLike, RunLike, ScheduleLike } from "./flowsView";
@@ -210,6 +212,40 @@ describe("run history wording", () => {
     expect(
       progressText(run({ status: "failed", total_steps: 3, current_step: 1 })),
     ).toBe("stopped at step 2 of 3");
+  });
+
+  it("says a run waiting on a card waits for you, and a running one is on its step", () => {
+    const stopped_at = { step: "fill", runs: "form", waiting_for: "Flow approval: x", waiting_since: "2026-10-22T19:07:26Z" };
+    expect(progressText(run({ status: "running", current_step: 0, stopped_at }))).toBe(
+      "waiting for you at step 1 of 1",
+    );
+    expect(
+      progressText(run({ status: "running", current_step: 0, stopped_at: { ...stopped_at, waiting_for: "" } })),
+    ).toBe("on step 1 of 1");
+  });
+});
+
+describe("stoppedStepText", () => {
+  const at = { step: "check", runs: "nightly_check", waiting_for: "", waiting_since: "" };
+  const time = () => "12:07";
+
+  it("names the card a run waits on, and since when", () => {
+    const waiting = run({ status: "running", stopped_at: { ...at, waiting_for: "Flow approval: x", waiting_since: "t" } });
+    expect(stoppedStepText(waiting, time)).toBe("Waiting for your answer since 12:07: Flow approval: x");
+  });
+
+  it("points at the error of a run that stopped on one", () => {
+    expect(stoppedStepText(run({ status: "paused", error: "boom", stopped_at: at }), time)).toBe(
+      "Stopped here, on the error above.",
+    );
+    expect(stoppedStepText(run({ status: "running", stopped_at: at }), time)).toBe("Running now.");
+    expect(stoppedStepText(run(), time)).toBe("");
+  });
+
+  it("says why a step's skill is not among the active ones", () => {
+    expect(inactiveSkillLabel("candidate")).toBe("candidate: test runs only, not active yet");
+    expect(inactiveSkillLabel("retired")).toBe("retired");
+    expect(inactiveSkillLabel(undefined)).toBe("missing");
   });
 });
 

@@ -125,6 +125,45 @@ async def test_flow_runs_list_newest_first_with_trigger_and_progress(flow_regist
     assert every[0]["total_steps"] == 0
 
 
+async def test_an_unfinished_run_names_its_step_and_the_card_it_waits_on(flow_registry, tmp_path) -> None:
+    """Its details said "No step finished" and nothing about where it was or why."""
+    from approval.models import Card, CardType
+    from approval.store import ApprovalStore
+
+    store = _run_store(tmp_path)
+    store.create(run_id="waiting", flow_name="job-review", task_id="flow_waiting", trigger="test")
+    store.create(run_id="paused", flow_name="job-review", task_id="flow_paused", trigger="schedule")
+    store.update("paused", status="paused", current_step=0, outputs=[], error="Step 'inspect' failed: boom")
+    store.create(run_id="done", flow_name="job-review", task_id="flow_done")
+    store.update("done", status="completed", current_step=1, outputs=[])
+    approvals = ApprovalStore()
+    approvals.add(
+        Card(
+            id="c1",
+            type=CardType.APPROVAL,
+            task_id="flow_waiting",
+            agent="general",
+            title="Flow approval: job-review",
+            message="Step 'inspect' is ready to run.",
+        )
+    )
+
+    services = ApiServices(flow_registry=flow_registry, flow_store=store, approval_store=approvals, north_home=tmp_path)
+    with bind_services(services):
+        views = {view["run_id"]: view for view in await web_api.list_flow_runs()}
+
+    waiting = views["waiting"]["stopped_at"]
+    assert waiting["step"] == "inspect" and waiting["runs"] == "review-item"
+    assert waiting["waiting_for"] == "Flow approval: job-review" and waiting["waiting_since"]
+    assert views["paused"]["stopped_at"] == {
+        "step": "inspect",
+        "runs": "review-item",
+        "waiting_for": "",
+        "waiting_since": "",
+    }
+    assert views["done"]["stopped_at"] is None
+
+
 def test_run_view_clips_long_output_and_names_old_test_runs(tmp_path) -> None:
     from flows.store import FlowRunStore
     from web.extensions import flow_run_view

@@ -63,6 +63,15 @@ export interface RunLike {
   error: string;
   // A scheduled run that started after its slot: by how much and why.
   late_note?: string;
+  // The step an unfinished run is on, and the card it waits on, if any.
+  stopped_at?: StoppedStep | null;
+}
+
+export interface StoppedStep {
+  step: string;
+  runs: string;
+  waiting_for: string;
+  waiting_since: string;
 }
 
 // "daily at 07:00", or "every 5 minutes" - an interval has no time of day.
@@ -133,7 +142,28 @@ export function progressText(run: RunLike): string {
   const noun = total === 1 ? "step" : "steps";
   if (run.status === "completed") return `${total} ${noun}`;
   const at = Math.min(run.current_step + 1, Math.max(total, 1));
+  if (run.stopped_at?.waiting_for) return `waiting for you at step ${at} of ${total}`;
+  if (run.status === "running") return `on step ${at} of ${total}`;
   return `stopped at step ${at} of ${total}`;
+}
+
+// Why a step's skill is not in the list of active ones. It read "unavailable",
+// which hid that a candidate still runs in test runs and only needs activating.
+export function inactiveSkillLabel(status: string | undefined): string {
+  if (!status) return "missing";
+  return status === "candidate" ? "candidate: test runs only, not active yet" : status;
+}
+
+// Why an unfinished run is where it is. A run waiting on an approval read
+// "running · stopped at step 1 of 1" and its details said nothing at all.
+export function stoppedStepText(run: RunLike, timeOf: (iso: string) => string): string {
+  const stopped = run.stopped_at;
+  if (!stopped) return "";
+  if (stopped.waiting_for)
+    return `Waiting for your answer since ${timeOf(stopped.waiting_since)}: ${stopped.waiting_for}`;
+  if (run.status === "running") return "Running now.";
+  if (run.error) return "Stopped here, on the error above.";
+  return `${run.status.charAt(0).toUpperCase()}${run.status.slice(1)} here.`;
 }
 
 export interface UpcomingItem {

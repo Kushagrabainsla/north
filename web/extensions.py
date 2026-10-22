@@ -11,9 +11,10 @@ import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from approval.models import Card
 from config.browser_profiles import BrowserProfile, SetupProgress, discover_browser_profiles
 from flows.exceptions import FlowNotFoundError, FlowParseError
-from flows.models import FLOW_FILENAME, FlowSource, flow_fingerprint
+from flows.models import FLOW_FILENAME, Flow, FlowSource, flow_fingerprint
 from flows.registry import parse_flow_document
 from flows.store import FlowRun
 from flows.validation import schedulable_flow_error, validate_flow_capabilities
@@ -542,7 +543,27 @@ def _meaningful(value: Any) -> str:
     return "" if text in {"{}", "[]"} else text
 
 
-def flow_run_view(run: FlowRun, total_steps: int | None = None) -> dict[str, Any]:
+def stopped_step_view(run: FlowRun, flow: Flow | None, waiting: Card | None = None) -> dict[str, Any] | None:
+    """The step an unfinished run is on, what runs it, and the card it waits on, if any.
+
+    A run's details listed only finished steps, so one waiting on an approval, or
+    paused on an error before its first step finished, said "No step finished"
+    and nothing about where it was or why.
+    """
+    if run.status == "completed" or flow is None or not 0 <= run.current_step < len(flow.steps):
+        return None
+    step = flow.steps[run.current_step]
+    return {
+        "step": step.name,
+        "runs": step.skill or step.action or "instructions",
+        "waiting_for": waiting.title if waiting is not None else "",
+        "waiting_since": waiting.created_at.isoformat() if waiting is not None else "",
+    }
+
+
+def flow_run_view(
+    run: FlowRun, total_steps: int | None = None, *, stopped_at: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """One run as the Flows page reads it: what started it, how far it got, what it said.
 
     Step output is clipped: a run keeps whole agent answers, and a history list
@@ -581,6 +602,7 @@ def flow_run_view(run: FlowRun, total_steps: int | None = None) -> dict[str, Any
         "started_at": run.created_at or run.updated_at,
         "updated_at": run.updated_at,
         "steps": steps,
+        "stopped_at": stopped_at,
     }
 
 
@@ -591,16 +613,29 @@ async def list_flow_runs(flow: str | None = None, limit: int = 50) -> list[dict[
     store = services.require("flow_store")
     registry = services.flow_registry
     runs = await asyncio.to_thread(store.list_runs, flow, max(1, min(limit, 200)))
+    approvals = services.approval_store
+    # Newest first, so each task keeps its oldest open card: the one it is stuck on.
+    pending = sorted(approvals.pending(), key=lambda card: card.created_at, reverse=True) if approvals else []
+    waiting = {card.task_id: card for card in pending}
 
-    def total(name: str) -> int | None:
+    def definition(name: str) -> Flow | None:
         if registry is None:
             return None
         try:
-            return len(registry.get(name).steps)
+            return registry.get(name)
         except FlowNotFoundError:
             return None
 
-    views = [flow_run_view(run, total(run.flow_name)) for run in runs]
+    views = []
+    for run in runs:
+        known = definition(run.flow_name)
+        views.append(
+            flow_run_view(
+                run,
+                len(known.steps) if known is not None else None,
+                stopped_at=stopped_step_view(run, known, waiting.get(run.task_id)),
+            )
+        )
     # A scheduled run's task id is its job's id; the job knows the slot it was due
     # at, so a run hours late says so instead of reading as on time.
     if any(view["trigger"] == "schedule" for view in views) and services.job_processor is not None:
