@@ -4,7 +4,24 @@
 // yet) or hides a search that just has no results.
 
 import { describe, expect, it } from "vitest";
-import { replyText, sessionsEmptyMessage } from "./Chat";
+import { attachmentText, replyText, sessionsEmptyMessage } from "./Chat";
+
+describe("what can be attached to a message", () => {
+  const bytes = (values: number[]) => new Uint8Array(values).buffer;
+
+  it("attaches text, including non-ASCII text", () => {
+    expect(attachmentText(new TextEncoder().encode("notes: café ✓").buffer)).toBe("notes: café ✓");
+  });
+
+  it("refuses an image instead of pasting its bytes as text", () => {
+    const pngHeader = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d];
+    expect(attachmentText(bytes(pngHeader))).toBeNull();
+  });
+
+  it("refuses a binary file that happens to be valid UTF-8", () => {
+    expect(attachmentText(bytes([0x41, 0x00, 0x42]))).toBeNull();
+  });
+});
 
 describe("sessions empty-state copy", () => {
   it("blames the search first, regardless of which tab is open", () => {

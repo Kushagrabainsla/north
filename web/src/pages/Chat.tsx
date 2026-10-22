@@ -213,6 +213,18 @@ const DELETE_SESSION_COPY =
 /** What the empty session list says, which depends on *why* it's empty: a
  *  search with no match reads differently from a tab that's genuinely empty,
  *  and "no archived sessions" would be a lie shown on the active tab. */
+// An attachment goes into the message as text, so only text can be attached. A
+// screenshot read as text became 55 KB of replacement characters in the prompt,
+// and North never saw the picture. Text is valid UTF-8 with no NUL character.
+export function attachmentText(bytes: ArrayBuffer): string | null {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return text.includes("\u0000") ? null : text;
+  } catch {
+    return null;
+  }
+}
+
 export function sessionsEmptyMessage(search: string, tab: "active" | "archived"): string {
   if (search) return "No sessions match this search.";
   return tab === "archived" ? "No archived sessions." : "No sessions have been created yet.";
@@ -369,8 +381,10 @@ export function Chat() {
   const appendFiles = async (files: File[]) => {
     let value = prompt;
     let truncated = false;
+    const skipped: string[] = [];
     for (const file of files) {
-      const text = await file.text();
+      const text = attachmentText(await file.arrayBuffer());
+      if (text === null) { skipped.push(file.name); continue; }
       const prefix = `${value ? "\n\n" : ""}[Attached: ${file.name}]\n`;
       const remaining = Math.max(0, 30_000 - value.length - prefix.length);
       value += prefix + text.slice(0, remaining);
@@ -378,7 +392,11 @@ export function Chat() {
       if (value.length >= 30_000) break;
     }
     updatePrompt(value);
-    if (truncated) setNotice("Attachment text was shortened to fit the session message limit.");
+    const notices = [
+      skipped.length ? `Not attached: ${skipped.join(", ")}. Only text files can be attached; North cannot read images or other binary files yet.` : "",
+      truncated ? "Attachment text was shortened to fit the session message limit." : "",
+    ].filter(Boolean);
+    if (notices.length) setNotice(notices.join(" "));
   };
   const attachFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     await appendFiles(Array.from(event.target.files || []));
