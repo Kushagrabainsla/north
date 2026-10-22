@@ -326,16 +326,9 @@ class AgenticLLMAgent(LLMAgent):
 
         for call, result_str, success, _ in results:
             if self._deps.stream_manager and payload.task_id:
-                event_data: dict[str, Any] = {"tool": call.name, "success": success}
-                try:
-                    parsed = json.loads(result_str)
-                    if formatted := parsed.get("formatted"):
-                        event_data["formatted"] = formatted
-                    if not success and (err := parsed.get("error")):
-                        event_data["error"] = err
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-                await self._deps.stream_manager.emit(payload.task_id, "tool_result", event_data)
+                await self._deps.stream_manager.emit(
+                    payload.task_id, "tool_result", _tool_result_event(call.name, result_str, success)
+                )
             await self._record_tool_call_confidence(call.name, result_str, success)
 
         self._append_tool_call_exchange(messages, results)
@@ -1330,6 +1323,29 @@ class AgenticLLMAgent(LLMAgent):
             logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
             return _failed_json(str(exc)), []
         return _cap_tool_result(data, tool_name), images
+
+
+_EMPTY: tuple[Any, ...] = (None, "", [], {})
+
+
+def _tool_result_event(tool_name: str, result_str: str, success: bool) -> dict[str, Any]:
+    """The run-history record of one tool result: what the model was shown.
+
+    A tool's readable `formatted` text stands for its data. Without one, the rest
+    of the result is kept: a failed skill test recorded only "Skill selection tests
+    failed.", though the model was told which prompts failed, and an `ask_user`
+    result recorded no answer at all.
+    """
+    event: dict[str, Any] = {"tool": tool_name, "success": success}
+    try:
+        parsed = json.loads(result_str)
+        if formatted := parsed.get("formatted"):
+            event["formatted"] = formatted
+        else:
+            event.update({key: value for key, value in parsed.items() if key not in event and value not in _EMPTY})
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return event
 
 
 def _cap_tool_result(data: dict[str, Any], tool_name: str = "") -> str:
