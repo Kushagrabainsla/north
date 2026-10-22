@@ -47,6 +47,9 @@ same primitives, but it must not import recorded results.
 - [`coding_agents_integration/`](coding_agents_integration/) — whether a coding agent's
   approval requests, waits, runs and restarts connect to north's real cards, queue,
   dashboard and recovery, before the feature is built.
+- [`codex_prompt_cache/`](codex_prompt_cache/) — whether a run's first Codex
+  call can reuse an earlier run's prompt cache. It can't, enough to matter;
+  see the section below.
 
 ## Browser and custom-flow completion regression (2026-10-10)
 
@@ -324,3 +327,62 @@ patches that, pins both halves, and loads the extension unpacked so it never
 auto-updates. Chrome lets only one extension ID debug at a time: per-profile
 copies with different IDs locked each other out (reproduced in Chrome for
 Testing), so every copy shares one manifest key and ID. Live check: `tests/live/test_taskwindow_bridge_live.py`.
+
+## Codex prompt cache across runs (2026-10-22)
+
+Question: Codex caches a prompt start only within one `session_id`, and north
+sends the run id, so every run's first call is 0% cached. Would a session
+shared across runs (per task, or per agent) fix that?
+
+Answer: no. Codex caches the tool list **ahead of** the instructions, and
+stops at the first tool that differs. Each run picks its own tools, so most
+runs share little or nothing. `session_id` stays the run id.
+
+Live probe ([`probe.py`](codex_prompt_cache/probe.py), `gpt-5.6-terra`, real
+general-agent instructions and tool schemas):
+
+| Call | Session | Prompt | Input | Cached |
+| --- | --- | --- | --- | --- |
+| 1 | S | tools A + task 1 | 10,869 | 0 |
+| 2 | S | tools B (only the first tool differs) + task 2 | 10,373 | **0** |
+| 3 | S | tools A + task 2 | 11,353 | 6,656 |
+| 4 | new | copy of call 1 | 10,869 | 0 |
+
+Calls 2 and 3 ran at once in one session; both worked. Call 4 confirms the
+cache is per session.
+
+Offline replay ([`replay.py`](codex_prompt_cache/replay.py)) of the 46
+general-agent runs from Oct 17 to Oct 22. It re-selects each run's tools
+with the production selection code and counts what the run before it, under
+the same key, had already cached. Only 11 of 45 runs had the same tools as
+the run before. First calls are 716k of 2.28M uncached input tokens (31%).
+
+| Session key | Cache life | Cached on first calls | Share of all uncached | Runs helped |
+| --- | --- | --- | --- | --- |
+| per run (today) | any | 0 | 0% | 0 |
+| per task | 5-60 min | 9,369 | 0.4% | 2 |
+| per agent | 5 min | 43,877 | 1.9% | 8 |
+| per agent | 60 min | 85,604 | 3.7% | 13 |
+
+A per-agent key also puts every run on one key. OpenAI says a key spills to
+other machines above about 15 requests a minute, which would lose part of the
+74% cache reuse inside runs (4.46M tokens); losing 2% of that cancels the gain.
+
+Same cause inside a run: when `find_tools` adds a tool mid-run, the next call
+is 0% cached (6 of 178 later calls, 81k tokens).
+
+The only lever left is a tool list that stays the same across runs, such as
+the full catalog (41 tools, about 12.7k tokens, against 3-5k selected). That
+reverses lean tool selection and was not measured.
+
+Limitations: the replay rebuilds tool sets without each task's plan text or
+skill descriptions, so a few sets may differ from what ran. Token sizes are
+north's 4-characters-a-token estimate. Cache life on the Codex backend is not
+published; 5, 10 and 60 minutes bracket it.
+
+```sh
+.venv/bin/python -m experiments.codex_prompt_cache.probe    # about 45k tokens of Codex plan quota
+.venv/bin/python -m experiments.codex_prompt_cache.replay --since 2026-10-17 --until 2026-10-22T19:10
+```
+
+Recorded numbers: [`results.json`](codex_prompt_cache/results.json).

@@ -1661,6 +1661,14 @@ agents/university/README.md
 agents/finance/README.md
 ```
 
+### 19.4 Experiments Live in `experiments/`
+
+Probes, measurements and their results go in `experiments/`: a runnable harness, its recorded results, and the write-up in `experiments/README.md`. Never in separate notes or md files elsewhere.
+
+**Why:** the evidence behind a decision stays with the code and can be re-run.
+
+**How to apply:** even an experiment that ends in "do not ship" is committed there, with its numbers.
+
 ---
 
 ## 20. Git

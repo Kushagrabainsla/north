@@ -1,0 +1,27 @@
+{
+  "recorded_at": "2026-10-22",
+  "model": "gpt-5.6-terra",
+  "probe": [
+    {"call": 1, "session": "S", "prompt": "tools A + task 1", "tokens_in": 10869, "cached_tokens": 0},
+    {"call": 2, "session": "S", "prompt": "tools B (first tool differs) + task 2", "tokens_in": 10373, "cached_tokens": 0},
+    {"call": 3, "session": "S", "prompt": "tools A + task 2", "tokens_in": 11353, "cached_tokens": 6656},
+    {"call": 4, "session": "T (new)", "prompt": "copy of call 1", "tokens_in": 10869, "cached_tokens": 0}
+  ],
+  "replay": {
+    "since": "2026-10-17",
+    "until": "2026-10-22T19:10",
+    "runs": 46,
+    "same_tool_set_as_previous_run": [11, 45],
+    "uncached_input": {"first_calls": 715689, "all": 2284946},
+    "later_calls_cached_share": 0.74,
+    "estimates": [
+      {"session_key": "per run (today)", "cache_life_minutes": 60, "cached_on_first_calls": 0, "share_of_all_uncached": 0.0, "runs_helped": 0},
+      {"session_key": "per task", "cache_life_minutes": 5, "cached_on_first_calls": 9369, "share_of_all_uncached": 0.004, "runs_helped": 2},
+      {"session_key": "per task", "cache_life_minutes": 60, "cached_on_first_calls": 9369, "share_of_all_uncached": 0.004, "runs_helped": 2},
+      {"session_key": "per agent", "cache_life_minutes": 5, "cached_on_first_calls": 43877, "share_of_all_uncached": 0.019, "runs_helped": 8},
+      {"session_key": "per agent", "cache_life_minutes": 10, "cached_on_first_calls": 56513, "share_of_all_uncached": 0.025, "runs_helped": 9},
+      {"session_key": "per agent", "cache_life_minutes": 60, "cached_on_first_calls": 85604, "share_of_all_uncached": 0.037, "runs_helped": 13}
+    ]
+  },
+  "decision": "not shipped: session_id stays the run id"
+}
