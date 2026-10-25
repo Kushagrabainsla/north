@@ -125,9 +125,20 @@ class FlowRunner:
             started.append(run.run_id)
         return started
 
-    def waiting_run(self, flow_name: str) -> FlowRun | None:
-        """The run of *flow_name* waiting on a resource, if any."""
-        return self._store.waiting_run(flow_name)
+    def replace_waiting(self, flow_name: str) -> list[FlowRun]:
+        """End the runs of *flow_name* still waiting on a resource, for a newer run to replace; return them.
+
+        A waiting run would do the newer run's work for a time that has passed:
+        the Oct 23 briefings waited 23 hours for a model and arrived on Oct 24,
+        and kept that day's from running at all. A test run is evidence for
+        activation, not the same work, so it stays, and so does a run being
+        tried again right now, which is running.
+        """
+        return [
+            self._store.discard(run.run_id, reason="Replaced by a newer run while it waited")
+            for run in self._store.list_runs(flow_name, limit=None)
+            if run.status == "waiting" and not run.test_mode and run.run_id not in self._resuming
+        ]
 
     async def _resume(self, run: FlowRun) -> None:
         try:

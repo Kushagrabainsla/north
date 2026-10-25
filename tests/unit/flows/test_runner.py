@@ -859,17 +859,56 @@ async def test_a_waiting_run_resumes_by_itself_once_it_has_waited(tmp_path):
     assert "running again after it stopped with: Waiting for a model" in agent.payloads[1].prompt
 
 
-async def test_a_schedule_does_not_start_a_second_run_while_one_waits(tmp_path):
-    runner, store, _ = _waiting_runner(tmp_path)
+async def test_a_schedule_firing_replaces_a_run_still_waiting_from_the_last_one(tmp_path):
+    """The Oct 23 briefings waited a day, arrived on Oct 24, and kept Oct 24's from running."""
+    runner, store, agent = _waiting_runner(tmp_path)
     tool = RunFlowTool(runner)
     first = await tool.run_scheduled("demo", "job-1")
 
+    agent.models_back = True
     second = await tool.run_scheduled("demo", "job-2")
 
     assert first.success, "a waiting run resumes by itself, so its job is not left needing you"
-    assert second.data["run_id"] == first.data["run_id"]
-    assert "waiting" in second.data["note"]
-    assert len(store.list_runs("demo")) == 1
+    assert second.data["run_id"] != first.data["run_id"]
+    assert second.data["status"] == "completed"
+    replaced = store.get(first.data["run_id"])
+    assert replaced.status == "cancelled"
+    assert replaced.error.startswith("Replaced by a newer run while it waited: Waiting for a model")
+
+
+async def test_a_run_still_missing_its_model_waits_in_the_replaced_ones_place(tmp_path):
+    runner, store, _ = _waiting_runner(tmp_path)
+    tool = RunFlowTool(runner)
+    await tool.run_scheduled("demo", "job-1")
+
+    second = await tool.run_scheduled("demo", "job-2")
+
+    assert [run.run_id for run in store.list_runs("demo") if run.status == "waiting"] == [second.data["run_id"]]
+
+
+async def test_a_waiting_test_run_is_not_replaced_by_a_schedule(tmp_path):
+    """A test run is evidence for activation, not the schedule's work."""
+    runner, store, _ = _waiting_runner(tmp_path)
+    test_run = await runner.run("demo", test_mode=True)
+
+    await RunFlowTool(runner).run_scheduled("demo", "job-1")
+
+    assert store.get(test_run.run_id).status == "waiting"
+
+
+async def test_a_waiting_run_being_tried_again_is_left_to_finish(tmp_path):
+    import asyncio
+
+    runner, store, agent = _waiting_runner(tmp_path)
+    run = await runner.run("demo")
+    agent.models_back = True
+    runner.resume_waiting(min_wait_seconds=0)  # the retry has started, though the store still says waiting
+
+    await RunFlowTool(runner).run_scheduled("demo", "job-1")
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    assert store.get(run.run_id).status == "completed"
 
 
 # ── A scheduled run brings its result to the user ────────────────────────────

@@ -206,18 +206,8 @@ class FlowRunStore:
             ).fetchone()
         return _from_row(row) if row is not None else None
 
-    def waiting_run(self, flow_name: str) -> FlowRun | None:
-        """The run of *flow_name* waiting on a resource, if one is - there is at most one worth having."""
-        with sqlite3.connect(self._path) as connection:
-            connection.row_factory = sqlite3.Row
-            row = connection.execute(
-                "SELECT * FROM flow_runs WHERE flow_name = ? AND status = 'waiting' ORDER BY created_at LIMIT 1",
-                (flow_name,),
-            ).fetchone()
-        return _from_row(row) if row is not None else None
-
-    def discard(self, run_id: str) -> FlowRun:
-        """End a paused or waiting run without finishing it. Its finished steps' outputs stay on record."""
+    def discard(self, run_id: str, *, reason: str = "Discarded while paused") -> FlowRun:
+        """End a paused or waiting run without finishing it, saying why. Its finished steps' outputs stay on record."""
         run = self.get(run_id)
         if run is None:
             raise KeyError(f"Unknown flow run: {run_id}")
@@ -228,7 +218,7 @@ class FlowRunStore:
             status="cancelled",
             current_step=run.current_step,
             outputs=run.outputs,
-            error=f"Discarded while paused: {run.error}" if run.error else "Discarded while paused.",
+            error=f"{reason}: {run.error}" if run.error else f"{reason}.",
         )
 
     def update(
