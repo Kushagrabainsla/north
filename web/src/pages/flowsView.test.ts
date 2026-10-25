@@ -419,15 +419,15 @@ describe("flowDeletionPrompt", () => {
       2,
     );
 
-    expect(prompt).toContain("Delete flow 'daily-news-briefing'?");
+    expect(prompt).toContain("Delete flow 'daily-news-briefing' and its run history?");
     expect(prompt).toContain("• Daily news briefing");
     expect(prompt).toContain("• Evening digest");
     expect(prompt).toContain("2 queued runs will also be cancelled.");
   });
 
-  it("does not imply a cascade when nothing else depends on the flow", () => {
+  it("names only the run history when nothing else depends on the flow", () => {
     expect(flowDeletionPrompt("scratch", [], 0)).toBe(
-      "Delete flow 'scratch'? This cannot be undone.",
+      "Delete flow 'scratch' and its run history? This cannot be undone.",
     );
   });
 });

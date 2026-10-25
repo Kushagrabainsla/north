@@ -306,7 +306,7 @@ export function flowDeletionPrompt(
   scheduleTitles: string[],
   queuedRuns: number,
 ): string {
-  const lines = [`Delete flow '${flow}'? This cannot be undone.`];
+  const lines = [`Delete flow '${flow}' and its run history? This cannot be undone.`];
   if (scheduleTitles.length)
     lines.push(
       `These schedules run it and will also be deleted:\n${scheduleTitles.map((title) => `• ${title}`).join("\n")}`,

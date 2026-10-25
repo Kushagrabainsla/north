@@ -23,6 +23,27 @@ def test_new_file_is_authored_and_then_updatable(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == "v1"
 
 
+def test_forgetting_a_deleted_directory_drops_its_records_and_before_images(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    policy = SelfEditPolicy(root, tmp_path / "mutations")
+    gone, kept = root / "gone" / "a.md", root / "kept" / "b.md"
+    for path in (gone, kept):
+        path.parent.mkdir(parents=True)
+        creation = policy.begin(path, "create")
+        path.write_text("v1", encoding="utf-8")
+        policy.commit(creation)
+    update = policy.begin(gone, "update")
+    gone.write_text("v2", encoding="utf-8")
+    policy.commit(update)
+    gone.unlink()
+
+    assert policy.forget(gone.parent) == 2
+
+    assert not Path(str(update.before_image)).exists()
+    assert not policy.revert(update.id)  # nothing to bring the deleted file back from
+    assert policy.authorize(kept, "update") is None
+
+
 def test_user_authored_file_cannot_be_updated(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()

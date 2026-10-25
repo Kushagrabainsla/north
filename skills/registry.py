@@ -125,10 +125,13 @@ class SkillRegistry:
         if learned_dir is not None:
             self._sources.append((learned_dir, SkillSource.LEARNED))
         self._skills: dict[str, Skill] = {}
+        # Built-in skills a learned one of the same name replaces.
+        self._overridden: set[str] = set()
         self._discover()
 
     def _discover(self) -> None:
         self._skills = {}
+        self._overridden = set()
         for directory, source in self._sources:
             self._load_directory(directory, source)
 
@@ -142,6 +145,8 @@ class SkillRegistry:
             skill = self._load_skill(entry, skill_file, source)
             if skill is None:
                 continue
+            if source is SkillSource.LEARNED and skill.name in self._skills:
+                self._overridden.add(skill.name)
             self._skills[skill.name] = skill
 
     def _load_skill(self, directory: Path, skill_file: Path, source: SkillSource) -> Skill | None:
@@ -213,6 +218,10 @@ class SkillRegistry:
 
     def names(self) -> list[str]:
         return list(self._skills.keys())
+
+    def overrides_builtin(self, name: str) -> bool:
+        """Whether *name* is a learned skill replacing a built-in one, which takes over if it is removed."""
+        return name in self._overridden
 
     def remove_learned(self, name: str) -> bool:
         """Remove a learned skill directory; bundled skills are immutable."""

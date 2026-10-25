@@ -22,6 +22,7 @@ from flows.validation import schedulable_flow_error, validate_flow_capabilities
 from inference.registry import PROVIDER_DEFINITIONS
 from jobs.models import JobStatus, late_note
 from orchestrator.api_context import current_services
+from policies.self_edit import SelfEditPolicy
 from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME, SkillSource
 from skills.parser import parse_skill_document
@@ -38,6 +39,7 @@ from tools.universal.create_tool import (
     _list_tools,
     _render_stub,
 )
+from tools.universal.flow_runner import STOPPED, step_approval_title
 from tools.universal.schedule_task import ScheduleTaskTool
 from tools.universal.update_schedule import UpdateScheduleTool
 from utils.ids import generate_id
@@ -359,13 +361,40 @@ async def update_skill(name: str, body: SkillUpdate) -> dict[str, Any]:
 
 @router.delete("/skills/{name}", status_code=204)
 async def delete_skill(name: str) -> None:
-    """Delete a user-owned skill or override and reveal the built-in fallback."""
+    """Delete a user-owned skill or override and reveal the built-in fallback.
+
+    A skill a flow runs is kept unless a built-in takes its place: the flow
+    could only fail the next time it ran.
+    """
     registry = current_services().require("skill_registry")
-    if not registry.remove_learned(name):
-        skill = next((item for item in registry.all() if item.name == name), None)
+    skill = next((item for item in registry.all() if item.name == name), None)
+    stranded = (
+        _flows_using(name)
+        if skill is not None and skill.source is SkillSource.LEARNED and not registry.overrides_builtin(name)
+        else []
+    )
+    if stranded:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Used by {', '.join(stranded)}. Delete those flows or change their steps first.",
+        )
+    if skill is None or not registry.remove_learned(name):
         if skill is not None and skill.source.value == "builtin":
             raise HTTPException(status_code=403, detail="Built-in skills cannot be deleted")
         raise HTTPException(status_code=404, detail=f"Learned skill {name!r} was not found")
+    _forget_authorship(skill.directory)
+
+
+def _flows_using(skill: str) -> list[str]:
+    registry = current_services().flow_registry
+    flows = registry.all() if registry is not None else []
+    return sorted(flow.name for flow in flows if any(step.skill == skill for step in flow.steps))
+
+
+def _forget_authorship(directory: Path) -> None:
+    """North no longer owns what it wrote in a deleted *directory*, so what you make there later stays yours."""
+    home = Path(current_services().require("north_home"))
+    SelfEditPolicy(directory.parent, home / "mutations").forget(directory)
 
 
 @router.get("/tools")
@@ -1023,16 +1052,38 @@ async def update_flow(name: str, body: FlowUpdate) -> dict[str, Any]:
 
 @router.delete("/flow-definitions/{name}", status_code=204)
 async def delete_flow(name: str) -> None:
-    registry = current_services().require("flow_registry")
+    """Delete a flow with what exists only for it.
+
+    That is its schedules and queued runs, its runs and the cards their stops
+    left, the approvals north remembers from its step cards, and North's record
+    of having written it. A run still going is refused rather than cut off.
+    """
+    services = current_services()
+    registry = services.require("flow_registry")
     try:
         flow = registry.get(name)
     except FlowNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     if flow.source is FlowSource.BUILTIN:
         raise HTTPException(status_code=403, detail="Built-in flows cannot be deleted")
+    runs = services.flow_store.list_runs(name, limit=None) if services.flow_store is not None else []
+    if any(run.status == "running" for run in runs):
+        raise HTTPException(
+            status_code=409,
+            detail="A run of this flow is still going. Let it finish, or answer the card it waits on, then delete.",
+        )
     if not registry.remove_learned(name):
         raise HTTPException(status_code=404, detail=f"Learned flow {name!r} was not found")
     await _remove_schedules_of(name)
+    if runs:
+        runner = services.require("flow_runner")
+        for run in runs:
+            if run.status in STOPPED:
+                runner.discard(run.run_id)  # closes the card its stop left
+        services.flow_store.remove_flow(name)
+    if services.approval_memory is not None:
+        services.approval_memory.forget_cards_titled(step_approval_title(name))
+    _forget_authorship(flow.directory)
 
 
 def _settings():

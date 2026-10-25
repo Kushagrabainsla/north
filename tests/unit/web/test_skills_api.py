@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 from fastapi import HTTPException
 
+from flows.registry import FlowRegistry
 from orchestrator.api_context import ApiServices, bind_services
+from policies.self_edit import SelfEditPolicy
 from skills.models import SkillSource
 from skills.registry import SkillRegistry
 from web import api as web_api
@@ -139,7 +142,7 @@ async def test_skill_api_deletes_learned_skill_but_not_builtin(tmp_path) -> None
     learned_skill.joinpath("SKILL.md").write_text(learned_doc, encoding="utf-8")
     registry = SkillRegistry(builtin, learned)
 
-    with bind_services(ApiServices(skill_registry=registry)):
+    with bind_services(ApiServices(skill_registry=registry, north_home=tmp_path)):
         with pytest.raises(HTTPException) as builtin_error:
             await web_api.delete_skill("builtin-skill")
         assert builtin_error.value.status_code == 403
@@ -147,3 +150,59 @@ async def test_skill_api_deletes_learned_skill_but_not_builtin(tmp_path) -> None
 
     assert not learned_skill.exists()
     assert registry.get("builtin-skill").source is SkillSource.BUILTIN
+
+
+def _flow_running(skill: str, flows_dir) -> FlowRegistry:
+    directory = flows_dir / "daily"
+    directory.mkdir(parents=True)
+    (directory / "FLOW.yaml").write_text(
+        yaml.safe_dump({"name": "daily", "description": "Daily", "steps": [{"name": "do", "skill": skill}]}),
+        encoding="utf-8",
+    )
+    return FlowRegistry(flows_dir)
+
+
+async def test_a_skill_a_flow_runs_is_not_deleted(tmp_path, skill_registry) -> None:
+    """The flow could only fail the next time it ran."""
+    flows = _flow_running("test-skill", tmp_path / "flows")
+
+    services = ApiServices(skill_registry=skill_registry, flow_registry=flows, north_home=tmp_path)
+    with bind_services(services), pytest.raises(HTTPException) as refused:
+        await web_api.delete_skill("test-skill")
+
+    assert refused.value.status_code == 409
+    assert "daily" in refused.value.detail
+    assert skill_registry.get("test-skill").source is SkillSource.LEARNED
+
+
+async def test_an_override_a_flow_runs_can_be_deleted_because_the_built_in_takes_over(tmp_path) -> None:
+    for root in ("builtin", "learned"):
+        directory = tmp_path / root / "test-skill"
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").write_text(_document(f"From {root}"), encoding="utf-8")
+    registry = SkillRegistry(tmp_path / "builtin", tmp_path / "learned")
+    flows = _flow_running("test-skill", tmp_path / "flows")
+
+    with bind_services(ApiServices(skill_registry=registry, flow_registry=flows, north_home=tmp_path)):
+        assert await web_api.delete_skill("test-skill") is None
+
+    assert registry.get("test-skill").source is SkillSource.BUILTIN
+
+
+async def test_a_deleted_skill_is_no_longer_norths_to_rewrite(tmp_path) -> None:
+    learned = tmp_path / "learned"
+    policy = SelfEditPolicy(learned, tmp_path / "mutations", user_document="SKILL.md")
+    path = learned / "test-skill" / "SKILL.md"
+    path.parent.mkdir(parents=True)
+    creation = policy.begin(path, "create")
+    path.write_text(_document(), encoding="utf-8")
+    policy.commit(creation)
+    registry = SkillRegistry(tmp_path / "builtin", learned)
+
+    with bind_services(ApiServices(skill_registry=registry, north_home=tmp_path)):
+        await web_api.delete_skill("test-skill")
+    path.parent.mkdir()
+    path.write_text(_document(), encoding="utf-8")  # yours this time
+
+    with pytest.raises(PermissionError, match="was not created by North"):
+        policy.begin(path, "update")

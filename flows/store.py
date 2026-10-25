@@ -125,8 +125,8 @@ class FlowRunStore:
             row = connection.execute("SELECT * FROM flow_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _from_row(row) if row is not None else None
 
-    def list_runs(self, flow_name: str | None = None, limit: int = 50) -> list[FlowRun]:
-        """Most recently started runs first, optionally for one flow.
+    def list_runs(self, flow_name: str | None = None, limit: int | None = 50) -> list[FlowRun]:
+        """Most recently started runs first, optionally for one flow; every one when *limit* is None.
 
         Ordered by start time, falling back to the last update for runs that
         predate the start time being recorded.
@@ -136,8 +136,10 @@ class FlowRunStore:
         if flow_name is not None:
             query += " WHERE flow_name = ?"
             params.append(flow_name)
-        query += " ORDER BY CASE WHEN created_at = '' THEN updated_at ELSE created_at END DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY CASE WHEN created_at = '' THEN updated_at ELSE created_at END DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         with sqlite3.connect(self._path) as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(query, params).fetchall()
@@ -167,6 +169,15 @@ class FlowRunStore:
                 (before.isoformat(),),
             )
             return cursor.rowcount
+
+    def remove_flow(self, flow_name: str) -> int:
+        """Delete every run of *flow_name*, a flow that is gone; returns how many.
+
+        None of them can resume without their flow, and a new flow given the
+        same name would otherwise show them as its own history.
+        """
+        with sqlite3.connect(self._path) as connection:
+            return connection.execute("DELETE FROM flow_runs WHERE flow_name = ?", (flow_name,)).rowcount
 
     def pause_interrupted(self) -> int:
         """Pause runs still recorded as running, at the step they were on; returns how many.

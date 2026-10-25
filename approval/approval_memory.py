@@ -216,6 +216,26 @@ class ApprovalMemory:
             self._ensure_cache().pop(fingerprint, None)
         return bool(removed)
 
+    def forget_cards_titled(self, title: str) -> int:
+        """Stop replaying the decisions you made on cards titled *title*; returns how many.
+
+        For a thing that is gone, such as a deleted flow, whose cards all carry
+        its name in their title. Like `forget`, the rows stay. Only these rows
+        lose their fingerprint, so an action you also decided elsewhere still
+        replays that other decision.
+        """
+        try:
+            with open_db_connection(self._db_path) as conn:
+                removed = conn.execute(
+                    "UPDATE decisions SET fingerprint = '' WHERE title = ? AND fingerprint != ''", (title,)
+                ).rowcount
+        except Exception:
+            logger.warning("ApprovalMemory: failed to forget cards titled %r", title, exc_info=True)
+            return 0
+        if removed:
+            self._cache = None  # reloaded from the rows that still replay
+        return removed
+
     def record(
         self,
         agent: str,

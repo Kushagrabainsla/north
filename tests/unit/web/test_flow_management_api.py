@@ -1,4 +1,4 @@
-"""Managing a flow from the dashboard: schedule it, run it, test it, activate it.
+"""Managing a flow from the dashboard: schedule it, run it, test it, activate it, delete it.
 
 These routes are thin over the tools the chat uses, so the tests check the
 part that is the page's own: what it refuses, what it returns, and that a run
@@ -7,6 +7,7 @@ is visible the moment it starts.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -15,13 +16,16 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from agents.models import AgentResult
+from approval.approval_memory import ApprovalMemory
+from approval.models import Card, CardType
 from flows.models import flow_fingerprint
 from flows.registry import FlowRegistry
 from flows.store import FlowRunStore
 from jobs.cron_store import UserCronStore
 from orchestrator.api_context import ApiServices, bind_services
+from policies.self_edit import SelfEditPolicy
 from skills.registry import SkillRegistry
-from tools.universal.flow_runner import FlowRunner
+from tools.universal.flow_runner import FlowRunner, step_approval_title
 from utils.tasks import drain
 from web import api as web_api
 
@@ -418,3 +422,72 @@ async def test_deleting_a_flow_takes_its_schedules_and_queued_runs_with_it(env) 
 
 async def test_deleting_a_flow_with_no_schedules_still_works(env) -> None:
     assert await web_api.delete_flow("draft") is None
+
+
+class FakeInteraction:
+    def __init__(self) -> None:
+        self.withdrawn: list[str] = []
+
+    def withdraw(self, *, task_id: str, source: str) -> None:
+        self.withdrawn.append(task_id)
+
+
+async def test_deleting_a_flow_removes_its_runs_and_closes_the_cards_their_stops_left(env) -> None:
+    interaction = FakeInteraction()
+    runner = FlowRunner(env.flows, env.agents, env.skills, env.store, interaction)
+    env.store.create(run_id="stopped", flow_name="live", task_id="job1")
+    env.store.update("stopped", status="paused", current_step=0, outputs=[], error="the tool broke")
+    env.store.create(run_id="done", flow_name="live", task_id="job2")
+    env.store.update("done", status="completed", current_step=1, outputs=[])
+    env.store.create(run_id="other", flow_name="draft", task_id="job3")
+
+    with bind_services(replace(env.services, flow_runner=runner)):
+        await web_api.delete_flow("live")
+
+    assert interaction.withdrawn == ["job1"]
+    # A new flow named "live" would otherwise show them as its own history.
+    assert [run.run_id for run in env.store.list_runs()] == ["other"]
+
+
+async def test_a_flow_with_a_run_still_going_is_not_deleted(env) -> None:
+    env.store.create(run_id="going", flow_name="live", task_id="job1")  # perhaps waiting on its step's card
+
+    with pytest.raises(HTTPException) as refused:
+        await web_api.delete_flow("live")
+
+    assert refused.value.status_code == 409
+    assert env.flows.get("live").name == "live"
+    assert env.store.get("going").status == "running"
+
+
+async def test_deleting_a_flow_forgets_the_approvals_of_its_step_cards(env, tmp_path) -> None:
+    """Autonomous mode would otherwise approve the same step, unasked, in a flow made again."""
+    memory = ApprovalMemory(tmp_path / "approval_memory.db")
+    for flow in ("live", "draft"):
+        card = Card(
+            id=flow, type=CardType.APPROVAL, task_id="", agent="general", title=step_approval_title(flow), message=""
+        )
+        memory.record("general", f"step 'look' of {flow}", "approved", card=card)
+
+    with bind_services(replace(env.services, approval_memory=memory)):
+        await web_api.delete_flow("live")
+
+    assert memory.recall("general", "step 'look' of live") is None
+    assert memory.recall("general", "step 'look' of draft") == "approved"
+
+
+async def test_a_deleted_flow_is_no_longer_norths_to_rewrite(env, tmp_path) -> None:
+    policy = SelfEditPolicy(env.learned_dir, tmp_path / "mutations", user_document="FLOW.yaml")
+    path = env.learned_dir / "authored" / "FLOW.yaml"
+    path.parent.mkdir()
+    creation = policy.begin(path, "create")
+    path.write_text(_flow_yaml("authored", "candidate"), encoding="utf-8")
+    policy.commit(creation)
+    env.flows.reload()
+
+    await web_api.delete_flow("authored")
+    path.parent.mkdir()
+    path.write_text(_flow_yaml("authored", "candidate"), encoding="utf-8")  # yours this time
+
+    with pytest.raises(PermissionError, match="was not created by North"):
+        policy.begin(path, "update")

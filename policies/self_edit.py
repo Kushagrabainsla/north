@@ -125,6 +125,26 @@ class SelfEditPolicy:
             return True
         return False
 
+    def forget(self, directory: Path) -> int:
+        """Drop the records of everything under *directory*, which was deleted; returns how many.
+
+        A record left behind would make a file you later create at the same path
+        North's to rewrite, and its before-image would let a revert bring back
+        what you deleted.
+        """
+        gone = directory.resolve()
+        kept: list[dict[str, object]] = []
+        removed: list[dict[str, object]] = []
+        for record in self._read_registry():
+            (removed if Path(str(record.get("path"))).is_relative_to(gone) else kept).append(record)
+        if not removed:
+            return 0
+        for record in removed:
+            if record.get("before_image"):
+                Path(str(record["before_image"])).unlink(missing_ok=True)
+        self._registry.write_text(json.dumps(kept, indent=2) + "\n", encoding="utf-8")
+        return len(removed)
+
     def _owned(self, path: Path) -> bool:
         # Activation and approved user edits grant no autonomous rewrite authority.
         return any(

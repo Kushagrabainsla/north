@@ -44,6 +44,15 @@ RESUME_OPTION = "Resume"
 DISCARD_OPTION = "Discard"
 
 
+def step_approval_title(flow_name: str) -> str:
+    """The title of the card that asks before a flow's step runs.
+
+    Your decisions on these cards are remembered under it, so deleting the flow
+    can find and forget them; the cards themselves are trimmed from history.
+    """
+    return f"Flow approval: {flow_name}"
+
+
 def _status_for(exc: BaseException) -> str:
     return "waiting" if missing_resource(exc) else "paused"
 
@@ -378,7 +387,7 @@ class FlowRunner:
                 decision = await self._interaction.request_approval_status(
                     task_id=run.task_id or None,
                     agent=selected_agent_name,
-                    title=f"Flow approval: {flow.name}",
+                    title=step_approval_title(flow.name),
                     message=(
                         f"Step '{step.name}' is ready to run using {step.skill or 'inline instructions'} "
                         f"with executor '{selected_agent_name}'.\n\n{step.instructions}"
