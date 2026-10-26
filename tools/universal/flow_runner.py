@@ -317,6 +317,11 @@ class FlowRunner:
         # Only the step a paused or waiting run stopped on is told why it runs again.
         resumed_error = run.error if run.status in STOPPED else ""
         resume_at = run.current_step
+        if run.status in STOPPED:
+            # Running again, by whichever path: Resume on the page, the card or the
+            # retry loop. Left reading "waiting", a schedule's firing replaced it, or
+            # the retry loop started its step a second time, while it ran.
+            self._store.update(run.run_id, status="running", current_step=resume_at, outputs=outputs)
         for index in range(run.current_step, len(flow.steps)):
             step = flow.steps[index]
             if step.action:

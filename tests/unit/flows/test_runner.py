@@ -896,6 +896,59 @@ async def test_a_waiting_test_run_is_not_replaced_by_a_schedule(tmp_path):
     assert store.get(test_run.run_id).status == "waiting"
 
 
+class GatedAgent(OutOfModelsAgent):
+    """Once models are back, each call waits at ``gate``, so a test can act while a step runs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        import asyncio
+
+        self.gate = asyncio.Event()
+
+    async def run(self, payload):
+        if self.models_back:
+            await self.gate.wait()
+        return await super().run(payload)
+
+
+async def _resumed_by_hand(tmp_path):
+    """A waiting run that you resumed on the Flows page, caught while its step runs."""
+    import asyncio
+
+    store = FlowRunStore(tmp_path / "runs.db")
+    agent = GatedAgent()
+    runner = FlowRunner(_flow(tmp_path, _THREE_STEPS), FakeAgents(agent), _skills(tmp_path), store)
+    waiting = await runner.run("demo", trigger="schedule")
+    agent.models_back = True
+    resumed = asyncio.create_task(runner.run("demo", run_id=waiting.run_id, trigger="schedule"))
+    await asyncio.sleep(0)
+    return runner, store, agent, waiting.run_id, resumed
+
+
+async def test_a_run_resumed_by_hand_is_not_replaced_when_its_schedule_fires(tmp_path):
+    """It read "waiting" while it ran, so the firing cancelled it and ran its step again."""
+    import asyncio
+
+    runner, store, agent, run_id, resumed = await _resumed_by_hand(tmp_path)
+    assert store.get(run_id).status == "running"
+
+    firing = asyncio.create_task(RunFlowTool(runner).run_scheduled("demo", "job-2"))
+    await asyncio.sleep(0)
+    agent.gate.set()
+    await asyncio.gather(resumed, firing)
+
+    assert store.get(run_id).status == "completed"
+
+
+async def test_the_retry_loop_does_not_start_a_run_already_running_again(tmp_path):
+    runner, _, agent, _, resumed = await _resumed_by_hand(tmp_path)
+
+    assert runner.resume_waiting(min_wait_seconds=0) == []
+
+    agent.gate.set()
+    await resumed
+
+
 async def test_a_waiting_run_being_tried_again_is_left_to_finish(tmp_path):
     import asyncio
 
