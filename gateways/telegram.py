@@ -104,6 +104,9 @@ _LEDGER_POLL_LIMIT = 50
 # Ledger actions that carry a finished task's answer, most authoritative first.
 _COMPLETED_ACTIONS = ("task_synthesis", "task_completed", "task_completed_with_failures")
 _TERMINAL_STATUSES = ("failed", "cancelled")
+# The task's own end, which ends the wait with or without output: a cancel
+# carries none, so three cancelled tasks kept the chat "typing" for a day.
+_ENDED_ACTIONS = ("task_cancelled", "task_failed")
 
 
 class _TaskNotFound(Exception):
@@ -128,9 +131,10 @@ def _finished_output(entries: list[dict], task_id: str, poll: int) -> str | None
 
     for entry in entries:
         status = (entry.get("status") or "").lower()
-        if status in _TERMINAL_STATUSES and entry.get("output"):
+        output = entry.get("output")
+        if status in _TERMINAL_STATUSES and (output or entry.get("action") in _ENDED_ACTIONS):
             logger.warning("Task %s terminal status=%s at poll %d", task_id, status, poll)
-            return f"Task {status}: {entry['output']}"
+            return f"Task {status}: {output}" if output else f"Task {status}."
 
     for entry in entries:  # fallback: a single agent finished on its own
         if entry.get("action") == "agent_completed" and entry.get("output"):

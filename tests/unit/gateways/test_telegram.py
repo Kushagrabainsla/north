@@ -423,6 +423,23 @@ async def test_the_answer_reaches_the_chat_however_long_the_task_takes(monkeypat
     assert gaps[0] == 1.0 and max(gaps) == 15.0, "it checks less often as the task goes on"
 
 
+@pytest.mark.asyncio
+async def test_a_task_cancelled_elsewhere_ends_the_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cancel writes no output, so three cancelled tasks kept the chat "typing" for a day."""
+    gw = TelegramGateway()
+    running = [[{"action": "agent_started", "status": "running"}]] * 3
+    cancelled = [[{"action": "task_cancelled", "status": "cancelled", "output": ""}]]
+    gw._ledger_entries = AsyncMock(side_effect=running + cancelled)  # type: ignore[method-assign]
+
+    async def no_wait(seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr("gateways.telegram.asyncio.sleep", no_wait)
+
+    assert await gw._get_task_result("t-cancelled") == "Task cancelled."
+    assert gw._ledger_entries.await_count == 4
+
+
 # ── /workspace: the folder tasks from Telegram work in ───────────────────────
 
 
