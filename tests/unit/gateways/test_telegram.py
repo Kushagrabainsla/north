@@ -158,6 +158,24 @@ async def test_telegram_gateway_slash_commands(monkeypatch: pytest.MonkeyPatch) 
     assert "`safe`" in gw._send_message.call_args[0][1]
 
 
+@pytest.mark.asyncio
+async def test_an_unknown_command_is_answered_not_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """North once told the user to send `/record_audio 5`; the chat then said nothing at all."""
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+    gw = TelegramGateway()
+    gw._send_message = AsyncMock()  # type: ignore[method-assign]
+    gw._submit_task = AsyncMock()  # type: ignore[method-assign]
+
+    await gw._process_message({"message_id": 7, "chat": {"id": 12345}, "text": "/record_audio 5"})
+
+    reply = gw._send_message.call_args[0][1]
+    assert "`/record_audio` is not a north command" in reply and "/help" in reply
+    assert gw._send_message.call_args[1].get("reply_to") == 7
+    gw._submit_task.assert_not_awaited()
+
+
 def _autonomy_gateway(monkeypatch: pytest.MonkeyPatch) -> TelegramGateway:
     from config.approval_mode import mode_options
     from config.settings import settings

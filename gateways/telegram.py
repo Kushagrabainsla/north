@@ -509,11 +509,22 @@ class TelegramGateway:
         return transcribed
 
     async def _run_command(self, chat: _Reply, text: str) -> None:
-        """Run a slash command, ignoring anything that is not one north answers."""
+        """Run a slash command, or say that it is not one.
+
+        An unknown command used to be dropped without a word: on Oct 25 north
+        itself told you to send `/record_audio 5`, which does not exist, and the
+        chat stayed silent while you waited for a recording.
+        """
         parts = text.split()
         handler = _COMMAND_HANDLERS.get(parts[0])
-        if handler is not None:
-            await handler(self, chat, parts[1:])
+        if handler is None:
+            await self._reply(
+                chat,
+                f"`{parts[0]}` is not a north command, so nothing ran. To ask north for something, "
+                "send it as a plain message, without the slash. /help lists the commands.",
+            )
+            return
+        await handler(self, chat, parts[1:])
 
     async def _command_help(self, chat: _Reply, args: list[str]) -> None:
         await self._reply(
