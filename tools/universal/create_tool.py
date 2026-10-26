@@ -212,13 +212,17 @@ class CreateToolTool(Tool):
         message = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
             f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)"
         )
+        # The code is part of what you approved. Keyed by the name alone, one
+        # approval of `record_media` let any later code for it be installed and
+        # switched on in safe mode without a card.
+        code = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
         return Request(
             action=Action(
                 agent="create_tool",
                 kind=ActionKind.TOOL_CHANGE,
                 summary=f"{action} the {name!r} tool ({tool_type})",
                 operation=action,
-                args=name,
+                args=f"{name} code={code}",
             ),
             title="Tool Change - Approval Required",
             message=message,

@@ -128,6 +128,27 @@ async def test_tool_stays_candidate_until_validated_tested_and_activated(tmp_pat
     assert "learned_demo" in registry.tools
 
 
+async def test_an_approved_tool_change_is_not_replayed_for_different_code(tmp_path: Path) -> None:
+    """One approval of `record_media` let any later code for it be switched on in safe mode without a card."""
+    from approval.approval_memory import ApprovalMemory
+
+    learned = tmp_path / "learned" / "tools"
+    tool = CreateToolTool(tools_dir=learned, self_edit_policy=SelfEditPolicy(learned, tmp_path / "mutations"))
+    memory = ApprovalMemory(tmp_path / "approval_memory.db")
+
+    async def update_with(code: str):
+        request = await tool.describe(ToolInput(params={"action": "update", "name": "my_tool", "content": code}))
+        return request.action
+
+    approved = await update_with(_BENIGN_TOOL)
+    memory.record(approved.agent, approved.describe(), "approved")
+
+    same = await update_with(_BENIGN_TOOL)
+    changed = await update_with(_BENIGN_TOOL.replace("demo", "something else"))
+    assert memory.recall(same.agent, same.describe()) == "approved"
+    assert memory.recall(changed.agent, changed.describe()) is None
+
+
 def test_updating_builtin_tool_stages_learned_candidate(tmp_path: Path) -> None:
     learned = tmp_path / "learned" / "tools"
     policy = SelfEditPolicy(learned, tmp_path / "mutations")

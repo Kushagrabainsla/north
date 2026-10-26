@@ -81,6 +81,7 @@ All notable changes to north are documented here.
 - The Puppeteer/CDP existing-Chrome bridge (`browser_native.py`, `resources/browser/`), Chrome's remote-debugging setup and its permission prompt, the saved CDP endpoint on profiles, and agent-supplied `connect`/`copy_cookies`. Uncommitted browser-bridge experiments are summarized in `experiments/README.md` and deleted.
 
 ### Security
+- An approval of a learned tool's code no longer approves other code for that tool. North remembered a tool change by its step and tool name only, so in safe mode, after you approved `record_media` once on Oct 25, any later code for it could be installed and switched on without a card. The remembered identity now includes a fingerprint of the code: the same code is still not asked about twice, and any change shows you a card. The 5 remembered `record_media` approvals were withdrawn. Found by verifying north's Oct 24 self-audit.
 - North patches TaskWindow's daemon so pairing needs a one-time code; upstream gave its key to any request claiming the Web Store origin, which a local program can forge. A daemon that differs from the audited copy is refused, and its update check is off.
 
 ## [1.21.0] - 2026-10-10
