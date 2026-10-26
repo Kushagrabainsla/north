@@ -1,0 +1,369 @@
+{
+ "arm": "F",
+ "seed": 4,
+ "slots": 6,
+ "model": "gpt-5.6-luna",
+ "rounds": 14,
+ "wall_seconds": 47.6,
+ "tasks": [
+  {
+   "task_id": "t00",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 5,
+   "start_round": 1,
+   "end_round": 5,
+   "tokens_in": 3412,
+   "tokens_out": 172,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5327\"}",
+    "get_customer {\"customer_id\": \"C-1002\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5327\"}",
+    "send_invoice {\"invoice_id\": \"INV-5327\", \"to_email\": \"invoices@northwindtools.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "get_customer",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t01",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 6,
+   "start_round": 1,
+   "end_round": 6,
+   "tokens_in": 4429,
+   "tokens_out": 294,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Redwood Legal\"}",
+    "get_customer {\"customer_id\": \"C-1012\"}",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"22/11/2027\", \"items\": [{\"description\": \"Annual license\", \"qty\": 1, \"unit_price\": 13950}, {\"description\": \"Consulting hour",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"finance@redwoodlegal.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t02",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 3,
+   "start_round": 1,
+   "end_round": 3,
+   "tokens_in": 1853,
+   "tokens_out": 152,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Redwood Legal\"}",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"18/04/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 3, \"unit_price\": 34899}]}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t03",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 4,
+   "start_round": 1,
+   "end_round": 4,
+   "tokens_in": 2748,
+   "tokens_out": 205,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5386\"}",
+    "get_customer {\"customer_id\": \"C-1016\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5386\"}",
+    "send_invoice {\"invoice_id\": \"INV-5386\", \"to_email\": \"finance@willowcreekvet.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "get_customer",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t04",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 7,
+   "start_round": 1,
+   "end_round": 7,
+   "tokens_in": 5566,
+   "tokens_out": 303,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Copper Kettle Cafe\"}",
+    "get_customer {\"customer_id\": \"C-1003\"}",
+    "create_invoice {\"customer_id\": \"C-1003\", \"due_date\": \"22/05/2027\", \"items\": [{\"description\": \"Workshop seat\", \"qty\": 1, \"unit_price\": 15475}, {\"description\": \"Server rack rent",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"accounts@copperkettleca.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t05",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 6,
+   "start_round": 1,
+   "end_round": 6,
+   "tokens_in": 4323,
+   "tokens_out": 252,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Northwind Tools\"}",
+    "get_customer {\"customer_id\": \"C-1002\"}",
+    "create_invoice {\"customer_id\": \"C-1002\", \"due_date\": \"28/12/2027\", \"items\": [{\"description\": \"Consulting hour\", \"qty\": 4, \"unit_price\": 32575}]}",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"invoices@northwindtools.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t06",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 4,
+   "start_round": 4,
+   "end_round": 7,
+   "tokens_in": 2741,
+   "tokens_out": 197,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5248\"}",
+    "get_customer {\"customer_id\": \"C-1011\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5248\"}",
+    "send_invoice {\"invoice_id\": \"INV-5248\", \"to_email\": \"accounts@lumenoptics.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "get_customer",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t07",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 3,
+   "start_round": 5,
+   "end_round": 7,
+   "tokens_in": 1862,
+   "tokens_out": 196,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Maple Row Books\"}",
+    "create_invoice {\"customer_id\": \"C-1007\", \"due_date\": \"24/07/2027\", \"items\": [{\"description\": \"Cleaning service\", \"qty\": 2, \"unit_price\": 33099}]}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t08",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 5,
+   "start_round": 6,
+   "end_round": 10,
+   "tokens_in": 3764,
+   "tokens_out": 400,
+   "cached": 0,
+   "api_errors": [
+    "E104: line item malformed (unknown field 'quantity')"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Lumen Optics\"}",
+    "get_customer {\"customer_id\": \"C-1011\"}",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"14/06/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 2, \"unit_price\": 17025}, {\"description\": \"Consul",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"14/06/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 2, \"unit_price\": 17025}, {\"description\": \"Consulting "
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t09",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 6,
+   "start_round": 7,
+   "end_round": 12,
+   "tokens_in": 4480,
+   "tokens_out": 272,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Copper Kettle Cafe\"}",
+    "get_customer {\"customer_id\": \"C-1003\"}",
+    "create_invoice {\"customer_id\": \"C-1003\", \"due_date\": \"10/11/2027\", \"items\": [{\"description\": \"Paper stock\", \"qty\": 1, \"unit_price\": 17075}, {\"description\": \"Paper stock\", \"qty",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"accounts@copperkettleca.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t10",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 7,
+   "start_round": 7,
+   "end_round": 13,
+   "tokens_in": 5461,
+   "tokens_out": 328,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Copper Kettle Cafe\"}",
+    "get_customer {\"customer_id\": \"C-1003\"}",
+    "create_invoice {\"customer_id\": \"C-1003\", \"due_date\": \"13/06/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 2, \"unit_price\": 23275}, {\"description\": \"Annual license",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"accounts@copperkettleca.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "share_lesson",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t11",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 7,
+   "start_round": 8,
+   "end_round": 14,
+   "tokens_in": 5399,
+   "tokens_out": 284,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Northwind Tools\"}",
+    "get_customer {\"customer_id\": \"C-1002\"}",
+    "create_invoice {\"customer_id\": \"C-1002\", \"due_date\": \"19/02/2027\", \"items\": [{\"description\": \"Annual license\", \"qty\": 3, \"unit_price\": 19075}, {\"description\": \"Training manual",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"invoices@northwindtools.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  }
+ ],
+ "lessons": []
+}

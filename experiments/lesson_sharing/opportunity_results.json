@@ -1,0 +1,14 @@
+{
+  "tasks": 158,
+  "first_task": "2026-09-17T15:01:15.319523+00:00",
+  "last_task": "2026-10-26T17:53:20.313610+00:00",
+  "tasks_working_while_another_works": 78,
+  "related_bar_top10pct": 0.793,
+  "all_pair_similarity_p50": 0.557,
+  "readers_reachable_instant": 66,
+  "of_which_same_prompt_text": 0,
+  "readers_reachable_today": 1,
+  "share_reachable_instant": 0.418,
+  "share_reachable_today": 0.006,
+  "reachable_instant_briefing_flows": 54
+}

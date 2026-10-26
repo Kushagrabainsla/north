@@ -1,0 +1,566 @@
+{
+ "arm": "A",
+ "seed": 0,
+ "slots": 6,
+ "model": "gpt-5.6-luna",
+ "rounds": 24,
+ "wall_seconds": 92.3,
+ "tasks": [
+  {
+   "task_id": "t00",
+   "kind": "create_send",
+   "success": false,
+   "reasons": [
+    "not_sent",
+    "out_of_turns"
+   ],
+   "calls": 12,
+   "start_round": 1,
+   "end_round": 12,
+   "tokens_in": 10642,
+   "tokens_out": 889,
+   "cached": 2048,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Granite Peak Gym\"}",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"2027-11-15\", \"items\": [{\"description\": \"Annual license\", \"quantity\": 1, \"unit_price\": 321.75}, {\"description\": \"Server ra",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"11/15/2027\", \"items\": [{\"description\": \"Annual license\", \"quantity\": 1, \"unit_price\": 321.75}, {\"description\": \"Server ra",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"2027/11/15\", \"items\": [{\"description\": \"Annual license\", \"quantity\": 1, \"unit_price\": 321.75}, {\"description\": \"Server ra",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"15/11/2027\", \"items\": [{\"description\": \"Annual license\", \"quantity\": 1, \"unit_price\": 321.75}, {\"description\": \"Server ra",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"15/11/2027\", \"items\": [{\"description\": \"Annual license\", \"qty\": 1, \"unit_price\": 321.75}, {\"description\": \"Server rack re",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"15/11/2027\", \"items\": [{\"description\": \"Annual license\", \"qty\": 1, \"unit_price\": 32175}, {\"description\": \"Server rack ren",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@granitepeakgym.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    1
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t01",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 8,
+   "start_round": 1,
+   "end_round": 8,
+   "tokens_in": 5253,
+   "tokens_out": 293,
+   "cached": 0,
+   "api_errors": [
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Lumen Optics\"}",
+    "get_invoice {\"invoice_id\": \"INV-5583\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5583\"}",
+    "send_invoice {\"invoice_id\": \"INV-5583\", \"to_email\": \"hello@lumenoptics.example\"}",
+    "get_customer {\"customer_id\": \"C-1011\"}",
+    "send_invoice {\"invoice_id\": \"INV-5583\", \"to_email\": \"accounts@lumenoptics.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_invoice",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "share_lesson",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t02",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 9,
+   "start_round": 1,
+   "end_round": 9,
+   "tokens_in": 8019,
+   "tokens_out": 1229,
+   "cached": 0,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Bluebird Dental\"}",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"2027-02-13\", \"items\": [{\"description\": \"Cleaning service\", \"quantity\": 3, \"unit_price\": 317.5}, {\"description\": \"Server r",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"02/13/2027\", \"items\": [{\"description\": \"Cleaning service\", \"quantity\": 3, \"unit_price\": 317.5}, {\"description\": \"Server r",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"2027/02/13\", \"items\": [{\"description\": \"Cleaning service\", \"quantity\": 3, \"unit_price\": 317.5}, {\"description\": \"Server r",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"02/13/27\", \"items\": [{\"description\": \"Cleaning service\", \"quantity\": 3, \"unit_price\": 317.5}, {\"description\": \"Server rac",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"13/02/2027\", \"items\": [{\"description\": \"Cleaning service\", \"quantity\": 3, \"unit_price\": 317.5}, {\"description\": \"Server r",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"13/02/2027\", \"items\": [{\"description\": \"Cleaning service\", \"qty\": 3, \"unit_price\": 317.5}, {\"description\": \"Server rack r",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"13/02/2027\", \"items\": [{\"description\": \"Cleaning service\", \"qty\": 3, \"unit_price\": 31750}, {\"description\": \"Server rack r"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    1
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "create_invoice",
+    "create_invoice",
+    "flag_lesson",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t03",
+   "kind": "create_send",
+   "success": false,
+   "reasons": [
+    "month_first_date",
+    "no_correct_invoice",
+    "out_of_turns"
+   ],
+   "calls": 12,
+   "start_round": 1,
+   "end_round": 12,
+   "tokens_in": 11044,
+   "tokens_out": 687,
+   "cached": 2048,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Silverline Couriers\"}",
+    "create_invoice {\"customer_id\": \"C-1013\", \"due_date\": \"2027-09-03\", \"items\": [{\"description\": \"Consulting hour\", \"quantity\": 5, \"unit_price\": 257.75}, {\"description\": \"Repair k",
+    "create_invoice {\"customer_id\": \"C-1013\", \"due_date\": \"09/03/2027\", \"items\": [{\"description\": \"Consulting hour\", \"quantity\": 5, \"unit_price\": 257.75}, {\"description\": \"Repair k",
+    "create_invoice {\"customer_id\": \"C-1013\", \"due_date\": \"09/03/2027\", \"items\": [{\"description\": \"Consulting hour\", \"qty\": 5, \"unit_price\": 257.75}, {\"description\": \"Repair kit\", ",
+    "create_invoice {\"customer_id\": \"C-1013\", \"due_date\": \"09/03/2027\", \"items\": [{\"description\": \"Consulting hour\", \"qty\": 5, \"unit_price\": 25775}, {\"description\": \"Repair kit\", \"",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@silverlinecour.example\"}",
+    "get_customer {\"customer_id\": \"C-1013\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"ap@silverlinecour.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "share_lesson",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t04",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 7,
+   "start_round": 1,
+   "end_round": 7,
+   "tokens_in": 4789,
+   "tokens_out": 331,
+   "cached": 0,
+   "api_errors": [
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5193\"}",
+    "search_customers {\"query\": \"Atlas Print Shop\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5193\"}",
+    "send_invoice {\"invoice_id\": \"INV-5193\", \"to_email\": \"hello@atlasprintshop.example\"}",
+    "get_customer {\"customer_id\": \"C-1015\"}",
+    "send_invoice {\"invoice_id\": \"INV-5193\", \"to_email\": \"accounts@atlasprintshop.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "search_customers",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "share_lesson",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t05",
+   "kind": "create_send",
+   "success": false,
+   "reasons": [
+    "not_sent",
+    "out_of_turns"
+   ],
+   "calls": 12,
+   "start_round": 1,
+   "end_round": 12,
+   "tokens_in": 10455,
+   "tokens_out": 749,
+   "cached": 2176,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Copper Kettle Cafe\"}",
+    "create_invoice {\"customer_id\": \"C-1003\", \"due_date\": \"2027-10-19\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 4, \"unit_price\": 60.75}, {\"description\": \"Server",
+    "create_invoice {\"customer_id\": \"C-1003\", \"due_date\": \"10/19/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 4, \"unit_price\": 60.75}, {\"description\": \"Server",
+    "create_invoice {\"customer_id\": \"C-1003\", \"due_date\": \"19/10/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 4, \"unit_price\": 60.75}, {\"description\": \"Server",
+    "create_invoice {\"customer_id\": \"C-1003\", \"due_date\": \"19/10/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 4, \"unit_price\": 60.75}, {\"description\": \"Server rack",
+    "create_invoice {\"customer_id\": \"C-1003\", \"due_date\": \"19/10/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 4, \"unit_price\": 6075}, {\"description\": \"Server rack ",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@copperkettleca.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    1
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t06",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 12,
+   "start_round": 8,
+   "end_round": 19,
+   "tokens_in": 12093,
+   "tokens_out": 866,
+   "cached": 3584,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Orchard Hill Farms\"}",
+    "create_invoice {\"customer_id\": \"C-1010\", \"due_date\": \"2027-01-18\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 5, \"unit_price\": 202.75}, {\"description\": \"Training ma",
+    "create_invoice {\"customer_id\": \"C-1010\", \"due_date\": \"01/18/2027\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 5, \"unit_price\": 202.75}, {\"description\": \"Training ma",
+    "create_invoice {\"customer_id\": \"C-1010\", \"due_date\": \"18/01/2027\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 5, \"unit_price\": 202.75}, {\"description\": \"Training ma",
+    "create_invoice {\"customer_id\": \"C-1010\", \"due_date\": \"18/01/2027\", \"items\": [{\"description\": \"Delivery fee\", \"qty\": 5, \"unit_price\": 202.75}, {\"description\": \"Training manual\"",
+    "create_invoice {\"customer_id\": \"C-1010\", \"due_date\": \"18/01/2027\", \"items\": [{\"description\": \"Delivery fee\", \"qty\": 5, \"unit_price\": 20275}, {\"description\": \"Training manual\",",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@orchardhillfar.example\"}",
+    "get_customer {\"customer_id\": \"C-1010\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"invoices@orchardhillfar.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    0
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "share_lesson",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t07",
+   "kind": "create_draft",
+   "success": false,
+   "reasons": [
+    "month_first_date",
+    "no_correct_invoice"
+   ],
+   "calls": 6,
+   "start_round": 9,
+   "end_round": 14,
+   "tokens_in": 4233,
+   "tokens_out": 518,
+   "cached": 0,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Juniper Design Co\"}",
+    "create_invoice {\"customer_id\": \"C-1009\", \"due_date\": \"2027-05-09\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 1, \"unit_price\": 352.5}, {\"description\": \"Annual licen",
+    "create_invoice {\"customer_id\": \"C-1009\", \"due_date\": \"05/09/2027\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 1, \"unit_price\": 352.5}, {\"description\": \"Annual licen",
+    "create_invoice {\"customer_id\": \"C-1009\", \"due_date\": \"05/09/2027\", \"items\": [{\"description\": \"Delivery fee\", \"qty\": 1, \"unit_price\": 352.5}, {\"description\": \"Annual license\", ",
+    "create_invoice {\"customer_id\": \"C-1009\", \"due_date\": \"05/09/2027\", \"items\": [{\"description\": \"Delivery fee\", \"qty\": 1, \"unit_price\": 35250}, {\"description\": \"Annual license\", "
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson"
+   ]
+  },
+  {
+   "task_id": "t08",
+   "kind": "create_send",
+   "success": false,
+   "reasons": [
+    "not_sent",
+    "out_of_turns"
+   ],
+   "calls": 12,
+   "start_round": 10,
+   "end_round": 21,
+   "tokens_in": 9894,
+   "tokens_out": 593,
+   "cached": 0,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Tidewater Marine\"}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"2027-02-24\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 4, \"unit_price\": 301.75}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"02/24/2027\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 4, \"unit_price\": 301.75}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"24/02/2027\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 4, \"unit_price\": 301.75}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"24/02/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 4, \"unit_price\": 301.75}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"24/02/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 4, \"unit_price\": 30175}]}",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@tidewatermarin.example\"}",
+    "get_customer {\"customer_id\": \"C-1008\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer"
+   ]
+  },
+  {
+   "task_id": "t09",
+   "kind": "create_send",
+   "success": false,
+   "reasons": [
+    "not_sent",
+    "out_of_turns"
+   ],
+   "calls": 12,
+   "start_round": 13,
+   "end_round": 24,
+   "tokens_in": 11415,
+   "tokens_out": 827,
+   "cached": 2176,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Lumen Optics\"}",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"2027-02-14\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 4, \"unit_price\": 305.75}, {\"description\": \"Repair kit\"",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"02/14/2027\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 4, \"unit_price\": 305.75}, {\"description\": \"Repair kit\"",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"2027/02/14\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 4, \"unit_price\": 305.75}, {\"description\": \"Repair kit\"",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"14/02/2027\", \"items\": [{\"description\": \"Delivery fee\", \"quantity\": 4, \"unit_price\": 305.75}, {\"description\": \"Repair kit\"",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"14/02/2027\", \"items\": [{\"description\": \"Delivery fee\", \"qty\": 4, \"unit_price\": 305.75}, {\"description\": \"Repair kit\", \"qt",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"14/02/2027\", \"items\": [{\"description\": \"Delivery fee\", \"qty\": 4, \"unit_price\": 30575}, {\"description\": \"Repair kit\", \"qty",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@lumenoptics.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t10",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 6,
+   "start_round": 13,
+   "end_round": 18,
+   "tokens_in": 4017,
+   "tokens_out": 408,
+   "cached": 0,
+   "api_errors": [
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5975\"}",
+    "search_customers {\"query\": \"Granite Peak Gym\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5975\"}",
+    "send_invoice {\"invoice_id\": \"INV-5975\", \"to_email\": \"hello@granitepeakgym.example\"}",
+    "get_customer {\"customer_id\": \"C-1005\"}",
+    "send_invoice {\"invoice_id\": \"INV-5975\", \"to_email\": \"ap@granitepeakgym.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "search_customers",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "send_invoice",
+    "share_lesson"
+   ]
+  },
+  {
+   "task_id": "t11",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 9,
+   "start_round": 13,
+   "end_round": 21,
+   "tokens_in": 7073,
+   "tokens_out": 715,
+   "cached": 0,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Tidewater Marine\"}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"2027-10-19\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 5, \"unit_price\": 313.25}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"10/19/2027\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 5, \"unit_price\": 313.25}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"2027/10/19\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 5, \"unit_price\": 313.25}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"19/10/2027\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 5, \"unit_price\": 313.25}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"19/10/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 5, \"unit_price\": 313.25}]}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"19/10/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 5, \"unit_price\": 31325}]}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice"
+   ]
+  }
+ ],
+ "lessons": []
+}

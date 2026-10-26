@@ -50,6 +50,104 @@ same primitives, but it must not import recorded results.
 - [`codex_prompt_cache/`](codex_prompt_cache/) — whether a run's first Codex
   call can reuse an earlier run's prompt cache (no, not enough to matter), and
   where calls inside a run lose it. See the section below.
+- [`lesson_sharing/`](lesson_sharing/) — whether agents running at the same time
+  should see each other's lessons sooner, and what wrong lessons cost. See the
+  section below.
+
+## Lessons between agents running at the same time (2026-10-26)
+
+Question: north learns only when a task ends and reads only when a run starts,
+so tasks running at once never learn from each other. Would sharing sooner help,
+and what do wrong lessons cost?
+
+**Step 0, north's own history** ([`opportunity.py`](lesson_sharing/opportunity.py),
+ledger only, no model calls). 158 tasks from Sep 17 to Oct 26. 78 did work while
+another task worked (steps under 10 minutes apart); 66 (42%) while a *related*
+task worked (prompt similarity in the top 10% of all pairs). 54 of the 66 are the
+two daily briefings, which start in the same minute. Today's path (lesson after
+the task ends, plus the 120 s and 900 s polls) could reach 1 task (0.6%). On the
+4 days both briefings failed, the causes were model outages and changed flows,
+not a lesson one could pass to the other. So north rarely has a lesson to share
+today; the opportunity is real only for parallel work.
+
+**Step 1, a fleet** ([`world.py`](lesson_sharing/world.py), [`fleet.py`](lesson_sharing/fleet.py)).
+A fake invoicing API with five rules its docs do not state (date order, cents,
+`qty`, finalize before send, billing email). Errors are terse with a small hint;
+a month-first date (day 12 or below) and whole dollars are accepted silently and
+graded wrong. 12 tasks, 6 running at once, 12 turns each, `gpt-5.6-luna`.
+Agents share a rule with `share_lesson` and report a wrong note with
+`flag_lesson`; tools, prompt and budget are the same in every arm. Each arm with
+a board also gets three plausible wrong lessons from peers: two loud ones whose
+author fails at round 6, and one silent one ("whole dollars") whose author
+succeeds at round 5. Rules fixed before the runs: KILL if the oracle beats today
+by under 5 points; KILL if instant sharing reaches 90% of the oracle with under
+2% harm; GO if the oracle beats today by 10+ and the gate beats instant by 3+.
+
+| Arm | When others see a lesson | Success, 60 tasks | 95% CI | Turns | Silent-harm tasks |
+| --- | --- | --- | --- | --- | --- |
+| A none | never | 63% | 51-74 | 9.7 | 9 |
+| B today | author's task succeeded; read at start | 75% | 63-84 | 8.3 | 8 |
+| C reread | as B, plus before every call | 57% | 44-68 | 8.3 | 19 |
+| D instant | next round, no label | 62% | 49-73 | 7.5 | 23 |
+| E gated | next round, `[unconfirmed]` until the author succeeds; retracted if it fails or is flagged | 92% | 82-96 | 7.0 | 3 |
+| G labels | E's labels only, nothing retracted | 92% | 82-96 | 7.0 | 2 |
+| H retract | E's retractions only, no labels | 67% | 54-77 | 7.6 | 17 |
+| F oracle | all five rules at the start | 100% | 94-100 | 5.2 | 0 |
+
+Without the planted lessons (3 seeds, 36 tasks): today 72%, reread 89%, instant
+94%, gated 89%.
+
+Paired exact McNemar tests (same tasks): gated vs instant 19 vs 1 tasks won only
+by one side (p<0.001); gated vs today 12 vs 2 (p=0.013); labels vs instant 20 vs 2
+(p<0.001); retract vs instant 8 vs 5 (p=0.58); gated vs labels 3 vs 3 (p=1.0);
+reread vs today 1 vs 12 (p=0.003). Clean: instant vs none 12 vs 0 (p<0.001),
+gated vs instant 1 vs 3 (p=0.63).
+
+What it shows:
+
+- Sharing sooner helps a lot when lessons are right: 94% against 72% for today's
+  path, closing most of the 25-point gap to the oracle.
+- One silent wrong lesson posted early erases all of it: instant 62% against 63%
+  with no sharing. Agents copied it into their own lessons. Loud wrong lessons
+  did little; the API's errors corrected them.
+- Re-reading what today's path publishes made things worse (57% against 75%): the
+  silent wrong lesson's author succeeded, so it was published as trusted and
+  reached agents mid-task.
+- A per-note `[unconfirmed]` label, turned `[confirmed]` when the author's task
+  succeeds, recovered it: 92% with the planted lessons and 89% without. The label
+  did the work. Retraction alone did nothing, and added nothing on top of labels:
+  the harmful lesson came from a task that succeeded, which outcome-based
+  retraction cannot catch.
+- Verdict under the fixed rules: GO (oracle minus today 25 points; gated minus
+  instant 30).
+
+Limitations: one synthetic API, one small model, 6 agents and 12 tasks per run,
+5 seeds (3 without planted lessons). The three planted lessons are a design
+choice; the silent one dominates the harm. Arm B is kinder than real north,
+which also waits for two similar successes and up to 17 minutes. Agent-written
+lessons were judged wrong by keyword ([`summarize.py`](lesson_sharing/summarize.py)),
+which is approximate. A stronger model may weigh labels differently. 4,928
+Codex calls, 4.5M input tokens (0.8M cached), no provider errors.
+
+Proposed for north, not built: publish a lesson the moment an agent shares it,
+labelled unconfirmed; send new lessons for a running task's own tools or domain
+as an appended note before its next model call (append-only, so the Codex cache
+holds, as measured in `codex_prompt_cache/mid_run_note.py`); mark it confirmed
+when the author's task succeeds, and retracted when it fails (an outage or a
+cancel leaves it unconfirmed). Do not add mid-run reading to today's path alone:
+arm C shows that spreads trusted mistakes faster.
+
+```sh
+.venv/bin/python -m experiments.lesson_sharing.opportunity
+.venv/bin/python -m experiments.lesson_sharing.fleet --arms A B C D E F G H --seeds 0 1 2 3 4    # about 100 calls per arm and seed
+.venv/bin/python -m experiments.lesson_sharing.fleet --arms B C D E --clean --seeds 0 1 2
+.venv/bin/python -m experiments.lesson_sharing.summarize
+```
+
+Recorded numbers: [`summary.json`](lesson_sharing/summary.json), per-run files in
+[`results/`](lesson_sharing/results/), Step 0 in
+[`opportunity_results.json`](lesson_sharing/opportunity_results.json). The first
+pilot, before the error hints were added, is kept in [`pilot/`](lesson_sharing/pilot/).
 
 ## Browser and custom-flow completion regression (2026-10-10)
 

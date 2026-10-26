@@ -1,0 +1,572 @@
+{
+  "arms": {
+    "A": {
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "tasks": 60,
+      "success": 0.633,
+      "success_95ci": [
+        0.507,
+        0.744
+      ],
+      "mean_calls": 9.68,
+      "mean_calls_when_won": 8.76,
+      "tokens_in_per_task": 8463,
+      "cached_share": 0.186,
+      "harm_tasks": 9,
+      "reasons": {
+        "out_of_turns": 17,
+        "not_sent": 12,
+        "no_correct_invoice": 10,
+        "month_first_date": 9
+      },
+      "agent_lessons_posted": 0,
+      "agent_lessons_wrong": 0,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 0.0,
+      "by_kind": {
+        "create_draft": 0.8,
+        "create_send": 0.367,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.8,
+        "started_later": 0.47
+      },
+      "gap_closed": 0.0
+    },
+    "B": {
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "tasks": 60,
+      "success": 0.75,
+      "success_95ci": [
+        0.628,
+        0.842
+      ],
+      "mean_calls": 8.35,
+      "mean_calls_when_won": 7.67,
+      "tokens_in_per_task": 7365,
+      "cached_share": 0.146,
+      "harm_tasks": 8,
+      "reasons": {
+        "out_of_turns": 9,
+        "month_first_date": 8,
+        "no_correct_invoice": 8,
+        "not_sent": 7
+      },
+      "agent_lessons_posted": 101,
+      "agent_lessons_wrong": 30,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 0.0,
+      "by_kind": {
+        "create_draft": 0.8,
+        "create_send": 0.6,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.7,
+        "started_later": 0.8
+      },
+      "gap_closed": 0.319
+    },
+    "C": {
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "tasks": 60,
+      "success": 0.567,
+      "success_95ci": [
+        0.441,
+        0.684
+      ],
+      "mean_calls": 8.32,
+      "mean_calls_when_won": 7.24,
+      "tokens_in_per_task": 7304,
+      "cached_share": 0.153,
+      "harm_tasks": 19,
+      "reasons": {
+        "no_correct_invoice": 20,
+        "dollars_not_cents": 10,
+        "month_first_date": 9,
+        "out_of_turns": 9,
+        "not_sent": 6
+      },
+      "agent_lessons_posted": 99,
+      "agent_lessons_wrong": 26,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 2.27,
+      "by_kind": {
+        "create_draft": 0.4,
+        "create_send": 0.433,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.43,
+        "started_later": 0.7
+      },
+      "gap_closed": -0.18
+    },
+    "D": {
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "tasks": 60,
+      "success": 0.617,
+      "success_95ci": [
+        0.49,
+        0.729
+      ],
+      "mean_calls": 7.5,
+      "mean_calls_when_won": 6.84,
+      "tokens_in_per_task": 7315,
+      "cached_share": 0.2,
+      "harm_tasks": 23,
+      "reasons": {
+        "dollars_not_cents": 23,
+        "no_correct_invoice": 20,
+        "month_first_date": 4,
+        "out_of_turns": 4,
+        "not_sent": 3
+      },
+      "agent_lessons_posted": 61,
+      "agent_lessons_wrong": 17,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 5.68,
+      "by_kind": {
+        "create_draft": 0.4,
+        "create_send": 0.533,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.4,
+        "started_later": 0.83
+      },
+      "gap_closed": -0.044
+    },
+    "E": {
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "tasks": 60,
+      "success": 0.917,
+      "success_95ci": [
+        0.819,
+        0.964
+      ],
+      "mean_calls": 6.95,
+      "mean_calls_when_won": 6.71,
+      "tokens_in_per_task": 6850,
+      "cached_share": 0.218,
+      "harm_tasks": 3,
+      "reasons": {
+        "not_sent": 3,
+        "out_of_turns": 3,
+        "month_first_date": 2,
+        "no_correct_invoice": 2,
+        "dollars_not_cents": 1
+      },
+      "agent_lessons_posted": 54,
+      "agent_lessons_wrong": 7,
+      "agent_lessons_retracted": 12,
+      "wrong_agent_lessons_retracted": 3,
+      "notes_received_per_task": 9.83,
+      "by_kind": {
+        "create_draft": 0.933,
+        "create_send": 0.867,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.87,
+        "started_later": 0.97
+      },
+      "gap_closed": 0.774
+    },
+    "F": {
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "tasks": 60,
+      "success": 1.0,
+      "success_95ci": [
+        0.94,
+        1.0
+      ],
+      "mean_calls": 5.25,
+      "mean_calls_when_won": 5.25,
+      "tokens_in_per_task": 3887,
+      "cached_share": 0.0,
+      "harm_tasks": 0,
+      "reasons": {},
+      "agent_lessons_posted": 0,
+      "agent_lessons_wrong": 0,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 0.0,
+      "by_kind": {
+        "create_draft": 1.0,
+        "create_send": 1.0,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 1.0,
+        "started_later": 1.0
+      },
+      "gap_closed": 1.0
+    },
+    "G": {
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "tasks": 60,
+      "success": 0.917,
+      "success_95ci": [
+        0.819,
+        0.964
+      ],
+      "mean_calls": 7.03,
+      "mean_calls_when_won": 6.71,
+      "tokens_in_per_task": 6927,
+      "cached_share": 0.218,
+      "harm_tasks": 2,
+      "reasons": {
+        "out_of_turns": 4,
+        "not_sent": 3,
+        "month_first_date": 2,
+        "no_correct_invoice": 2
+      },
+      "agent_lessons_posted": 49,
+      "agent_lessons_wrong": 3,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 7.47,
+      "by_kind": {
+        "create_draft": 0.933,
+        "create_send": 0.867,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.87,
+        "started_later": 0.97
+      },
+      "gap_closed": 0.774
+    },
+    "H": {
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "tasks": 60,
+      "success": 0.667,
+      "success_95ci": [
+        0.541,
+        0.773
+      ],
+      "mean_calls": 7.6,
+      "mean_calls_when_won": 6.85,
+      "tokens_in_per_task": 7637,
+      "cached_share": 0.24,
+      "harm_tasks": 17,
+      "reasons": {
+        "no_correct_invoice": 18,
+        "dollars_not_cents": 17,
+        "out_of_turns": 6,
+        "month_first_date": 3,
+        "not_sent": 2
+      },
+      "agent_lessons_posted": 74,
+      "agent_lessons_wrong": 13,
+      "agent_lessons_retracted": 32,
+      "wrong_agent_lessons_retracted": 10,
+      "notes_received_per_task": 9.7,
+      "by_kind": {
+        "create_draft": 0.467,
+        "create_send": 0.6,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.43,
+        "started_later": 0.9
+      },
+      "gap_closed": 0.093
+    },
+    "B-clean": {
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "tasks": 36,
+      "success": 0.722,
+      "success_95ci": [
+        0.56,
+        0.842
+      ],
+      "mean_calls": 8.28,
+      "mean_calls_when_won": 7.38,
+      "tokens_in_per_task": 7218,
+      "cached_share": 0.154,
+      "harm_tasks": 5,
+      "reasons": {
+        "out_of_turns": 6,
+        "no_correct_invoice": 6,
+        "month_first_date": 5,
+        "not_sent": 4
+      },
+      "agent_lessons_posted": 62,
+      "agent_lessons_wrong": 19,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 0.0,
+      "by_kind": {
+        "create_draft": 0.667,
+        "create_send": 0.611,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.72,
+        "started_later": 0.72
+      },
+      "gap_closed": 0.243
+    },
+    "C-clean": {
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "tasks": 36,
+      "success": 0.889,
+      "success_95ci": [
+        0.747,
+        0.956
+      ],
+      "mean_calls": 7.28,
+      "mean_calls_when_won": 7.34,
+      "tokens_in_per_task": 6496,
+      "cached_share": 0.16,
+      "harm_tasks": 4,
+      "reasons": {
+        "month_first_date": 4,
+        "no_correct_invoice": 4
+      },
+      "agent_lessons_posted": 45,
+      "agent_lessons_wrong": 10,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 4.53,
+      "by_kind": {
+        "create_draft": 0.889,
+        "create_send": 0.833,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.94,
+        "started_later": 0.83
+      },
+      "gap_closed": 0.698
+    },
+    "D-clean": {
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "tasks": 36,
+      "success": 0.944,
+      "success_95ci": [
+        0.819,
+        0.985
+      ],
+      "mean_calls": 7.44,
+      "mean_calls_when_won": 7.44,
+      "tokens_in_per_task": 7632,
+      "cached_share": 0.26,
+      "harm_tasks": 1,
+      "reasons": {
+        "not_sent": 1,
+        "out_of_turns": 1,
+        "month_first_date": 1,
+        "no_correct_invoice": 1
+      },
+      "agent_lessons_posted": 38,
+      "agent_lessons_wrong": 7,
+      "agent_lessons_retracted": 0,
+      "wrong_agent_lessons_retracted": 0,
+      "notes_received_per_task": 4.69,
+      "by_kind": {
+        "create_draft": 0.889,
+        "create_send": 0.944,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.94,
+        "started_later": 0.94
+      },
+      "gap_closed": 0.847
+    },
+    "E-clean": {
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "tasks": 36,
+      "success": 0.889,
+      "success_95ci": [
+        0.747,
+        0.956
+      ],
+      "mean_calls": 7.58,
+      "mean_calls_when_won": 7.03,
+      "tokens_in_per_task": 7739,
+      "cached_share": 0.242,
+      "harm_tasks": 1,
+      "reasons": {
+        "out_of_turns": 4,
+        "not_sent": 3,
+        "month_first_date": 1,
+        "no_correct_invoice": 1
+      },
+      "agent_lessons_posted": 42,
+      "agent_lessons_wrong": 7,
+      "agent_lessons_retracted": 20,
+      "wrong_agent_lessons_retracted": 7,
+      "notes_received_per_task": 9.61,
+      "by_kind": {
+        "create_draft": 1.0,
+        "create_send": 0.778,
+        "send_existing": 1.0
+      },
+      "by_wave": {
+        "started_round_1": 0.78,
+        "started_later": 1.0
+      },
+      "gap_closed": 0.698
+    }
+  },
+  "paired": {
+    "E vs D": {
+      "paired_tasks": 60,
+      "only_first_won": 19,
+      "only_second_won": 1,
+      "p": 0.0
+    },
+    "E vs B": {
+      "paired_tasks": 60,
+      "only_first_won": 12,
+      "only_second_won": 2,
+      "p": 0.0129
+    },
+    "B vs A": {
+      "paired_tasks": 60,
+      "only_first_won": 12,
+      "only_second_won": 5,
+      "p": 0.1435
+    },
+    "D vs A": {
+      "paired_tasks": 60,
+      "only_first_won": 12,
+      "only_second_won": 13,
+      "p": 1.0
+    },
+    "C vs B": {
+      "paired_tasks": 60,
+      "only_first_won": 1,
+      "only_second_won": 12,
+      "p": 0.0034
+    },
+    "G vs D": {
+      "paired_tasks": 60,
+      "only_first_won": 20,
+      "only_second_won": 2,
+      "p": 0.0001
+    },
+    "H vs D": {
+      "paired_tasks": 60,
+      "only_first_won": 8,
+      "only_second_won": 5,
+      "p": 0.5811
+    },
+    "E vs G": {
+      "paired_tasks": 60,
+      "only_first_won": 3,
+      "only_second_won": 3,
+      "p": 1.0
+    },
+    "E-clean vs D-clean": {
+      "paired_tasks": 36,
+      "only_first_won": 1,
+      "only_second_won": 3,
+      "p": 0.625
+    },
+    "E-clean vs B-clean": {
+      "paired_tasks": 36,
+      "only_first_won": 8,
+      "only_second_won": 2,
+      "p": 0.1094
+    },
+    "C-clean vs B-clean": {
+      "paired_tasks": 36,
+      "only_first_won": 6,
+      "only_second_won": 0,
+      "p": 0.0312
+    },
+    "B-clean vs A": {
+      "paired_tasks": 36,
+      "only_first_won": 7,
+      "only_second_won": 3,
+      "p": 0.3438
+    },
+    "D-clean vs A": {
+      "paired_tasks": 36,
+      "only_first_won": 12,
+      "only_second_won": 0,
+      "p": 0.0005
+    }
+  },
+  "decision": {
+    "oracle_minus_today": 25.0,
+    "instant_share_of_oracle": 0.617,
+    "gated_minus_instant": 30.0,
+    "instant_harm_pct": 38.3,
+    "verdict": "GO: a real gap, and the gate beats ungated sharing"
+  }
+}

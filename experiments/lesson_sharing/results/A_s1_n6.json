@@ -1,0 +1,568 @@
+{
+ "arm": "A",
+ "seed": 1,
+ "slots": 6,
+ "model": "gpt-5.6-luna",
+ "rounds": 24,
+ "wall_seconds": 92.1,
+ "tasks": [
+  {
+   "task_id": "t00",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 10,
+   "start_round": 1,
+   "end_round": 10,
+   "tokens_in": 7673,
+   "tokens_out": 642,
+   "cached": 0,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Willow Creek Vets\"}",
+    "create_invoice {\"customer_id\": \"C-1016\", \"due_date\": \"2027-12-21\", \"items\": [{\"description\": \"Cleaning service\", \"quantity\": 4, \"unit_price\": 316.25}]}",
+    "create_invoice {\"customer_id\": \"C-1016\", \"due_date\": \"12/21/2027\", \"items\": [{\"description\": \"Cleaning service\", \"quantity\": 4, \"unit_price\": 316.25}]}",
+    "create_invoice {\"customer_id\": \"C-1016\", \"due_date\": \"21/12/2027\", \"items\": [{\"description\": \"Cleaning service\", \"quantity\": 4, \"unit_price\": 316.25}]}",
+    "create_invoice {\"customer_id\": \"C-1016\", \"due_date\": \"21/12/2027\", \"items\": [{\"description\": \"Cleaning service\", \"qty\": 4, \"unit_price\": 316.25}]}",
+    "create_invoice {\"customer_id\": \"C-1016\", \"due_date\": \"21/12/2027\", \"items\": [{\"description\": \"Cleaning service\", \"qty\": 4, \"unit_price\": 31625}]}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    1
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t01",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 6,
+   "start_round": 1,
+   "end_round": 6,
+   "tokens_in": 4022,
+   "tokens_out": 322,
+   "cached": 0,
+   "api_errors": [
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5705\"}",
+    "search_customers {\"query\": \"Tidewater Marine\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5705\"}",
+    "send_invoice {\"invoice_id\": \"INV-5705\", \"to_email\": \"hello@tidewatermarin.example\"}",
+    "get_customer {\"customer_id\": \"C-1008\"}",
+    "send_invoice {\"invoice_id\": \"INV-5705\", \"to_email\": \"finance@tidewatermarin.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "search_customers",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "send_invoice",
+    "share_lesson"
+   ]
+  },
+  {
+   "task_id": "t02",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 12,
+   "start_round": 1,
+   "end_round": 12,
+   "tokens_in": 13369,
+   "tokens_out": 1013,
+   "cached": 5248,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Bluebird Dental\"}",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"2027-08-27\", \"items\": [{\"description\": \"Consulting hour\", \"quantity\": 1, \"unit_price\": 18.25}, {\"description\": \"Cleaning ",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"08/27/2027\", \"items\": [{\"description\": \"Consulting hour\", \"quantity\": 1, \"unit_price\": 18.25}, {\"description\": \"Cleaning ",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"2027/08/27\", \"items\": [{\"description\": \"Consulting hour\", \"quantity\": 1, \"unit_price\": 18.25}, {\"description\": \"Cleaning ",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"27/08/2027\", \"items\": [{\"description\": \"Consulting hour\", \"quantity\": 1, \"unit_price\": 18.25}, {\"description\": \"Cleaning ",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"27/08/2027\", \"items\": [{\"description\": \"Consulting hour\", \"qty\": 1, \"unit_price\": 18.25}, {\"description\": \"Cleaning servi",
+    "create_invoice {\"customer_id\": \"C-1004\", \"due_date\": \"27/08/2027\", \"items\": [{\"description\": \"Consulting hour\", \"qty\": 1, \"unit_price\": 1825}, {\"description\": \"Cleaning servic",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "get_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@bluebirddental.example\"}",
+    "get_customer {\"customer_id\": \"C-1004\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"finance@bluebirddental.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    0
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "get_invoice",
+    "send_invoice",
+    "get_customer",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t03",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 9,
+   "start_round": 1,
+   "end_round": 9,
+   "tokens_in": 8248,
+   "tokens_out": 832,
+   "cached": 3200,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Tidewater Marine\"}",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"2027-02-22\", \"items\": [{\"description\": \"Repair kit\", \"quantity\": 2, \"unit_price\": 394.99}, {\"description\": \"Workshop seat",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"02/22/2027\", \"items\": [{\"description\": \"Repair kit\", \"quantity\": 2, \"unit_price\": 394.99}, {\"description\": \"Workshop seat",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"2027/02/22\", \"items\": [{\"description\": \"Repair kit\", \"quantity\": 2, \"unit_price\": 394.99}, {\"description\": \"Workshop seat",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"22/02/2027\", \"items\": [{\"description\": \"Repair kit\", \"quantity\": 2, \"unit_price\": 394.99}, {\"description\": \"Workshop seat",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"22/02/2027\", \"items\": [{\"description\": \"Repair kit\", \"qty\": 2, \"unit_price\": 394.99}, {\"description\": \"Workshop seat\", \"q",
+    "create_invoice {\"customer_id\": \"C-1008\", \"due_date\": \"22/02/2027\", \"items\": [{\"description\": \"Repair kit\", \"qty\": 2, \"unit_price\": 39499}, {\"description\": \"Workshop seat\", \"qt"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    0
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t04",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 12,
+   "start_round": 1,
+   "end_round": 12,
+   "tokens_in": 13803,
+   "tokens_out": 1049,
+   "cached": 4992,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Lumen Optics\"}",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"2027-07-25\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 4, \"unit_price\": 264.5}, {\"description\": \"Worksh",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"07/25/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 4, \"unit_price\": 264.5}, {\"description\": \"Worksh",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"2027/07/25\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 4, \"unit_price\": 264.5}, {\"description\": \"Worksh",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"25/07/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 4, \"unit_price\": 264.5}, {\"description\": \"Worksh",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"25/07/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 4, \"unit_price\": 264.5}, {\"description\": \"Workshop se",
+    "create_invoice {\"customer_id\": \"C-1011\", \"due_date\": \"25/07/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 4, \"unit_price\": 26450}, {\"description\": \"Workshop se",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@lumenoptics.example\"}",
+    "get_customer {\"customer_id\": \"C-1011\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"accounts@lumenoptics.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    0
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t05",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 8,
+   "start_round": 1,
+   "end_round": 8,
+   "tokens_in": 6952,
+   "tokens_out": 920,
+   "cached": 0,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Saffron Street Foods\"}",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"2027-08-13\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 3, \"unit_price\": 49.99}, {\"description\": \"Server",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"08/13/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 3, \"unit_price\": 49.99}, {\"description\": \"Server",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"2027/08/13\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 3, \"unit_price\": 49.99}, {\"description\": \"Server",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"13/08/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 3, \"unit_price\": 49.99}, {\"description\": \"Server",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"13/08/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 3, \"unit_price\": 49.99}, {\"description\": \"Server rack",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"13/08/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 3, \"unit_price\": 4999}, {\"description\": \"Server rack "
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    0
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t06",
+   "kind": "create_send",
+   "success": false,
+   "reasons": [
+    "month_first_date",
+    "no_correct_invoice",
+    "out_of_turns"
+   ],
+   "calls": 12,
+   "start_round": 7,
+   "end_round": 18,
+   "tokens_in": 10359,
+   "tokens_out": 642,
+   "cached": 2048,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Northwind Tools\"}",
+    "create_invoice {\"customer_id\": \"C-1002\", \"due_date\": \"2027-09-04\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 5, \"unit_price\": 301.99}, {\"description\": \"Annual l",
+    "create_invoice {\"customer_id\": \"C-1002\", \"due_date\": \"09/04/2027\", \"items\": [{\"description\": \"Training manual\", \"quantity\": 5, \"unit_price\": 301.99}, {\"description\": \"Annual l",
+    "create_invoice {\"customer_id\": \"C-1002\", \"due_date\": \"09/04/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 5, \"unit_price\": 301.99}, {\"description\": \"Annual licens",
+    "create_invoice {\"customer_id\": \"C-1002\", \"due_date\": \"09/04/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 5, \"unit_price\": 30199}, {\"description\": \"Annual license",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@northwindtools.example\"}",
+    "get_customer {\"customer_id\": \"C-1002\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"invoices@northwindtools.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "share_lesson",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t07",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 4,
+   "start_round": 9,
+   "end_round": 12,
+   "tokens_in": 2286,
+   "tokens_out": 200,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5514\"}",
+    "get_customer {\"customer_id\": \"C-1008\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5514\"}",
+    "send_invoice {\"invoice_id\": \"INV-5514\", \"to_email\": \"finance@tidewatermarin.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "get_customer",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t08",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 12,
+   "start_round": 10,
+   "end_round": 21,
+   "tokens_in": 13742,
+   "tokens_out": 1226,
+   "cached": 7808,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E301: invoice state invalid for sending",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Redwood Legal\"}",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"2027-09-19\", \"items\": [{\"description\": \"Paper stock\", \"quantity\": 4, \"unit_price\": 142.25}, {\"description\": \"Cleaning ser",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"09/19/2027\", \"items\": [{\"description\": \"Paper stock\", \"quantity\": 4, \"unit_price\": 142.25}, {\"description\": \"Cleaning ser",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"2027/09/19\", \"items\": [{\"description\": \"Paper stock\", \"quantity\": 4, \"unit_price\": 142.25}, {\"description\": \"Cleaning ser",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"19/09/2027\", \"items\": [{\"description\": \"Paper stock\", \"quantity\": 4, \"unit_price\": 142.25}, {\"description\": \"Cleaning ser",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"19/09/2027\", \"items\": [{\"description\": \"Paper stock\", \"qty\": 4, \"unit_price\": 142.25}, {\"description\": \"Cleaning service\"",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"19/09/2027\", \"items\": [{\"description\": \"Paper stock\", \"qty\": 4, \"unit_price\": 14225}, {\"description\": \"Cleaning service\",",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@redwoodlegal.example\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@redwoodlegal.example\"}",
+    "get_customer {\"customer_id\": \"C-1012\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"finance@redwoodlegal.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    1
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "send_invoice",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "share_lesson",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t09",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 11,
+   "start_round": 11,
+   "end_round": 21,
+   "tokens_in": 10484,
+   "tokens_out": 806,
+   "cached": 3200,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)",
+    "E302: recipient not permitted for this customer"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Pinecrest Clinic\"}",
+    "create_invoice {\"customer_id\": \"C-1014\", \"due_date\": \"2027-04-13\", \"items\": [{\"description\": \"Paper stock\", \"quantity\": 4, \"unit_price\": 182.25}, {\"description\": \"Server rack ",
+    "create_invoice {\"customer_id\": \"C-1014\", \"due_date\": \"04/13/2027\", \"items\": [{\"description\": \"Paper stock\", \"quantity\": 4, \"unit_price\": 182.25}, {\"description\": \"Server rack ",
+    "create_invoice {\"customer_id\": \"C-1014\", \"due_date\": \"13/04/2027\", \"items\": [{\"description\": \"Paper stock\", \"quantity\": 4, \"unit_price\": 182.25}, {\"description\": \"Server rack ",
+    "create_invoice {\"customer_id\": \"C-1014\", \"due_date\": \"13/04/2027\", \"items\": [{\"description\": \"Paper stock\", \"qty\": 4, \"unit_price\": 182.25}, {\"description\": \"Server rack renta",
+    "create_invoice {\"customer_id\": \"C-1014\", \"due_date\": \"13/04/2027\", \"items\": [{\"description\": \"Paper stock\", \"qty\": 4, \"unit_price\": 18225}, {\"description\": \"Server rack rental",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"hello@pinecrestclini.example\"}",
+    "get_customer {\"customer_id\": \"C-1014\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"invoices@pinecrestclini.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice",
+    "get_customer",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t10",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 4,
+   "start_round": 13,
+   "end_round": 16,
+   "tokens_in": 2294,
+   "tokens_out": 198,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5663\"}",
+    "get_customer {\"customer_id\": \"C-1006\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5663\"}",
+    "send_invoice {\"invoice_id\": \"INV-5663\", \"to_email\": \"invoices@saffronstreetf.example\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "get_customer",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t11",
+   "kind": "create_send",
+   "success": false,
+   "reasons": [
+    "not_sent",
+    "out_of_turns"
+   ],
+   "calls": 12,
+   "start_round": 13,
+   "end_round": 24,
+   "tokens_in": 9915,
+   "tokens_out": 669,
+   "cached": 0,
+   "api_errors": [
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E102: due_date rejected (use slashes)",
+    "E104: line item malformed (unknown field 'quantity')",
+    "E103: unit_price rejected (integer minor units)"
+   ],
+   "attempts": [
+    "search_customers {\"query\": \"Saffron Street Foods\"}",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"2027-08-13\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 3, \"unit_price\": 21.25}]}",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"08/13/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 3, \"unit_price\": 21.25}]}",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"2027/08/13\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 3, \"unit_price\": 21.25}]}",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"13/08/2027\", \"items\": [{\"description\": \"Server rack rental\", \"quantity\": 3, \"unit_price\": 21.25}]}",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"13/08/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 3, \"unit_price\": 21.25}]}",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"13/08/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 3, \"unit_price\": 2125}]}",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}"
+   ],
+   "notes_at_start": 0,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [
+    1
+   ],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "flag_lesson",
+    "create_invoice",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice"
+   ]
+  }
+ ],
+ "lessons": []
+}

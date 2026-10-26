@@ -1,0 +1,372 @@
+{
+ "arm": "F",
+ "seed": 3,
+ "slots": 6,
+ "model": "gpt-5.6-luna",
+ "rounds": 15,
+ "wall_seconds": 48.8,
+ "tasks": [
+  {
+   "task_id": "t00",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 7,
+   "start_round": 1,
+   "end_round": 7,
+   "tokens_in": 5491,
+   "tokens_out": 297,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Willow Creek Vets\"}",
+    "get_customer {\"customer_id\": \"C-1016\"}",
+    "create_invoice {\"customer_id\": \"C-1016\", \"due_date\": \"17/04/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 2, \"unit_price\": 10399}, {\"description\": \"Server rack",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"finance@willowcreekvet.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "share_lesson",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t01",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 3,
+   "start_round": 1,
+   "end_round": 3,
+   "tokens_in": 1965,
+   "tokens_out": 237,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Granite Peak Gym\"}",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"07/07/2027\", \"items\": [{\"description\": \"Cleaning service\", \"qty\": 1, \"unit_price\": 34825}, {\"description\": \"Annual licens"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t02",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 4,
+   "start_round": 1,
+   "end_round": 4,
+   "tokens_in": 2955,
+   "tokens_out": 247,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5237\"}",
+    "search_customers {\"query\": \"Atlas Print Shop\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5237\"}",
+    "get_customer {\"customer_id\": \"C-1015\"}",
+    "send_invoice {\"invoice_id\": \"INV-5237\", \"to_email\": \"accounts@atlasprintshop.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "search_customers",
+    "finalize_invoice",
+    "get_customer",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t03",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 6,
+   "start_round": 1,
+   "end_round": 6,
+   "tokens_in": 4312,
+   "tokens_out": 223,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Redwood Legal\"}",
+    "get_customer {\"customer_id\": \"C-1012\"}",
+    "create_invoice {\"customer_id\": \"C-1012\", \"due_date\": \"26/11/2027\", \"items\": [{\"description\": \"Consulting hour\", \"qty\": 2, \"unit_price\": 25850}]}",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"finance@redwoodlegal.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t04",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 3,
+   "start_round": 1,
+   "end_round": 3,
+   "tokens_in": 1925,
+   "tokens_out": 178,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Orchard Hill Farms\"}",
+    "create_invoice {\"customer_id\": \"C-1010\", \"due_date\": \"11/01/2027\", \"items\": [{\"description\": \"Server rack rental\", \"qty\": 4, \"unit_price\": 29875}, {\"description\": \"Server rack"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t05",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 4,
+   "start_round": 1,
+   "end_round": 4,
+   "tokens_in": 2975,
+   "tokens_out": 238,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5720\"}",
+    "search_customers {\"query\": \"Juniper Design Co\"}",
+    "get_customer {\"customer_id\": \"C-1009\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5720\"}",
+    "send_invoice {\"invoice_id\": \"INV-5720\", \"to_email\": \"ap@juniperdesignc.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "search_customers",
+    "get_customer",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t06",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 7,
+   "start_round": 4,
+   "end_round": 10,
+   "tokens_in": 5618,
+   "tokens_out": 287,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Saffron Street Foods\"}",
+    "get_customer {\"customer_id\": \"C-1006\"}",
+    "create_invoice {\"customer_id\": \"C-1006\", \"due_date\": \"15/07/2027\", \"items\": [{\"description\": \"Paper stock\", \"qty\": 5, \"unit_price\": 29725}, {\"description\": \"Repair kit\", \"qty\"",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"invoices@saffronstreetf.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "share_lesson",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t07",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 6,
+   "start_round": 4,
+   "end_round": 9,
+   "tokens_in": 4343,
+   "tokens_out": 231,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Granite Peak Gym\"}",
+    "get_customer {\"customer_id\": \"C-1005\"}",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"01/10/2027\", \"items\": [{\"description\": \"Workshop seat\", \"qty\": 4, \"unit_price\": 39899}]}",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"ap@granitepeakgym.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t08",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 7,
+   "start_round": 5,
+   "end_round": 11,
+   "tokens_in": 5385,
+   "tokens_out": 287,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Northwind Tools\"}",
+    "get_customer {\"customer_id\": \"C-1002\"}",
+    "create_invoice {\"customer_id\": \"C-1002\", \"due_date\": \"16/10/2027\", \"items\": [{\"description\": \"Training manual\", \"qty\": 3, \"unit_price\": 28775}, {\"description\": \"Server rack re",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"invoices@northwindtools.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "share_lesson",
+    "create_invoice",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t09",
+   "kind": "create_draft",
+   "success": true,
+   "reasons": [],
+   "calls": 4,
+   "start_round": 5,
+   "end_round": 8,
+   "tokens_in": 2616,
+   "tokens_out": 241,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Northwind Tools\"}",
+    "get_customer {\"customer_id\": \"C-1002\"}",
+    "create_invoice {\"customer_id\": \"C-1002\", \"due_date\": \"14/06/2027\", \"items\": [{\"description\": \"Cleaning service\", \"qty\": 3, \"unit_price\": 31775}]}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "create_invoice"
+   ]
+  },
+  {
+   "task_id": "t10",
+   "kind": "send_existing",
+   "success": true,
+   "reasons": [],
+   "calls": 5,
+   "start_round": 7,
+   "end_round": 11,
+   "tokens_in": 3735,
+   "tokens_out": 212,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "get_invoice {\"invoice_id\": \"INV-5468\"}",
+    "search_customers {\"query\": \"Lumen Optics\"}",
+    "get_customer {\"customer_id\": \"C-1011\"}",
+    "finalize_invoice {\"invoice_id\": \"INV-5468\"}",
+    "send_invoice {\"invoice_id\": \"INV-5468\", \"to_email\": \"accounts@lumenoptics.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "get_invoice",
+    "search_customers",
+    "get_customer",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  },
+  {
+   "task_id": "t11",
+   "kind": "create_send",
+   "success": true,
+   "reasons": [],
+   "calls": 8,
+   "start_round": 8,
+   "end_round": 15,
+   "tokens_in": 6376,
+   "tokens_out": 313,
+   "cached": 0,
+   "api_errors": [],
+   "attempts": [
+    "search_customers {\"query\": \"Granite Peak Gym\"}",
+    "get_customer {\"customer_id\": \"C-1005\"}",
+    "create_invoice {\"customer_id\": \"C-1005\", \"due_date\": \"20/05/2027\", \"items\": [{\"description\": \"Cleaning service\", \"qty\": 4, \"unit_price\": 27199}, {\"description\": \"Training manu",
+    "finalize_invoice {\"invoice_id\": \"INV-7001\"}",
+    "send_invoice {\"invoice_id\": \"INV-7001\", \"to_email\": \"ap@granitepeakgym.example\"}"
+   ],
+   "notes_at_start": 5,
+   "notes_received": 0,
+   "posted": [],
+   "flagged": [],
+   "tool_calls": [
+    "search_customers",
+    "get_customer",
+    "share_lesson",
+    "create_invoice",
+    "share_lesson",
+    "finalize_invoice",
+    "send_invoice"
+   ]
+  }
+ ],
+ "lessons": []
+}
