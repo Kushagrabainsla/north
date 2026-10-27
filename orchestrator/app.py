@@ -57,6 +57,8 @@ from memory.profile import move_rule_and_goal_facts, rebuild_profile
 from orchestrator.api import coding_ask_router, coding_gate_router, health_router, webhook_router
 from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
+from orchestrator.api_context import merge as merge_services
+from orchestrator.background import BackgroundLoops
 from orchestrator.coding_ask import ApprovalsAsker
 from orchestrator.coding_briefing import MemoryBriefing
 from orchestrator.coding_fetch import ApprovalsFetcher, Page
@@ -710,7 +712,10 @@ def _launch_background_tasks(
     flow_store: FlowRunStore | None = None,
     flow_runner: FlowRunner | None = None,
     approvals: Approvals | None = None,
+    loops: BackgroundLoops | None = None,
 ) -> list[asyncio.Task]:
+    loops = loops or BackgroundLoops()
+
     async def _nightly_cleanup() -> str:
         """north's own housekeeping: the one step of the built-in nightly-cleanup flow."""
         n = await deps.task_context_store.cleanup_stale_tasks(
@@ -798,52 +803,38 @@ def _launch_background_tasks(
         north_home=settings.north_home,
     )
 
+    # The forever-loops are kept running: one that fails starts again, and /health shows it.
     tasks = [
-        asyncio.create_task(
-            _guarded(
-                deps.job_processor.run(
-                    on_job=_dispatch_job,
-                    poll_interval_seconds=settings.job_poll_interval_seconds,
-                ),
-                "job_processor",
+        loops.start(
+            "job_processor",
+            lambda: deps.job_processor.run(
+                on_job=_dispatch_job, poll_interval_seconds=settings.job_poll_interval_seconds
             ),
-            name="job_processor",
         ),
-        asyncio.create_task(_guarded(cron_scheduler.run(), "cron_scheduler"), name="cron_scheduler"),
-        asyncio.create_task(_guarded(episode_consolidator.run(), "episode_consolidator"), name="episode_consolidator"),
-        asyncio.create_task(_guarded(skill_distiller.run(), "skill_distiller"), name="skill_distiller"),
+        loops.start("cron_scheduler", cron_scheduler.run),
+        loops.start("episode_consolidator", episode_consolidator.run),
+        loops.start("skill_distiller", skill_distiller.run),
         asyncio.create_task(_guarded(callback_server.serve(), "callback_server"), name="callback_server"),
-        asyncio.create_task(_guarded(_pool_refresh_loop(deps, orchestrator), "pool_refresh"), name="pool_refresh"),
+        loops.start("pool_refresh", lambda: _pool_refresh_loop(deps, orchestrator)),
         *(
-            [asyncio.create_task(_guarded(_resume_waiting_flows_loop(flow_runner), "flow_resume"), name="flow_resume")]
+            [loops.start("flow_resume", lambda: _resume_waiting_flows_loop(flow_runner))]
             if flow_runner is not None
             else []
         ),
-        asyncio.create_task(
-            _guarded(orchestrator.drain_queued_tasks_loop(), "task_queue_drainer"),
-            name="task_queue_drainer",
-        ),
-        asyncio.create_task(
-            _guarded(
-                watch_stuck_tasks(
-                    orchestrator,
-                    poll_interval=WATCHDOG_POLL_INTERVAL_SECONDS,
-                    max_age_seconds=settings.stuck_task_max_age_seconds,
-                ),
-                "stuck_task_watchdog",
+        loops.start("task_queue_drainer", orchestrator.drain_queued_tasks_loop),
+        loops.start(
+            "stuck_task_watchdog",
+            lambda: watch_stuck_tasks(
+                orchestrator,
+                poll_interval=WATCHDOG_POLL_INTERVAL_SECONDS,
+                max_age_seconds=settings.stuck_task_max_age_seconds,
             ),
-            name="stuck_task_watchdog",
         ),
     ]
 
     # Telegram gateway: it waits until a bot is set up, so the dashboard can add one live
     if telegram_gateway is not None:
-        tasks.append(
-            asyncio.create_task(
-                _guarded(telegram_gateway.run(), "telegram_gateway"),
-                name="telegram_gateway",
-            )
-        )
+        tasks.append(loops.start("telegram_gateway", telegram_gateway.run))
 
     return tasks
 
@@ -1126,6 +1117,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             learned_dir=settings.north_home / "skills",
         )
         telegram_gateway = TelegramGateway()
+        background_loops = BackgroundLoops()
+        merge_services(app, background_loops=background_loops)
         background_tasks = _launch_background_tasks(
             deps,
             orchestrator,
@@ -1137,6 +1130,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             flow_store=flow_store,
             flow_runner=flow_runner,
             approvals=approvals,
+            loops=background_loops,
         )
         if tool_index is not None:
             background_tasks.append(

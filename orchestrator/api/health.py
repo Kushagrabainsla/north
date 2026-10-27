@@ -47,6 +47,10 @@ async def health_check(request: Request = None) -> dict:  # noqa: RUF013 - calla
     checks["event_stream"] = (
         {"status": "ok"} if services.stream_manager is not None else {"status": "failed", "detail": "not configured"}
     )
+    # Absent when the background workers are off (test mode); a loop that failed
+    # and is waiting to start again makes north degraded, not "ok".
+    if services.background_loops is not None:
+        checks["background_loops"] = services.background_loops.report()
 
     if services.inference_router is None:
         checks["inference"] = {"status": "failed", "detail": "not configured"}
