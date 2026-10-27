@@ -60,9 +60,9 @@ class GlobTool(Tool):
         if not pattern:
             return ToolOutput(success=False, error="Parameter 'pattern' is required.")
 
-        resolved = resolve_path(input.params.get("path", "."), input.params.get("workspace"))
+        resolved = resolve_path(input.params.get("path", "."), input.params.get("workspace"), contained=False)
         if resolved is None:
-            return ToolOutput(success=False, error="Path escapes workspace root.")
+            return ToolOutput(success=False, error="That path is blocked: it holds credentials or north's own data.")
 
         limit = _coerce_limit(input.params.get("head_limit"))
         return await asyncio.to_thread(_glob_sync, resolved, pattern, limit)

@@ -13,10 +13,12 @@ import asyncio
 import contextlib
 import os
 import signal
+from pathlib import Path
 from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
+from tools._path import is_sensitive_path
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import _os_sandbox
@@ -26,6 +28,7 @@ from tools.specialized._sandbox import (
     build_run_argv,
     docker_available,
 )
+from utils.edit_scope import narrow_workspace
 
 _TIMEOUT = 30
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the
@@ -43,6 +46,42 @@ _OBVIOUS_DESTRUCTIVE_HINTS = [
     "dd if=",
     "> /dev/sd",
 ]
+
+
+def _boundary(input: ToolInput) -> str | None:
+    """Where a command may write: the folder the server granted, or a subfolder of it the model chose.
+
+    Never the model's `workspace` alone (CODING_STYLE §16.1.1). With nothing
+    granted there is no boundary, and nothing but temp and caches is writable.
+    """
+    return narrow_workspace(input.granted_workspace or "", str(input.params.get("workspace") or "")) or None
+
+
+def _cwd(input: ToolInput, boundary: str | None) -> str | None:
+    """Where the command starts. Not a limit on anything: the sandbox is."""
+    return str(input.params.get("workspace") or "") or boundary
+
+
+def _outside_folders(input: ToolInput) -> tuple[str, ...] | ToolOutput:
+    """The folders outside the boundary the command asked to write to, resolved.
+
+    A credential folder is refused here, before any card: no answer makes it writable.
+    """
+    raw = input.params.get("write_outside") or []
+    boundary = _boundary(input)
+    root = Path(boundary).resolve() if boundary else None
+    folders: list[str] = []
+    for item in [raw] if isinstance(raw, str) else raw:
+        folder = Path(str(item)).expanduser().resolve()
+        if is_sensitive_path(folder):
+            return ToolOutput(
+                success=False,
+                error=f"`{folder}` holds credentials; no command may write there.",
+                failure_kind="refused",
+            )
+        if root is None or not folder.is_relative_to(root):
+            folders.append(str(folder))
+    return tuple(dict.fromkeys(folders))
 
 
 def _cap(text: str) -> str:
@@ -64,7 +103,9 @@ class BashTool(Tool):
     shows the exact command string so the user sees precisely what will run. With
     the OS sandbox on (macOS), a command is first tried where the kernel refuses
     every write and the network; one that finishes there changed nothing and
-    needs no card, and an approved one runs with writes limited to its workspace.
+    needs no card, and an approved one runs with writes limited to the task's
+    folder, plus any folder outside it named in `write_outside` and shown on its
+    card (CODING_STYLE §16.1.1).
     """
 
     name = "bash"
@@ -83,6 +124,14 @@ class BashTool(Tool):
             "workspace": {
                 "type": "string",
                 "description": "Working directory for the command (optional)",
+            },
+            "write_outside": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Folders outside the task's folder this command must write to, such as ~/Desktop. "
+                    "Only when it has to: the user is asked, with these folders shown."
+                ),
             },
             "timeout": {
                 "type": "integer",
@@ -106,15 +155,21 @@ class BashTool(Tool):
         self._os_sandbox = _os_sandbox.current() if os_sandbox and not self._sandbox.enabled else None
         self._egress = EgressProxy(allowed_domains) if allowed_domains is not None else EgressProxy()
 
-    def _action(self, command: str, *, read_only: bool = False) -> Action:
+    def _action(
+        self, command: str, *, read_only: bool = False, boundary: str | None = None, outside: tuple[str, ...] = ()
+    ) -> Action:
         """What this command is, as facts. What that *means* is the policy's call."""
         return Action(
             agent="bash",
             kind=ActionKind.SHELL_COMMAND,
             summary=command,
             command=command,
+            # The folders are part of what you approve: the same command writing elsewhere asks again.
+            args=" ".join(f"writes={folder}" for folder in outside),
+            workspace=boundary or "",
             read_only=read_only,
             mutating=not read_only,
+            leaves_sandbox=bool(outside),
             obviously_destructive=any(hint in command for hint in _OBVIOUS_DESTRUCTIVE_HINTS),
         )
 
@@ -125,18 +180,21 @@ class BashTool(Tool):
         # Whether a catastrophic pattern is refused, and in which modes, is the
         # policy's call - this tool only reports that it recognises one.
         command = input.params.get("command")
-        if not command:
+        outside = _outside_folders(input)
+        if not command or isinstance(outside, ToolOutput):
             return None
-        proved = await self._prove_read_only(command, input.params.get("workspace") or None)
+        boundary = _boundary(input)
+        proved = await self._prove_read_only(command, boundary, _cwd(input, boundary))
+        also = "\n\nAlso writes to:\n" + "\n".join(f"- `{folder}`" for folder in outside) if outside else ""
         return Request(
-            action=self._action(command, read_only=proved is not None),
+            action=self._action(command, read_only=proved is not None, boundary=boundary, outside=outside),
             title="Shell Command - Approval Required",
-            message=f"```\n{command}\n```",
+            message=f"```\n{command}\n```{also}",
             declined="Command cancelled by user.",
             prepared=proved,
         )
 
-    async def _prove_read_only(self, command: str, cwd: str | None) -> ToolOutput | None:
+    async def _prove_read_only(self, command: str, boundary: str | None, cwd: str | None) -> ToolOutput | None:
         """Run *command* where the kernel refuses every write and the network.
 
         Returns its output when it finished successfully without being refused
@@ -152,7 +210,7 @@ class BashTool(Tool):
         """
         if not self._os_sandbox:
             return None
-        argv = self._os_sandbox.wrap(command, cwd, writable=False)
+        argv = self._os_sandbox.wrap(command, boundary, writable=False)
         output = await self._spawn(argv, cwd, _PROBE_TIMEOUT, command=command)
         if output.data is None or output.data.get("returncode") != 0:
             return None
@@ -161,22 +219,25 @@ class BashTool(Tool):
         return output
 
     async def _resolve_execution(
-        self, command: str, cwd: str | None
+        self, command: str, cwd: str | None, boundary: str | None, outside: tuple[str, ...]
     ) -> tuple[list[str] | None, str | None, str | None]:
         """Decide how to run *command*: (argv, host_cwd, error).
 
         - No sandbox → (None, cwd, None): run on the host as before.
-        - Docker on + available + a workspace to mount → (docker argv, None, None).
-        - Docker on but missing, or no workspace → (None, None, error): fail
+        - Docker on + available + a folder to mount → (docker argv, None, None).
+        - Docker on but missing, or no folder → (None, None, error): fail
           closed, because a requested security control must never silently degrade.
-        - OS sandbox on → (seatbelt argv, cwd, None): writes limited to the workspace.
+        - OS sandbox on → (seatbelt argv, cwd, None): writes limited to *boundary*
+          and the approved *outside* folders. With no boundary, only temp and caches:
+          it used to fall back to the folder north was started in.
         """
         if self._os_sandbox:
             port = await self._egress.start()
-            return self._os_sandbox.wrap(command, cwd or os.getcwd(), writable=True, proxy_port=port), cwd, None
+            argv = self._os_sandbox.wrap(command, boundary, writable=True, proxy_port=port, also_writable=outside)
+            return argv, cwd, None
         if not self._sandbox.enabled:
             return None, cwd, None
-        if not cwd:
+        if not boundary:
             return None, None, "Sandboxed execution requires a workspace to mount, but none was provided."
         if not await docker_available():
             return (
@@ -184,7 +245,7 @@ class BashTool(Tool):
                 None,
                 "Sandboxed execution is enabled but Docker is unavailable - refusing to run on the host.",
             )
-        return build_run_argv(command, cwd, self._sandbox), None, None
+        return build_run_argv(command, boundary, self._sandbox), None, None
 
     async def aclose(self) -> None:
         await self._egress.stop()
@@ -196,17 +257,29 @@ class BashTool(Tool):
         if isinstance(proved := prepared(input), ToolOutput):
             return proved
 
-        cwd = input.params.get("workspace") or None
+        outside = _outside_folders(input)
+        if isinstance(outside, ToolOutput):
+            return outside
+        boundary = _boundary(input)
+        cwd = _cwd(input, boundary)
         raw_timeout = input.params.get("timeout")
         try:
             timeout = min(max(int(raw_timeout), 1), 300) if raw_timeout is not None else _TIMEOUT
         except (ValueError, TypeError):
             timeout = _TIMEOUT
 
-        exec_argv, exec_cwd, sandbox_error = await self._resolve_execution(command, cwd)
+        exec_argv, exec_cwd, sandbox_error = await self._resolve_execution(command, cwd, boundary, outside)
         if sandbox_error is not None:
             return ToolOutput(success=False, error=sandbox_error)
-        return await self._spawn(exec_argv, exec_cwd, timeout, command=command)
+        output = await self._spawn(exec_argv, exec_cwd, timeout, command=command)
+        if not output.success and self._os_sandbox and self._os_sandbox.denied(output.error or ""):
+            # Refused, not broken: say how to ask, so the work is not dropped.
+            where = f"in `{boundary}`" if boundary else "only in temp folders"
+            output.error = (
+                f"{output.error}\nThe sandbox lets this command write {where}. If it must write somewhere else, "
+                "call bash again with write_outside=[that folder]; the user is asked first."
+            )
+        return output
 
     async def _spawn(self, argv: list[str] | None, cwd: str | None, timeout: int, *, command: str) -> ToolOutput:
         """Run *argv* - or *command* through the host shell when there is none - and collect its output."""

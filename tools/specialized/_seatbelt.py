@@ -6,11 +6,15 @@ touch. Two profiles:
 - **read-only** - no writes outside `/dev`, no network, no reads of credential
   directories. A command that finishes under it is *proved* to have changed
   nothing, so it needs no card.
-- **workspace** - writes limited to the workspace and the temp and cache
-  directories tools need; credential directories stay unreadable. Used for
-  commands you approved. Given an egress proxy port, the network is closed too,
-  except loopback (a project's own tests start local servers) - and the proxy
-  on loopback is the only way out (see `_egress.py`).
+- **workspace** - writes limited to the workspace, any folder you approved
+  for that one command, and the temp and cache directories tools need;
+  credential directories stay unreadable and unwritable. Used for commands you
+  approved. Given an egress proxy port, the network is closed too, except
+  loopback (a project's own tests start local servers) - and the proxy on
+  loopback is the only way out (see `_egress.py`).
+
+A task's own folder lives inside `~/.north`, which is otherwise closed, so when
+it is the workspace it is opened again for that command - that folder only.
 
 `sandbox-exec` is deprecated by Apple with no replacement; it is what Claude
 Code and Codex use on macOS. Only one sandbox layer may be active: a command
@@ -25,6 +29,8 @@ import os
 import shutil
 import sys
 from pathlib import Path
+
+from tools._path import is_north_scratch
 
 _SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
@@ -66,8 +72,15 @@ class Seatbelt:
         return available()
 
     @staticmethod
-    def wrap(command: str, workspace: str | None, *, writable: bool, proxy_port: int | None = None) -> list[str]:
-        return wrap(command, workspace, writable=writable, proxy_port=proxy_port)
+    def wrap(
+        command: str,
+        workspace: str | None,
+        *,
+        writable: bool,
+        proxy_port: int | None = None,
+        also_writable: tuple[str, ...] = (),
+    ) -> list[str]:
+        return wrap(command, workspace, writable=writable, proxy_port=proxy_port, also_writable=also_writable)
 
     @staticmethod
     def denied(stderr: str) -> bool:
@@ -87,25 +100,37 @@ def _secret_dirs() -> list[str]:
     return paths
 
 
-def profile(workspace: str | None, *, writable: bool, proxy_port: int | None = None) -> str:
+def profile(
+    workspace: str | None,
+    *,
+    writable: bool,
+    proxy_port: int | None = None,
+    also_writable: tuple[str, ...] = (),
+) -> str:
     """The Seatbelt profile for a command run in *workspace*.
 
     Later rules win, so each profile denies broadly and then allows narrowly.
     Paths are resolved first: the kernel matches real paths, and `/tmp` and
-    `/var` are symlinks on macOS.
+    `/var` are symlinks on macOS. *also_writable* are folders outside the
+    workspace you approved this command writing to.
     """
     rules = ["(version 1)", "(allow default)", "(deny file-write*)"]
     allowed = [_quote(p) for p in _TEMP_DIRS]
     if writable:
         home = Path.home()
         allowed += [_quote(home / name) for name in _CACHE_DIRS]
-        if workspace:
-            allowed.append(_quote(workspace))
+        allowed += [_quote(folder) for folder in (workspace, *also_writable) if folder]
     devices = " ".join(f"(literal {_quote(d)})" for d in _WRITABLE_DEVICES)
     rules.append(f'(allow file-write* {devices} (regex #"^/dev/ttys[0-9]+$"))')
     if allowed and writable:
         rules.append("(allow file-write* " + " ".join(f"(subpath {p})" for p in allowed) + ")")
-    rules.append("(deny file-read* " + " ".join(f"(subpath {_quote(p)})" for p in _secret_dirs()) + ")")
+    secrets = " ".join(f"(subpath {_quote(p)})" for p in _secret_dirs())
+    # Unwritable as well as unreadable: a workspace of the home folder used to
+    # let an approved command write into ~/.ssh.
+    rules.append(f"(deny file-read* file-write* {secrets})")
+    if workspace and is_north_scratch(Path(workspace)):
+        operations = "file-read* file-write*" if writable else "file-read*"
+        rules.append(f"(allow {operations} (subpath {_quote(workspace)}))")
     if not writable:
         rules.append("(deny network*)")
     elif proxy_port is not None:
@@ -126,9 +151,20 @@ def _proxy_env(proxy_port: int) -> list[str]:
     return [*(f"{name}={url}" for name in names), f"NO_PROXY={no_proxy}", f"no_proxy={no_proxy}"]
 
 
-def wrap(command: str, workspace: str | None, *, writable: bool, proxy_port: int | None = None) -> list[str]:
+def wrap(
+    command: str,
+    workspace: str | None,
+    *,
+    writable: bool,
+    proxy_port: int | None = None,
+    also_writable: tuple[str, ...] = (),
+) -> list[str]:
     """The argv that runs *command* under the chosen profile."""
-    argv = [_SANDBOX_EXEC, "-p", profile(workspace, writable=writable, proxy_port=proxy_port)]
+    argv = [
+        _SANDBOX_EXEC,
+        "-p",
+        profile(workspace, writable=writable, proxy_port=proxy_port, also_writable=also_writable),
+    ]
     if writable and proxy_port is not None:
         argv += ["/usr/bin/env", *_proxy_env(proxy_port)]
     return [*argv, "/bin/sh", "-c", command]

@@ -66,9 +66,9 @@ class GotoDefinitionTool(Tool):
             return ToolOutput(success=False, error="Parameter 'path' is required.")
 
         workspace = input.params.get("workspace")
-        resolved = resolve_path(path_str, workspace)
+        resolved = resolve_path(path_str, workspace, contained=False)
         if resolved is None:
-            return ToolOutput(success=False, error="Path escapes workspace root.")
+            return ToolOutput(success=False, error="That path is blocked: it holds credentials or north's own data.")
         if not resolved.is_file():
             return ToolOutput(success=False, error=f"File not found: {resolved}", failure_kind="not_found")
         if is_sensitive_path(resolved):

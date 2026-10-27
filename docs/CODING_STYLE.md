@@ -1266,7 +1266,11 @@ class CacheableTool(Tool, ABC):
 Every path-touching tool resolves through `tools/_path.py:resolve_path()` (the single fail-closed gate). Two - and only two - write zones exist:
 
 1. **The workspace** - all user-facing work (code, edited files, deliverables) lands here, in place. This is the deliverable; review it via `git diff`.
-2. **`<NORTH_HOME>/tasks/{task_id}/`** - internal agent handoff scratch only (research notes, specs, QA reports). A narrow carve-out inside the otherwise-blocked `~/.north`, available regardless of the active workspace.
+2. **`<NORTH_HOME>/tasks/{task_id}/`** - the task's own folder: its handoff scratch (research notes, specs, QA reports), and its workspace when none was chosen. A narrow carve-out inside the otherwise-blocked `~/.north`, available regardless of the active workspace.
+
+**The chosen folder is the write boundary; leaving it asks.** A task's folder is the one chosen for it (the dashboard picker, Telegram `/workspace`, a coding repo), else its own `<NORTH_HOME>/tasks/{task_id}/`, never the folder north was started in. North decides it in code: writers take it from `ToolInput.granted_workspace`, and the model may only narrow it (`narrow_workspace`). A write outside it is never refused and never silent: it goes to a card naming the target (`write_file` by its path, `bash` by `write_outside`), and the kernel holds `bash` to what was approved. Reads are not bounded by it. Credential folders are never writable.
+**Why:** north runs from the home folder, so tasks wrote there (a recording landed in `~`); where a task writes must not depend on where north runs or on what the model passes, and "save this to my Desktop" must still work.
+**How to apply:** never read a write location from `params["workspace"]` alone, never fall back to the server's start folder, and pass `contained=False` to `resolve_path` only for reads and for writes the approval layer rules on.
 
 Everything else under `~/.north` stays blocked - secrets (`secret.key`), `.env`, and all `*.db` (including the task-context DBs that share `~/.north/tasks/`). Agents never hardcode the handoff path: the orchestrator injects the absolute dir via `_path.handoff_dir_for()` into the `## Handoff Directory` prompt section, so it is defined once and never drifts.
 

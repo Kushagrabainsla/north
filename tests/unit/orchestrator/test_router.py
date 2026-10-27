@@ -15,10 +15,10 @@ from orchestrator.router import ExecutionPlanner, _execution_profile, _requires_
 
 
 @pytest.mark.asyncio
-async def test_execution_planner_workspace_context_in_prompt() -> None:
-    """ExecutionPlanner must inject the workspace and absolute path instruction
+async def test_the_planner_names_no_folder_for_tools_to_write_in() -> None:
+    """It told the model north's start folder (the home folder) was the default cwd for file tools.
 
-    into the planner prompt if a workspace path is configured.
+    A task's folder is decided per task, after planning (CODING_STYLE §16.1.1).
     """
     mock_agent = MagicMock()
     mock_agent.name = "general"
@@ -41,7 +41,6 @@ async def test_execution_planner_workspace_context_in_prompt() -> None:
         agent_registry=mock_agent_registry,
         inference_router=mock_inference,
         tool_registry=None,
-        workspace="/path/to/my/workspace",
     )
 
     classification, plan = await planner.plan_all(
@@ -53,10 +52,7 @@ async def test_execution_planner_workspace_context_in_prompt() -> None:
     mock_inference.complete.assert_called_once()
     call_arg = mock_inference.complete.call_args[0][0]
 
-    # Verify the workspace instruction was injected in the prompt
-    assert "=== System Context ===" in call_arg.prompt
-    assert "- workspace (default cwd for shell/file tools): /path/to/my/workspace" in call_arg.prompt
-    assert "always prefer absolute paths" in call_arg.prompt
+    assert "default cwd for shell/file tools" not in call_arg.prompt
     assert "<north_runtime_context>" in call_arg.prompt
     assert call_arg.prompt.index("<north_runtime_context>") < call_arg.prompt.index("=== User Task ===")
 

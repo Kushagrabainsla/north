@@ -48,9 +48,9 @@ class ListDirTool(Tool):
         return "\n".join(lines)
 
     async def run(self, input: ToolInput) -> ToolOutput:
-        resolved = resolve_path(input.params.get("path", "."), input.params.get("workspace"))
+        resolved = resolve_path(input.params.get("path", "."), input.params.get("workspace"), contained=False)
         if resolved is None:
-            return ToolOutput(success=False, error="Path escapes workspace root.")
+            return ToolOutput(success=False, error="That path is blocked: it holds credentials or north's own data.")
         return await asyncio.to_thread(_list_sync, resolved)
 
 

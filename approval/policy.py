@@ -282,7 +282,12 @@ class ApprovalPolicy:
             return None
         if forbidden_reason(action):
             return None
-        if action.kind is ActionKind.SHELL_COMMAND and self.unattended.approves_command(action.command):
+        if (
+            action.kind is ActionKind.SHELL_COMMAND
+            # Writing outside the task's folder is yours to allow, whatever the command.
+            and not action.leaves_sandbox
+            and self.unattended.approves_command(action.command)
+        ):
             return Ruling(Verdict.ALLOW, "test, lint or build command", DecidedBy.SAFE_LIST)
         if action.kind is ActionKind.GIT and self.unattended.approves_git(action.operation, action.args):
             return Ruling(Verdict.ALLOW, "local-only git", DecidedBy.SAFE_LIST)

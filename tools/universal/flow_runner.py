@@ -24,7 +24,7 @@ from flows.validation import (
 )
 from inference.exceptions import missing_resource
 from skills.checks import run_checks
-from utils.handoff import declared_artifact_paths, missing_artifact_paths
+from utils.handoff import declared_artifact_paths, ensure_handoff_dir, missing_artifact_paths
 from utils.tasks import spawn
 from utils.time import localnow
 
@@ -419,6 +419,9 @@ class FlowRunner:
                     )
 
             step_task_id = run.task_id or f"flow:{run.run_id}"
+            # A folder chosen for the flow, else the run's own (CODING_STYLE §16.1.1); never the
+            # folder north was started in, where scheduled steps used to write.
+            folder = self._workspace or ensure_handoff_dir(step_task_id)
             # The step, then once more if its result fails the skill's checks: told
             # exactly what failed, an agent fixes it; a second failure stops the run.
             failed_checks = ""
@@ -439,9 +442,9 @@ class FlowRunner:
                                 resumed_error=resumed_error if index == resume_at and not failed_checks else "",
                                 failed_checks=failed_checks,
                             ),
-                            workspace=self._workspace,
-                            # Configured by the operator (settings), so the server grants it.
-                            granted_workspace=self._workspace or "",
+                            workspace=folder,
+                            # Chosen for the flow, or the run's own folder: the server grants it.
+                            granted_workspace=folder,
                             skills=[step.skill] if step.skill else [],
                             allowed_tools=list(allowed_tools),
                             # "on_mutation" needs nothing here: every change a step
@@ -509,14 +512,9 @@ class FlowRunner:
                 artifact_schema = output_schema.get("properties", {}).get("artifacts", {})
                 if artifact_schema.get("type") == "array" and artifact_schema.get("items", {}).get("type") == "string":
                     reported = contract_output.get("artifacts", [])
-                    paths = [
-                        str(Path(self._workspace) / path) if self._workspace and not Path(path).is_absolute() else path
-                        for path in reported
-                    ]
-                    # Without a granted workspace a relative path is ambiguous;
-                    # the daemon's working directory must not count as evidence.
-                    unresolved = [path for path in paths if not Path(path).is_absolute()]
-                    missing = [*unresolved, *missing_artifact_paths(path for path in paths if path not in unresolved)]
+                    # A relative path is the step's folder's; the daemon's working directory never counts.
+                    paths = [str(Path(folder) / path) for path in reported]
+                    missing = missing_artifact_paths(paths)
                     if missing:
                         return self._store.update(
                             run.run_id,
@@ -524,8 +522,7 @@ class FlowRunner:
                             current_step=index,
                             outputs=outputs,
                             error=f"Skill step '{step.name}' reported missing or empty artifacts: "
-                            + ", ".join(missing)
-                            + (". Use absolute paths when no workspace is configured." if unresolved else ""),
+                            + ", ".join(missing),
                         )
                     written = list(dict.fromkeys([*written, *paths]))
 

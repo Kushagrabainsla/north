@@ -220,13 +220,11 @@ class ExecutionPlanner:
         agent_registry: AgentRegistry,
         inference_router: InferenceRouter,
         tool_registry: ToolRegistryPort | None = None,
-        workspace: str = "",
         north_settings: NorthSettings | None = None,
     ) -> None:
         self._agent_registry = agent_registry
         self._inference_router = inference_router
         self._tool_registry = tool_registry
-        self._workspace = workspace
         self._north_settings = north_settings
         # Cache: normalized_hash → (insert_ts, classification, plan)
         self._plan_cache: dict[str, tuple[float, IntentClassification, ExecutionPlan]] = {}
@@ -262,17 +260,6 @@ class ExecutionPlanner:
         except Exception as e:
             raise RoutingError(f"Failed to load planner prompt: {e}") from e
 
-        system_context_lines = []
-        if self._workspace:
-            system_context_lines.append(f"- workspace (default cwd for shell/file tools): {self._workspace}")
-            system_context_lines.append(
-                "- When constructing filesystem paths, always prefer absolute paths derived from the "
-                "workspace above. Never emit bare filenames or paths starting with '~' - expand them."
-            )
-        system_context_block = (
-            "=== System Context ===\n" + "\n".join(system_context_lines) + "\n\n" if system_context_lines else ""
-        )
-
         conversation_block = (
             f"=== Recent Conversation ===\n{conversation}\n"
             "(Use this to resolve what the User Task refers to - e.g. a short "
@@ -284,7 +271,6 @@ class ExecutionPlanner:
 
         full_prompt = (
             f"{system_prompt}\n\n{RUNTIME_CONTEXT_INSTRUCTION}\n\n"
-            f"{system_context_block}"
             f"=== Available Agents ===\n{json.dumps(agents_info, indent=2)}\n\n"
             f"=== Available Tools ===\n{json.dumps(tools_info, indent=2)}\n\n"
             f"{conversation_block}"

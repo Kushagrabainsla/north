@@ -476,10 +476,9 @@ async def list_workspace_directories(path: str = Query(default="", max_length=40
 
 @router.post("/conversations", status_code=201)
 async def create_conversation(body: ConversationCreate) -> dict[str, Any]:
-    settings = current_services().north_settings
-    requested_workspace = body.workspace
-    if requested_workspace is None:
-        requested_workspace = getattr(settings, "north_workspace", "")
+    # No folder chosen means none: each task then works in its own folder. Filling
+    # in north's start folder made every chat look as if you had chosen your home.
+    requested_workspace = body.workspace or ""
     conversation = (
         await current_services()
         .require("conversation_store")

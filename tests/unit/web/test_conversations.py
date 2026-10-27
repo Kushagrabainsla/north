@@ -124,7 +124,8 @@ async def test_chat_turn_uses_its_conversation_workspace(tmp_path) -> None:
     assert "Goal: Inspect this project" in orchestrator.request.context
 
 
-async def test_new_chat_inherits_the_server_workspace(tmp_path) -> None:
+async def test_a_new_chat_has_no_folder_until_you_choose_one(tmp_path) -> None:
+    """It inherited north's start folder (the home folder), so every chat looked as if you had chosen home."""
     store = ConversationStore(tmp_path / "web.db")
 
     class Settings:
@@ -133,7 +134,7 @@ async def test_new_chat_inherits_the_server_workspace(tmp_path) -> None:
     with bind_services(ApiServices(conversation_store=store, north_settings=Settings())):
         payload = await web_api.create_conversation(web_api.ConversationCreate())
 
-    assert payload["workspace"] == str(tmp_path.resolve())
+    assert payload["workspace"] == ""
 
 
 async def test_cli_conversation_is_visible_in_shared_list(tmp_path) -> None:

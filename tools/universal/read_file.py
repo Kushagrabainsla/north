@@ -61,9 +61,9 @@ class ReadFileTool(Tool):
         if not path_str:
             return ToolOutput(success=False, error="Parameter 'path' is required.")
 
-        resolved = resolve_path(path_str, input.params.get("workspace"))
+        resolved = resolve_path(path_str, input.params.get("workspace"), contained=False)
         if resolved is None:
-            return ToolOutput(success=False, error="Path escapes workspace root.")
+            return ToolOutput(success=False, error="That path is blocked: it holds credentials or north's own data.")
 
         start_line = _coerce_line(input.params.get("start_line"))
         end_line = _coerce_line(input.params.get("end_line"))

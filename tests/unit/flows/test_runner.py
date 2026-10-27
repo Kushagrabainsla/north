@@ -496,7 +496,10 @@ async def test_relative_artifacts_resolve_in_the_granted_workspace_not_process_d
     assert run.outputs[0]["data"]["artifacts"] == [str(workspace / "fit.md")]
 
 
-async def test_relative_artifacts_without_a_workspace_do_not_use_daemon_files(tmp_path, monkeypatch):
+async def test_relative_artifacts_resolve_in_the_runs_folder_not_the_daemons(tmp_path, monkeypatch):
+    """With no folder chosen, a step works in its run's own folder; a file where north runs is no evidence."""
+    from utils.handoff import handoff_dir_for
+
     (tmp_path / "fit.md").write_text("An unrelated file in the process directory.")
     monkeypatch.chdir(tmp_path)
     runner = FlowRunner(
@@ -505,8 +508,9 @@ async def test_relative_artifacts_without_a_workspace_do_not_use_daemon_files(tm
         _artifact_skills(tmp_path),
         FlowRunStore(tmp_path / "runs.db"),
     )
-    run = await runner.run("demo")
-    assert run.status == "paused" and "Use absolute paths" in run.error
+    run = await runner.run("demo", task_id="job-1")
+    assert run.status == "paused"
+    assert f"{handoff_dir_for('job-1')}/fit.md" in run.error
 
 
 async def test_artifact_objects_are_not_mistaken_for_local_file_paths(tmp_path):

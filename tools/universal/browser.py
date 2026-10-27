@@ -1015,7 +1015,7 @@ class BrowserTool(Tool):
         if params.get("action") == "upload":
             from tools._path import resolve_path
 
-            source = resolve_path(str(params.get("filename") or ""), input.granted_workspace)
+            source = resolve_path(str(params.get("filename") or ""), input.granted_workspace, contained=False)
             if source is None or not source.is_file():
                 return ToolOutput(success=False, error="Upload needs 'filename': an existing local file.")
             params = {**params, "filename": str(source)}

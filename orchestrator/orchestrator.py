@@ -84,6 +84,15 @@ logger = logging.getLogger(__name__)
 _HANDOFF_ARTIFACT_MAX_CHARS: int = 6000
 
 
+def _task_folder(task_id: str, chosen: str) -> str:
+    """The folder a task works and writes in: the one chosen for it, else its own (CODING_STYLE §16.1.1).
+
+    Never the folder north was started in. North runs from the home folder, so
+    every task without a chosen folder wrote there: a recording landed in `~`.
+    """
+    return chosen or handoff_dir_for(task_id)
+
+
 def _declared_artifact_paths(agent: Agent, task_id: str, date: str) -> list[str]:
     """An agent's declared outputs as concrete paths, so scheduled work can prove it
     produced the durable thing the dashboard reads instead of treating a model
@@ -134,7 +143,6 @@ class Orchestrator:
         episodic_store: Any | None = None,
         tool_registry: ToolDispatchRegistryPort | None = None,
         tool_input_factory: ToolInputFactory | None = None,
-        default_workspace: str = "",
         extraction_pipeline: Any | None = None,
         running_task_store: RunningTaskStore | None = None,
         stuck_task_max_age_seconds: int = 86_400,
@@ -170,7 +178,6 @@ class Orchestrator:
         # Task-scoped plan store: the conductor seeds it from the agreed spec's
         # tasks so the coder starts from (and resumes on) the agreed checklist.
         self._plan_store = plan_store
-        self._default_workspace = default_workspace
         self._extraction_pipeline = extraction_pipeline
         self._running_task_store = running_task_store
         self._stuck_task_max_age_seconds = stuck_task_max_age_seconds
@@ -992,7 +999,7 @@ class Orchestrator:
         validated at the API boundary, so the agent is known-registered here.
         """
         agent = self._agent_registry.get(request.forced_agent)
-        workspace = request.workspace or self._default_workspace
+        workspace = _task_folder(task_id, request.workspace)
         required_artifacts = (
             _declared_artifact_paths(agent, task_id, localnow().date().isoformat())
             if request.source is LedgerSource.CRON
@@ -1330,8 +1337,7 @@ class Orchestrator:
         the coding to the user's installed coding agents (`coding_agent`). Everything runs through the
         generic sequential or parallel executors.
         """
-        if not workspace:
-            workspace = self._default_workspace
+        workspace = _task_folder(task_id, workspace)
         await self._heartbeat(task_id)
 
         if plan.mode == ExecutionMode.SINGLE_TOOL and plan.direct_tool:

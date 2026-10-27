@@ -70,7 +70,9 @@ async def test_bash_sandbox_fails_closed_without_docker(tmp_path: Path, monkeypa
 
     monkeypatch.setattr("tools.specialized.bash.docker_available", no_docker)
     tool = bind_approvals(BashTool(sandbox=SandboxConfig(enabled=True)), store=_approving_store())
-    out = await tool.execute(ToolInput(params={"command": "echo hi", "workspace": str(tmp_path)}))
+    out = await tool.execute(
+        ToolInput(params={"command": "echo hi", "workspace": str(tmp_path)}, granted_workspace=str(tmp_path))
+    )
     assert not out.success
     assert "Docker is unavailable" in (out.error or "")
 
@@ -111,7 +113,9 @@ async def test_bash_sandbox_runs_docker_argv(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("tools.specialized.bash.docker_available", yes_docker)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     tool = bind_approvals(BashTool(sandbox=SandboxConfig(enabled=True)), store=_approving_store())
-    out = await tool.execute(ToolInput(params={"command": "pytest -q", "workspace": str(tmp_path)}))
+    out = await tool.execute(
+        ToolInput(params={"command": "pytest -q", "workspace": str(tmp_path)}, granted_workspace=str(tmp_path))
+    )
 
     assert out.success
     assert out.data["stdout"] == "container-stdout"

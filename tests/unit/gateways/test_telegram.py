@@ -482,14 +482,16 @@ async def test_workspace_switches_the_folder_and_the_next_task_carries_it(monkey
 
 
 @pytest.mark.asyncio
-async def test_the_choice_survives_a_restart_and_reset_returns_to_the_default(monkeypatch, tmp_path) -> None:
+async def test_the_choice_survives_a_restart_and_reset_returns_to_each_tasks_own_folder(monkeypatch, tmp_path) -> None:
+    """Reset used to name north's start folder, which tasks then wrote in; a task without a choice has its own."""
     monkeypatch.setattr("gateways.telegram.settings.north_workspace", "/srv/default")
     await _say(_chat_gateway(monkeypatch), f"/workspace {tmp_path}")
 
     restarted = _chat_gateway(monkeypatch)
     assert str(tmp_path.resolve()) in await _say(restarted, "/workspace")
-    assert "/srv/default" in await _say(restarted, "/workspace reset")
-    assert "/srv/default" in await _say(restarted, "/workspace")
+    assert "each task's own folder" in await _say(restarted, "/workspace reset")
+    shown = await _say(restarted, "/workspace")
+    assert "each task's own folder" in shown and "/srv/default" not in shown
 
 
 @pytest.mark.asyncio

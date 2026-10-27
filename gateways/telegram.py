@@ -549,12 +549,12 @@ class TelegramGateway:
         """Show or choose the folder tasks from this chat work in, as the dashboard's picker does for a chat."""
         if not args:
             chosen = _chosen_workspace()
-            where = f"`{chosen}`" if chosen else f"the server's default, `{settings.north_workspace or 'none'}`"
+            where = f"`{chosen}`" if chosen else _OWN_FOLDER
             await self._reply(chat, f"📁 Tasks from Telegram work in {where}.\nSwitch with `/workspace <path>`.")
             return
         if args == ["reset"]:
             _workspace_file().unlink(missing_ok=True)
-            await self._reply(chat, f"📁 Back to the server's default, `{settings.north_workspace or 'none'}`.")
+            await self._reply(chat, f"📁 Back to {_OWN_FOLDER}.")
             return
         raw = " ".join(args)
         try:
@@ -781,6 +781,10 @@ class TelegramGateway:
 
 # Every slash command the gateway answers. Anything else is left to north itself
 # to read as an ordinary message.
+# Where a task works when no folder was chosen for it (CODING_STYLE §16.1.1).
+_OWN_FOLDER = "each task's own folder, `~/.north/tasks/<task id>/`"
+
+
 def _workspace_file() -> Path:
     """Where `/workspace` keeps its choice, so a restart does not lose it."""
     return settings.north_home / "telegram_workspace.txt"

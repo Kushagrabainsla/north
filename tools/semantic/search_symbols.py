@@ -56,9 +56,9 @@ class SearchSymbolsTool(Tool):
         if not path_str:
             return ToolOutput(success=False, error="Parameter 'path' is required.")
 
-        resolved = resolve_path(path_str, input.params.get("workspace"))
+        resolved = resolve_path(path_str, input.params.get("workspace"), contained=False)
         if resolved is None:
-            return ToolOutput(success=False, error="Path escapes workspace root.")
+            return ToolOutput(success=False, error="That path is blocked: it holds credentials or north's own data.")
 
         supported_suffixes = (".py", ".js", ".jsx", ".ts", ".tsx", ".go")
         if resolved.suffix not in supported_suffixes:

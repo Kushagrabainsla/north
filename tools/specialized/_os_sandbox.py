@@ -21,11 +21,19 @@ class OsSandbox(Protocol):
         ...
 
     @staticmethod
-    def wrap(command: str, workspace: str | None, *, writable: bool, proxy_port: int | None = None) -> list[str]:
-        """The argv that runs *command* read-only, or writing only inside *workspace*.
+    def wrap(
+        command: str,
+        workspace: str | None,
+        *,
+        writable: bool,
+        proxy_port: int | None = None,
+        also_writable: tuple[str, ...] = (),
+    ) -> list[str]:
+        """The argv that runs *command* read-only, or writing only inside *workspace* and *also_writable*.
 
         It never reaches the network, except - when *writable* and given a
-        *proxy_port* - the egress proxy on loopback, which the command is pointed at."""
+        *proxy_port* - the egress proxy on loopback, which the command is pointed at.
+        Credential folders are neither readable nor writable, whatever the folders."""
         ...
 
     @staticmethod

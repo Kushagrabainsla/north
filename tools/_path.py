@@ -244,13 +244,19 @@ def references_sensitive_path(command: str) -> bool:
     return False
 
 
-def resolve_path(path_str: str, workspace: str | None) -> Path | None:
+def resolve_path(path_str: str, workspace: str | None, *, contained: bool = True) -> Path | None:
     """Resolve *path_str*, optionally scoped to *workspace*.
 
-    - With workspace: resolved path must stay inside the workspace root.
+    - With workspace: a relative path is resolved from it, and, when
+      *contained*, the resolved path must stay inside it.
     - Without workspace: path is resolved from CWD.
     - In *both* cases the sensitive-path blocklist applies, so a workspace of
       $HOME (or any broad root) never grants access to ~/.ssh, ~/.north, /etc…
+
+    Pass ``contained=False`` for a read, and for a write the approval layer
+    rules on by the task's folder (`write_file`): the folder is a boundary for
+    writes, decided in one place (CODING_STYLE §16.1.1), not a wall that makes
+    "read my notes on the Desktop" fail.
 
     Returns ``None`` when the path is denied.
     """
@@ -266,7 +272,7 @@ def resolve_path(path_str: str, workspace: str | None) -> Path | None:
     # The per-task handoff area is an always-allowed write zone (internal agent
     # scratch) regardless of the active workspace, so it must not be rejected by
     # the workspace-containment check. The blocklist below still applies.
-    if workspace and not (_in_handoff_root(str(candidate)) or _in_personal_subdir(str(candidate))):
+    if contained and workspace and not (_in_handoff_root(str(candidate)) or _in_personal_subdir(str(candidate))):
         root = Path(workspace).resolve()
         if not str(candidate).startswith(str(root) + "/") and candidate != root:
             return None

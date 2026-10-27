@@ -158,9 +158,9 @@ class SearchFilesTool(Tool):
         if not pattern:
             return ToolOutput(success=False, error="Parameter 'pattern' is required.")
 
-        resolved = resolve_path(input.params.get("path", "."), input.params.get("workspace"))
+        resolved = resolve_path(input.params.get("path", "."), input.params.get("workspace"), contained=False)
         if resolved is None:
-            return ToolOutput(success=False, error="Path escapes workspace root.")
+            return ToolOutput(success=False, error="That path is blocked: it holds credentials or north's own data.")
 
         mode = input.params.get("output_mode", "content")
         if mode not in _OUTPUT_MODES:

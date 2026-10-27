@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -67,6 +68,28 @@ class TestBashToolApprovalBypass:
 
         assert await self._allowed(tool, "pytest -q")
         store.add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_safe_listed_command_that_writes_outside_its_folder_asks(self) -> None:
+        """`pytest` is on the safe list; writing to a folder the task was not given is still yours to allow."""
+        from config.approval_mode import ApprovalMode
+
+        tool, _ = self._tool(mode=ApprovalMode.SAFE, store=rejecting_store())
+        params = {"command": "pytest -q", "write_outside": ["/Users/Shared/elsewhere"]}
+        request = await tool.describe(ToolInput(params=params, granted_workspace="/Users/Shared/task"))
+
+        assert "/Users/Shared/elsewhere" in request.message
+        assert not (await tool.approvals.decide(request, task_id="task-1")).allowed
+
+    @pytest.mark.asyncio
+    async def test_a_credential_folder_cannot_be_asked_for(self) -> None:
+        tool, store = self._tool(store=approving_store())
+        params = {"command": "touch ~/.ssh/key", "write_outside": ["~/.ssh"]}
+
+        out = await tool.execute(ToolInput(params=params, granted_workspace="/Users/Shared/task"))
+
+        assert out.failure_kind == "refused" and "credentials" in out.error
+        store.add.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_auto_mode_still_gates_a_command_off_the_allowlist(self) -> None:
@@ -302,6 +325,86 @@ class TestBashOsSandbox:
         )
 
         assert out.failure_kind == "refused"
+
+    # Pytest's temp folders are always writable under the sandbox, so where a command
+    # may write is checked in folders outside them.
+    @pytest.fixture
+    def shared(self):
+        import shutil
+        import uuid
+        from pathlib import Path
+
+        folder = Path("/Users/Shared") / f"north-sandbox-test-{uuid.uuid4().hex[:8]}"
+        (folder / "task").mkdir(parents=True)
+        (folder / "elsewhere").mkdir()
+        yield folder
+        shutil.rmtree(folder, ignore_errors=True)
+
+    @staticmethod
+    def _approved() -> BashTool:
+        return bind_approvals(BashTool(os_sandbox=True), store=approving_store())
+
+    @pytest.mark.asyncio
+    async def test_the_model_cannot_move_where_a_command_writes(self, shared) -> None:
+        """The task's folder is granted by north; a `workspace` outside it used to become writable."""
+        task, elsewhere = str(shared / "task"), str(shared / "elsewhere")
+
+        widened = await self._approved().execute(
+            ToolInput(params={"command": "touch made.txt", "workspace": elsewhere}, granted_workspace=task)
+        )
+        inside = await self._approved().execute(
+            ToolInput(params={"command": "touch made.txt", "workspace": task}, granted_workspace=task)
+        )
+
+        assert not widened.success and not (shared / "elsewhere" / "made.txt").exists()
+        assert inside.success and (shared / "task" / "made.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_writing_outside_the_folder_works_once_the_folder_is_approved(self, shared) -> None:
+        task, target = str(shared / "task"), shared / "elsewhere" / "x"
+        command = f"touch {target}"
+
+        refused = await self._approved().execute(ToolInput(params={"command": command}, granted_workspace=task))
+        approved = await self._approved().execute(
+            ToolInput(params={"command": command, "write_outside": [str(target.parent)]}, granted_workspace=task)
+        )
+
+        assert not refused.success and "write_outside" in refused.error, "it says how to ask"
+        assert approved.success and target.exists()
+
+    @pytest.mark.asyncio
+    async def test_a_credential_folder_is_unwritable_even_inside_the_granted_folder(self, tmp_path, monkeypatch):
+        """Chat tasks ran in the home folder, where an approved command could write into ~/.ssh."""
+        home = tmp_path / "home"
+        (home / ".ssh").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+
+        out = await self._approved().execute(
+            ToolInput(params={"command": f"touch {home}/.ssh/authorized_keys"}, granted_workspace=str(home))
+        )
+
+        assert not out.success and not (home / ".ssh" / "authorized_keys").exists()
+
+    @pytest.mark.asyncio
+    async def test_a_task_folder_inside_north_home_is_open_to_its_command_and_no_other(self) -> None:
+        """~/.north is closed to commands; a task's own folder inside it is the exception."""
+        from utils.handoff import ensure_handoff_dir
+
+        mine, other = ensure_handoff_dir("task_mine"), ensure_handoff_dir("task_other")
+        (Path(other) / "notes.txt").write_text("private")
+        tool = self._approved()
+
+        own = await tool.execute(
+            ToolInput(
+                params={"command": "echo hi > note.txt && cat note.txt", "workspace": mine}, granted_workspace=mine
+            )
+        )
+        foreign = await tool.execute(
+            ToolInput(params={"command": f"cat {other}/notes.txt", "workspace": mine}, granted_workspace=mine)
+        )
+
+        assert own.success and own.data["stdout"].strip() == "hi"
+        assert not foreign.success
 
     def test_docker_replaces_the_os_sandbox(self) -> None:
         from tools.specialized._sandbox import SandboxConfig

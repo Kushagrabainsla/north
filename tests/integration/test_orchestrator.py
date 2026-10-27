@@ -683,6 +683,39 @@ async def test_execute_single_tool_passes_task_id(tmp_path):
     assert tool_input.params["arg1"] == "val1"
 
 
+@pytest.mark.asyncio
+async def test_a_task_with_no_chosen_folder_works_in_its_own_folder(tmp_path):
+    """Not the folder north was started in: north runs from the home folder, and tasks wrote there."""
+    import unittest.mock as mock
+
+    from orchestrator.models import ExecutionMode, ExecutionPlan
+    from tools.models import ToolInput
+    from utils.handoff import handoff_dir_for
+
+    orch, _, _ = _make_orchestrator(tmp_path)
+    mock_tool = mock.MagicMock()
+    mock_tool.execute = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
+    mock_tool.format_output = mock.MagicMock(return_value="done")
+    orch._tool_registry = mock.MagicMock()
+    orch._tool_registry.get.return_value = mock_tool
+    orch._tool_input_factory = ToolInput
+    plan = ExecutionPlan(
+        task_id="t1",
+        agents=[],
+        parallel_groups=[],
+        dependencies={},
+        mode=ExecutionMode.SINGLE_TOOL,
+        direct_tool="write_file",
+        direct_tool_params={"path": "notes.md", "content": "x"},
+    )
+
+    await orch._stage_execute("t1", "save a note", plan, workspace="")
+
+    tool_input = mock_tool.execute.call_args[0][0]
+    assert tool_input.granted_workspace == handoff_dir_for("t1")
+    assert tool_input.params["workspace"] == handoff_dir_for("t1")
+
+
 # ---------------------------------------------------------------------------
 # resume_task (startup recovery of interrupted tasks)
 # ---------------------------------------------------------------------------

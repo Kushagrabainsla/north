@@ -458,7 +458,6 @@ def _build_orchestrator(
             agent_registry=agent_registry,
             inference_router=deps.cost_tracker,
             tool_registry=tool_registry,
-            workspace=settings.north_workspace,
             north_settings=settings,
         ),
         task_context_store=deps.task_context_store,
@@ -476,7 +475,6 @@ def _build_orchestrator(
         episodic_store=deps.episodic_store,
         tool_registry=tool_registry,
         tool_input_factory=ToolInput,
-        default_workspace=settings.north_workspace,
         extraction_pipeline=extraction_pipeline,
         running_task_store=deps.running_task_store,
         stuck_task_max_age_seconds=settings.stuck_task_max_age_seconds,
@@ -1035,7 +1033,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         flow_store,
         approvals.interaction,
         tool_registry=tool_registry,
-        workspace=settings.north_workspace,
     )
     if deps.card_continuations is not None:
         deps.card_continuations.register(

@@ -98,9 +98,9 @@ class WriteFileTool(Tool):
         if content is None:
             return ToolOutput(success=False, error="Parameter 'content' is required.")
 
-        resolved = resolve_path(path_str, input.params.get("workspace"))
+        resolved = resolve_path(path_str, input.params.get("workspace"), contained=False)
         if resolved is None:
-            return ToolOutput(success=False, error="Path escapes workspace root.")
+            return ToolOutput(success=False, error="That path is blocked: it holds credentials or north's own data.")
 
         # Server-owned edit-scope check, before any bytes are written. The scope
         # arrives on input.edit_scope (never params), so the model cannot widen

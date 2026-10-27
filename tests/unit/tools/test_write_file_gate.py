@@ -77,6 +77,57 @@ async def test_auto_ignores_a_workspace_the_model_chose(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_write_outside_the_task_folder_asks_and_then_lands(tmp_path: Path) -> None:
+    """ "Save this to my Desktop" used to fail outright: the path was outside the folder, so no card was even made."""
+    from tests.conftest import approving_store
+
+    task, desktop = tmp_path / "task", tmp_path / "Desktop"
+    target = desktop / "summary.md"
+    params = {"path": str(target), "content": "hi\n", "workspace": str(task)}
+
+    out = await _tool(ApprovalMode.SAFE, approving_store()).execute(
+        ToolInput(params=params, granted_workspace=str(task))
+    )
+
+    assert out.success, out.error
+    assert target.read_text() == "hi\n"
+
+
+@pytest.mark.asyncio
+async def test_a_credential_path_is_refused_before_any_card(tmp_path: Path, monkeypatch) -> None:
+    from tools import _path
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _path._resolved_blocked_prefixes.cache_clear()
+    store = _silent_store()
+
+    out = await _tool(ApprovalMode.ASK, store).execute(
+        ToolInput(params={"path": str(tmp_path / ".ssh" / "authorized_keys"), "content": "k"}, granted_workspace="/x")
+    )
+
+    assert not out.success and "blocked" in out.error
+    store.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_file_outside_the_task_folder_can_be_read(tmp_path: Path) -> None:
+    from tools.universal.read_file import ReadFileTool
+
+    notes = tmp_path / "Desktop" / "notes.txt"
+    notes.parent.mkdir()
+    notes.write_text("remember the milk")
+
+    out = await ReadFileTool().execute(
+        ToolInput(
+            params={"path": str(notes), "workspace": str(tmp_path / "task")}, granted_workspace=str(tmp_path / "task")
+        )
+    )
+
+    assert out.success, out.error
+    assert "remember the milk" in str(out.data)
+
+
+@pytest.mark.asyncio
 async def test_north_notes_are_written_without_a_card_in_interactive(tmp_path: Path) -> None:
     store = _silent_store()
     target = tmp_path / "home" / "notes" / "today.md"
