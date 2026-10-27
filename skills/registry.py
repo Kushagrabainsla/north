@@ -112,6 +112,58 @@ def rejection_reason(name: str, description: str, body: str, *, source: SkillSou
     return ""
 
 
+def skill_from_document(text: str, directory: Path, source: SkillSource) -> Skill:
+    """The skill a SKILL.md *text* in *directory* defines; raises SkillParseError when it is not one.
+
+    One definition for the registry, which loads files, and for `create_skill`, which
+    tests a new version before writing it so a failing edit never replaces a live skill.
+    """
+    frontmatter, body = parse_skill_document(text)
+    name = str(frontmatter.get("name") or directory.name).strip()
+    description = str(frontmatter.get("description") or "").strip()
+    reason = rejection_reason(name, description, body, source=source)
+    if reason:
+        raise SkillParseError(reason)
+
+    provenance = tuple(str(t) for t in (frontmatter.get("provenance") or []))
+    version = str(frontmatter.get("version") or "1.0.0").strip()
+    status = str(frontmatter.get("status") or "active").strip().lower()
+    if status not in {"candidate", "active", "retired"}:
+        raise SkillParseError(f"invalid status {status!r}")
+    raw_domains = frontmatter.get("domains")
+    domains = (
+        frozenset(str(d).strip() for d in raw_domains if str(d).strip())
+        if isinstance(raw_domains, list) and raw_domains
+        else frozenset({"engineering"})
+    )
+    raw_intents = frontmatter.get("intents")
+    intents = (
+        frozenset(str(intent).strip().lower() for intent in raw_intents if str(intent).strip())
+        if isinstance(raw_intents, list)
+        else frozenset()
+    )
+    unknown_intents = intents - {intent.value for intent in SkillIntent}
+    if unknown_intents:
+        raise SkillParseError(f"unknown intents {sorted(unknown_intents)}")
+    try:
+        execution = parse_execution_contract(frontmatter.get("execution"))
+    except ValueError as exc:
+        raise SkillParseError(str(exc)) from exc
+    return Skill(
+        name=name,
+        description=description,
+        body=body,
+        directory=directory,
+        source=source,
+        version=version,
+        status=status,
+        provenance=provenance,
+        domains=domains,
+        intents=intents,
+        execution=execution,
+    )
+
+
 class SkillRegistry:
     """Loads skills from a built-in directory and an optional learned directory.
 
@@ -151,58 +203,10 @@ class SkillRegistry:
 
     def _load_skill(self, directory: Path, skill_file: Path, source: SkillSource) -> Skill | None:
         try:
-            frontmatter, body = parse_skill_document(skill_file.read_text(encoding="utf-8"))
+            return skill_from_document(skill_file.read_text(encoding="utf-8"), directory, source)
         except (SkillParseError, OSError) as exc:
             logger.warning("SkillRegistry: skipping %s - %s", directory.name, exc)
             return None
-
-        name = str(frontmatter.get("name") or directory.name).strip()
-        description = str(frontmatter.get("description") or "").strip()
-        reason = rejection_reason(name, description, body, source=source)
-        if reason:
-            logger.warning("SkillRegistry: skipping skill %r - %s", name or directory.name, reason)
-            return None
-
-        provenance = tuple(str(t) for t in (frontmatter.get("provenance") or []))
-        version = str(frontmatter.get("version") or "1.0.0").strip()
-        status = str(frontmatter.get("status") or "active").strip().lower()
-        if status not in {"candidate", "active", "retired"}:
-            logger.warning("SkillRegistry: skipping skill %r - invalid status %r", name, status)
-            return None
-        raw_domains = frontmatter.get("domains")
-        domains = (
-            frozenset(str(d).strip() for d in raw_domains if str(d).strip())
-            if isinstance(raw_domains, list) and raw_domains
-            else frozenset({"engineering"})
-        )
-        raw_intents = frontmatter.get("intents")
-        intents = (
-            frozenset(str(intent).strip().lower() for intent in raw_intents if str(intent).strip())
-            if isinstance(raw_intents, list)
-            else frozenset()
-        )
-        unknown_intents = intents - {intent.value for intent in SkillIntent}
-        if unknown_intents:
-            logger.warning("SkillRegistry: skipping skill %r - unknown intents %s", name, sorted(unknown_intents))
-            return None
-        try:
-            execution = parse_execution_contract(frontmatter.get("execution"))
-        except ValueError as exc:
-            logger.warning("SkillRegistry: skipping skill %r - %s", name, exc)
-            return None
-        return Skill(
-            name=name,
-            description=description,
-            body=body,
-            directory=directory,
-            source=source,
-            version=version,
-            status=status,
-            provenance=provenance,
-            domains=domains,
-            intents=intents,
-            execution=execution,
-        )
 
     def reload(self) -> None:
         """Re-scan the source directories (e.g. after the distiller writes a skill)."""

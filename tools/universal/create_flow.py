@@ -1,9 +1,16 @@
-"""CreateFlowTool - create and hot-reload declarative North flows."""
+"""CreateFlowTool - create and hot-reload declarative North flows.
+
+One card per change: creating, updating or activating a flow is asked about
+once, and that approval covers one test run and switching the flow on. Each
+step of the test still asks as usual. A new flow that fails its test stays a
+draft; an edit that fails goes back to the version that was live.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +18,7 @@ import yaml
 
 from flows.models import FLOW_FILENAME, FlowSource, flow_fingerprint
 from flows.registry import FlowRegistry, parse_flow_document
-from flows.store import FlowRunStore
+from flows.store import FlowRun, FlowRunStore
 from flows.validation import validate_flow_capabilities
 from policies.self_edit import SelfEditPolicy
 from tools.base import Tool
@@ -32,26 +39,28 @@ def _write_flow(directory: Path, path: Path, document: str) -> None:
 
 
 class CreateFlowTool(Tool):
-    """Create a validated declarative workflow at runtime."""
+    """Create a validated declarative workflow at runtime, test it once, and switch it on."""
 
     name = "create_flow"
     is_mutating = True
     description = (
-        "Create and validate a reusable declarative flow. New flows are candidates, not active promises. "
-        "Before creating one, use the authoring-a-north-flow skill, resolve missing setup choices with ask_user "
-        "including explicit manual-only, one-time, or recurring timing (never assume), reuse capabilities, take "
-        "the timezone only from North settings (never ask for it or declare a timezone input), and provide "
-        "an executable skill, instructions, inputs, and approval mode for every step; then validate "
-        "the candidate, test it, and only then activate it. Candidate skills may run in test mode only. "
-        "Agents and tools belong to skill contracts. Schedules are separate: collecting timing does not "
-        "install a schedule or authorize activation; use schedule_task only after testing and confirmation."
+        "Create, update, inspect or activate a reusable declarative flow. Before creating one, use the "
+        "authoring-a-north-flow skill, resolve missing setup choices with ask_user including explicit manual-only, "
+        "one-time, or recurring timing (never assume), reuse capabilities, take the timezone only from North "
+        "settings (never ask for it or declare a timezone input), and provide an executable skill, instructions, "
+        "inputs, and approval mode for every step. create, update and activate are each asked about once; the flow "
+        "is then run once as a test (pass test_inputs for the smallest safe case) and is live if the test completes. "
+        "A failing new flow stays a draft; a failing edit goes back to the live version. Agents and tools belong to "
+        "skill contracts. Schedules are separate: collecting timing does not install a schedule or authorize "
+        "activation; use schedule_task only after the flow is live and the user confirmed."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "update", "list", "read", "validate", "activate"],
+                "enum": ["create", "update", "activate", "list", "read"],
+                "description": "activate = test a draft flow as it is now and switch it on.",
             },
             "name": {"type": "string", "description": "Lowercase flow name, e.g. job-application-review."},
             "description": {"type": "string", "description": "Outcome the flow achieves."},
@@ -67,13 +76,13 @@ class CreateFlowTool(Tool):
                 "items": {"type": "string"},
                 "description": "Agent domains that may use the flow (default: general).",
             },
+            "test_inputs": {
+                "type": "object",
+                "description": "Inputs for the one test run, as ${inputs.key}: the smallest safe case.",
+            },
             "test_run_id": {
                 "type": "string",
-                "description": "Completed test-mode flow run proving this exact candidate works.",
-            },
-            "user_confirmed": {
-                "type": "boolean",
-                "description": "True only after the user explicitly approves activation.",
+                "description": "activate only: a completed test run of this exact flow to use instead of a new one.",
             },
         },
         "required": ["action"],
@@ -88,6 +97,7 @@ class CreateFlowTool(Tool):
         skill_registry=None,
         agent_registry=None,
         flow_store: FlowRunStore | None = None,
+        runner=None,
     ) -> None:
         self._registry = registry
         self._learned_dir = learned_dir or (Path.home() / ".north" / "flows")
@@ -96,18 +106,34 @@ class CreateFlowTool(Tool):
         self._skill_registry = skill_registry
         self._agent_registry = agent_registry
         self._flow_store = flow_store
+        # tools.universal.flow_runner.FlowRunner: runs the one test run.
+        self._runner = runner
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
-        return str((params or {}).get("action") or "").strip().lower() in {
-            "create",
-            "update",
-            "activate",
-        }
+        return str((params or {}).get("action") or "").strip().lower() in {"create", "update", "activate"}
 
     async def describe(self, input: ToolInput):
         request = await super().describe(input)
-        if str(input.params.get("action") or "").strip().lower() == "update":
-            path = self._learned_dir / _slug(str(input.params.get("name") or "")) / FLOW_FILENAME
+        action = str(input.params.get("action") or "").strip().lower()
+        name = _slug(str(input.params.get("name") or ""))
+        outcome = {
+            "create": f"creates the flow '{name}', runs it once as a test now",
+            "update": f"updates the flow '{name}', runs it once as a test now",
+            "activate": f"runs the flow '{name}' once as a test now",
+        }.get(action)
+        if outcome:
+            if action == "activate" and input.params.get("test_run_id"):
+                outcome = f"switches on the flow '{name}' on the evidence of test run {input.params['test_run_id']}"
+            request = replace(
+                request,
+                message=(
+                    f"Approving {outcome} (each step still asks as usual), and switches it on if the test "
+                    "completes. If it fails, a new flow stays a draft and an edited one goes back to the "
+                    "version that was live.\n\n" + request.message
+                ),
+            )
+        if action == "update":
+            path = self._learned_dir / name / FLOW_FILENAME
             return describe_user_edit(self._self_edit_policy, path, input, request)
         return request
 
@@ -123,117 +149,23 @@ class CreateFlowTool(Tool):
                 return ToolOutput(success=True, data=_view(self._registry.get(name), include_steps=True))
             except Exception as exc:
                 return ToolOutput(success=False, error=str(exc))
-        if action == "validate":
-            name = str(input.params.get("name") or "").strip()
-            if not name:
-                return ToolOutput(success=False, error="Parameter 'name' is required for validate.")
-            try:
-                flow = self._registry.get(name)
-            except Exception as exc:
-                return ToolOutput(success=False, error=str(exc))
-            report = validate_flow_capabilities(
-                flow,
-                skill_registry=self._skill_registry,
-                agent_registry=self._agent_registry,
-                tool_registry=self._tool_registry,
-                allow_candidate_skills=flow.status == "candidate",
-            )
-            return ToolOutput(
-                success=report.valid,
-                data={"name": name, **report.as_dict()},
-                error=None if report.valid else "; ".join(report.errors),
-            )
         if action == "activate":
             return await self._activate(input)
-        if action == "update":
-            return await self._update(input)
-        if action != "create":
+        if action not in {"create", "update"}:
             return ToolOutput(
-                success=False,
-                error="Parameter 'action' must be create, update, list, read, validate, or activate.",
+                success=False, error="Parameter 'action' must be create, update, activate, list, or read."
             )
+        return await self._write_and_prove(input, action)
 
-        raw_name = str(input.params.get("name") or "").strip()
-        description = str(input.params.get("description") or "").strip()
-        steps = input.params.get("steps")
-        if not raw_name:
-            return ToolOutput(success=False, error="Parameter 'name' is required.")
-        if not description:
-            return ToolOutput(success=False, error="Parameter 'description' is required.")
-        if not isinstance(steps, list) or not steps:
-            return ToolOutput(success=False, error="Parameter 'steps' must be a non-empty list.")
-        if any(isinstance(step, dict) and ({"tool", "agent"} & step.keys()) for step in steps):
-            return ToolOutput(
-                success=False,
-                error=(
-                    "Flow steps reference only skills. Move agent and tool choices into the skill's execution contract."
-                ),
-            )
-
-        name = _slug(raw_name)
-        document = yaml.safe_dump(
-            {
-                "name": name,
-                "description": description,
-                "source": FlowSource.LEARNED.value,
-                "status": "candidate",
-                "domains": input.params.get("domains") or ["general"],
-                "steps": steps,
-            },
-            sort_keys=False,
-            allow_unicode=True,
-        )
-        directory = self._learned_dir / name
-        path = directory / FLOW_FILENAME
-        if path.exists():
-            return ToolOutput(
-                success=False,
-                error=f"Flow '{name}' already exists. Read and update the existing definition instead.",
-            )
-        try:
-            # Validate before writing so malformed flows never enter the registry.
-            flow = parse_flow_document(document, directory, FlowSource.LEARNED)
-            report = validate_flow_capabilities(
-                flow,
-                skill_registry=self._skill_registry,
-                agent_registry=self._agent_registry,
-                tool_registry=self._tool_registry,
-                allow_candidate_skills=True,
-            )
-            if not report.valid:
-                return ToolOutput(
-                    success=False,
-                    error="Flow is not executable: " + "; ".join(report.errors),
-                    data=report.as_dict(),
-                )
-            mutation = None
-            if self._self_edit_policy is not None:
-                mutation = self._self_edit_policy.begin(path, "create")
-            await asyncio.to_thread(_write_flow, directory, path, document)
-            if mutation is not None:
-                self._self_edit_policy.commit(mutation)
-            self._registry.reload()
-            return ToolOutput(
-                success=True,
-                data={
-                    "name": name,
-                    "path": str(path),
-                    "steps": len(steps),
-                    "status": "candidate",
-                    "validation": report.as_dict(),
-                },
-            )
-        except Exception as exc:
-            return ToolOutput(success=False, error=f"Failed to create flow '{name}': {exc}")
-
-    async def _update(self, input: ToolInput) -> ToolOutput:
+    async def _write_and_prove(self, input: ToolInput, action: str) -> ToolOutput:
+        """Write the flow, test it once, and switch it on; on failure keep what was live."""
         raw_name = str(input.params.get("name") or "").strip()
         description = str(input.params.get("description") or "").strip()
         steps = input.params.get("steps")
         if not raw_name or not description or not isinstance(steps, list) or not steps:
             return ToolOutput(
                 success=False,
-                error="Parameters 'name', 'description', and a non-empty 'steps' list are required for update.",
+                error="Parameters 'name', 'description', and a non-empty 'steps' list are required.",
             )
         if any(isinstance(step, dict) and ({"tool", "agent"} & step.keys()) for step in steps):
             return ToolOutput(
@@ -243,77 +175,101 @@ class CreateFlowTool(Tool):
                 ),
             )
         name = _slug(raw_name)
-        try:
-            current = self._registry.get(name)
-        except Exception as exc:
-            return ToolOutput(success=False, error=str(exc))
-
         directory = self._learned_dir / name
         path = directory / FLOW_FILENAME
+        current = None
+        if action == "create" and path.exists():
+            return ToolOutput(
+                success=False,
+                error=f"Flow '{name}' already exists. Read and update the existing definition instead.",
+            )
+        if action == "update":
+            try:
+                current = self._registry.get(name)
+            except Exception as exc:
+                return ToolOutput(success=False, error=str(exc))
         document = yaml.safe_dump(
             {
                 "name": name,
                 "description": description,
                 "source": FlowSource.LEARNED.value,
-                # Every executable edit invalidates prior evidence.
+                # A draft until its test completes; every executable edit needs new evidence.
                 "status": "candidate",
-                "domains": input.params.get("domains") or sorted(current.domains),
+                "domains": input.params.get("domains") or (sorted(current.domains) if current else ["general"]),
                 "steps": steps,
             },
             sort_keys=False,
             allow_unicode=True,
         )
         try:
+            # Validate before writing so malformed flows never enter the registry.
             flow = parse_flow_document(document, directory, FlowSource.LEARNED)
-            report = validate_flow_capabilities(
-                flow,
-                skill_registry=self._skill_registry,
-                agent_registry=self._agent_registry,
-                tool_registry=self._tool_registry,
-                allow_candidate_skills=True,
+        except Exception as exc:
+            return ToolOutput(success=False, error=f"Flow is invalid: {exc}")
+        report = validate_flow_capabilities(
+            flow,
+            skill_registry=self._skill_registry,
+            agent_registry=self._agent_registry,
+            tool_registry=self._tool_registry,
+            allow_candidate_skills=True,
+        )
+        if not report.valid:
+            return ToolOutput(
+                success=False, error="Flow is not executable: " + "; ".join(report.errors), data=report.as_dict()
             )
-            if not report.valid:
-                return ToolOutput(
-                    success=False,
-                    error="Flow is not executable: " + "; ".join(report.errors),
-                    data=report.as_dict(),
-                )
-            operation = "update" if path.exists() else "create"
+        if self._runner is None:
+            return ToolOutput(success=False, error="Flow testing is unavailable, so nothing changed.")
+
+        previous = path.read_text(encoding="utf-8") if path.exists() else None
+        try:
+            operation = "update" if previous is not None else "create"
             mutation = begin_edit(self._self_edit_policy, path, operation, input) if self._self_edit_policy else None
             await asyncio.to_thread(_write_flow, directory, path, document)
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
             self._registry.reload()
-            return ToolOutput(
-                success=True,
-                data={
-                    "name": name,
-                    "path": str(path),
-                    "steps": len(steps),
-                    "status": "candidate",
-                    "updated": True,
-                    "validation": report.as_dict(),
-                },
-            )
         except Exception as exc:
-            return ToolOutput(success=False, error=f"Failed to update flow '{name}': {exc}")
+            return ToolOutput(success=False, error=f"Failed to write flow '{name}': {exc}")
+
+        run = await self._test(name, input)
+        if run.status == "completed":
+            return await self._switch_on(name, run, updated=action == "update", steps=len(steps))
+        if previous is not None:
+            # The edit failed its test: what was live stays live.
+            await asyncio.to_thread(_write_flow, directory, path, previous)
+            self._registry.reload()
+            if run.status in {"paused", "waiting"}:
+                self._runner.discard(run.run_id)
+            kept = "The previous version is live again."
+        else:
+            kept = "The new flow stays a draft."
+        return ToolOutput(
+            success=False,
+            error=f"The test run ended {run.status}: {run.error or 'no error recorded'}. {kept}",
+            data={"name": name, "test_run_id": run.run_id, "status": run.status},
+        )
+
+    async def _test(self, name: str, input: ToolInput) -> FlowRun:
+        inputs = input.params.get("test_inputs")
+        return await self._runner.run(
+            name,
+            task_id=str(input.params.get("task_id") or ""),
+            inputs=inputs if isinstance(inputs, dict) else None,
+            test_mode=True,
+            trigger="test",
+        )
 
     async def _activate(self, input: ToolInput) -> ToolOutput:
+        """Switch on a draft flow: on a completed test run named in test_run_id, or one run now."""
         name = str(input.params.get("name") or "").strip()
-        test_run_id = str(input.params.get("test_run_id") or "").strip()
-        if not name or not test_run_id:
-            return ToolOutput(success=False, error="Parameters 'name' and 'test_run_id' are required for activate.")
-        if input.params.get("user_confirmed") is not True:
-            return ToolOutput(success=False, error="Activation requires explicit user confirmation.")
-        if self._flow_store is None:
-            return ToolOutput(success=False, error="Flow test evidence is unavailable.")
+        if not name:
+            return ToolOutput(success=False, error="Parameter 'name' is required for activate.")
         try:
             flow = self._registry.get(name)
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))
         if flow.status not in {"candidate", "active"}:
-            return ToolOutput(success=False, error=f"Flow '{name}' is {flow.status}, not a candidate.")
-
+            return ToolOutput(success=False, error=f"Flow '{name}' is {flow.status}, not a draft.")
         report = validate_flow_capabilities(
             flow,
             skill_registry=self._skill_registry,
@@ -322,24 +278,35 @@ class CreateFlowTool(Tool):
         )
         if not report.valid:
             return ToolOutput(success=False, error="Flow is not executable: " + "; ".join(report.errors))
-        run = self._flow_store.get(test_run_id)
-        if run is None or run.flow_name != name:
-            return ToolOutput(success=False, error=f"No test run {test_run_id!r} exists for flow '{name}'.")
+        if test_run_id := str(input.params.get("test_run_id") or "").strip():
+            if self._flow_store is None:
+                return ToolOutput(success=False, error="Flow test evidence is unavailable.")
+            run = self._flow_store.get(test_run_id)
+            if run is None or run.flow_name != name:
+                return ToolOutput(success=False, error=f"No test run {test_run_id!r} exists for flow '{name}'.")
+        elif self._runner is None:
+            return ToolOutput(success=False, error="Flow testing is unavailable.")
+        else:
+            run = await self._test(name, input)
         if not run.test_mode or run.status != "completed":
-            return ToolOutput(success=False, error="Activation requires a completed test-mode run.")
+            return ToolOutput(
+                success=False,
+                error=f"Activation needs a completed test run; this one ended {run.status}: {run.error or 'no error'}.",
+                data={"name": name, "test_run_id": run.run_id, "status": run.status},
+            )
+        return await self._switch_on(name, run)
+
+    async def _switch_on(self, name: str, run: FlowRun, *, updated: bool = False, steps: int = 0) -> ToolOutput:
+        """Mark *name* live on the evidence of *run*, a completed test of exactly this version."""
+        flow = self._registry.get(name)
         fingerprint = flow_fingerprint(flow, self._skill_registry.get if self._skill_registry else None)
         if run.flow_fingerprint != fingerprint:
             return ToolOutput(
-                success=False,
-                error="The flow changed after it was tested; test the current candidate again.",
+                success=False, error="The flow changed after it was tested; test the current version again."
             )
-
+        live = {"name": name, "status": "active", "test_run_id": run.run_id, "updated": updated, "steps": steps}
         if flow.status == "active" and flow.activation_fingerprint == fingerprint:
-            return ToolOutput(
-                success=True,
-                data={"name": name, "status": "active", "test_run_id": test_run_id},
-            )
-
+            return ToolOutput(success=True, data=live)
         path = flow.directory / FLOW_FILENAME
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -353,22 +320,14 @@ class CreateFlowTool(Tool):
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
             self._registry.reload()
-            return ToolOutput(
-                success=True,
-                data={"name": name, "status": "active", "test_run_id": test_run_id},
-            )
+            return ToolOutput(success=True, data=live)
         except Exception as exc:
-            return ToolOutput(success=False, error=f"Failed to activate flow '{name}': {exc}")
+            return ToolOutput(success=False, error=f"Failed to switch on flow '{name}': {exc}")
 
     def format_output(self, data: dict[str, Any]) -> str:
-        if "valid" in data:
-            return (
-                f"Flow '{data.get('name')}' is valid."
-                if data.get("valid")
-                else f"Flow '{data.get('name')}' is not valid: {'; '.join(data.get('errors') or [])}"
-            )
         if data.get("status") == "active" and data.get("test_run_id"):
-            return f"Flow '{data.get('name')}' activated from successful test {data.get('test_run_id')}."
+            state = "updated and live" if data.get("updated") else "live"
+            return f"Flow '{data.get('name')}' is {state}: test run {data.get('test_run_id')} completed."
         if "flows" in data:
             return (
                 "\n".join(
@@ -381,11 +340,7 @@ class CreateFlowTool(Tool):
             return f"Flow '{data['name']}' ({data['status']}; {len(data['steps'])} steps):\n" + yaml.safe_dump(
                 data, sort_keys=False, allow_unicode=True
             )
-        verb = "updated" if data.get("updated") else "created"
-        return (
-            f"Flow candidate '{data.get('name')}' {verb} at {data.get('path')} "
-            f"({data.get('steps', 0)} steps). It is not active until a test passes and it is activated."
-        )
+        return str(data)
 
 
 def _view(flow, *, include_steps: bool = False) -> dict[str, Any]:

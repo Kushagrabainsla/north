@@ -22,8 +22,8 @@ domains: [general, engineering]
 5. Create a `Tool` subclass with a unique snake_case `name`, retrieval-focused `description`, strict `parameters_schema`, and recoverable `ToolOutput` failures. Mutation classification must reflect the requested action, not merely the tool class.
 6. Keep final actions such as submit, send, purchase, publish, delete, or deploy behind an enforceable approval boundary. A sentence in a description is not a safety control.
 7. Add tests for success, invalid input, unavailable dependencies, refused authority, and the consequential-action boundary. A representative `create_tool` test call executes real code, so choose the smallest safe input and keep external mutation behind approval.
-8. Use `create_tool` to create or update a candidate only after the contract and code are complete. Call `validate`, then `test` with representative inputs. Activate only when both apply to the current source and the user explicitly confirms activation.
+8. Use `create_tool` to create or update the tool only after the contract and code are complete, with `test_params`: the smallest safe representative input. The user is asked once; the tool is then checked, called once with `test_params` (anything that call does still asks), and is live if the call succeeds. A failing version stays a draft and the live tool is unchanged. A draft that already exists goes live with `action=activate` and `test_params`.
 
 ## Done when
 - The active tool is discovered in the live registry, its schema is valid, its permissions are truthful, representative success and failure tests pass, and the original user outcome can now use it.
-- Say "tool candidate created" when verification is incomplete. Creating the file is never the user's completed outcome.
+- Say "tool draft created" when its test failed. Creating the file is never the user's completed outcome.

@@ -30,7 +30,6 @@ INTERACTION_BUILDERS = {
 # Modules that may call Tool.run directly instead of Tool.execute.
 RAW_TOOL_RUNS = {
     "web/extensions.py": "the user is acting from the dashboard: there is nobody else to ask",
-    "tools/universal/create_tool.py": "the candidate's test run was itself approved",
 }
 
 

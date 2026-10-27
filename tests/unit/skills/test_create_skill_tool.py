@@ -8,10 +8,21 @@ from tools.universal.create_skill import CreateSkillTool
 
 
 class _Selector:
+    """Picks a skill when every word of its name is in the request."""
+
     async def select(self, prompt, candidates=None):
-        if "deploy" not in prompt.lower():
-            return []
-        return [skill for skill in candidates or [] if skill.name == "deploy-docker"]
+        words = set(prompt.lower().replace("-", " ").split())
+        return [skill for skill in candidates or [] if set(skill.name.split("-")) <= words]
+
+
+def _tested(name: str, **params) -> dict:
+    """Params for a call that tests *name*: picked for a request naming it, not for an unrelated one."""
+    return {
+        "name": name,
+        "positive_prompts": [f"please {name.replace('-', ' ')} now"],
+        "negative_prompts": ["review this python function"],
+        **params,
+    }
 
 
 def test_authoring_schema_exposes_exact_contract_fields_and_fixed_intents():
@@ -29,28 +40,28 @@ async def test_creates_and_reloads_skill(tmp_path):
     learned_dir.mkdir()
 
     registry = SkillRegistry(builtin_dir=builtin_dir, learned_dir=learned_dir)
-    tool = CreateSkillTool(registry=registry, learned_dir=learned_dir)
+    tool = CreateSkillTool(registry=registry, learned_dir=learned_dir, skill_selector=_Selector())
 
     out = await tool.run(
         ToolInput(
-            params={
-                "name": "deploy-docker",
-                "description": "Use when deploying a Docker container.",
-                "instructions": "Step 1: docker build\nStep 2: docker run",
-            }
+            params=_tested(
+                "deploy-docker",
+                description="Use when deploying a Docker container.",
+                instructions="Step 1: docker build\nStep 2: docker run",
+            )
         )
     )
 
-    assert out.success
+    assert out.success, out.error
     assert out.data["name"] == "deploy-docker"
 
-    # Verify skill was created on disk and registered in SkillRegistry
+    # Created on disk, tested, and live in one call
     skill = registry.get("deploy-docker")
     assert skill.description == "Use when deploying a Docker container."
     assert "docker build" in skill.body
-    assert skill.status == "candidate"
+    assert skill.status == "active"
     assert skill.domains == frozenset({"general"})
-    assert skill.available_to("general") is False
+    assert skill.available_to("general") is True
 
 
 async def test_missing_params_errors(tmp_path):
@@ -69,14 +80,14 @@ async def test_user_skill_update_requires_fresh_approval_and_does_not_grant_owne
 
     learned = tmp_path / "learned"
     registry = SkillRegistry(tmp_path / "builtin", learned)
-    tool = CreateSkillTool(registry, learned)
+    tool = CreateSkillTool(registry, learned, skill_selector=_Selector())
     created = await tool.run(
         ToolInput(
-            params={
-                "name": "mine",
-                "description": "Use when reviewing my documents.",
-                "instructions": "1. Read the input.\n2. Return a review.",
-            }
+            params=_tested(
+                "mine",
+                description="Use when reviewing my documents.",
+                instructions="1. Read the input.\n2. Return a review.",
+            )
         )
     )
     assert created.success
@@ -85,12 +96,12 @@ async def test_user_skill_update_requires_fresh_approval_and_does_not_grant_owne
     policy = SelfEditPolicy(learned, tmp_path / "mutations", user_document="SKILL.md")
     tool._self_edit_policy = policy
     call = ToolInput(
-        params={
-            "action": "update",
-            "name": "mine",
-            "description": "Use when reviewing my documents.",
-            "instructions": "1. Read the input.\n2. Return a concise review.",
-        }
+        params=_tested(
+            "mine",
+            action="update",
+            description="Use when reviewing my documents.",
+            instructions="1. Read the input.\n2. Return a concise review.",
+        )
     )
     assert not (await tool.run(call)).success
     assert (await tool.describe(call)).requires_confirmation
@@ -108,54 +119,66 @@ async def test_user_skill_update_requires_fresh_approval_and_does_not_grant_owne
     assert path.read_text() == original
 
 
-async def test_skill_requires_selection_tests_and_confirmation_before_activation(tmp_path):
+async def test_a_skill_is_live_only_once_it_passes_its_selection_tests(tmp_path):
+    """One card covers it: the call tests the skill and switches it on, or changes nothing."""
     builtin = tmp_path / "builtin"
     learned = tmp_path / "learned"
     builtin.mkdir()
     registry = SkillRegistry(builtin, learned)
     tool = CreateSkillTool(registry, learned, skill_selector=_Selector())
-    created = await tool.run(
+    skill = {
+        "description": "Use when deploying a Docker container.",
+        "instructions": "1. Build the image.\n2. Run the container.\n\n## Done when\nThe service is healthy.",
+    }
+
+    untested = await tool.run(ToolInput(params={"name": "deploy-docker", **skill}))
+    missed = await tool.run(
+        ToolInput(params=_tested("deploy-docker", positive_prompts=["ship the container"], **skill))
+    )
+    assert not untested.success and "positive_prompts" in untested.error
+    assert not missed.success and missed.data["positive_failures"] == ["ship the container"]
+    assert "deploy-docker" not in registry.names(), "a failing skill is never written"
+
+    passed = await tool.run(ToolInput(params=_tested("deploy-docker", **skill)))
+
+    assert passed.success, passed.error
+    assert registry.get("deploy-docker").status == "active"
+
+
+async def test_an_edit_that_fails_its_tests_leaves_the_live_skill_as_it_was(tmp_path):
+    """An edit used to take the skill offline at once: the Oct 7 research briefing stopped that way."""
+    learned = tmp_path / "learned"
+    registry = SkillRegistry(tmp_path / "builtin", learned)
+    tool = CreateSkillTool(registry, learned, skill_selector=_Selector())
+    base = {"description": "Use when deploying a Docker container.", "instructions": "1. Build.\n2. Run."}
+    assert (await tool.run(ToolInput(params=_tested("deploy-docker", **base)))).success
+    before = (learned / "deploy-docker" / "SKILL.md").read_text()
+
+    edit = await tool.run(
         ToolInput(
-            params={
-                "name": "deploy-docker",
-                "description": "Use when deploying a Docker container.",
-                "instructions": "1. Build the image.\n2. Run the container.\n\n## Done when\nThe service is healthy.",
-            }
+            params=_tested(
+                "deploy-docker",
+                action="update",
+                negative_prompts=["deploy docker to staging"],
+                description="Use when deploying anything.",
+                instructions="Do whatever.",
+            )
         )
     )
-    assert created.success
 
-    premature = await tool.run(
-        ToolInput(params={"action": "activate", "name": "deploy-docker", "user_confirmed": True})
-    )
-    validated = await tool.run(
-        ToolInput(
-            params={
-                "action": "validate",
-                "name": "deploy-docker",
-                "positive_prompts": ["Deploy this Docker service"],
-                "negative_prompts": ["Review this Python function"],
-            }
-        )
-    )
-    activated = await tool.run(
-        ToolInput(params={"action": "activate", "name": "deploy-docker", "user_confirmed": True})
-    )
-
-    assert not premature.success
-    assert validated.success
-    assert activated.success
+    assert not edit.success
+    assert (learned / "deploy-docker" / "SKILL.md").read_text() == before
     assert registry.get("deploy-docker").status == "active"
 
 
 async def test_creates_skill_with_flow_execution_contract(tmp_path):
     registry = SkillRegistry(tmp_path / "builtin", tmp_path / "learned")
-    tool = CreateSkillTool(registry, tmp_path / "learned")
+    tool = CreateSkillTool(registry, tmp_path / "learned", skill_selector=_Selector())
 
     out = await tool.run(
         ToolInput(
             params={
-                "name": "review-item",
+                **_tested("review-item"),
                 "description": "Use when reviewing one item.",
                 "instructions": "1. Review the item.\n2. Return evidence.",
                 "execution": {
@@ -185,7 +208,7 @@ async def test_creates_skill_with_flow_execution_contract(tmp_path):
     assert execution.inputs["required"] == ["item"]
 
 
-async def test_a_skill_you_edited_by_hand_can_be_validated_and_activated(tmp_path):
+async def test_a_skill_you_edited_by_hand_can_be_tested_and_switched_on(tmp_path):
     """With the self-edit policy on, as the server runs it.
 
     A skill edited on the dashboard is a candidate North never authored. Activation went through the
@@ -206,31 +229,19 @@ async def test_a_skill_you_edited_by_hand_can_be_validated_and_activated(tmp_pat
     policy = SelfEditPolicy(learned, tmp_path / "mutations")
     tool = CreateSkillTool(registry, learned, skill_selector=_Selector(), self_edit_policy=policy)
 
-    validated = await tool.run(
-        ToolInput(
-            params={
-                "action": "validate",
-                "name": "deploy-docker",
-                "positive_prompts": ["Deploy this Docker service"],
-                "negative_prompts": ["Review this Python function"],
-            }
-        )
-    )
-    activated = await tool.run(
-        ToolInput(params={"action": "activate", "name": "deploy-docker", "user_confirmed": True})
-    )
+    activated = await tool.run(ToolInput(params=_tested("deploy-docker", action="activate")))
     rewritten = await tool.run(
         ToolInput(
-            params={
-                "action": "update",
-                "name": "deploy-docker",
-                "description": "Use when deploying anything.",
-                "instructions": "Do whatever.\n\n## Done when\nDone.",
-            }
+            params=_tested(
+                "deploy-docker",
+                action="update",
+                description="Use when deploying anything.",
+                instructions="Do whatever.\n\n## Done when\nDone.",
+            )
         )
     )
 
-    assert validated.success and activated.success, activated.error
+    assert activated.success, activated.error
     assert registry.get("deploy-docker").status == "active"
     assert not rewritten.success, "North still may not rewrite what you wrote"
 
@@ -254,8 +265,7 @@ async def test_no_card_for_a_call_that_will_be_refused_anyway(tmp_path):
     update = {"action": "update", "name": "mine", "description": "Use when x.", "instructions": "y"}
 
     assert await tool.describe(ToolInput(params=update)) is None
-    assert await tool.describe(ToolInput(params={"action": "activate", "name": "mine", "user_confirmed": True})) is None
-    assert await tool.describe(ToolInput(params={"action": "activate", "name": "mine"})) is None
+    assert await tool.describe(ToolInput(params={"action": "activate", "name": "nobody"})) is None
     assert not (await tool.execute(ToolInput(params=update))).success
     new = {"action": "create", "name": "fresh", "description": "Use when fresh.", "instructions": "z"}
     assert await tool.describe(ToolInput(params=new)) is not None, "a write that can happen is still asked about"

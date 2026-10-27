@@ -959,9 +959,7 @@ async def activate_flow(name: str, body: FlowActivation) -> dict[str, Any]:
         agent_registry=services.agent_registry,
         flow_store=services.flow_store,
     )
-    result = await _as_user(
-        tool, {"action": "activate", "name": name, "test_run_id": body.test_run_id, "user_confirmed": True}
-    )
+    result = await _as_user(tool, {"action": "activate", "name": name, "test_run_id": body.test_run_id})
     if not result.success:
         raise HTTPException(status_code=422, detail=result.error or "Could not activate this flow")
     return await get_flow(name)

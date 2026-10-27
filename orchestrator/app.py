@@ -1004,6 +1004,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     create_skill_tool._agent_registry = agent_registry
     # Flows execute agents with exact skills, so their management and runner
     # tools are registered only after both live registries exist.
+    flow_runner = FlowRunner(
+        flow_registry,
+        agent_registry,
+        skill_registry,
+        flow_store,
+        approvals.interaction,
+        tool_registry=tool_registry,
+    )
     tool_registry.register(
         CreateFlowTool(
             flow_registry,
@@ -1015,15 +1023,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             agent_registry=agent_registry,
             tool_registry=tool_registry,
             flow_store=flow_store,
+            runner=flow_runner,
         )
-    )
-    flow_runner = FlowRunner(
-        flow_registry,
-        agent_registry,
-        skill_registry,
-        flow_store,
-        approvals.interaction,
-        tool_registry=tool_registry,
     )
     if deps.card_continuations is not None:
         deps.card_continuations.register(

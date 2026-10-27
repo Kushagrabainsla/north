@@ -20,8 +20,11 @@ class FakeAgent:
     name = "general"
     domain = "general"
     config = SimpleNamespace()
+    broken = False  # set on the class: the test run's step then fails
 
     async def run(self, payload):
+        if FakeAgent.broken:
+            raise RuntimeError("the step broke")
         return AgentResult(output="ready", summary="done", data={"value": "ready"})
 
 
@@ -30,6 +33,25 @@ class FakeAgents:
         if name != "general":
             raise KeyError(name)
         return FakeAgent()
+
+
+class Approving:
+    """Each step's own card, answered yes."""
+
+    async def request_approval_status(self, **_card):
+        from approval import ApprovalDecision
+
+        return ApprovalDecision.APPROVED
+
+    def withdraw(self, **_card) -> None:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _working_agent():
+    FakeAgent.broken = False
+    yield
+    FakeAgent.broken = False
 
 
 def _skills(tmp_path) -> SkillRegistry:
@@ -76,6 +98,7 @@ def _manager(tmp_path):
         skill_registry=skills,
         agent_registry=agents,
         flow_store=runs,
+        runner=FlowRunner(registry, agents, skills, runs, Approving()),
     )
     return manager, registry, skills, agents, runs
 
@@ -121,11 +144,11 @@ async def test_creates_and_reloads_skill_based_flow(tmp_path):
         )
     )
 
-    assert out.success
+    assert out.success, out.error
     assert registry.get("job-application-review").step_names() == ["review", "final-check"]
     assert registry.get("job-application-review").steps[0].skill == "review-item"
     assert out.data["steps"] == 2
-    assert registry.get("job-application-review").status == "candidate"
+    assert registry.get("job-application-review").status == "active", "tested and switched on in the same call"
 
 
 async def test_user_authored_flow_update_needs_fresh_consent_and_preserves_ownership(tmp_path):
@@ -158,11 +181,10 @@ async def test_user_authored_flow_update_needs_fresh_consent_and_preserves_owner
     bind_approvals(tool, ApprovalMode.YOLO, store=store)
     out = await tool.execute(call)
     store.wait_for_decision.assert_awaited_once()
-    assert out.success and registry.get("mine").status == "candidate"
-    records = policy._read_registry()
-    assert records[-1]["operation"] == "user_update"
+    assert out.success and registry.get("mine").status == "active"
+    [edit] = [record for record in policy._read_registry() if record["operation"] == "user_update"]
     assert policy.authorize(path, "update") is not None
-    assert policy.revert(records[-1]["id"])
+    assert policy.revert(edit["id"])
     assert path.read_text() == original
     path.write_text(original + "\n# Human changed this after approval\n")
     assert not (await tool.run(approved)).success
@@ -198,13 +220,13 @@ async def test_list_and_read_describe_existing_flows_without_claiming_creation(t
     assert created.success
     listed = await tool.execute(ToolInput(params={"action": "list"}))
     assert listed.success
-    assert tool.format_output(listed.data) == "existing - Review one item. (1 steps; candidate)"
+    assert tool.format_output(listed.data) == "existing - Review one item. (1 steps; active)"
     read = await tool.execute(ToolInput(params={"action": "read", "name": "existing"}))
     assert read.success
     text = tool.format_output(read.data)
-    assert "candidate; 1 steps" in text and "skill: review-item" in text
+    assert "active; 1 steps" in text and "skill: review-item" in text
     assert "created" not in text and "None" not in text
-    assert "created at" in tool.format_output(created.data)
+    assert "is live" in tool.format_output(created.data)
 
 
 def test_format_an_empty_flow_list():
@@ -292,89 +314,69 @@ async def test_create_flow_checks_live_skills_and_skill_owned_executor(tmp_path)
     assert registry.names() == []
 
 
-async def test_candidate_needs_exact_successful_test_before_activation(tmp_path):
-    manager, registry, skills, agents, runs = _manager(tmp_path)
-    created = await manager.run(
-        ToolInput(
-            params={
-                "action": "create",
-                "name": "tested-flow",
-                "description": "Only activate after the exact definition passes.",
-                "steps": _steps(),
-            }
-        )
-    )
-    assert created.success
+async def test_a_new_flow_that_fails_its_test_stays_a_draft_until_one_passes(tmp_path):
+    manager, registry, *_ = _manager(tmp_path)
+    flow = {"name": "tested-flow", "description": "Only live once a test passes.", "steps": _steps()}
+    FakeAgent.broken = True
 
-    runner = FlowRunner(registry, agents, skills, runs)
-    with pytest.raises(ValueError, match="not active"):
-        await runner.run("tested-flow")
-    tested = await runner.run("tested-flow", test_mode=True)
-    denied = await manager.run(
-        ToolInput(
-            params={
-                "action": "activate",
-                "name": "tested-flow",
-                "test_run_id": tested.run_id,
-                "user_confirmed": False,
-            }
-        )
-    )
-    activated = await manager.run(
-        ToolInput(
-            params={
-                "action": "activate",
-                "name": "tested-flow",
-                "test_run_id": tested.run_id,
-                "user_confirmed": True,
-            }
-        )
-    )
+    failed = await manager.run(ToolInput(params={"action": "create", **flow}))
 
-    assert not denied.success and "confirmation" in denied.error
-    assert activated.success
+    assert not failed.success and "stays a draft" in failed.error
+    assert registry.get("tested-flow").status == "candidate"
+
+    FakeAgent.broken = False
+    activated = await manager.run(ToolInput(params={"action": "activate", "name": "tested-flow"}))
+
+    assert activated.success, activated.error
     assert registry.get("tested-flow").status == "active"
     assert registry.get("tested-flow").activation_fingerprint
 
 
-async def test_updating_a_flow_returns_it_to_candidate_and_invalidates_old_test(tmp_path):
+async def test_an_edit_that_fails_its_test_puts_the_live_version_back(tmp_path):
+    """An edit used to take a flow offline at once, until someone tested and activated it again."""
+    manager, registry, *_ = _manager(tmp_path)
+    base = {"name": "changing-flow", "description": "A flow whose edits need new evidence.", "steps": _steps("before")}
+    assert (await manager.run(ToolInput(params={"action": "create", **base}))).success
+    live = (manager._learned_dir / "changing-flow" / "FLOW.yaml").read_text()
+    FakeAgent.broken = True
+
+    edit = await manager.run(ToolInput(params={**base, "action": "update", "steps": _steps("after")}))
+
+    assert not edit.success and "previous version is live again" in edit.error
+    assert (manager._learned_dir / "changing-flow" / "FLOW.yaml").read_text() == live
+    assert registry.get("changing-flow").status == "active"
+
+
+async def test_an_edit_that_passes_is_live_at_once(tmp_path):
+    manager, registry, *_ = _manager(tmp_path)
+    base = {"name": "changing-flow", "description": "A flow whose edits need new evidence.", "steps": _steps("before")}
+    assert (await manager.run(ToolInput(params={"action": "create", **base}))).success
+
+    edit = await manager.run(ToolInput(params={**base, "action": "update", "steps": _steps("after")}))
+
+    assert edit.success, edit.error
+    assert registry.get("changing-flow").steps[0].inputs == {"value": "after"}
+    assert registry.get("changing-flow").status == "active"
+
+
+async def test_an_old_test_run_cannot_switch_on_a_changed_flow(tmp_path):
+    """The page's Activate takes a test run; it has to be a test of exactly this version."""
     manager, registry, skills, agents, runs = _manager(tmp_path)
-    base = {
-        "action": "create",
-        "name": "changing-flow",
-        "description": "A flow whose edits require new evidence.",
-        "steps": _steps("before"),
-    }
-    assert (await manager.run(ToolInput(params=base))).success
-    old_test = await FlowRunner(registry, agents, skills, runs).run("changing-flow", test_mode=True)
+    base = {"name": "changing-flow", "description": "A flow whose edits need new evidence.", "steps": _steps("before")}
+    assert (await manager.run(ToolInput(params={"action": "create", **base}))).success
+    old_test = runs.list_runs("changing-flow")[0]
+    path = manager._learned_dir / "changing-flow" / "FLOW.yaml"
+    path.write_text(path.read_text().replace("before", "after").replace("status: active", "status: candidate"))
+    registry.reload()
 
-    updated = await manager.run(
-        ToolInput(
-            params={
-                **base,
-                "action": "update",
-                "steps": _steps("after"),
-            }
-        )
-    )
-    stale_activation = await manager.run(
-        ToolInput(
-            params={
-                "action": "activate",
-                "name": "changing-flow",
-                "test_run_id": old_test.run_id,
-                "user_confirmed": True,
-            }
-        )
+    stale = await manager.run(
+        ToolInput(params={"action": "activate", "name": "changing-flow", "test_run_id": old_test.run_id})
     )
 
-    assert updated.success
-    assert registry.get("changing-flow").status == "candidate"
-    assert not stale_activation.success
-    assert "changed after it was tested" in stale_activation.error
+    assert not stale.success and "changed after it was tested" in stale.error
 
 
-async def test_editing_a_referenced_skill_invalidates_an_activated_flow(tmp_path):
+async def test_editing_a_referenced_skill_invalidates_a_live_flow(tmp_path):
     manager, registry, skills, agents, runs = _manager(tmp_path)
     assert (
         await manager.run(
@@ -388,27 +390,13 @@ async def test_editing_a_referenced_skill_invalidates_an_activated_flow(tmp_path
             )
         )
     ).success
-    runner = FlowRunner(registry, agents, skills, runs)
-    tested = await runner.run("skill-sensitive", test_mode=True)
-    assert (
-        await manager.run(
-            ToolInput(
-                params={
-                    "action": "activate",
-                    "name": "skill-sensitive",
-                    "test_run_id": tested.run_id,
-                    "user_confirmed": True,
-                }
-            )
-        )
-    ).success
 
     skill_file = tmp_path / "skills" / "review-item" / "SKILL.md"
     skill_file.write_text(skill_file.read_text(encoding="utf-8") + "\nCheck one more condition.\n", encoding="utf-8")
     skills.reload()
 
     with pytest.raises(ValueError, match="referenced skill was edited"):
-        await runner.run("skill-sensitive")
+        await FlowRunner(registry, agents, skills, runs).run("skill-sensitive")
 
 
 async def test_use_flow_returns_ordered_skill_steps(tmp_path):

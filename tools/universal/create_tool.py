@@ -6,6 +6,7 @@ import ast
 import hashlib
 import importlib.util
 import inspect
+import json
 import re
 import textwrap
 from pathlib import Path
@@ -35,24 +36,24 @@ class CreateToolTool(Tool):
     name = "create_tool"
     is_mutating = True
     description = (
-        "Create, update, inspect, validate, test, and activate atomic executable capabilities. "
+        "Create, update, inspect, or activate atomic executable capabilities. "
         "Use the adding-a-north-tool skill first and call action='list' before creating anything. "
-        "New and edited tools are non-runnable candidates. They enter the live catalog only after "
-        "structural validation, a successful explicit test call, and user-confirmed activation."
+        "create, update and activate each take test_params and are asked about once: the tool is then "
+        "checked, called once with test_params (a real call: anything it does still asks as usual), and is "
+        "live if that call succeeds. A failing version stays a draft and the live tool is unchanged."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "update", "read", "list", "validate", "test", "activate"],
+                "enum": ["create", "update", "activate", "read", "list"],
                 "description": (
                     "list = show all tools with location and description; "
                     "read = return full source of an existing tool by name; "
-                    "create = write a new tool file (provide 'content' for a full implementation); "
-                    "update = stage improved code without replacing the active tool; "
-                    "validate = import and inspect the candidate; test = call it with test_params; "
-                    "activate = publish the tested candidate after explicit user confirmation"
+                    "create = write a new tool (provide 'content' for a full implementation), test it, switch it on; "
+                    "update = write improved code, test it, and replace the live tool only if the test passes; "
+                    "activate = test a draft that already exists, as it is, and switch it on"
                 ),
             },
             "name": {
@@ -111,11 +112,10 @@ class CreateToolTool(Tool):
             },
             "test_params": {
                 "type": "object",
-                "description": "Small, safe representative input passed to the candidate during action=test.",
-            },
-            "user_confirmed": {
-                "type": "boolean",
-                "description": "True only after the user explicitly approves activation.",
+                "description": (
+                    "Required for create, update and activate: the small, safe representative input for the one "
+                    "test call made before the tool is switched on."
+                ),
             },
         },
         "required": ["action"],
@@ -150,26 +150,8 @@ class CreateToolTool(Tool):
         if action == "read":
             return data.get("content", "(empty)")
 
-        if action == "create":
-            return (
-                f"Tool candidate created: {data['path']}\n"
-                "It is not live until validation and a representative test pass, then the user confirms activation."
-            )
-
-        if action == "update":
-            return (
-                f"Tool update candidate staged: {data['path']}\n"
-                "The currently active implementation is unchanged until this candidate is tested and activated."
-            )
-
-        if action == "validate":
-            return f"Tool candidate '{data['name']}' passed structural validation."
-
-        if action == "test":
-            return f"Tool candidate '{data['name']}' passed its representative test call."
-
         if action == "activate":
-            return f"Tool '{data['name']}' is active in the live catalog."
+            return f"Tool '{data['name']}' passed its test call and is live."
 
         return str(data)
 
@@ -180,21 +162,38 @@ class CreateToolTool(Tool):
             return _list_tools(self._tools_dir)
         if action == "read":
             return _read_tool(input.params.get("name") or "", self._tools_dir)
-        if action in {"create", "update", "validate", "test", "activate"}:
-            if action == "create":
-                return self._create(input.params)
-            if action == "update":
-                return self._update(input.params)
-            if action == "validate":
-                return self._validate(input.params)
-            if action == "test":
-                return await self._test(input.params)
-            return self._activate(input.params)
+        if action in {"create", "update", "activate"}:
+            if not isinstance(input.params.get("test_params"), dict):
+                return ToolOutput(
+                    success=False,
+                    error="Parameter 'test_params' is required: the tool is called once with it before it goes live.",
+                )
+            if action in {"create", "update"}:
+                written = self._create(input.params) if action == "create" else self._update(input.params)
+                if not written.success:
+                    return written
+            return await self._prove(input)
 
         return ToolOutput(
             success=False,
-            error=f"Unknown action '{action}'. Use: list, read, create, update, validate, test, activate.",
+            error=f"Unknown action '{action}'. Use: list, read, create, update, activate.",
         )
+
+    async def _prove(self, input: ToolInput) -> ToolOutput:
+        """Check the draft, call it once with test_params, and switch it on if that works.
+
+        One card covered all of it. A draft that fails stays a draft, and the live
+        version, if there is one, is unchanged.
+        """
+        params = input.params
+        for step in (self._validate(params), await self._test(params, input)):
+            if not step.success:
+                return ToolOutput(
+                    success=False,
+                    error=f"{step.error} It stays a draft; the live tool, if any, is unchanged.",
+                    data=step.data,
+                )
+        return self._activate(params)
 
     async def describe(self, input: ToolInput) -> Request:
         """Show the proposed code. Model-authored code may be imported or hot-loaded,
@@ -209,8 +208,11 @@ class CreateToolTool(Tool):
             if candidate is not None:
                 content = candidate.read_text(encoding="utf-8")
         preview = (content[:_PREVIEW_CHARS] + "\n…") if len(content) > _PREVIEW_CHARS else content
-        message = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
-            f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)"
+        test = json.dumps(params.get("test_params") or {}, sort_keys=True, default=str)
+        message = (
+            f"Agent wants to {action} the '{name}' tool ({tool_type}). Approving writes it, calls it once with "
+            f"`{test}` (anything that call does still asks), and switches it on if that works.\n\n"
+            + (f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)")
         )
         # The code is part of what you approved. Keyed by the name alone, one
         # approval of `record_media` let any later code for it be installed and
@@ -377,7 +379,7 @@ class CreateToolTool(Tool):
             data={"action": "validate", "name": name, "status": "candidate", "valid": True},
         )
 
-    async def _test(self, params: dict) -> ToolOutput:
+    async def _test(self, params: dict, input: ToolInput | None = None) -> ToolOutput:
         name = str(params.get("name") or "").strip()
         test_params = params.get("test_params")
         if not name:
@@ -393,9 +395,13 @@ class CreateToolTool(Tool):
         try:
             instance = _load_tool_file(path, expected_name=name)
             _validate_tool_contract(instance)
-            # The user approved this test through `describe()`, so the candidate
-            # runs directly: asking again about each of its own calls would ask twice.
-            result = await instance.run(ToolInput(params=test_params))
+            # Through the approval layer like any call: the card for this tool covered
+            # writing and testing it, not what the test call itself does.
+            instance.approvals = self.approvals
+            task_id = params.get("task_id")
+            call = {**test_params, **({"task_id": task_id} if task_id else {})}
+            granted = input.granted_workspace if input is not None else None
+            result = await instance.execute(ToolInput(params=call, granted_workspace=granted))
         except Exception as exc:
             return ToolOutput(success=False, error=f"Tool candidate test raised an exception: {exc}")
         if not isinstance(result, ToolOutput):
@@ -421,8 +427,6 @@ class CreateToolTool(Tool):
         name = str(params.get("name") or "").strip()
         if not name:
             return ToolOutput(success=False, error="Parameter 'name' is required for action=activate.")
-        if params.get("user_confirmed") is not True:
-            return ToolOutput(success=False, error="Activation requires explicit user confirmation.")
         if self._registry is None:
             return ToolOutput(success=False, error="The live tool registry is unavailable.")
         candidate = _find_candidate_path(name, self._tools_dir)

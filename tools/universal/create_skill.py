@@ -2,22 +2,27 @@
 
 Allows agents to package recurring procedures into reusable skills on the fly.
 Writes SKILL.md to North's learned skills directory and reloads the SkillRegistry.
+
+One card per change: creating, updating or activating a skill is asked about
+once, and that approval covers testing it and switching it on. The new version
+is tested before anything is written, so one that fails never replaces a live skill.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from policies.self_edit import SelfEditPolicy
+from skills.exceptions import SkillParseError
 from skills.models import SKILL_FILENAME, SkillIntent, SkillSource
 from skills.parser import parse_skill_document
-from skills.registry import parse_execution_contract, rejection_reason
+from skills.registry import parse_execution_contract, rejection_reason, skill_from_document
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal._procedure_edit import begin_edit, describe_user_edit
@@ -45,18 +50,19 @@ class CreateSkillTool(Tool):
     name = "create_skill"
     is_mutating = True
     description = (
-        "Create, update, inspect, validate, and activate procedural skills. Use the "
-        "authoring-a-north-skill skill first and reuse an existing procedure when possible. "
-        "New and edited skills remain candidates until positive and negative selection tests pass "
-        "and the user explicitly confirms activation."
+        "Create, update, inspect, or activate procedural skills. Use the authoring-a-north-skill skill "
+        "first and reuse an existing procedure when possible. create, update and activate each take "
+        "positive_prompts and negative_prompts: the user is asked once, then the skill is tested with them "
+        "and is live if they pass. A failing new version changes nothing."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "update", "list", "read", "validate", "activate"],
+                "enum": ["create", "update", "activate", "list", "read"],
                 "default": "create",
+                "description": "activate = test a skill that is still a draft, as it is, and switch it on.",
             },
             "name": {
                 "type": "string",
@@ -103,16 +109,12 @@ class CreateSkillTool(Tool):
             "positive_prompts": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Representative prompts that must select this skill during validation.",
+                "description": "Requests that must select this skill. Required for create, update, activate.",
             },
             "negative_prompts": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Nearby prompts that must not select this skill during validation.",
-            },
-            "user_confirmed": {
-                "type": "boolean",
-                "description": "True only after the user explicitly approves activation.",
+                "description": "Nearby requests that must not select this skill. Required for create/update/activate.",
             },
         },
         "required": [],
@@ -133,7 +135,6 @@ class CreateSkillTool(Tool):
         self._skill_selector = skill_selector
         self._tool_registry = tool_registry
         self._agent_registry = agent_registry
-        self._validated: dict[str, str] = {}
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
         return str((params or {}).get("action") or "create").strip().lower() in {
@@ -152,7 +153,17 @@ class CreateSkillTool(Tool):
         if self._will_refuse(input.params):
             return None
         request = await super().describe(input)
-        if str(input.params.get("action") or "").strip().lower() == "update":
+        action = str(input.params.get("action") or "create").strip().lower()
+        name = _slug(str(input.params.get("name") or ""))
+        verb = {"create": "creates", "update": "updates", "activate": "tests"}.get(action, action)
+        request = replace(
+            request,
+            message=(
+                f"Approving {verb} the skill '{name}', checks it is picked for the example requests and not "
+                "the others, and switches it on if that passes. If it fails, nothing changes.\n\n" + request.message
+            ),
+        )
+        if action == "update":
             path = self._learned_dir / _slug(str(input.params.get("name") or "")) / SKILL_FILENAME
             return describe_user_edit(self._self_edit_policy, path, input, request)
         return request
@@ -164,12 +175,9 @@ class CreateSkillTool(Tool):
             return False
         path = self._learned_dir / name / SKILL_FILENAME
         if action == "activate":
-            if params.get("user_confirmed") is not True:
-                return True
+            # Nothing to ask about: no such skill, or it is live already.
             try:
-                return self._validated.get(name) != _skill_fingerprint(
-                    self._registry.get(name).directory / SKILL_FILENAME
-                )
+                return self._registry.get(name).status != "candidate"
             except Exception:
                 return True
         if action in {"create", "update"} and self._self_edit_policy is not None:
@@ -198,8 +206,6 @@ class CreateSkillTool(Tool):
             )
         if action == "read":
             return self._read(input.params)
-        if action == "validate":
-            return await self._validate(input.params)
         if action == "activate":
             return await self._activate(input.params)
         if action not in {"create", "update"}:
@@ -258,7 +264,7 @@ class CreateSkillTool(Tool):
             "name": slug_name,
             "description": description,
             "source": SkillSource.LEARNED.value,
-            "status": "candidate",
+            "status": "active",
             "domains": domains,
             "intents": intents,
         }
@@ -274,6 +280,12 @@ class CreateSkillTool(Tool):
         reason = rejection_reason(slug_name, description, body, source=SkillSource.LEARNED)
         if reason:
             return ToolOutput(success=False, error=f"Skill is invalid: {reason}")
+        try:
+            skill = skill_from_document(document, skill_dir, SkillSource.LEARNED)
+        except SkillParseError as exc:
+            return ToolOutput(success=False, error=f"Skill is invalid: {exc}")
+        if (failed := await self._selection_failures(skill, input.params)) is not None:
+            return failed
 
         try:
             operation = "update" if skill_file.exists() else "create"
@@ -287,9 +299,8 @@ class CreateSkillTool(Tool):
             if hasattr(self._registry, "reload"):
                 self._registry.reload()
             loaded = self._registry.get(slug_name)
-            if loaded.status != "candidate":
-                return ToolOutput(success=False, error=f"Skill '{slug_name}' did not load as a candidate.")
-            self._validated.pop(slug_name, None)
+            if loaded.status != "active":
+                return ToolOutput(success=False, error=f"Skill '{slug_name}' did not load as live.")
             return ToolOutput(
                 success=True,
                 data={
@@ -299,6 +310,7 @@ class CreateSkillTool(Tool):
                     "status": loaded.status,
                     "updated": action == "update",
                     "frontmatter": parsed_frontmatter,
+                    **_tests_run(input.params),
                 },
             )
         except Exception as exc:
@@ -318,73 +330,61 @@ class CreateSkillTool(Tool):
             data={"name": name, "content": content, "status": skill.status},
         )
 
-    async def _validate(self, params: dict[str, Any]) -> ToolOutput:
-        name = str(params.get("name") or "").strip()
-        positives = [str(item).strip() for item in params.get("positive_prompts") or [] if str(item).strip()]
-        negatives = [str(item).strip() for item in params.get("negative_prompts") or [] if str(item).strip()]
-        if not name or not positives or not negatives:
+    async def _selection_failures(self, skill, params: dict[str, Any]) -> ToolOutput | None:
+        """Why *skill* fails its selection tests, or None when it passes.
+
+        It is tested as it would be live: against every other skill, in place of
+        any version of itself, before anything is written.
+        """
+        positives, negatives = _prompts(params, "positive_prompts"), _prompts(params, "negative_prompts")
+        if not positives or not negatives:
             return ToolOutput(
                 success=False,
-                error="Validation requires name, positive_prompts, and negative_prompts.",
+                error="positive_prompts and negative_prompts are required: the skill is tested with them "
+                "before it is switched on.",
             )
         if self._skill_selector is None:
             return ToolOutput(success=False, error="Skill selection testing is unavailable.")
+        candidates = [item for item in self._registry.all() if item.name != skill.name] + [skill]
+
+        async def picked(prompt: str) -> bool:
+            chosen = await self._skill_selector.select(prompt, candidates=candidates)
+            return skill.name in {item.name for item in chosen}
+
         try:
-            skill = self._registry.get(name)
-            candidates = self._registry.all()
-            positive_failures = [
-                prompt
-                for prompt in positives
-                if name not in {item.name for item in await self._skill_selector.select(prompt, candidates=candidates)}
-            ]
-            negative_failures = [
-                prompt
-                for prompt in negatives
-                if name in {item.name for item in await self._skill_selector.select(prompt, candidates=candidates)}
-            ]
+            missed = [prompt for prompt in positives if not await picked(prompt)]
+            wrongly = [prompt for prompt in negatives if await picked(prompt)]
         except Exception as exc:
-            return ToolOutput(success=False, error=f"Skill validation failed: {exc}")
-        if positive_failures or negative_failures:
+            return ToolOutput(success=False, error=f"Skill selection testing failed: {exc}")
+        if missed or wrongly:
             return ToolOutput(
                 success=False,
-                error="Skill selection tests failed.",
-                data={
-                    "positive_failures": positive_failures,
-                    "negative_failures": negative_failures,
-                },
+                error="Skill selection tests failed, so nothing changed.",
+                data={"positive_failures": missed, "negative_failures": wrongly},
             )
-        fingerprint = _skill_fingerprint(skill.directory / SKILL_FILENAME)
-        self._validated[name] = fingerprint
-        return ToolOutput(
-            success=True,
-            data={"name": name, "valid": True, "positive_tests": len(positives), "negative_tests": len(negatives)},
-        )
+        return None
 
     async def _activate(self, params: dict[str, Any]) -> ToolOutput:
+        """Test a draft skill as it is, and switch it on if it passes."""
         name = str(params.get("name") or "").strip()
         if not name:
             return ToolOutput(success=False, error="Parameter 'name' is required for activate.")
-        if params.get("user_confirmed") is not True:
-            return ToolOutput(success=False, error="Activation requires explicit user confirmation.")
         try:
             skill = self._registry.get(name)
             path = skill.directory / SKILL_FILENAME
-            fingerprint = _skill_fingerprint(path)
+            content = path.read_text(encoding="utf-8")
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))
-        if self._validated.get(name) != fingerprint:
-            return ToolOutput(
-                success=False,
-                error="Validate the current skill with positive and negative prompts first.",
-            )
         if skill.status == "active":
             return ToolOutput(success=True, data={"name": name, "status": "active"})
         if skill.status != "candidate":
-            return ToolOutput(success=False, error=f"Skill '{name}' is {skill.status}, not a candidate.")
+            return ToolOutput(success=False, error=f"Skill '{name}' is {skill.status}, not a draft.")
         if skill.execution is not None and (contract_error := self._execution_error(skill.execution, skill.domains)):
             return ToolOutput(success=False, error=contract_error)
+        live = replace(skill, status="active")
+        if (failed := await self._selection_failures(live, params)) is not None:
+            return failed
 
-        content = path.read_text(encoding="utf-8")
         frontmatter, body = parse_skill_document(content)
         frontmatter["status"] = "active"
         document = f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n\n{body.strip()}\n"
@@ -394,7 +394,7 @@ class CreateSkillTool(Tool):
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
             self._registry.reload()
-            return ToolOutput(success=True, data={"name": name, "status": "active"})
+            return ToolOutput(success=True, data={"name": name, "status": "active", **_tests_run(params)})
         except Exception as exc:
             return ToolOutput(success=False, error=f"Failed to activate skill '{name}': {exc}")
 
@@ -427,16 +427,24 @@ class CreateSkillTool(Tool):
             )
         if "content" in data:
             return str(data["content"])
-        if data.get("valid"):
-            return f"Skill '{data.get('name')}' passed its selection tests."
-        if data.get("status") == "active":
-            return f"Skill '{data.get('name')}' is active."
-        verb = "updated" if data.get("updated") else "created"
-        return (
-            f"Skill candidate '{data.get('name')}' {verb} at {data.get('path')}. "
-            "It is not active until selection tests pass and the user confirms activation."
+        tested = (
+            f" It was picked for {data['positive_tests']} example request(s) and none of "
+            f"{data['negative_tests']} others."
+            if "positive_tests" in data
+            else ""
         )
+        if data.get("path"):
+            verb = "updated" if data.get("updated") else "created"
+            return f"Skill '{data.get('name')}' {verb} at {data.get('path')} and live.{tested}"
+        return f"Skill '{data.get('name')}' is live.{tested}"
 
 
-def _skill_fingerprint(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _prompts(params: dict[str, Any], key: str) -> list[str]:
+    return [str(item).strip() for item in params.get(key) or [] if str(item).strip()]
+
+
+def _tests_run(params: dict[str, Any]) -> dict[str, int]:
+    return {
+        "positive_tests": len(_prompts(params, "positive_prompts")),
+        "negative_tests": len(_prompts(params, "negative_prompts")),
+    }

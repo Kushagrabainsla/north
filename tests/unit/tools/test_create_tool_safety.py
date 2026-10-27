@@ -87,45 +87,81 @@ class _Registry:
         return set(self.tools)
 
 
-async def test_tool_stays_candidate_until_validated_tested_and_activated(tmp_path: Path) -> None:
+def _demo(tmp_path: Path, **kw) -> tuple[CreateToolTool, _Registry, Path]:
     learned = tmp_path / "learned" / "tools"
-    policy = SelfEditPolicy(learned, tmp_path / "mutations")
     registry = _Registry()
-    tool = CreateToolTool(tool_registry=registry, tools_dir=learned, self_edit_policy=policy)
-
-    created = tool._create(
-        {
-            "name": "learned_demo",
-            "description": "demo",
-            "content": _BENIGN_TOOL.replace("my_tool", "learned_demo"),
-            "tool_type": "specialized",
-        }
+    tool = CreateToolTool(
+        tool_registry=registry, tools_dir=learned, self_edit_policy=SelfEditPolicy(learned, tmp_path / "m")
     )
-    assert created.success
-    candidate = learned / "candidates" / "specialized" / "learned_demo.py"
-    active = learned / "specialized" / "learned_demo.py"
-    assert candidate.exists()
-    assert not active.exists()
+    return tool, registry, learned
+
+
+def _create(code: str, **params) -> ToolInput:
+    return ToolInput(
+        params={"action": "create", "name": "learned_demo", "content": code, "tool_type": "specialized", **params}
+    )
+
+
+async def test_one_call_writes_tests_and_switches_on_a_tool(tmp_path: Path) -> None:
+    """One card covers writing, testing and switching on; there is no separate activation to ask for."""
+    tool, registry, learned = _demo(tmp_path)
+
+    out = await tool.run(_create(_BENIGN_TOOL.replace("my_tool", "learned_demo"), test_params={}))
+
+    assert out.success, out.error
+    assert (learned / "specialized" / "learned_demo.py").exists()
+    assert not (learned / "candidates" / "specialized" / "learned_demo.py").exists()
+    assert "learned_demo" in registry.tools
+
+
+async def test_a_tool_whose_test_call_fails_stays_a_draft(tmp_path: Path) -> None:
+    tool, registry, learned = _demo(tmp_path)
+    broken = _BENIGN_TOOL.replace("my_tool", "learned_demo").replace(
+        "ToolOutput(success=True, data={})", 'ToolOutput(success=False, error="the device is missing")'
+    )
+
+    out = await tool.run(_create(broken, test_params={}))
+
+    assert not out.success and "the device is missing" in out.error and "stays a draft" in out.error
+    assert (learned / "candidates" / "specialized" / "learned_demo.py").exists()
     assert "learned_demo" not in registry.tools
 
-    refused = tool._activate({"name": "learned_demo", "user_confirmed": True})
-    assert not refused.success
-    assert "Test" in refused.error
 
-    validated = tool._validate({"name": "learned_demo"})
-    assert validated.success
-    tested = await tool._test({"name": "learned_demo", "test_params": {}})
-    assert tested.success
+async def test_nothing_is_written_without_test_params(tmp_path: Path) -> None:
+    tool, _registry, learned = _demo(tmp_path)
 
-    unconfirmed = tool._activate({"name": "learned_demo"})
-    assert not unconfirmed.success
-    assert "confirmation" in unconfirmed.error
+    out = await tool.run(_create(_BENIGN_TOOL.replace("my_tool", "learned_demo")))
 
-    activated = tool._activate({"name": "learned_demo", "user_confirmed": True})
-    assert activated.success
-    assert active.exists()
-    assert not candidate.exists()
-    assert "learned_demo" in registry.tools
+    assert not out.success and "test_params" in out.error
+    assert not (learned / "candidates" / "specialized" / "learned_demo.py").exists()
+
+
+async def test_a_test_call_that_changes_something_asks_like_any_call(tmp_path: Path) -> None:
+    """The tool's card covers writing and testing it, not what its test call does: recording the mic still asks."""
+    from tests.conftest import bind_approvals, rejecting_store
+
+    tool, registry, _learned = _demo(tmp_path)
+    store = rejecting_store()
+    bind_approvals(tool, store=store)
+    mutating = _BENIGN_TOOL.replace("my_tool", "learned_demo").replace(
+        'description = "demo"', 'description = "demo"\n    is_mutating = True'
+    )
+
+    out = await tool.run(_create(mutating, test_params={}))
+
+    assert not out.success and "stays a draft" in out.error
+    store.add.assert_called_once()
+    assert "learned_demo" not in registry.tools
+
+
+async def test_a_draft_already_there_is_tested_and_switched_on_by_activate(tmp_path: Path) -> None:
+    tool, registry, _learned = _demo(tmp_path)
+    assert tool._update({"name": "read_file", "content": _BENIGN_TOOL.replace("my_tool", "read_file")}).success
+
+    out = await tool.run(ToolInput(params={"action": "activate", "name": "read_file", "test_params": {}}))
+
+    assert out.success, out.error
+    assert "read_file" in registry.tools
 
 
 async def test_an_approved_tool_change_is_not_replayed_for_different_code(tmp_path: Path) -> None:
