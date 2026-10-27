@@ -2,8 +2,8 @@
 
 GitTool and GhTool both shell out to an external binary, capture stdout/stderr,
 enforce a timeout, and cap output to a structured ``ToolOutput``. This is the
-single definition of that flow (CODING_STYLE §5 DRY). BashTool and ShellTool use
-async PTY-based execution instead and deliberately do not share this path.
+single definition of that flow (CODING_STYLE §5 DRY). BashTool uses async
+execution instead and deliberately does not share this path.
 """
 
 from __future__ import annotations

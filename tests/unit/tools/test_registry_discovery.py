@@ -17,7 +17,6 @@ _AGENT_BUILTINS = {"delegate_task", "request_approval", "ask_user"}
 # orchestrator/app.py::_build_tool_registry rather than auto-discovered.
 _MANUALLY_REGISTERED = {
     "bash",
-    "shell",
     "schedule_task",
     "list_schedules",
     "update_schedule",

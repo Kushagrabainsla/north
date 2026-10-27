@@ -78,6 +78,7 @@ All notable changes to north are documented here.
 - `north web` no longer runs the server in auto-reload mode over your home folder (an omitted Typer option was truthy). `north stop` now stops the server's child processes too, finds a leftover listener without root on macOS, and fails instead of printing "Stopped" while the port is still taken.
 
 ### Removed
+- The `shell` tool, which kept a command running across tool calls. It ran outside the sandbox that confines `bash`, so in safe mode `shell start "npm test"` ran on the host with no card and full access; and no run ever used it. `bash` is the one way north runs a command.
 - The Puppeteer/CDP existing-Chrome bridge (`browser_native.py`, `resources/browser/`), Chrome's remote-debugging setup and its permission prompt, the saved CDP endpoint on profiles, and agent-supplied `connect`/`copy_cookies`. Uncommitted browser-bridge experiments are summarized in `experiments/README.md` and deleted.
 
 ### Security

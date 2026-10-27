@@ -346,19 +346,11 @@ timeout - see ARCHITECTURE §9.8.
 
 **Setting:** `sandbox.os` (`os_sandbox_enabled`, default on).
 
-The same approval flow is shared by every gated tool (`BashTool`, `ShellTool`, `PatchFileTool`, `GitTool`, `GhTool`, `KasaTool`) through the one `UserInteraction` mediator (see Section 16), so the tools never drift.
+The same approval flow is shared by every gated tool (`BashTool`, `PatchFileTool`, `GitTool`, `GhTool`, `KasaTool`) through the one `UserInteraction` mediator (see Section 16), so the tools never drift.
 
-## 14. Persistent PTY Shell Sessions
+## 14. Persistent PTY Shell Sessions (removed)
 
-**What:** `ShellTool` (`tools/specialized/shell_tool.py`) keeps a process alive across tool calls behind a pseudo-terminal. Where `BashTool` is one-shot (run → capture → exit), `ShellTool` exposes `start` / `read` / `write` / `stop` / `list` so an agent can launch `npm run dev`, `tsc --watch`, a REPL, or a debugger, then stream output, send input, and terminate it over several iterations.
-
-**Why:** Many real coding tasks need a long-running process - start a dev server then curl it, watch a compiler, drive an interactive REPL. A one-shot subprocess cannot express any of these.
-
-**How:**
-- Each session is backed by `pty.openpty()` (stdlib - no third-party dependency like `pexpect`; the model does the "wait for X" reasoning itself, so an expect layer adds nothing).
-- The PTY master fd is registered with the event loop via `loop.add_reader()`; output accumulates in a per-session ring buffer (`_MAX_BUFFER_BYTES`) drained on each `read`.
-- Processes spawn with `start_new_session=True` so `stop` can `killpg` the whole group (SIGTERM, then SIGKILL on timeout).
-- Safety mirrors `BashTool`: `start` and `write` go through the shared approval flow; `read` / `stop` / `list` operate on an already-approved session. A session cap (`_MAX_SESSIONS`) bounds runaway shells.
+`ShellTool` was deleted on 2026-10-26. It kept a process alive across tool calls, but it ran outside the OS sandbox that confines `bash`, and no run ever used it: coding goes to Claude Code and Codex, which run their own shells. `bash` is the one way north runs a command. A long-running command, if one is ever needed, becomes an option on `bash`, on the same sandboxed path.
 
 ## 15. Diff Preview Before Write
 

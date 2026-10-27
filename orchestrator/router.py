@@ -79,7 +79,6 @@ _INTERPRETATION_TOOLS: frozenset[str] = frozenset(
         "browser",
         "chrome_agent",
         "bash",
-        "shell",
         "search_code",
         "find_references",
         "goto_definition",
