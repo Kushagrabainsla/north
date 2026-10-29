@@ -156,3 +156,11 @@ def test_job_application_skills_split_drafting_from_submission() -> None:
     assert queue.execution.approval == "before_step"
     assert "request_approval" in queue.body
     assert "returned `response` values" in queue.body
+
+
+def test_smart_home_control_is_a_skill_on_the_general_agent():
+    """The home agent was its prompt and a keyword list; by the rule that retired news and wellness, it is a skill."""
+    skill = _REGISTRY.get("controlling-smart-home-devices")
+    assert skill.available_to("general")
+    assert {"kasa", "screen_brightness"} <= set(skill.execution.tools)
+    assert "scene" in skill.body and "Stratis" in skill.body

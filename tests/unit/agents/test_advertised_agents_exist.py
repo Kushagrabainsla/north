@@ -112,3 +112,16 @@ def test_planner_routing_table_targets_resolve() -> None:
         resolvable.add("engineering")
     unresolvable = sorted(set(rows) - resolvable)
     assert not unresolvable, f"planner routes to targets with no agent or domain: {unresolvable}"
+
+
+def test_general_is_the_one_agent() -> None:
+    """A specialism is a skill on the general agent, never an agent of its own (CODING_STYLE §15)."""
+    assert _registered_agent_names() == {"general"}
+
+
+def test_planner_examples_name_only_agents_that_exist() -> None:
+    """Its examples still planned `home` beside `general` after the home agent became a skill."""
+    text = PLANNER_PROMPT.read_text(encoding="utf-8")
+    named = set(re.findall(r'"([a-z_]+)"', "".join(re.findall(r'"agents":\s*\[([^\]]*)\]', text))))
+    named |= {n.strip() for line in re.findall(r"agents:\s*\[([^\]]*)\]", text) for n in line.split(",") if n.strip()}
+    assert named <= _registered_agent_names(), f"planner examples name unregistered agents: {sorted(named)}"

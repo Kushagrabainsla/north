@@ -55,7 +55,6 @@ _ALWAYS_ALLOWED_FACT_TOPICS = frozenset({"user", "identity"})
 # someone likes to work genuinely changes how an agent should behave.
 _FACT_TOPICS_BY_DOMAIN: dict[str, frozenset[str]] = {
     "engineering": frozenset({"preferences"}),
-    "home": frozenset({"preferences", "schedule"}),
 }
 
 

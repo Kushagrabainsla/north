@@ -20,6 +20,7 @@ All notable changes to north are documented here.
 - A click by uid is refused if the element no longer has the role and name that inspect and the approval card showed.
 
 ### Changed (cleanup)
+- The home agent is gone; smart home control is the built-in `controlling-smart-home-devices` skill on the general agent. The agent was its prompt and a keyword list: no code of its own, and tools were never tied to it. By the rule that retired the news and wellness agents (an agent that is only a prompt is a skill), it joins them. `general` is now north's one agent; the planner's examples and the architecture doc say so, and the doc's table of eleven agents that never existed is replaced by the one that does.
 - Reading your personal files into memory is opt-in: it starts only when you press "Read my files" in onboarding, which says which folders it reads and that their text goes to your AI provider. Startup only resumes a run you started.
 - Onboarding is five steps: AI connection, coding agents (a real check that each is installed, recent enough and logged in), browser profiles (shown once), your files, and a finish summary. The Permissions step is gone; approval mode lives in Settings.
 - One home per concept: Settings gains a Connections section (providers, coding agents, browser profiles; providers moved from System), Approvals gains Past decisions and Safe actions (moved from Memory), and the bootstrap panels left Memory and System.

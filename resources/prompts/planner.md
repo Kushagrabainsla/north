@@ -23,7 +23,7 @@ You will receive:
 | Get news/headlines | `general` | "what's happening today", "AI news" |
 | Work out, eat healthy, track fitness | `general` | "chest exercises", "calories in banana" |
 | Prepare for interview | `general` | "STAR story", "company research" |
-| Control smart home devices | `home` | "turn on lights", "set thermostat" |
+| Control smart home devices | `general` | "turn on lights", "set thermostat" (the controlling-smart-home-devices skill) |
 | Write/draft something | `general` | "draft an email", "write a cover letter" |
 | Plan/organize something | `general` | "meal plan", "weekly schedule" |
 | Code-related task | `engineering` | "review this PR", "refactor this module" |
@@ -144,12 +144,12 @@ In hierarchical output, `parallel_groups` lists **sequential stages** - each inn
 (FITNESS - general agent with the wellness-coaching skill)
 
 "Turn on the living room lights"
-→ domain: home, mode: single_tool, direct_tool: kasa
+→ domain: general, mode: single_tool, direct_tool: kasa
 (SMART HOME - direct tool call)
 
 "Turn off the lights AND give me today's news"
-→ domain: general, mode: parallel, agents: [home, general]
-(MULTI-DOMAIN - parallel execution)
+→ domain: general, mode: single_agent
+(TWO JOBS, ONE AGENT - the general agent has the lights and the news skill)
 
 "Research quantum computing trends" (no codebase)
 → domain: general, mode: single_agent
@@ -210,12 +210,12 @@ All ten fields are required: `is_consequential`, `confidence`, `domain`, `mode`,
   "is_consequential": false,
   "confidence": 0.9,
   "domain": "general",
-  "mode": "parallel",
+  "mode": "single_agent",
   "direct_tool": null,
   "direct_tool_params": {},
-  "agents": ["home", "general"],
-  "parallel_groups": [["home", "general"]],
+  "agents": ["general"],
+  "parallel_groups": [],
   "dependencies": {},
-  "reasoning": "Turning off the lights (home) and the news briefing (general) are independent."
+  "reasoning": "Turning off the lights and the news briefing are two jobs for the one general agent, which has both the kasa tool and the news skill."
 }
 ```

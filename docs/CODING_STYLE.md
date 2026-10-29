@@ -1152,6 +1152,8 @@ status="completed"
 
 ## 15. Agents
 
+North has one agent, `general`. A specialism is a skill on it, never a new agent: an agent that is only a prompt is a skill (the news briefing, wellness coaching and smart home control all went this way). Coding is not an agent either: the general agent hands it to the installed Claude Code / Codex.
+
 ### 15.1 The Agent Interface
 
 ```python

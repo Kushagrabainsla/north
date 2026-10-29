@@ -393,11 +393,10 @@ A relevance *score* cannot decide whether a task wants personal facts at all: me
 ```python
 _FACT_TOPICS_BY_DOMAIN = {
     "engineering": frozenset({"preferences"}),
-    "home": frozenset({"preferences", "schedule"}),
 }
 ```
 
-plus `identity` and `user` topics, always allowed everywhere - the user stated those directly, so no domain is denied them. `engineering` is deliberately the narrow one: a coding prompt about a bug pulled "the user is familiar with PyTorch" and a fact that matched only on the word "fail", both plausible by cosine score and useless to the task. A domain absent from the map (`general`, and any newly added agent) stays **unrestricted** rather than silently blind - the safe default until someone has measured that domain the way `engineering`/`home`/`wellness` were measured. The whole-document `user.md` fallback (Section 5.3) is gated the same way: it is served only to unrestricted principals, because serving it to a topic-scoped caller would hand back by another route exactly what the scoping just excluded.
+plus `identity` and `user` topics, always allowed everywhere - the user stated those directly, so no domain is denied them. `engineering` is deliberately the narrow one: a coding prompt about a bug pulled "the user is familiar with PyTorch" and a fact that matched only on the word "fail", both plausible by cosine score and useless to the task. A domain absent from the map (`general`, and any newly added agent) stays **unrestricted** rather than silently blind - the safe default until someone has measured that domain the way `engineering` was measured. The whole-document `user.md` fallback (Section 5.3) is gated the same way: it is served only to unrestricted principals, because serving it to a topic-scoped caller would hand back by another route exactly what the scoping just excluded.
 
 What this does not solve: within an unrestricted domain, there is still no per-task signal deciding whether *this particular* prompt wants personal facts - `general` recalls against the raw prompt text on every turn, including one-word acknowledgements. See "Task-Level Fact Recall Gating" in Section 15 for the still-unshipped fix.
 
@@ -552,7 +551,7 @@ scoping each task's rows. Earlier versions used one file per task.
 
 ```python
 await task_context.write(task_id, agent="general", key="output", value=..., status="completed")
-await task_context.update_agent_status(task_id, "home", "failed")
+await task_context.update_agent_status(task_id, "general", "failed")
 everything = await task_context.get_all(task_id)   # {agent: {key: value}}
 ```
 
@@ -797,20 +796,11 @@ without code changes. The current set:
 
 | Agent | Domain | Responsibilities |
 |-------|--------|-----------------|
-| Architect | Engineering | Designs implementation plans, decomposes work - reasoning pool |
-| Coder | Engineering | Code generation, debugging, refactoring, edits - reasoning pool |
-| Tester | QA | Runs the suite, verifies changes, reports failures - fast_cheap pool |
-| Researcher | Research | Open-ended investigation, gathering and synthesising sources |
-| General | General purpose | Open-ended chat, planning, questions that don't map to a domain agent |
-| Home | Smart home | Controls local devices (e.g. Kasa bulbs) behind approval gates |
-| News Briefing | News | Assembles briefings from web sources |
-| Health | Health and wellness | Meal planning, workouts, dietary and fitness tracking |
-| University | Academic | Coursework, deadlines, research papers, communications |
-| Job | Career | Internship tasks, professional communications, interview prep |
-| Finance | Personal finance | Budgeting, expense tracking, investment research |
+| General | General purpose | Everything: chat, research, writing, smart home, and code, which it hands to the installed Claude Code / Codex |
 
-Every agent subclasses `LLMAgent` (single call) or `AgenticLLMAgent` (ReAct loop with native
-function calling); the engineering agents (Architect, Coder) run on the reasoning pool.
+One agent. A specialism is a skill on it (news briefing, wellness coaching, smart home control, job applications), never an agent of its own: an agent that is only a prompt is a skill. The multi-agent plan modes, the result synthesizer and `delegate_task` remain in code for a registry with more than one agent.
+
+The agent subclasses `AgenticLLMAgent` (a ReAct loop with native function calling).
 
 ### 7.2 Folder Structure
 
@@ -823,9 +813,8 @@ Each agent is a self-contained folder dropped into `/agents`. The Orchestrator s
     config.yaml           <- declaration: agent, domain, accepted keywords
     prompts/
       system.md           <- system prompt defining the agent's expertise
-  /home/
-  (news briefings and wellness coaching are skills on the general agent, not agents:
-   an agent that is only a prompt is a skill)
+  (news briefings, wellness coaching and smart home control are skills on the general agent,
+   not agents: an agent that is only a prompt is a skill)
   (no coding agents of its own: code tasks go to the general agent, which hands them to the installed
    Claude Code / Codex through `coding_agent`; see docs/design/coding-agents.md)
 ```
@@ -2151,7 +2140,7 @@ beautifulsoup4 = ">=4.12.0"
 ddgs = ">=1.0.0"                # DuckDuckGo search (no API key required)
 
 # Smart home
-python-kasa = ">=0.7.0"         # local control of Kasa devices (home agent)
+python-kasa = ">=0.7.0"         # local control of Kasa devices (kasa tool)
 
 # Voice input
 sounddevice = ">=0.4.6"         # push-to-talk audio capture
