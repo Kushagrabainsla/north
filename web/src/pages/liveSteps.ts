@@ -40,7 +40,7 @@ const LABELS: Record<string, [string, string]> = {
 /** Every event the fold reacts to; the page subscribes to exactly these. */
 export const STEP_EVENTS = [
   ...Object.keys(LABELS),
-  "classified", "routed", "agent_started", "model", "failover", "tool_called", "tool_result", "agent_completed", "task_failed",
+  "classified", "routed", "agent_started", "model", "tool_called", "tool_result", "agent_completed", "task_failed",
 ];
 
 const truncate = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
@@ -74,8 +74,6 @@ export function foldStep(steps: Step[], event: string, data: Record<string, any>
       const agent = steps[index].text.replace(/^↳ /, "").split(" ")[0];
       return steps.map((s, i) => (i === index ? { ...s, text: `${branch}${agent} running on ${data.model}…` } : s));
     }
-    case "failover":
-      return push("↻", `switched model${data.to ? ` to ${data.to}` : ""}${data.reason ? ` (${data.reason})` : ""}`, false);
     case "tool_called":
       return push("⚙", `${branch}${data.tool || "tool"}${paramsPreview(data.params || data.args)}…`);
     case "tool_result":

@@ -43,6 +43,8 @@ describe("a task's live steps", () => {
 
   it("ignores events it has no line for, and subscribes to every event it folds", () => {
     expect(foldStep([], "prompt_profile", {})).toEqual([]);
+    // Nothing on the server emits failover; a switched model shows as the next "running on" line.
+    expect(STEP_EVENTS).not.toContain("failover");
     expect(STEP_EVENTS).toContain("tool_called");
     expect(STEP_EVENTS).toContain("question_required");
   });

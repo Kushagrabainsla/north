@@ -28,3 +28,10 @@ def test_a_ledger_with_a_combined_answer_reads_as_that_answer() -> None:
     ]
     assert _reconstruct_task_output(entries) == "Three sources, summarised."
     assert _reconstruct_task_output(entries[:2]) == "found three sources\n\ndrafted the summary"
+
+
+def test_an_event_nothing_emits_adds_no_step() -> None:
+    """The feed rendered a failover line, but no code on the server has ever emitted that event."""
+    feed = TaskStepFeed(stream=MagicMock(), live=MagicMock())
+    feed.apply("failover", {"from": "a", "to": "b"})
+    assert feed.steps == []

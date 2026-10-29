@@ -197,14 +197,6 @@ class TaskStepFeed:
                 self.steps[index] = ("◎", f"{agent_name} running on [cyan]{model}[/cyan]…", True)
                 return
 
-    def _on_failover(self, data: dict[str, Any]) -> None:
-        from_model = data.get("from", "model")
-        to_model = data.get("to", "")
-        reason = data.get("reason", "")
-        destination = f" → [cyan]{to_model}[/cyan]" if to_model else ""
-        why = f" ({reason})" if reason else ""
-        self.steps.append(("↻", f"failover: [dim]{from_model}[/dim]{destination}{why}", False))
-
     def _on_agent_completed(self, data: dict[str, Any]) -> None:
         agent = data.get("agent", "agent")
         summary = data.get("summary", "")
@@ -314,7 +306,6 @@ def _chosen_option(raw_choice: str, options: list[str]) -> str:
 _EVENT_HANDLERS: dict[str, Callable[[TaskStepFeed, dict[str, Any]], None]] = {
     "agent_started": TaskStepFeed._on_agent_started,
     "model": TaskStepFeed._on_model,
-    "failover": TaskStepFeed._on_failover,
     "agent_completed": TaskStepFeed._on_agent_completed,
     "task_synthesis": TaskStepFeed._on_task_synthesis,
     "tool_called": TaskStepFeed._on_tool_called,
