@@ -48,7 +48,7 @@ class LandingDesk:
             decision = await self._approvals.decide(_request(change, verification, review), task_id=task_id)
             if not decision.allowed:
                 if decision.status is None:  # refused outright, nobody was asked
-                    return Landing(LandingState.KEPT, f"north's policy: {decision.reason}")
+                    return Landing(LandingState.KEPT, f"north's policy: {decision.reason}", by_policy=True)
                 return Landing(LandingState.DECLINED, "you kept it on the branch")
             if await manager.apply_back(copy, lock=self._lock(tree.base)):
                 keep_branch = False

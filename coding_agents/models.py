@@ -146,6 +146,7 @@ class LandingState(StrEnum):
 class Landing:
     state: LandingState
     reason: str = ""
+    by_policy: bool = False  # kept because north's own policy refused it, not because of the tests
 
 
 @dataclass(frozen=True)

@@ -301,6 +301,21 @@ class TestWhatHappenedToTheChange:
         assert "Earlier rounds of this task also left branches" in text
         assert "`north/wt-coding-one`, `north/wt-coding-two`" in text
 
+    async def test_a_change_the_policy_kept_back_says_to_ask_rather_than_edit_again(self) -> None:
+        kept = Landing(LandingState.KEPT, "north's policy: functions need docstrings", by_policy=True)
+
+        text = await self._text(verification=PASSED, landing=kept)
+
+        assert "NOT applied: north's policy: functions need docstrings" in text
+        assert "ask the user which they want; do not run another edit round" in text
+
+    async def test_a_change_kept_for_failing_tests_does_not_say_to_ask(self) -> None:
+        failed = Verification(VerificationState.FAILED, "pytest -q", "1 failed")
+
+        text = await self._text(verification=failed, landing=Landing(LandingState.KEPT, "the tests failed"))
+
+        assert "do not run another edit round" not in text
+
     async def test_a_declined_change_says_you_kept_it(self) -> None:
         text = await self._text(verification=PASSED, landing=Landing(LandingState.DECLINED, "you kept it"))
 

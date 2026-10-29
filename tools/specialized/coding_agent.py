@@ -225,7 +225,11 @@ def _output(report: RunReport) -> ToolOutput:
             "summary": report.review.summary,
         }
     if report.landing is not None:
-        data["landing"] = {"state": report.landing.state.value, "reason": report.landing.reason}
+        data["landing"] = {
+            "state": report.landing.state.value,
+            "reason": report.landing.reason,
+            "by_policy": report.landing.by_policy,
+        }
     if report.earlier_branches:
         data["earlier_branches"] = list(report.earlier_branches)
     if report.problem:  # the agent finished, but what it did could not be saved: that is not "no changes"
@@ -277,11 +281,17 @@ def _edit_summary(data: dict) -> str:
         "conflict": "the same lines changed in your working tree meanwhile",
         "declined": "you chose to keep them on the branch",
     }.get(landing["state"], landing["reason"])
-    return (
+    text = (
         f"The agent's changes were NOT applied: {why}. {tests} They are on branch `{change['branch']}` "
         f"in your repository ({size}). To review: "
         f"`git -C {change['base']} diff {change['base_sha']}..{change['branch']}`.\n{files}"
     )
+    if landing.get("by_policy"):
+        text += (
+            "\n\nIf meeting that rule would contradict what the user asked, ask the user which they want; "
+            "do not run another edit round to satisfy both."
+        )
+    return text
 
 
 def _review_summary(review: dict) -> str:

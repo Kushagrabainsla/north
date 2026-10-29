@@ -151,7 +151,7 @@ class TestWhenItStaysOnTheBranch:
 
         landing, _ = await _land(LandingDesk(nobody), change)
 
-        assert landing.state is LandingState.KEPT and "north's policy" in landing.reason
+        assert landing.state is LandingState.KEPT and "north's policy" in landing.reason and landing.by_policy
         assert change.tree.branch in _branches(repo)
 
     async def test_a_change_to_a_different_branch_is_a_different_question(self, repo) -> None:
