@@ -60,12 +60,16 @@ async def recover_interrupted_tasks(
 
         now = datetime.now(UTC)
         resumed: list[str] = []
+        queued: list[str] = []
         failed: list[str] = []
         for rt in interrupted:
             if rt.task_id in orchestrator.active_task_ids:
                 continue  # already picked back up (shouldn't happen this early)
             # Paused tasks are user-initiated — only resume via explicit resume_paused_task().
-            if rt.status == "paused":
+            # Queued ones wait for a model: the queue runs them when one is back, and a
+            # missing resource never uses up attempts (CODING_STYLE §13.5, #34). Taken
+            # here, three outages, or a day of one, failed them at the next start.
+            if rt.status in ("paused", "queued"):
                 continue
             stalled_for = (now - rt.heartbeat_at).total_seconds()
             if rt.has_side_effects and not resume_side_effecting:
@@ -76,6 +80,11 @@ async def recover_interrupted_tasks(
                     "effects (e.g. a repeated push or message). Re-submit manually if you want it re-run.",
                 )
                 failed.append(rt.task_id)
+            elif rt.status == "retrying":
+                # Cut off while the queue was running it again: it goes back to the queue, whose
+                # attempts count no outage against it.
+                await store.mark_queued(rt.task_id, attempt=rt.attempt)
+                queued.append(rt.task_id)
             elif stalled_for > max_age_seconds:
                 await _fail_task(
                     deps, rt.task_id, f"Interrupted task exceeded max age ({max_age_seconds}s) - marked failed."
@@ -90,9 +99,16 @@ async def recover_interrupted_tasks(
                 failed.append(rt.task_id)
             elif await orchestrator.resume_task(rt.task_id, rt.request, attempt=rt.attempt + 1):
                 resumed.append(rt.task_id)
+            else:
+                # North is at capacity: the queue starts it once a slot frees, rather than
+                # its row reading "running" with nothing running it until the next start.
+                await store.mark_queued(rt.task_id, attempt=rt.attempt)
+                queued.append(rt.task_id)
 
         if resumed:
             logger.info("Recovery: resumed %d interrupted task(s): %s", len(resumed), resumed)
+        if queued:
+            logger.info("Recovery: left %d interrupted task(s) to the queue: %s", len(queued), queued)
         if failed:
             logger.warning("Recovery: marked %d unrecoverable task(s) FAILED: %s", len(failed), failed)
     except Exception:

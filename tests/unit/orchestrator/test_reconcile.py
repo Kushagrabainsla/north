@@ -28,6 +28,7 @@ def _running_task(
     age_seconds: float = 1.0,
     heartbeat_age: float | None = None,
     has_side_effects: bool = False,
+    status: str = "running",
 ) -> RunningTask:
     now = datetime.now(UTC)
     hb_age = age_seconds if heartbeat_age is None else heartbeat_age
@@ -38,6 +39,7 @@ def _running_task(
         started_at=now - timedelta(seconds=age_seconds),
         heartbeat_at=now - timedelta(seconds=hb_age),
         has_side_effects=has_side_effects,
+        status=status,
     )
 
 
@@ -45,12 +47,17 @@ class _StubStore:
     def __init__(self, tasks: list[RunningTask]) -> None:
         self._tasks = tasks
         self.cleared: list[str] = []
+        self.queued: list[tuple[str, int]] = []
 
     async def list_all(self) -> list[RunningTask]:
         return list(self._tasks)
 
     async def clear(self, task_id: str) -> None:
         self.cleared.append(task_id)
+
+    async def mark_queued(self, task_id: str, *, attempt: int = 0) -> bool:
+        self.queued.append((task_id, attempt))
+        return True
 
 
 class _StubLedger:
@@ -190,4 +197,40 @@ async def test_side_effecting_task_resumed_when_opted_in() -> None:
     )
 
     assert [tid for tid, _, _ in orch.resumed] == ["t1"]
+    assert _failed_ids(ledger) == []
+
+
+async def test_a_task_queued_for_a_model_is_left_to_the_queue_however_long_it_waited() -> None:
+    """Three outages, or a day of one, failed it at the next start; a missing model never uses up attempts (#34)."""
+    store = _StubStore(
+        [_running_task("t1", attempt=MAX_RESUME_ATTEMPTS + 2, age_seconds=_MAX_AGE * 2, status="queued")]
+    )
+    ledger, orch = _StubLedger(), _StubOrchestrator()
+
+    await _run(_StubDeps(ledger, store), orch)
+
+    assert orch.resumed == []
+    assert _failed_ids(ledger) == []
+    assert store.cleared == []
+
+
+async def test_a_task_the_queue_was_running_again_goes_back_to_the_queue() -> None:
+    store = _StubStore([_running_task("t1", attempt=MAX_RESUME_ATTEMPTS + 2, status="retrying")])
+    ledger, orch = _StubLedger(), _StubOrchestrator()
+
+    await _run(_StubDeps(ledger, store), orch)
+
+    assert orch.resumed == []
+    assert _failed_ids(ledger) == []
+    assert store.queued == [("t1", MAX_RESUME_ATTEMPTS + 2)]
+
+
+async def test_a_task_north_has_no_room_for_yet_waits_in_the_queue() -> None:
+    """Refused at capacity, its row read "running" with nothing running it until the next start."""
+    store = _StubStore([_running_task("t1", attempt=1)])
+    ledger, orch = _StubLedger(), _StubOrchestrator(resume_result=False)
+
+    await _run(_StubDeps(ledger, store), orch)
+
+    assert store.queued == [("t1", 1)]
     assert _failed_ids(ledger) == []
