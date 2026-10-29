@@ -54,10 +54,10 @@ def test_without_yolo_the_mode_is_left_alone(monkeypatch) -> None:
     assert calls == ["submit"]
 
 
-def _status_with(monkeypatch, autonomy: str) -> str:
+def _status_with(monkeypatch, autonomy: str, health: dict | None = None) -> str:
     def fake_api(method, path, **kwargs):
         if path == "/health":
-            return _Reply({"status": "ok"})
+            return _Reply(health or {"status": "ok"})
         if path == "/orchestrator/settings":
             return _Reply({"power": "sport", "autonomy": autonomy})
         raise RuntimeError("not needed")
@@ -77,3 +77,22 @@ def test_status_shows_the_dials_the_api_returns(monkeypatch) -> None:
 
 def test_status_shows_the_yolo_badge(monkeypatch) -> None:
     assert "YOLO" in _status_with(monkeypatch, "yolo")
+
+
+def test_a_degraded_server_reads_degraded_and_names_the_failing_check(monkeypatch) -> None:
+    health = {"status": "degraded", "checks": {"api": {"status": "ok"}, "inference": {"status": "failed"}}}
+
+    output = _status_with(monkeypatch, "safe", health)
+
+    assert "degraded: inference" in output and "down" not in output
+    assert "autonomy: safe" in output  # the rest of the snapshot is still shown
+
+
+def test_a_server_that_does_not_answer_reads_down(monkeypatch) -> None:
+    def unreachable(method, path, **kwargs):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(main, "_api", unreachable)
+    result = runner.invoke(main.app, ["status"])
+
+    assert result.exit_code == 0 and "down" in result.output

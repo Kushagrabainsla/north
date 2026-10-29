@@ -1393,24 +1393,32 @@ def status() -> None:
     sizes, registered agents, and the active strategy into one view.
     """
     # Server health
+    # A server that answers is up, whatever its checks say: "degraded" (say, no model reachable) used to
+    # read "server down" and hid the rest of the snapshot, the part that says what is wrong.
     try:
         health = _api("GET", "/health").json()
-        server_ok = health.get("status") == "ok"
+        reachable = True
     except Exception:
-        server_ok = False
+        reachable = False
         health = {}
 
     _console.print()
     _console.print(f"  {wordmark()} [bold white]status[/bold white]")
 
     # ── Server ──
-    health_icon = "[green]●[/green]" if server_ok else "[red]●[/red]"
     uptime = health.get("uptime_seconds")
     uptime_str = f"  [dim]uptime {int(uptime)}s[/dim]" if uptime is not None else ""
-    status_text = "healthy" if server_ok else "down"
+    if not reachable:
+        health_icon, status_text = "[red]●[/red]", "down"
+    elif health.get("status") == "ok":
+        health_icon, status_text = "[green]●[/green]", "healthy"
+    else:
+        failing = [name for name, check in (health.get("checks") or {}).items() if check.get("status") != "ok"]
+        health_icon = "[yellow]●[/yellow]"
+        status_text = f"{health.get('status') or 'degraded'}: {', '.join(failing)}" if failing else "degraded"
     _console.print(f"  {health_icon} server  [bright_black]{status_text}[/bright_black]{uptime_str}")
 
-    if not server_ok:
+    if not reachable:
         _console.print()
         return
 
