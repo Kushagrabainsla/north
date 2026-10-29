@@ -545,3 +545,15 @@ async def test_a_chat_still_hears_how_its_task_ended_after_north_restarts(monkey
     [call] = after._send_message.await_args_list
     assert call.args[0] == 42 and "interrupted by a restart" in call.args[1]
     assert after.resume_waits() == 0, "answered once, then forgotten"
+
+
+def test_the_chat_gets_the_tasks_last_answer_once_it_has_ended() -> None:
+    """Taken at the first agent answer, a task with more to do sent the chat that one and never the rest."""
+    from gateways.telegram import _finished_output
+
+    first = {"action": "agent_completed", "output": "answer 1"}
+    follow_up = {"action": "agent_completed", "output": "answer 2, with the 2025 numbers"}
+    ended = {"action": "task_completed", "output": None}
+
+    assert _finished_output([first], "t", 1) is None
+    assert _finished_output([ended, follow_up, first], "t", 2) == "answer 2, with the 2025 numbers"

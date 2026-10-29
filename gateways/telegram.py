@@ -136,10 +136,14 @@ def _finished_output(entries: list[dict], task_id: str, poll: int) -> str | None
             logger.warning("Task %s terminal status=%s at poll %d", task_id, status, poll)
             return f"Task {status}: {output}" if output else f"Task {status}."
 
-    for entry in entries:  # fallback: a single agent finished on its own
-        if entry.get("action") == "agent_completed" and entry.get("output"):
-            logger.info("Task %s found agent_completed output at poll %d", task_id, poll)
-            return entry["output"]
+    # Its latest agent's answer, once the task has ended. Taken as soon as any agent
+    # answered, a task with more to do (a later stage, a message you sent mid-task)
+    # sent the chat its first answer and never the rest.
+    if any(entry.get("action") in _COMPLETED_ACTIONS for entry in entries):
+        for entry in entries:
+            if entry.get("action") == "agent_completed" and entry.get("output"):
+                logger.info("Task %s found agent_completed output at poll %d", task_id, poll)
+                return entry["output"]
     return None
 
 
