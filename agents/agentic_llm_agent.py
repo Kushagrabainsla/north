@@ -100,6 +100,8 @@ _EVIDENCE_LOCATOR_KEYS: tuple[str, ...] = (
 
 # How much of a final answer is kept as its one-line summary.
 _SUMMARY_CHARS = 120
+# How a message you sent mid-task reaches the model (CODING_STYLE §15.4).
+_MESSAGE_WHILE_WORKING = "The user sent this while you were working on the task. Take it into account from here on:"
 
 
 def _tool_schemas(
@@ -508,6 +510,7 @@ class AgenticLLMAgent(LLMAgent):
         tally = _RunTally()
         emitted_model: str = ""
         soft_budget_noted = False
+        messages_read = 0
 
         known_registry_tools = (
             set(self._deps.tool_registry.all_tool_names()) if getattr(self._deps, "tool_registry", None) else set()
@@ -515,6 +518,7 @@ class AgenticLLMAgent(LLMAgent):
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for iteration in range(self._deps.agent_max_iterations):
+            messages_read = await self._read_your_messages(payload, messages, messages_read)
             if not soft_budget_noted:
                 soft_budget_noted = await self._note_soft_budget_if_needed(
                     payload,
@@ -569,6 +573,12 @@ class AgenticLLMAgent(LLMAgent):
                 # strip the model's private reasoning from the stored copy so it
                 # matches the streamed view and never feeds extraction/verification.
                 content = normalize_dashes(strip_reasoning(response.content or ""))
+                if self._has_unread_messages(payload, messages_read):
+                    # You wrote while it was answering: it answers again, with your message.
+                    messages.append({"role": "assistant", "content": content})
+                    if self._deps.stream_manager is not None:
+                        await self._deps.stream_manager.emit(payload.task_id, "stream_reset", {})
+                    continue
                 return tally.answer(content, content[:_SUMMARY_CHARS])
 
             # Tool calls branch - execute the requested calls.
@@ -595,6 +605,28 @@ class AgenticLLMAgent(LLMAgent):
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
         )
+
+    def _reads_messages(self, payload: AgentPayload) -> bool:
+        """Only the agents the orchestrator runs read your messages; a delegate's caller already has them."""
+        return self._deps.task_inbox is not None and bool(payload.task_id) and payload.delegation_depth == 0
+
+    async def _read_your_messages(self, payload: AgentPayload, messages: list[dict], read: int) -> int:
+        """Add what you sent the task after the first *read* messages to the conversation; returns the new count."""
+        if not self._reads_messages(payload):
+            return read
+        assert self._deps.task_inbox is not None
+        new = self._deps.task_inbox.read(payload.task_id, read)
+        for text in new:
+            messages.append({"role": "user", "content": f"{_MESSAGE_WHILE_WORKING}\n\n{text}"})
+        if new and self._deps.stream_manager is not None:
+            await self._deps.stream_manager.emit(payload.task_id, "user_message_read", {"count": len(new)})
+        return read + len(new)
+
+    def _has_unread_messages(self, payload: AgentPayload, read: int) -> bool:
+        if not self._reads_messages(payload):
+            return False
+        assert self._deps.task_inbox is not None
+        return self._deps.task_inbox.count(payload.task_id) > read
 
     async def _note_soft_budget_if_needed(
         self,

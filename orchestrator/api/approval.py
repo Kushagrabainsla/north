@@ -80,14 +80,21 @@ class SteerRequest(BaseModel):
 
 @router.post("/steer")
 async def steer_task(body: SteerRequest) -> dict:
-    """Submit an in-flight steering directive to an active task."""
+    """Send a message into a running task (CODING_STYLE §15.4).
+
+    With no ``task_id``, the one task in flight; with several, which one is yours
+    to say, not the most recent one north started from any surface.
+    """
     orch = _get_orchestrator()
     task_id = body.task_id
     if not task_id:
-        active = list(orch._active_tasks.keys())
-        if not active:
-            raise HTTPException(status_code=404, detail="No active task to steer.")
-        task_id = active[-1]
-
-    await orch.emit_steer(task_id, body.instruction)
+        active = sorted(orch.active_task_ids)
+        if len(active) != 1:
+            raise HTTPException(
+                status_code=409 if active else 404,
+                detail="Several tasks are running; name one." if active else "No task is running.",
+            )
+        task_id = active[0]
+    if not await orch.send_message(task_id, body.instruction):
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} has finished.")
     return {"status": "ok", "task_id": task_id, "instruction": body.instruction}

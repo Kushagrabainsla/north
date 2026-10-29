@@ -4,7 +4,8 @@
 // yet) or hides a search that just has no results.
 
 import { describe, expect, it } from "vitest";
-import { attachmentText, replyText, sessionsEmptyMessage } from "./Chat";
+import { attachmentText, joinedTurn, replyText, sessionsEmptyMessage } from "./Chat";
+import type { Turn } from "../types";
 
 describe("what can be attached to a message", () => {
   const bytes = (values: number[]) => new Uint8Array(values).buffer;
@@ -48,5 +49,19 @@ describe("which reply a turn shows", () => {
   it("falls back to whatever exists", () => {
     expect(replyText(false, "only streamed", "")).toBe("only streamed");
     expect(replyText(true, "", "only saved")).toBe("only saved");
+  });
+});
+
+describe("a message sent into a running task", () => {
+  const turn = (id: string, task_id: string | null) => ({ id, task_id, prompt: id, created_at: "" }) as unknown as Turn;
+  const turns = [turn("first", "task-1"), turn("added", "task-1"), turn("next", "task-2")];
+
+  it("shows as part of the task an earlier turn started, with no answer of its own", () => {
+    expect(joinedTurn(turns, 1)).toBe(true);
+  });
+
+  it("leaves a turn that started its own task as it was", () => {
+    expect(joinedTurn(turns, 0)).toBe(false);
+    expect(joinedTurn(turns, 2)).toBe(false);
   });
 });

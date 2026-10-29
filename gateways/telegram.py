@@ -347,6 +347,19 @@ class TelegramGateway:
             logger.error("Failed to submit task to north: %s", exc)
             return None
 
+    async def _send_into_task(self, task_id: str, text: str) -> bool:
+        """Send *text* into a running task; False when it has finished or north cannot be reached."""
+        try:
+            resp = await self._http.post(
+                f"{self._orchestrator_base}/orchestrator/steer",
+                json={"task_id": task_id, "instruction": text},
+                headers=_headers(),
+            )
+        except httpx.RequestError as exc:
+            logger.error("Failed to send a message into task %s: %s", task_id, exc)
+            return False
+        return resp.status_code == 200
+
     async def _get_task_result(self, task_id: str, chat_id: int | None = None) -> str | None:
         """Poll the ledger for the completed agent's output, sending interactive approval cards if needed."""
         prompted_cards: set[str] = set()
@@ -658,8 +671,16 @@ class TelegramGateway:
         await self._reply(chat, within_telegram_limit(f"🧭 **Recent decisions**\n\n{body}\n\nOverrule one on the web."))
 
     async def _run_task(self, chat: _Reply, text: str) -> None:
-        """Submit a message to north and reply with whatever it produces."""
+        """Submit a message to north and reply with whatever it produces.
+
+        Sent while this chat's task still works, it goes into that task instead (CODING_STYLE §15.4),
+        whose answer this chat is already waiting for.
+        """
         await self._send_chat_action(chat.chat_id)
+        running = self._pending_task_for(chat.chat_id)
+        if running and await self._send_into_task(running, text):
+            await self._reply(chat, "↳ Added to the task I'm working on; its answer will cover it.")
+            return
 
         result = await self._submit_task(text)
         if result is None:

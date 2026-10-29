@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from agents.inbox import TaskInbox
 from approval import Notifier, TerminalNotifier
 from approval.continuation import CardContinuations
 from approval.store import ApprovalStore
@@ -97,6 +98,8 @@ class Dependencies:
     card_continuations: Any | None = field(default=None)
     # How prepared work was decided, and why - the training signal for a flow.
     decision_log: Any | None = field(default=None)
+    # What you send a task while it works, read by the orchestrator and the agents it runs.
+    task_inbox: TaskInbox = field(default_factory=TaskInbox)
 
 
 _EMBED_CACHE_MAX_SIZE = 512

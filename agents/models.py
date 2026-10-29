@@ -17,6 +17,7 @@ from utils.edit_scope import EditAuthorizer
 from utils.ids import generate_id
 
 if TYPE_CHECKING:
+    from agents.inbox import TaskInbox
     from approval.interaction import UserInteraction
     from ledger.base import LedgerWriter
     from memory import MemoryGateway
@@ -228,3 +229,6 @@ class AgentDependencies:
     flow_registry: Any | None = field(default=None)
     # Durable execution index shared by top-level and delegated agents.
     agent_run_store: Any | None = field(default=None)
+    # What you send a task while it works (CODING_STYLE §15.4). The agents the
+    # orchestrator runs read it before each step and before answering.
+    task_inbox: TaskInbox | None = field(default=None)

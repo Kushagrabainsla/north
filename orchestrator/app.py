@@ -413,6 +413,7 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry, interaction: UserIntera
         north_settings=deps.north_settings,
         agent_run_store=deps.agent_run_store,
         offered_store=deps.offered_store,
+        task_inbox=deps.task_inbox,
     )
 
 
@@ -485,6 +486,7 @@ def _build_orchestrator(
         critic=settings.critic_enabled,
         approval_memory=approval_memory,
         plan_store=deps.plan_store,
+        task_inbox=deps.task_inbox,
     )
 
 

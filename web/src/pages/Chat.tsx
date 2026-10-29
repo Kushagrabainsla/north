@@ -30,10 +30,17 @@ export function replyText(isActive: boolean, streamed = "", output = ""): string
 function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprovals: () => Promise<void>) {
   const [live, setLive] = useState<Record<string, string>>({});
   const [signals, setSignals] = useState<Record<string, Signal[]>>({});
-  const ids = turns.filter(t => t.task_id && !["completed", "failed", "cancelled", "needs_attention"].includes(t.detail?.task.status || "")).map(t => t.task_id!);
+  // One stream per task: a message sent into a running task is a turn of its own on the same task.
+  const ids = [...new Set(turns.filter(t => t.task_id && !["completed", "failed", "cancelled", "needs_attention"].includes(t.detail?.task.status || "")).map(t => t.task_id!))];
   useEffect(() => {
     const streams = ids.map(taskId => {
       const stream = new EventSource(`/orchestrator/stream/${taskId}`);
+      // Every (re)connect replays the task's whole history, so it starts from nothing: appended to
+      // what was shown, a reconnect or a new turn showed the streamed answer twice.
+      stream.addEventListener("open", () => {
+        setLive(current => ({ ...current, [taskId]: "" }));
+        setSignals(current => ({ ...current, [taskId]: [] }));
+      });
       stream.addEventListener("token", event => {
         const payload = JSON.parse((event as MessageEvent).data);
         setLive(current => ({ ...current, [taskId]: (current[taskId] || "") + (payload.text || "") }));
@@ -45,6 +52,9 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
           setSignals(current => ({ ...current, [taskId]: [...(current[taskId] || []), signal] }));
         });
       }
+      // What was streamed is being replaced: a model switched mid-answer, or North answers again with a
+      // message you sent while it worked.
+      stream.addEventListener("stream_reset", () => setLive(current => ({ ...current, [taskId]: "" })));
       // A retry starts the task over: what the failed try streamed and warned no longer applies.
       stream.addEventListener("task_retrying", () => {
         setLive(current => ({ ...current, [taskId]: "" }));
@@ -134,6 +144,18 @@ function WorkspacePicker({ workspace, saving, onSelect }: { workspace: string; s
       {listing && <footer><button type="button" onClick={() => setOpen(false)}>Cancel</button><button type="button" className="workspace-choose" disabled={saving} onClick={() => void choose()}>{saving ? "Saving…" : "Choose this folder"}</button></footer>}
     </div>}
   </div>;
+}
+
+/** A turn whose task an earlier turn started: the message went into that running task (CODING_STYLE §15.4). */
+export function joinedTurn(turns: Turn[], index: number): boolean {
+  const taskId = turns[index]?.task_id;
+  return Boolean(taskId) && turns.slice(0, index).some(turn => turn.task_id === taskId);
+}
+
+function JoinedTurn({ turn }: { turn: Turn }) {
+  return <article className="turn-bundle turn-joined">
+    <div className="user-prompt"><div className="user-message"><div className="turn-meta">You · {timeAgo(turn.created_at)} · sent into the task above</div><p>{turn.prompt}</p></div><div className="avatar user-avatar">You</div></div>
+  </article>;
 }
 
 function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
@@ -454,14 +476,15 @@ export function Chat() {
     await Promise.all([room.reload(), chats.reload()]);
   };
   const currentWorkspace = room.data?.workspace || "";
+  const taskRunning = (room.data?.turns || []).some(turn => turn.task_id && ["pending", "running", "queued", "retrying", "paused"].includes(turn.detail?.task.status || ""));
   return <div className={`chat-page session-room ${dragging ? "dragging" : ""}`} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
     <section className="chat-room" ref={chatRoom}>
       {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><button className="primary-button" onClick={createSession}>New session</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Session unavailable"}/> : <>
         <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<><Status value={room.data.archived ? "archived" : room.data.goal_status}/><button className="ghost-button" onClick={togglePinned}>{room.data.pinned ? "Unpin" : "Pin"}</button><button className="ghost-button" onClick={toggleArchived}>{room.data.archived ? "Unarchive" : "Archive"}</button><button className="ghost-button" onClick={editGoal}>Edit goal</button><button className="ghost-button" onClick={rename}>Rename</button><button className="danger-button" onClick={() => deleteChat(room.data!.id)}>Delete</button></>}/>
         <section className="session-goal"><div><small>Active goal</small><p>{room.data.goal || "No goal has been set for this session yet."}</p></div><div><Status value={room.data.goal_status}/>{room.data.goal && room.data.goal_status !== "achieved" && <button className="ghost-button" onClick={markGoalAchieved}>Mark achieved</button>}</div></section>
-        <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
+        <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
-        <form className="composer" onSubmit={submit}><textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
+        <form className="composer" onSubmit={submit}><textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder={taskRunning ? "Add to the task North is working on…" : "Ask North anything…"} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}
     </section>
   </div>;

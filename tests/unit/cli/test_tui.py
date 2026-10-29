@@ -130,8 +130,8 @@ async def test_tui_reuses_one_shared_conversation_for_all_prompts():
     app._set_status = lambda value: None
     sink = _install_capturing_http(app)
 
-    assert await app._post_task("first") == "task_test"
-    assert await app._post_task("second") == "task_test"
+    assert await app._post_task("first") == ("task_test", False)
+    assert await app._post_task("second") == ("task_test", False)
 
     assert sink == [
         {
@@ -293,3 +293,31 @@ async def test_lifecycle_extended_events_render():
         for ev, extra in events:
             await app._handle_event(ev, {"task_id": tid, **extra})
             await pilot.pause()
+
+
+async def test_a_message_that_joins_the_running_task_opens_no_new_turn():
+    """The server sent it into the running task (CODING_STYLE §15.4); that task's turn stays the one shown."""
+    app = NorthApp(base_url="http://north.test", headers=_HEADERS)
+    app._set_status = lambda value: None
+    app._conversation_id = "conversation_test"
+    app._current_turn_activity["task_running"] = {"task_id": "task_running", "prompt": "Summarise sales"}
+
+    class Joining(_CapturingClient):
+        async def post(self, url, **kw):
+            self.sink.append({"url": url, "json": kw.get("json")})
+            return _FakeResp({"task_id": "task_running", "joined": True})
+
+    sink: list[dict] = []
+
+    @contextlib.asynccontextmanager
+    async def fake_http():
+        yield Joining(sink)
+
+    app._http = fake_http
+    logged: list[str] = []
+    app._log = logged.append
+
+    await app._submit_prompt("use the 2025 numbers")
+
+    assert app._current_turn_activity["task_running"]["prompt"] == "Summarise sales"
+    assert any("sent into the running task" in line for line in logged)

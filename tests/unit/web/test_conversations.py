@@ -124,6 +124,58 @@ async def test_chat_turn_uses_its_conversation_workspace(tmp_path) -> None:
     assert "Goal: Inspect this project" in orchestrator.request.context
 
 
+class _Orchestrator:
+    """Starts task_1; *running* is the set of tasks still working."""
+
+    def __init__(self, running: set[str]) -> None:
+        self.running = running
+        self.submitted: list = []
+        self.sent: list[tuple[str, str]] = []
+
+    async def submit_task(self, request):
+        self.submitted.append(request)
+        return TaskResponse(task_id=f"task_{len(self.submitted)}", status="pending", created_at="2026-01-01T00:00:00Z")
+
+    async def send_message(self, task_id: str, text: str) -> bool:
+        if task_id not in self.running:
+            return False
+        self.sent.append((task_id, text))
+        return True
+
+
+async def test_a_message_sent_while_the_sessions_task_works_goes_into_that_task(tmp_path) -> None:
+    """A second message started a parallel task that knew nothing of the first (CODING_STYLE §15.4)."""
+    store = ConversationStore(tmp_path / "web.db")
+    conversation = await store.create()
+    orchestrator = _Orchestrator(running={"task_1"})
+
+    with bind_services(ApiServices(conversation_store=store, orchestrator=orchestrator)):
+        await web_api.create_turn(conversation.id, web_api.TurnCreate(prompt="Summarise sales"))
+        added = await web_api.create_turn(conversation.id, web_api.TurnCreate(prompt="use the 2025 numbers"))
+
+    assert len(orchestrator.submitted) == 1
+    assert orchestrator.sent == [("task_1", "use the 2025 numbers")]
+    assert added["task_id"] == "task_1" and added["joined"] is True
+    assert [turn.task_id for turn in await store.turns(conversation.id)] == ["task_1", "task_1"]
+
+
+async def test_a_message_after_the_task_finished_starts_a_new_one(tmp_path, monkeypatch) -> None:
+    async def no_detail(task_id):
+        return None
+
+    monkeypatch.setattr(web_api, "_task_detail", no_detail)
+    store = ConversationStore(tmp_path / "web.db")
+    conversation = await store.create()
+    orchestrator = _Orchestrator(running=set())
+
+    with bind_services(ApiServices(conversation_store=store, orchestrator=orchestrator)):
+        await web_api.create_turn(conversation.id, web_api.TurnCreate(prompt="Summarise sales"))
+        added = await web_api.create_turn(conversation.id, web_api.TurnCreate(prompt="Now plan next quarter"))
+
+    assert len(orchestrator.submitted) == 2
+    assert added["task_id"] == "task_2"
+
+
 async def test_a_new_chat_has_no_folder_until_you_choose_one(tmp_path) -> None:
     """It inherited north's start folder (the home folder), so every chat looked as if you had chosen home."""
     store = ConversationStore(tmp_path / "web.db")

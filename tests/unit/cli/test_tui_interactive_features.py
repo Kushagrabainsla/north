@@ -191,14 +191,18 @@ async def test_steering_submission_and_slash_commands():
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
 
-        # Submit /steer command
+        # Submit /steer command: it goes into this terminal's running task, by its id
+        app._current_turn_activity["t_running"] = {"task_id": "t_running"}
+        app._turn_start_times["t_running"] = 1.0
         prompt = app.query_one("#prompt")
         prompt.value = "/steer use pytest-asyncio strictly"
         await app.on_input_submitted(SimpleNamespace(value=prompt.value, input=prompt))
         await pilot.pause()
 
         assert any(
-            "steer" in call["url"] and call["json"]["instruction"] == "use pytest-asyncio strictly" for call in sink
+            "steer" in call["url"]
+            and call["json"] == {"task_id": "t_running", "instruction": "use pytest-asyncio strictly"}
+            for call in sink
         )
 
         # Test /thoughts slash command
@@ -209,7 +213,7 @@ async def test_steering_submission_and_slash_commands():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_emit_steer_and_api_endpoint():
+async def test_steering_sends_a_message_into_the_running_task():
     from approval.store import ApprovalStore
     from orchestrator.orchestrator import Orchestrator
     from orchestrator.stream import EventStreamManager
@@ -232,9 +236,10 @@ async def test_orchestrator_emit_steer_and_api_endpoint():
         approval_store=approval_store_,
     )
 
-    await orch.emit_steer("task_123", "focus on edge cases")
+    orch._active_tasks["task_123"] = MagicMock()
+    assert await orch.send_message("task_123", "focus on edge cases")
 
     assert ledger_writer.write.call_count == 1
     entry = ledger_writer.write.call_args[0][0]
-    assert entry.action == "task_steered"
-    assert entry.output == "focus on edge cases"
+    assert entry.action == "user_message"
+    assert entry.input == "focus on edge cases"

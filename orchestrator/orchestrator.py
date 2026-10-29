@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
+from agents.inbox import TaskInbox
 from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, UserInteraction
 from approval.approval_memory import ApprovalMemory
@@ -151,8 +152,13 @@ class Orchestrator:
         critic: bool = False,
         approval_memory: ApprovalMemory | None = None,
         plan_store: Any | None = None,
+        task_inbox: TaskInbox | None = None,
     ) -> None:
         self._ledger = ledger
+        # What you send a task while it works, shared with its agents (CODING_STYLE §15.4).
+        self._inbox = task_inbox or TaskInbox()
+        # The request each task in flight was started with, to answer a message that arrives after its agents did.
+        self._requests: dict[str, TaskRequest] = {}
         # Everything that reports on a task writes through one journal: durable
         # ledger entry plus the live event, never one without the other.
         self._journal = TaskJournal(ledger=ledger, stream_manager=stream_manager)
@@ -413,6 +419,9 @@ class Orchestrator:
         # the task is resumed next start.
         if self._running_task_store is not None:
             await self._running_task_store.clear(task_id)
+        # A paused or queued task has no pipeline whose cleanup would close these.
+        self._inbox.close(task_id)
+        self._requests.pop(task_id, None)
         await self._journal.record(task_id, "task_cancelled", status=LedgerStatus.CANCELLED)
         await self._stream_manager.emit_done(task_id)
         return True
@@ -621,23 +630,27 @@ class Orchestrator:
             },
         )
 
-    async def emit_steer(self, task_id: str, instruction: str) -> None:
-        """Publish an in-flight steering directive to an active task."""
-        await self._stream_manager.emit(
+    async def send_message(self, task_id: str, text: str) -> bool:
+        """Send *text* into a task that has not finished (CODING_STYLE §15.4); False when there is none.
+
+        Its agents read it before their next step and before answering. A task
+        paused, or queued for a model, reads it when it runs again; the ledger
+        entry is what a task that starts over after a restart reads it from.
+        """
+        if task_id not in self._active_tasks and (
+            self._running_task_store is None or await self._running_task_store.get(task_id) is None
+        ):
+            return False
+        self._inbox.post(task_id, text)
+        await self._journal.record(
             task_id,
-            "task_steered",
-            {"task_id": task_id, "instruction": instruction, "timestamp": format_timestamp(utcnow())},
+            "user_message",
+            source=LedgerSource.PROMPT,
+            agent="user",
+            input=text,
+            payload={"text": text, "timestamp": format_timestamp(utcnow())},
         )
-        await self._journal.write(
-            LedgerEntry.new(
-                source=LedgerSource.CLARIFICATION,
-                task_id=task_id,
-                agent="user",
-                action="task_steered",
-                output=instruction,
-                status=LedgerStatus.COMPLETED,
-            )
-        )
+        return True
 
     @property
     def active_task_ids(self) -> frozenset[str]:
@@ -794,6 +807,8 @@ class Orchestrator:
         # pipeline that starts by *reading* found nothing and stopped the task.
         await asyncio.to_thread(ensure_handoff_dir, task_id)
         task_start = time.monotonic()
+        self._requests[task_id] = request
+        await self._open_inbox(task_id)
         try:
             await self._run_pipeline(task_id, request)
         except asyncio.CancelledError:
@@ -805,6 +820,13 @@ class Orchestrator:
             await self._report_task_failure(task_id, task_start, e)
         finally:
             await self._release_finished_task(task_id)
+
+    async def _open_inbox(self, task_id: str) -> None:
+        """Take messages for the task; one starting over opens with those you sent before."""
+        if self._inbox.is_open(task_id):
+            return
+        entries = await self._ledger.query(LedgerFilters(task_id=task_id, agent="user", order_asc=True, limit=500))
+        self._inbox.open(task_id, [entry.input for entry in entries if entry.action == "user_message" and entry.input])
 
     async def _run_pipeline(self, task_id: str, request: TaskRequest) -> None:
         # Strategy command shortcut - handle before full pipeline
@@ -933,6 +955,8 @@ class Orchestrator:
         is_resumable = stored_task is not None and stored_task.status in {"queued", "paused"}
         if is_resumable:
             return
+        self._inbox.close(task_id)
+        self._requests.pop(task_id, None)
         # Reap this task's tracked cost exactly once, regardless of exit path.
         # The success/failure/conflict/cancel paths already pop it to record
         # the cost in the ledger; popping again here is a no-op (pop_task_cost
@@ -1482,6 +1506,10 @@ class Orchestrator:
         """
         failures = failures or []
         scarcity = _has_model_scarcity(failures)
+        request = self._requests.get(task_id)
+        if not scarcity and request is not None and self._inbox.take_unread(task_id):
+            await self._answer_late_messages(task_id, request)
+            return
         if scarcity:
             blocked_agents = ", ".join(
                 str(failure) for failure in failures if getattr(failure, "error_type", None) == "model_unavailable"
@@ -1543,6 +1571,29 @@ class Orchestrator:
         # they produce no signal worth extracting.
         if self._extraction_pipeline is not None and not skip_extraction:
             spawn(self._extraction_pipeline.run_once(), name="extraction_run_once")
+
+    async def _answer_late_messages(self, task_id: str, request: TaskRequest) -> None:
+        """Answer, in this task, messages you sent after its agents had answered (CODING_STYLE §15.4).
+
+        The general agent reads every message from the inbox and is told what the
+        task already did and said, so it acts on what is new instead of starting over.
+        """
+        entries = await self._ledger.query(LedgerFilters(task_id=task_id, order_asc=True, limit=500))
+        answered = "\n\n".join(
+            f"{entry.agent}: {entry.output}" for entry in entries if entry.action == "agent_completed" and entry.output
+        )
+        context = (
+            f"{self._with_earlier_decisions(task_id, request.context)}\n\n"
+            f"## Already done in this task\n{answered or 'Nothing was answered yet.'}\n\n"
+            "The user sent new messages while this task worked; they follow. "
+            "Act on them, and do not repeat what is already done. Your answer replaces the one above, "
+            "so give the whole answer, keeping what still holds."
+        ).strip()
+        # Live views show the answer being written; the one above is about to be replaced.
+        await self._stream_manager.emit(task_id, "stream_reset", {})
+        await self._fall_back_to_agent(
+            task_id, request.prompt, _task_folder(task_id, request.workspace), context, request.edit_scope, ""
+        )
 
     async def _maybe_synthesize(
         self,

@@ -558,6 +558,12 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
     conversation = await store.get(conversation_id)
     if conversation is None:  # The conversation could only disappear between the two store calls.
         raise HTTPException(status_code=404, detail="Conversation not found")
+    # Sent while the session's latest task works on it: it goes into that task (CODING_STYLE §15.4).
+    latest_task = next((item.task_id for item in reversed(previous[:-1]) if item.task_id), None)
+    orchestrator = current_services().require("orchestrator")
+    if latest_task and await orchestrator.send_message(latest_task, body.prompt):
+        await store.attach_task(turn.id, latest_task)
+        return {**asdict(turn), "task_id": latest_task, "joined": True}
     context_parts: list[str] = []
     for item in previous[-6:-1]:
         detail = await _task_detail(item.task_id)
@@ -581,16 +587,12 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
     if context_parts:
         context_sections.append("## Recent conversation\n" + "\n\n".join(context_parts))
     context = "\n\n".join(context_sections)
-    task = (
-        await current_services()
-        .require("orchestrator")
-        .submit_task(
-            TaskRequest(
-                prompt=body.prompt,
-                workspace=conversation.workspace,
-                context=context,
-                idempotency_key=f"conversation:{conversation_id}:{turn.id}",
-            )
+    task = await orchestrator.submit_task(
+        TaskRequest(
+            prompt=body.prompt,
+            workspace=conversation.workspace,
+            context=context,
+            idempotency_key=f"conversation:{conversation_id}:{turn.id}",
         )
     )
     await store.attach_task(turn.id, task.task_id)

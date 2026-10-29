@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -545,6 +546,46 @@ async def test_a_chat_still_hears_how_its_task_ended_after_north_restarts(monkey
     [call] = after._send_message.await_args_list
     assert call.args[0] == 42 and "interrupted by a restart" in call.args[1]
     assert after.resume_waits() == 0, "answered once, then forgotten"
+
+
+@pytest.mark.asyncio
+async def test_a_message_while_the_chats_task_works_goes_into_that_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every plain message started a new task, which knew nothing of the one still working (CODING_STYLE §15.4)."""
+    import httpx
+
+    sent: list[dict] = []
+
+    def north(request: httpx.Request) -> httpx.Response:
+        sent.append({"path": request.url.path, "body": json.loads(request.content)})
+        return httpx.Response(200, json={"status": "ok"})
+
+    gw = _chat_gateway(monkeypatch)
+    gw._http = httpx.AsyncClient(transport=httpx.MockTransport(north))
+    gw._submit_task = AsyncMock()  # type: ignore[method-assign]
+    gw._pending[(42, 1)] = {"message_id": 1, "text": "Summarise sales", "task_id": "t-running"}
+
+    reply = await _say(gw, "use the 2025 numbers")
+
+    gw._submit_task.assert_not_awaited()
+    assert sent == [
+        {"path": "/orchestrator/steer", "body": {"task_id": "t-running", "instruction": "use the 2025 numbers"}}
+    ]
+    assert "Added to the task" in reply
+
+
+@pytest.mark.asyncio
+async def test_a_message_after_the_chats_task_finished_starts_a_new_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    gw = _chat_gateway(monkeypatch)
+    gw._http = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(404)))
+    gw._submit_task = AsyncMock(return_value={"task_id": "t-new"})  # type: ignore[method-assign]
+    gw._get_task_result = AsyncMock(return_value="done")  # type: ignore[method-assign]
+    gw._pending[(42, 1)] = {"message_id": 1, "text": "Summarise sales", "task_id": "t-finished"}
+
+    await _say(gw, "now plan next quarter")
+
+    gw._submit_task.assert_awaited_once()
 
 
 def test_the_chat_gets_the_tasks_last_answer_once_it_has_ended() -> None:

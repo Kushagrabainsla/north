@@ -1231,6 +1231,12 @@ class AgentResult(BaseModel):
     question_options: list[str] = []
 ```
 
+### 15.4 A Message Sent Mid-Task Goes Into That Task
+
+A message you send while a task works on your request goes into that running task, on every surface (dashboard, TUI, Telegram, `/steer`): never dropped, never a separate task started beside it. The agents working on the task read it before their next step and before they answer; one that arrives after they answered is still answered in that task. Each message is written to the ledger, so a task that starts over (a restart, a model outage) still knows what you said.
+**Why:** a second message started a parallel task that knew nothing of the first, and `/steer` said "steering sent" while nothing read it.
+**How to apply:** route a message for a conversation with a running task to `Orchestrator.send_message`, not `submit_task`; a new task starts only when nothing is running there.
+
 ---
 
 ## 16. Tools

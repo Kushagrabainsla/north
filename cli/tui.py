@@ -720,7 +720,8 @@ class NorthApp(App[None]):
             "waiting_for_model": self._on_waiting_for_model,
             "task_queued": self._on_task_queued,
             "task_resumed": self._on_task_resumed,
-            "task_steered": self._on_task_steered,
+            "user_message": self._on_user_message,
+            "user_message_read": self._on_user_message_read,
             "plan_updated": self._on_plan_updated,
             "stream_reset": self._on_stream_reset,
             # Integrity signals. north computes these and records them to the ledger;
@@ -1617,9 +1618,11 @@ class NorthApp(App[None]):
             self._plan_steps = list(turn.get("plan_steps") or [])
             self._render_active_turns()
 
-    async def _on_task_steered(self, task_id: str, data: dict) -> None:
-        instruction = data.get("instruction", "")
-        self._update_turn_phase(task_id, f"steered · {instruction}")
+    async def _on_user_message(self, task_id: str, data: dict) -> None:
+        self._update_turn_phase(task_id, f"message sent · {data.get('text', '')}")
+
+    async def _on_user_message_read(self, task_id: str, data: dict) -> None:
+        self._update_turn_phase(task_id, "read your message")
 
     # ── integrity signals ────────────────────────────────────────────────
     # north checks its own work (claims vs tool evidence, self-repair, a critic
@@ -1922,8 +1925,8 @@ class NorthApp(App[None]):
             body["workspace"] = self.workspace
         return body
 
-    async def _post_task(self, text: str) -> str:
-        """Submit the prompt and return its task id, or "" when the server refused it."""
+    async def _post_task(self, text: str) -> tuple[str, bool]:
+        """Submit the prompt: its task id ("" when the server refused it), and whether it went into a running task."""
         self._set_status("…")
         try:
             async with self._http() as c:
@@ -1943,14 +1946,15 @@ class NorthApp(App[None]):
                     timeout=30.0,
                 )
                 resp.raise_for_status()
-                return str(resp.json().get("task_id", ""))
+                body = resp.json()
+                return str(body.get("task_id", "")), bool(body.get("joined"))
         except httpx.ConnectError:
             self._set_status("")
             self._log("  [red]◆[/red]  [red]cannot reach north server[/red]")
         except Exception as exc:
             self._set_status("")
             self._log(f"  [red]◆[/red]  [red]error: {exc}[/red]")
-        return ""
+        return "", False
 
     def _new_turn_activity(self, task_id: str, text: str) -> dict:
         return {
@@ -1980,8 +1984,13 @@ class NorthApp(App[None]):
     async def _submit_prompt(self, text: str) -> None:
         """Send a typed prompt and open a live turn for it."""
         self._last_submitted_prompt = text
-        task_id = await self._post_task(text)
+        task_id, joined = await self._post_task(text)
         if not task_id:
+            return
+        if joined:
+            # The running task reads it; its turn stays the one on screen (CODING_STYLE §15.4).
+            self._set_status("")
+            self._log("  [magenta]↳ sent into the running task[/magenta]")
             return
         self._user_task_ids.add(task_id)
         self._turn_start_times[task_id] = time.monotonic()
@@ -2306,19 +2315,28 @@ class NorthApp(App[None]):
         if feedback:
             self.run_worker(self._send_steer(feedback))
 
+    def _latest_task_id(self) -> str:
+        """The task this terminal started most recently that is still running, or ""."""
+        running = [task_id for task_id in self._current_turn_activity if task_id in self._turn_start_times]
+        return max(running, key=self._turn_start_times.__getitem__, default="")
+
     async def _send_steer(self, feedback: str) -> None:
+        task_id = self._latest_task_id()
+        if not task_id:
+            self._log("  [bright_black]no task of yours is running; send it as a prompt instead[/bright_black]")
+            return
         try:
             async with self._http() as c:
                 r = await c.post(
                     f"{self.base_url}/orchestrator/steer",
                     headers=self.headers,
-                    json={"instruction": feedback},
+                    json={"task_id": task_id, "instruction": feedback},
                     timeout=5.0,
                 )
                 if r.status_code == 200:
-                    self._log(f"  [magenta]🎯 steering sent:[/magenta] [white]{feedback}[/white]")
+                    self._log(f"  [magenta]↳ sent into the running task:[/magenta] [white]{feedback}[/white]")
                 else:
-                    self._log(f"  [red]failed to send steer directive (HTTP {r.status_code})[/red]")
+                    self._log(f"  [red]could not send it to the task (HTTP {r.status_code})[/red]")
         except Exception as exc:
             self._log(f"  [red]error sending steer directive: {exc}[/red]")
 
@@ -2536,8 +2554,8 @@ class NorthApp(App[None]):
         self._remember_input(text)
         self._log(f"  [bright_black]>[/bright_black]  {text}")
 
-        task_id = await self._post_task(text)
-        if not task_id:
+        task_id, joined = await self._post_task(text)
+        if not task_id or joined:
             return
         self._user_task_ids.add(task_id)
         self._session_tokens += _estimated_tokens(text)
