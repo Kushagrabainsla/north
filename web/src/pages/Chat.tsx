@@ -21,6 +21,20 @@ const SIGNALS: Record<string, (data: any) => Omit<Signal, "event" | "timestamp">
   north_star_check_failed: d => ({ tone: "warn", text: "Goal alignment could not be evaluated", details: d.reason ? [d.reason] : [] }),
 };
 
+/** What a turn is in, for its badge and its working line. A card wins over a running
+ *  task, since answering it is what moves things; a paused task stays paused, card or not:
+ *  shown as "waiting for approval", the pause was invisible until the API was asked. */
+export function turnStatus(taskStatus: string, waiting: boolean, outcome = ""): string {
+  if (taskStatus === "paused") return "paused";
+  if (waiting) return "waiting_for_approval";
+  return taskStatus === "completed" ? outcome || "response_ready" : taskStatus;
+}
+
+export function workingText(status: string, waiting: boolean): string {
+  if (status === "paused") return waiting ? "Paused · waiting for you" : "Task paused";
+  return status === "waiting_for_approval" ? "North is waiting for you" : "North is working on this prompt";
+}
+
 /** The reply to show. While a task runs, its live text is the newest; once it ends, the
  *  saved answer is the one a reopened page shows, so a page that watched the task live
  *  shows it too, not the stream it pieced together along the way. */
@@ -185,11 +199,7 @@ function JoinedTurn({ turn }: { turn: Turn }) {
 function TurnBundle({ turn, streamed, signals = [], steps = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; steps?: Step[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
   const detail = turn.detail;
   const taskStatus = detail?.task.status || "pending";
-  const status = pendingApprovals.length
-    ? "waiting_for_approval"
-    : taskStatus === "completed"
-      ? (detail?.outcome_status || "response_ready")
-      : taskStatus;
+  const status = turnStatus(taskStatus, pendingApprovals.length > 0, detail?.outcome_status);
   const entries = detail?.entries || [];
   const runs = detail?.runs || [];
   const inferenceCategories = detail?.inference_categories || [];
@@ -220,7 +230,7 @@ function TurnBundle({ turn, streamed, signals = [], steps = [], reload, pendingA
         {["pending", "running", "queued", "retrying", "paused"].includes(taskStatus) && <button className="danger-link" onClick={() => control("cancel")}>Cancel</button>}
       </div></div>
       {pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} respond={respondApproval}/>)}
-      {isActive && <div className={`thinking thinking-${status}`}><span className="pulse"/>{status === "waiting_for_approval" ? "North is waiting for you" : status === "paused" ? "Task paused" : "North is working on this prompt"}</div>}
+      {isActive && <div className={`thinking thinking-${status}`}><span className="pulse"/>{workingText(status, pendingApprovals.length > 0)}</div>}
       {isActive && <LiveSteps steps={steps}/>}
       {reply && <Markdown>{reply}</Markdown>}
       {!isActive && !reply && <Empty>No response was recorded for this task.</Empty>}

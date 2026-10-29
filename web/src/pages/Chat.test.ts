@@ -4,7 +4,7 @@
 // yet) or hides a search that just has no results.
 
 import { describe, expect, it } from "vitest";
-import { attachmentText, joinedTurn, replyText, sessionsEmptyMessage } from "./Chat";
+import { attachmentText, joinedTurn, replyText, sessionsEmptyMessage, turnStatus, workingText } from "./Chat";
 import type { Turn } from "../types";
 
 describe("what can be attached to a message", () => {
@@ -63,5 +63,21 @@ describe("a message sent into a running task", () => {
   it("leaves a turn that started its own task as it was", () => {
     expect(joinedTurn(turns, 0)).toBe(false);
     expect(joinedTurn(turns, 2)).toBe(false);
+  });
+});
+
+describe("a paused task that still has a card", () => {
+  it("reads paused, and says it is also waiting for you", () => {
+    // It read "waiting for approval", so the pause was invisible until the API was asked.
+    expect(turnStatus("paused", true)).toBe("paused");
+    expect(workingText("paused", true)).toBe("Paused · waiting for you");
+    expect(workingText("paused", false)).toBe("Task paused");
+  });
+
+  it("lets a card win over a running task, and keeps a finished task's outcome", () => {
+    expect(turnStatus("running", true)).toBe("waiting_for_approval");
+    expect(workingText("waiting_for_approval", true)).toBe("North is waiting for you");
+    expect(turnStatus("completed", false, "waiting_for_user")).toBe("waiting_for_user");
+    expect(turnStatus("completed", false)).toBe("response_ready");
   });
 });
