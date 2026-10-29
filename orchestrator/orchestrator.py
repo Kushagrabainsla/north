@@ -404,6 +404,25 @@ class Orchestrator:
         finished) - writing a CANCELLED entry then would rewrite the history
         of a completed task, since get_task() reads the most recent entry.
         """
+        if not await self._stop_task(task_id):
+            return False
+        await self._journal.record(task_id, "task_cancelled", status=LedgerStatus.CANCELLED)
+        await self._stream_manager.emit_done(task_id)
+        return True
+
+    async def _stop_task(self, task_id: str) -> bool:
+        """End a task for good, whatever state it is in; False when there is no such task in flight.
+
+        Stops a running pipeline, and for one that is not running (paused, or
+        queued for a model) does the cleanup its pipeline's finally would have
+        done: a user-cancelled task must not be recovered on restart, and its
+        _process_task finally cannot reliably clear the registry once the task
+        is being cancelled (awaits in a cancelling task re-raise CancelledError),
+        so the row is dropped here. Shutdown and a crash deliberately leave the
+        row so the task is resumed next start. The task's cards are released
+        here too: a paused task's cards stayed pending after it was cancelled,
+        still counted as waiting on you, and answering them did nothing.
+        """
         running = self._active_tasks.pop(task_id, None)
         was_stored = False
         if running is None and self._running_task_store is not None:
@@ -415,18 +434,11 @@ class Orchestrator:
             running.cancel()
         if self._tracked_router:
             self._tracked_router.pop_task_cost(task_id)
-        # A user-cancelled task must not be recovered on restart, and its
-        # _process_task finally cannot reliably clear the registry once the task
-        # is being cancelled (awaits in a cancelling task re-raise CancelledError),
-        # so drop it here explicitly. Shutdown/crash deliberately leave the row so
-        # the task is resumed next start.
         if self._running_task_store is not None:
             await self._running_task_store.clear(task_id)
-        # A paused or queued task has no pipeline whose cleanup would close these.
         self._inbox.close(task_id)
         self._requests.pop(task_id, None)
-        await self._journal.record(task_id, "task_cancelled", status=LedgerStatus.CANCELLED)
-        await self._stream_manager.emit_done(task_id)
+        self._release_pending_cards(task_id)
         return True
 
     async def cancel_all_tasks(self) -> int:
@@ -687,20 +699,8 @@ class Orchestrator:
 
     async def cancel_stuck_task(self, task_id: str) -> bool:
         """Fail a task the watchdog found stalled: record why, then cancel it."""
-        running = self._active_tasks.pop(task_id, None)
-        was_stored = False
-        if running is None and self._running_task_store is not None:
-            stored = await self._running_task_store.get(task_id)
-            was_stored = stored is not None
-        if running is None and not was_stored:
+        if not await self._stop_task(task_id):
             return False
-        if running is not None and not running.done():
-            running.cancel()
-        if self._tracked_router:
-            self._tracked_router.pop_task_cost(task_id)
-        if self._running_task_store is not None:
-            await self._running_task_store.clear(task_id)
-
         await self._journal.record(
             task_id,
             "task_stuck",

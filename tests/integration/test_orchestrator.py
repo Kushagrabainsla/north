@@ -30,6 +30,7 @@ from orchestrator.journal import TaskJournal
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.result_audit import ResultAuditor
+from orchestrator.running_tasks import RunningTaskStore
 from orchestrator.stream import EventStreamManager
 from orchestrator.task_context import TaskContextStore
 
@@ -1507,3 +1508,46 @@ async def test_the_answer_combining_several_agents_is_kept_and_shown(tmp_path):
     with bind_services(ApiServices(orchestrator=orch, ledger=ledger, agent_run_store=_NoRuns())):
         detail = await web_api._task_detail("t1")
     assert detail["output"] == "Three sources, summarised."
+
+
+def _pending_question(approval, task_id: str, card_id: str):
+    from approval.models import Card, CardType
+
+    card = Card(
+        id=card_id, type=CardType.QUESTION, task_id=task_id, agent="general", title="Question", message="Which?"
+    )
+    approval.add(card)
+    assert task_id in approval.tasks_waiting_on_you()
+    return card
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_paused_task_releases_the_cards_it_was_waiting_on(tmp_path):
+    """A paused task has no pipeline, so its cards stayed pending: counted as waiting on you, answering did nothing."""
+    from approval.models import ApprovalDecision
+
+    orch, _, approval = _make_orchestrator(tmp_path)
+    orch._running_task_store = RunningTaskStore(tmp_path / "running.db")
+    req = TaskRequest(prompt="paused with a question", source=LedgerSource.PROMPT)
+    await orch._running_task_store.mark_running("t_paused_q", req)
+    await orch._running_task_store.mark_paused("t_paused_q")
+    _pending_question(approval, "t_paused_q", "q_paused")
+
+    assert await orch.cancel_task("t_paused_q") is True
+
+    assert approval.get("q_paused").status == ApprovalDecision.TASK_ENDED
+    assert "t_paused_q" not in approval.tasks_waiting_on_you()
+
+
+@pytest.mark.asyncio
+async def test_a_task_failed_as_stuck_releases_its_cards_too(tmp_path):
+    from approval.models import ApprovalDecision
+
+    orch, _, approval = _make_orchestrator(tmp_path)
+    orch._running_task_store = RunningTaskStore(tmp_path / "running.db")
+    await orch._running_task_store.mark_running("t_stuck", TaskRequest(prompt="stalled", source=LedgerSource.PROMPT))
+    _pending_question(approval, "t_stuck", "q_stuck")
+
+    assert await orch.cancel_stuck_task("t_stuck") is True
+
+    assert approval.get("q_stuck").status == ApprovalDecision.TASK_ENDED
