@@ -1,6 +1,9 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { agentDeletionPrompt } from "./Agents";
-import { memoryLabel, memoryLink } from "./Approvals";
+import { ApprovalCard, memoryLabel, memoryLink } from "./Approvals";
+import type { Approval } from "../types";
 
 describe("personal-agent deletion confirmation", () => {
   it("names every schedule and pending job that will be removed", () => {
@@ -44,5 +47,25 @@ describe("links from a decision to the memory it used", () => {
   it("names what kind of memory it was, as the API words it", () => {
     expect(memoryLabel({ kind: "fact", label: "Fact", text: "likes tea", ref: "" })).toBe("Fact: likes tea");
     expect(memoryLabel({ kind: "judgement_rules", label: "Your judgement rules", text: "", ref: "" })).toBe("Your judgement rules");
+  });
+});
+
+describe("answering a question on the approvals page", () => {
+  const question = (options: string[]) =>
+    ({ id: "q1", type: "question", task_id: "t1", agent: "general", title: "Question", message: "Which quarter?",
+       options, status: "pending", chosen_option: "", created_at: "", fields: [], context: "", response: {},
+       blocking: true, source: "" }) as unknown as Approval;
+  const markup = (options: string[]) =>
+    renderToStaticMarkup(createElement(ApprovalCard, { card: question(options), onDecide: () => undefined }));
+
+  it("takes an answer in your own words when the question offers no options", () => {
+    // With option buttons only, such a question had no way to be answered here.
+    expect(markup([])).toContain('placeholder="Type your answer"');
+  });
+
+  it("keeps the offered options as buttons beside it", () => {
+    const html = markup(["Q2", "Q3"]);
+    expect(html).toContain(">Q2</button>");
+    expect(html).toContain('placeholder="Type your answer"');
   });
 });

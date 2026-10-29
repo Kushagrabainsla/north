@@ -122,6 +122,7 @@ export function ApprovalCard({
   const [showContext, setShowContext] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  const [answer, setAnswer] = useState("");
   const edited = fields.filter(
     (f) => f.editable && values[f.name] !== f.value,
   ).length;
@@ -235,14 +236,33 @@ export function ApprovalCard({
       ) : (
         <div className="approval-actions">
           {card.type === "question" ? (
-            card.options.map((option) => (
+            // Options are shortcuts; a question can always be answered in your own words.
+            // With buttons only, a question asked without options could not be answered here.
+            <>
+              {card.options.map((option) => (
+                <button
+                  key={option}
+                  onClick={() => onDecide("answered", option, values)}
+                >
+                  {option}
+                </button>
+              ))}
+              <input
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && answer.trim()) onDecide("answered", answer.trim(), values);
+                }}
+                placeholder="Type your answer"
+              />
               <button
-                key={option}
-                onClick={() => onDecide("answered", option, values)}
+                className="primary-button"
+                disabled={!answer.trim()}
+                onClick={() => onDecide("answered", answer.trim(), values)}
               >
-                {option}
+                Answer
               </button>
-            ))
+            </>
           ) : (
             <>
               <button
