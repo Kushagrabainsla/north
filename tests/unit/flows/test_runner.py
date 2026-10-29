@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -1196,3 +1197,38 @@ async def test_a_step_that_fails_its_checks_twice_stops_with_the_reason(tmp_path
         run.error
         == f"Skill step 'brief' failed its checks: the file at {tmp_path / '2026-10-17.md'} was not saved, or is empty"
     )
+
+
+async def test_a_run_stopped_while_it_ran_is_recorded_as_cancelled(tmp_path):
+    """Cancelling a scheduled job stops its run's step; the run then reads cancelled, not running."""
+    registry = _flow(
+        tmp_path,
+        """name: demo
+description: One slow step
+steps:
+  - name: first
+    skill: review-item
+    approval: never
+""",
+    )
+    started = asyncio.Event()
+
+    class SlowAgent(FakeAgent):
+        async def run(self, payload):
+            started.set()
+            await asyncio.sleep(30)
+
+    store = FlowRunStore(tmp_path / "runs.db")
+    runner = FlowRunner(registry, FakeAgents(SlowAgent()), _skills(tmp_path), store)
+    running = asyncio.create_task(runner.run("demo", task_id="job1", trigger="schedule"))
+    await asyncio.wait_for(started.wait(), 5)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert store.latest_for_task("job1").status == "running"  # stopping it wrote nothing
+
+    runner.cancel_running("job1")
+
+    run = store.latest_for_task("job1")
+    assert run.status == "cancelled"
+    assert run.error == "Cancelled while it ran."

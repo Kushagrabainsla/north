@@ -78,13 +78,14 @@ async def resume_task(task_id: str) -> dict[str, str]:
 
 @router.post("/cancel-all")
 async def cancel_all() -> dict[str, int]:
-    """Stop everything in flight: cancel all active tasks and all pending jobs."""
+    """Stop everything in flight: cancel all active tasks and all pending and running jobs."""
     tasks_cancelled = await _get_orchestrator().cancel_all_tasks()
     processor = _get_job_processor()
     jobs_cancelled = 0
-    for job in await processor.list_jobs(status=JobStatus.PENDING, limit=1000):
-        await processor.cancel(job.job_id)
-        jobs_cancelled += 1
+    for status in (JobStatus.PENDING, JobStatus.RUNNING):
+        for job in await processor.list_jobs(status=status, limit=1000):
+            await processor.cancel(job.job_id)
+            jobs_cancelled += 1
     return {"tasks_cancelled": tasks_cancelled, "jobs_cancelled": jobs_cancelled}
 
 

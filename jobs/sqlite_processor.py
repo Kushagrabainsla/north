@@ -62,6 +62,10 @@ _TERMINAL_STATUSES = (
     JobStatus.CANCELLED,
     JobStatus.NEEDS_ATTENTION,
 )
+# A job's end is recorded only while it has none: a cancel, or any end already
+# recorded, is final. A cancelled running job otherwise finished and wrote
+# "completed" over the cancel, or went back to "pending" for a retry.
+_UNFINISHED_SQL = f"status IN ('{JobStatus.PENDING.value}', '{JobStatus.RUNNING.value}')"
 
 # How often the poll loop requeues jobs stranded in RUNNING (their worker died),
 # and the lease past which a still-RUNNING job is considered abandoned. On
@@ -176,8 +180,9 @@ class SQLiteJobProcessor(JobProcessor):
         # weak refs, so without this a dispatched job can be garbage-collected
         # mid-run and silently stay RUNNING forever (CODING_STYLE §10.5).
         self._running_jobs: set[asyncio.Task] = set()
-        # The ids of those jobs: alive here, so never stale however long they run.
-        self._live_job_ids: set[str] = set()
+        # Those jobs by id: alive here, so never stale however long they run, and
+        # what a cancel stops.
+        self._live_jobs: dict[str, asyncio.Task] = {}
         self._wake_event = asyncio.Event()
 
     def _init_schema(self) -> None:
@@ -277,15 +282,15 @@ class SQLiteJobProcessor(JobProcessor):
                 if row and row["retry_count"] >= row["max_retries"]:
                     # Exhausted work is unfinished and must be visible to a person.
                     conn.execute(
-                        "UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ?",
+                        f"UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ? AND {_UNFINISHED_SQL}",
                         (JobStatus.NEEDS_ATTENTION.value, now_epoch(), job_id),
                     )
                     return
                 conn.execute(
-                    """
+                    f"""
                     UPDATE job_queue
                     SET status = ?, retry_epoch = ?, retry_count = retry_count + 1
-                    WHERE job_id = ?
+                    WHERE job_id = ? AND {_UNFINISHED_SQL}
                     """,
                     (JobStatus.PENDING.value, to_epoch(retry_after), job_id),
                 )
@@ -293,7 +298,11 @@ class SQLiteJobProcessor(JobProcessor):
         self._set_terminal_sync(job_id, JobStatus.FAILED)
 
     async def cancel(self, job_id: str) -> None:
+        """Cancel the job, and stop it if it is running here."""
         await asyncio.to_thread(self._cancel_sync, job_id)
+        live = self._live_jobs.get(job_id)
+        if live is not None and live is not asyncio.current_task():
+            live.cancel()
 
     def _cancel_sync(self, job_id: str) -> None:
         with open_db_connection(self._db_path) as conn:
@@ -320,7 +329,7 @@ class SQLiteJobProcessor(JobProcessor):
             raise ValueError(f"{status!r} is not a terminal status; expected one of {_TERMINAL_STATUSES}")
         with open_db_connection(self._db_path) as conn:
             conn.execute(
-                "UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ?",
+                f"UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ? AND {_UNFINISHED_SQL}",
                 (status.value, now_epoch(), job_id),
             )
 
@@ -355,7 +364,7 @@ class SQLiteJobProcessor(JobProcessor):
         that keeps killing its worker eventually needs attention, not an endless retry).
         Returns the number of jobs reaped.
         """
-        return await asyncio.to_thread(self._reap_stale_running_sync, lease_seconds, frozenset(self._live_job_ids))
+        return await asyncio.to_thread(self._reap_stale_running_sync, lease_seconds, frozenset(self._live_jobs))
 
     def _reap_stale_running_sync(self, lease_seconds: int, live: frozenset[str] = frozenset()) -> int:
         now = now_epoch()
@@ -440,11 +449,13 @@ class SQLiteJobProcessor(JobProcessor):
 
     async def _run_job(self, job: Job, on_job: Callable[[Job], Awaitable[Any]]) -> None:
         """Execute one job; mark completed, or schedule a retry / fail on error."""
-        self._live_job_ids.add(job.job_id)
+        task = asyncio.current_task()
+        assert task is not None  # always run as a task of its own
+        self._live_jobs[job.job_id] = task
         try:
             await self._run_job_to_end(job, on_job)
         finally:
-            self._live_job_ids.discard(job.job_id)
+            self._live_jobs.pop(job.job_id, None)
 
     async def _run_job_to_end(self, job: Job, on_job: Callable[[Job], Awaitable[Any]]) -> None:
         try:

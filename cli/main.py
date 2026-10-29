@@ -652,7 +652,7 @@ def cancel_job(
 @app.command("cancel")
 def cancel_any(
     target: str = typer.Argument("", help="Task or job ID to stop. Omit and pass --all to stop everything."),
-    all_: bool = typer.Option(False, "--all", help="Stop ALL active tasks and pending/scheduled jobs."),
+    all_: bool = typer.Option(False, "--all", help="Stop ALL active tasks and pending, scheduled and running jobs."),
 ) -> None:
     """Stop anything: a task or job by ID, or everything in flight with --all.
 

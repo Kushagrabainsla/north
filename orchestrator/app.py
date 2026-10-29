@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -44,7 +44,7 @@ from flows import FlowRegistry, FlowRunStore
 from gateways.telegram import TelegramGateway
 from gateways.telegram_api import bot_username as telegram_bot_username
 from jobs.exceptions import JobCancelled, JobNeedsAttention
-from jobs.models import Job
+from jobs.models import Job, JobStatus
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
 from jobs.seen import SeenStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
@@ -658,6 +658,10 @@ class ScheduledTaskFailed(Exception):
     """
 
 
+async def _not_cancelled() -> bool:
+    return False
+
+
 async def _run_scheduled_task(
     orchestrator: Orchestrator,
     prompt: str,
@@ -665,6 +669,7 @@ async def _run_scheduled_task(
     forced_agent: str | None = None,
     poll_seconds: float = _SCHEDULED_POLL_SECONDS,
     timeout_seconds: float = _SCHEDULED_TIMEOUT_SECONDS,
+    job_cancelled: Callable[[], Awaitable[bool]] = _not_cancelled,
 ) -> None:
     """Start a scheduled task and wait to see whether it worked.
 
@@ -677,28 +682,42 @@ async def _run_scheduled_task(
     are parked for attention so neither can be mislabeled completed or duplicated.
     The deadline counts only time spent working: while the task waits on your
     answer it is pushed back, because a card never expires (CODING_STYLE §13.5).
+    A job you cancel while this waits stops the task too; a shutdown leaves the
+    task to resume at the next start.
     """
     response = await orchestrator.submit_task(
         TaskRequest(prompt=prompt, source=LedgerSource.CRON, forced_agent=forced_agent)
     )
+    try:
+        await _watch_scheduled_task(orchestrator, response.task_id, poll_seconds, timeout_seconds)
+    except asyncio.CancelledError:
+        if await job_cancelled():
+            await orchestrator.cancel_task(response.task_id)
+        raise
+
+
+async def _watch_scheduled_task(
+    orchestrator: Orchestrator, task_id: str, poll_seconds: float, timeout_seconds: float
+) -> None:
+    """Wait for *task_id* to end, and raise unless it completed."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         polled_at = time.monotonic()
         await asyncio.sleep(poll_seconds)
-        if orchestrator.is_waiting_on_you(response.task_id):
+        if orchestrator.is_waiting_on_you(task_id):
             deadline += time.monotonic() - polled_at
             continue
-        task = await orchestrator.get_task(response.task_id)
+        task = await orchestrator.get_task(task_id)
         if task is None or task.status in _TASK_STILL_GOING:
             continue
         if task.status == "completed":
             return
         if task.status == "cancelled":
-            raise JobCancelled(f"scheduled task {response.task_id} was cancelled")
+            raise JobCancelled(f"scheduled task {task_id} was cancelled")
         if task.status == "needs_attention":
-            raise JobNeedsAttention(f"scheduled task {response.task_id} needs attention")
-        raise ScheduledTaskFailed(f"scheduled task {response.task_id} ended as {task.status}")
-    raise JobNeedsAttention(f"scheduled task {response.task_id} is still in progress after {timeout_seconds:.0f}s")
+            raise JobNeedsAttention(f"scheduled task {task_id} needs attention")
+        raise ScheduledTaskFailed(f"scheduled task {task_id} ended as {task.status}")
+    raise JobNeedsAttention(f"scheduled task {task_id} is still in progress after {timeout_seconds:.0f}s")
 
 
 def _launch_background_tasks(
@@ -775,9 +794,19 @@ def _launch_background_tasks(
             flow_runner.register_action("remind_waiting_cards", approvals.interaction.remind_waiting)
 
     async def _dispatch_job(job: Job) -> None:
+        async def cancelled_by_you() -> bool:
+            # Only a cancel writes "cancelled"; a shutdown stops the job and leaves it running.
+            stored = await deps.job_processor.get(job.job_id)
+            return stored is not None and stored.status is JobStatus.CANCELLED
+
         flow = str((job.payload or {}).get("flow") or "").strip()
         if flow:
-            result = await tool_registry.get("run_flow").run_scheduled(flow, job.job_id)
+            try:
+                result = await tool_registry.get("run_flow").run_scheduled(flow, job.job_id)
+            except asyncio.CancelledError:
+                if flow_runner is not None and await cancelled_by_you():
+                    flow_runner.cancel_running(job.job_id)
+                raise
             if not result.success:
                 raise JobNeedsAttention(result.error or f"scheduled flow '{flow}' failed")
             return
@@ -788,6 +817,7 @@ def _launch_background_tasks(
             orchestrator,
             scheduled_prompt,
             forced_agent=job.agent,
+            job_cancelled=cancelled_by_you,
         )
 
     cron_scheduler = CronScheduler(

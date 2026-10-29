@@ -181,6 +181,24 @@ class FlowRunner:
         self._withdraw_stop_card(run.task_id)
         return run
 
+    def cancel_running(self, task_id: str) -> FlowRun | None:
+        """Record the run started for *task_id* as cancelled, once it was stopped while it ran.
+
+        Stopping a run's coroutine ends its step but writes nothing, so the run read
+        "running" until the next start paused it as cut off, ready to resume work
+        you had cancelled.
+        """
+        run = self._store.latest_for_task(task_id)
+        if run is None or run.status != "running":
+            return None
+        return self._store.update(
+            run.run_id,
+            status="cancelled",
+            current_step=run.current_step,
+            outputs=run.outputs,
+            error="Cancelled while it ran.",
+        )
+
     def _withdraw_stop_card(self, task_id: str) -> None:
         if task_id and self._interaction is not None:
             self._interaction.withdraw(task_id=task_id, source=STOPPED_RUN_SOURCE)
