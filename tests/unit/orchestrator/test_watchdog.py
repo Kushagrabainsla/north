@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from ledger.models import LedgerSource
@@ -29,6 +30,11 @@ class _StubStore:
 
     async def list_all(self) -> list[RunningTask]:
         return list(self._tasks)
+
+    async def heartbeat(self, task_id: str) -> None:
+        self._tasks = [
+            replace(task, heartbeat_at=datetime.now(UTC)) if task.task_id == task_id else task for task in self._tasks
+        ]
 
 
 class _StubOrchestrator:
@@ -82,4 +88,15 @@ async def test_only_stalled_tasks_cancelled() -> None:
 async def test_boundary_exactly_at_max_age_is_not_cancelled() -> None:
     orch = _StubOrchestrator([_task("t1", heartbeat_age=_MAX_AGE - 1)])
     await _sweep(orch, _MAX_AGE)
+    assert orch.cancelled == []
+
+
+async def test_answering_a_day_old_card_does_not_get_the_task_cancelled_as_stuck() -> None:
+    """The wait was skipped but not discounted: the next sweep after your answer measured the whole day."""
+    orch = _StubOrchestrator([_task("t1", heartbeat_age=_MAX_AGE * 2)], waiting_on_you=frozenset({"t1"}))
+    await _sweep(orch, _MAX_AGE)
+
+    orch._waiting_on_you = frozenset()  # you answered; the task works again
+    await _sweep(orch, _MAX_AGE)
+
     assert orch.cancelled == []

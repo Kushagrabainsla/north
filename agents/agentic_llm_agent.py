@@ -518,6 +518,7 @@ class AgenticLLMAgent(LLMAgent):
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for iteration in range(self._deps.agent_max_iterations):
+            await self._heartbeat(payload)
             messages_read = await self._read_your_messages(payload, messages, messages_read)
             if not soft_budget_noted:
                 soft_budget_noted = await self._note_soft_budget_if_needed(
@@ -605,6 +606,20 @@ class AgenticLLMAgent(LLMAgent):
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
         )
+
+    async def _heartbeat(self, payload: AgentPayload) -> None:
+        """Tell the stuck-task watchdog the task is still working: every step is progress.
+
+        Beaten only when a stage started, a task working for hours through many steps
+        read as stalled since its start.
+        """
+        store = self._deps.running_task_store
+        if store is None or not payload.task_id:
+            return
+        try:
+            await store.heartbeat(payload.task_id)
+        except Exception:
+            logger.debug("heartbeat failed for task %s", payload.task_id, exc_info=True)
 
     def _reads_messages(self, payload: AgentPayload) -> bool:
         """Only the agents the orchestrator runs read your messages; a delegate's caller already has them."""

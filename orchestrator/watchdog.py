@@ -43,10 +43,15 @@ async def _sweep(orchestrator: Orchestrator, max_age_seconds: int) -> None:
         return
     now = datetime.now(UTC)
     for rt in await store.list_all():
-        # Paused tasks are intentionally idle, queued tasks are waiting for capacity,
-        # and a task waiting on your answer is not stuck - cards never expire
-        # (CODING_STYLE §13.5). Only tasks that are working are expected to heartbeat.
-        if rt.status in ("paused", "queued") or orchestrator.is_waiting_on_you(rt.task_id):
+        # Paused tasks are intentionally idle and queued tasks are waiting for capacity;
+        # both refresh the heartbeat when they run again. Only working tasks heartbeat.
+        if rt.status in ("paused", "queued"):
+            continue
+        # A task waiting on your answer is not stuck - cards never expire (CODING_STYLE
+        # §13.5) - and the wait never counts once you answer: skipped without this, an
+        # answer to a day-old card was followed by a sweep that measured the whole day.
+        if orchestrator.is_waiting_on_you(rt.task_id):
+            await store.heartbeat(rt.task_id)
             continue
         stalled_for = (now - rt.heartbeat_at).total_seconds()
         if stalled_for <= max_age_seconds:
