@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -12,6 +13,11 @@ from mcp.models import McpCallResult, McpServerConfig, McpToolDefinition
 from utils.version import NORTH_VERSION
 
 logger = logging.getLogger(__name__)
+
+# The longest single message north reads from a server. asyncio's default is
+# 64 KiB, and a server sends each tool result twice (``content`` and
+# ``structuredContent``), so a 32 KB result was enough to stop the reader.
+_MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 
 
 class McpError(Exception):
@@ -31,6 +37,9 @@ class McpClient:
         self._tools: list[McpToolDefinition] = []
         self._lock = asyncio.Lock()
         self._closed = False
+        # Why the connection ended on its own (the server exited, or sent a
+        # message north could not read), or None while it is up.
+        self._lost: str | None = None
 
     async def start(self) -> None:
         """Start the MCP server subprocess and perform the initialize handshake."""
@@ -47,6 +56,7 @@ class McpClient:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
+                    limit=_MAX_MESSAGE_BYTES,
                 )
             except Exception as exc:
                 raise McpError(f"Failed to start MCP server {self.name!r}: {exc}") from exc
@@ -103,6 +113,8 @@ class McpClient:
     async def _send_request(self, method: str, params: dict[str, Any], timeout: float | None = None) -> dict[str, Any]:
         if self._proc is None or self._proc.stdin is None or self._closed:
             raise McpError(f"MCP server {self.name!r} is not running")
+        if self._lost is not None:
+            raise McpError(f"MCP server {self.name!r} is not running: {self._lost}")
 
         self._next_id += 1
         req_id = self._next_id
@@ -113,8 +125,11 @@ class McpClient:
         payload = json.dumps(msg).encode("utf-8") + b"\n"
 
         try:
-            self._proc.stdin.write(payload)
-            await self._proc.stdin.drain()
+            try:
+                self._proc.stdin.write(payload)
+                await self._proc.stdin.drain()
+            except (ConnectionError, RuntimeError) as exc:
+                raise McpError(f"MCP server {self.name!r} is not running: {exc}") from exc
             to = timeout if timeout is not None else self.config.timeout
             response = await asyncio.wait_for(fut, timeout=to)
             if "error" in response:
@@ -137,11 +152,30 @@ class McpClient:
         await self._proc.stdin.drain()
 
     async def _read_loop(self) -> None:
+        reason = "the server exited"
+        try:
+            await self._read_messages()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            reason = f"could not read from the server: {exc}"
+        if self._closed:
+            return
+        # The connection is gone: fail every waiting call now rather than
+        # letting each one wait out its timeout.
+        self._lost = reason
+        logger.warning("MCP server %r connection lost: %s", self.name, reason)
+        for fut in self._pending_requests.values():
+            if not fut.done():
+                fut.set_exception(McpError(f"MCP server {self.name!r} is not running: {reason}"))
+        self._pending_requests.clear()
+
+    async def _read_messages(self) -> None:
         assert self._proc is not None and self._proc.stdout is not None
         while not self._closed:
             line = await self._proc.stdout.readline()
             if not line:
-                break
+                return
             line_str = line.decode("utf-8", errors="replace").strip()
             if not line_str:
                 continue
@@ -176,9 +210,13 @@ class McpClient:
             self._reader_task.cancel()
 
         if self._proc is not None:
-            try:
-                self._proc.terminate()
-                await asyncio.wait_for(self._proc.wait(), timeout=2.0)
-            except Exception:
-                self._proc.kill()
+            if self._proc.returncode is None:
+                try:
+                    self._proc.terminate()
+                    await asyncio.wait_for(self._proc.wait(), timeout=2.0)
+                except ProcessLookupError:
+                    pass  # it exited between the check and the terminate
+                except Exception:
+                    with contextlib.suppress(ProcessLookupError):
+                        self._proc.kill()
             self._proc = None
