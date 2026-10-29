@@ -1421,3 +1421,78 @@ async def test_dynamic_clock_is_after_the_cached_prefix(tmp_path: Path) -> None:
     assert "<north_runtime_context>" in router.user_prompt
     assert _re.search(r"local_time: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}[+-]\d{2}:\d{2}", router.user_prompt)
     assert router.user_prompt.index("<north_runtime_context>") < router.user_prompt.index("## Task\nhello")
+
+
+class _RateLimitedOnce(MockInferenceRouter):
+    """Answers a tool call, then is rate limited `limits` times, then answers with a message."""
+
+    def __init__(self, limits: int, retry_after: float | None) -> None:
+        self.limits = limits
+        self.retry_after = retry_after
+        self.calls = 0
+
+    async def complete_with_tools(self, request, token_callback=None):
+        from inference.exceptions import AllModelsRateLimitedError
+
+        self.calls += 1
+        if self.calls == 1:
+            return ToolCallResponse(
+                type="tool_calls", calls=[ToolCall(name="count_me", call_id="c1", params={})], model_used="mock"
+            )
+        if self.limits > 0:
+            self.limits -= 1
+            raise AllModelsRateLimitedError("No model could serve general - 1 model is rate limited", self.retry_after)
+        return ToolCallResponse(type="message", content="done", calls=[], model_used="mock")
+
+
+class _CountingTool(Tool):
+    name = "count_me"
+    description = "Counts how often it runs."
+    parameters_schema = {"type": "object", "properties": {}}
+    runs = 0
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        type(self).runs += 1
+        return ToolOutput(success=True, data={"ok": True})
+
+
+@pytest.fixture
+def no_rate_limit_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agents.agentic_llm_agent as module
+
+    monkeypatch.setattr(module, "_RATE_LIMIT_GRACE_SECONDS", 0.0, raising=False)
+    _CountingTool.runs = 0
+
+
+async def test_a_short_rate_limit_mid_run_is_waited_out_and_earlier_steps_are_kept(
+    tmp_path: Path, no_rate_limit_grace
+) -> None:
+    router = _RateLimitedOnce(limits=2, retry_after=0.01)
+    agent = _load_agent("general", tmp_path, router)
+    agent.deps.tool_registry.register(_CountingTool())
+
+    result = await agent.run(AgentPayload(task_id="t1", prompt="count once"))
+
+    assert result.output == "done"
+    assert _CountingTool.runs == 1
+    assert router.calls == 4
+
+
+async def test_a_rate_limit_with_no_retry_time_still_fails_the_run(tmp_path: Path, no_rate_limit_grace) -> None:
+    from inference.exceptions import AllModelsRateLimitedError
+
+    agent = _load_agent("general", tmp_path, _RateLimitedOnce(limits=1, retry_after=None))
+    agent.deps.tool_registry.register(_CountingTool())
+
+    with pytest.raises(AllModelsRateLimitedError):
+        await agent.run(AgentPayload(task_id="t1", prompt="count once"))
+
+
+async def test_a_rate_limit_that_outlasts_the_waits_fails_the_run(tmp_path: Path, no_rate_limit_grace) -> None:
+    from inference.exceptions import AllModelsRateLimitedError
+
+    agent = _load_agent("general", tmp_path, _RateLimitedOnce(limits=10, retry_after=0.01))
+    agent.deps.tool_registry.register(_CountingTool())
+
+    with pytest.raises(AllModelsRateLimitedError):
+        await agent.run(AgentPayload(task_id="t1", prompt="count once"))

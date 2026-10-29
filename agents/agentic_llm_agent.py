@@ -45,7 +45,7 @@ from agents.workspace_lock import workspace_lock
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent
 from approval.models import ApprovalDecision, Card, CardField, CardType
 from inference.cache_stats import CacheWasteTracker
-from inference.exceptions import ContextTooLargeError, is_model_unavailable_error
+from inference.exceptions import AllModelsRateLimitedError, ContextTooLargeError, is_model_unavailable_error
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from tools._path import handoff_dir_for
@@ -100,6 +100,11 @@ _EVIDENCE_LOCATOR_KEYS: tuple[str, ...] = (
 
 # How much of a final answer is kept as its one-line summary.
 _SUMMARY_CHARS = 120
+# A step whose every model is rate limited is tried again this many times, waiting out each limit that says it
+# lifts within the bound; past either, the run fails as before (and the task is queued for the model).
+_RATE_LIMIT_WAITS = 3
+_MAX_RATE_LIMIT_WAIT_SECONDS = 120.0
+_RATE_LIMIT_GRACE_SECONDS = 1.0
 # How a message you sent mid-task reaches the model (CODING_STYLE §15.4).
 _MESSAGE_WHILE_WORKING = "The user sent this while you were working on the task. Take it into account from here on:"
 
@@ -552,7 +557,7 @@ class AgenticLLMAgent(LLMAgent):
             token_cb = self._make_token_callback(payload.task_id)
 
             try:
-                response = await self._complete_or_shrink(messages, tools, payload, token_cb)
+                response = await self._complete_waiting_out_limits(messages, tools, payload, token_cb)
             except ContextTooLargeError:
                 return tally.answer(
                     "Context window exceeded - the conversation is too long to continue.",
@@ -696,6 +701,39 @@ class AgenticLLMAgent(LLMAgent):
                 "execution_profile_escalated",
                 {"from": "quick_readonly", "to": "standard", "reason": reason},
             )
+
+    async def _complete_waiting_out_limits(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        payload: AgentPayload,
+        token_cb: ReasoningStreamSplitter | None,
+    ) -> ToolCallResponse:
+        """One model turn that waits out a short rate limit instead of failing the run.
+
+        A failed run is retried from its first step, so a rate limit at step seven threw away six steps and
+        ran their tools again; on a free tier that read as three failed runs before a fourth went through.
+        A limit that says when it lifts, and soon, is waited out here and the same step tried again. One
+        with no retry time (billing, nothing serves the part) or a long one still fails the run, as before.
+        """
+        for waited in range(_RATE_LIMIT_WAITS + 1):
+            try:
+                return await self._complete_or_shrink(messages, tools, payload, token_cb)
+            except AllModelsRateLimitedError as exc:
+                wait = exc.retry_after
+                if wait is None or wait > _MAX_RATE_LIMIT_WAIT_SECONDS or waited == _RATE_LIMIT_WAITS:
+                    raise
+                logger.info(
+                    "Agent %s: every model is rate limited; waiting %.0fs to retry step (task %s)",
+                    self.name,
+                    wait,
+                    payload.task_id,
+                )
+                if token_cb is not None:
+                    await token_cb.reset()
+                await self._heartbeat(payload)
+                await asyncio.sleep(max(wait, 0.0) + _RATE_LIMIT_GRACE_SECONDS)
+        raise AssertionError("unreachable")  # the loop returns or raises
 
     async def _complete_or_shrink(
         self,
