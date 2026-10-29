@@ -6,6 +6,7 @@ import { Empty, ErrorNotice, InferenceCategories, Loading, Markdown, PageHeader,
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, CardField, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
+import { STEP_EVENTS, foldStep, type Step } from "./liveSteps";
 
 /** North's self-checks, rendered live rather than only reachable in the ledger.
  *  Each entry turns one SSE payload into a one-line verdict plus its details. */
@@ -30,6 +31,8 @@ export function replyText(isActive: boolean, streamed = "", output = ""): string
 function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprovals: () => Promise<void>) {
   const [live, setLive] = useState<Record<string, string>>({});
   const [signals, setSignals] = useState<Record<string, Signal[]>>({});
+  // What the task is doing, step by step, from the same events the TUI renders live.
+  const [steps, setSteps] = useState<Record<string, Step[]>>({});
   // One stream per task: a message sent into a running task is a turn of its own on the same task.
   const ids = [...new Set(turns.filter(t => t.task_id && !["completed", "failed", "cancelled", "needs_attention"].includes(t.detail?.task.status || "")).map(t => t.task_id!))];
   useEffect(() => {
@@ -40,7 +43,17 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
       stream.addEventListener("open", () => {
         setLive(current => ({ ...current, [taskId]: "" }));
         setSignals(current => ({ ...current, [taskId]: [] }));
+        setSteps(current => ({ ...current, [taskId]: [] }));
       });
+      for (const eventName of STEP_EVENTS) {
+        stream.addEventListener(eventName, event => {
+          const payload = JSON.parse((event as MessageEvent).data);
+          setSteps(current => ({ ...current, [taskId]: foldStep(current[taskId] || [], eventName, payload) }));
+        });
+      }
+      // What streamed before a tool call was narration on the way to it ("I'll check X."), not the
+      // answer; kept, it was glued onto the answer that streams after the last tool call.
+      stream.addEventListener("tool_called", () => setLive(current => ({ ...current, [taskId]: "" })));
       stream.addEventListener("token", event => {
         const payload = JSON.parse((event as MessageEvent).data);
         setLive(current => ({ ...current, [taskId]: (current[taskId] || "") + (payload.text || "") }));
@@ -59,6 +72,7 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
       stream.addEventListener("task_retrying", () => {
         setLive(current => ({ ...current, [taskId]: "" }));
         setSignals(current => ({ ...current, [taskId]: [] }));
+        setSteps(current => ({ ...current, [taskId]: [] }));
       });
       for (const eventName of ["task_completed", "task_failed", "task_cancelled", "task_skipped", "task_rejected", "task_needs_attention"]) {
         stream.addEventListener(eventName, () => { stream.close(); void reload(); });
@@ -70,7 +84,17 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
     });
     return () => streams.forEach(stream => stream.close());
   }, [ids.join("|"), reload, reloadApprovals]);
-  return { live, signals };
+  return { live, signals, steps };
+}
+
+/** The last few steps of a running task, newest last; the one still in progress pulses. */
+function LiveSteps({ steps }: { steps: Step[] }) {
+  if (!steps.length) return null;
+  const shown = steps.slice(-8);
+  return <div className="live-steps">
+    {steps.length > shown.length && <div className="live-step live-step-more">… {steps.length - shown.length} earlier step{steps.length - shown.length === 1 ? "" : "s"}</div>}
+    {shown.map((step, index) => <div className={`live-step ${step.active ? "live-step-active" : ""} ${step.icon === "✗" ? "live-step-failed" : ""}`} key={`${steps.length - shown.length + index}`}><span className="live-step-icon">{step.icon}</span><span>{step.text}</span></div>)}
+  </div>;
 }
 
 function InlineCardField({ field, value, onChange }: { field: CardField; value: unknown; onChange: (value: unknown) => void }) {
@@ -158,7 +182,7 @@ function JoinedTurn({ turn }: { turn: Turn }) {
   </article>;
 }
 
-function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
+function TurnBundle({ turn, streamed, signals = [], steps = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; steps?: Step[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
   const detail = turn.detail;
   const taskStatus = detail?.task.status || "pending";
   const status = pendingApprovals.length
@@ -197,6 +221,7 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
       </div></div>
       {pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} respond={respondApproval}/>)}
       {isActive && <div className={`thinking thinking-${status}`}><span className="pulse"/>{status === "waiting_for_approval" ? "North is waiting for you" : status === "paused" ? "Task paused" : "North is working on this prompt"}</div>}
+      {isActive && <LiveSteps steps={steps}/>}
       {reply && <Markdown>{reply}</Markdown>}
       {!isActive && !reply && <Empty>No response was recorded for this task.</Empty>}
       <SignalStrip signals={signals}/>
@@ -342,7 +367,7 @@ export function Chat() {
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const chatRoom = useRef<HTMLElement>(null);
   const openedAtBottom = useRef<string | null>(null);
-  const { live, signals } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
+  const { live, signals, steps } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
   useEffect(() => {
     const element = composerInput.current;
@@ -482,7 +507,7 @@ export function Chat() {
       {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><button className="primary-button" onClick={createSession}>New session</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Session unavailable"}/> : <>
         <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<><Status value={room.data.archived ? "archived" : room.data.goal_status}/><button className="ghost-button" onClick={togglePinned}>{room.data.pinned ? "Unpin" : "Pin"}</button><button className="ghost-button" onClick={toggleArchived}>{room.data.archived ? "Unarchive" : "Archive"}</button><button className="ghost-button" onClick={editGoal}>Edit goal</button><button className="ghost-button" onClick={rename}>Rename</button><button className="danger-button" onClick={() => deleteChat(room.data!.id)}>Delete</button></>}/>
         <section className="session-goal"><div><small>Active goal</small><p>{room.data.goal || "No goal has been set for this session yet."}</p></div><div><Status value={room.data.goal_status}/>{room.data.goal && room.data.goal_status !== "achieved" && <button className="ghost-button" onClick={markGoalAchieved}>Mark achieved</button>}</div></section>
-        <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
+        <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} steps={turn.task_id ? steps[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
         <form className="composer" onSubmit={submit}><textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder={taskRunning ? "Add to the task North is working on…" : "Ask North anything…"} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}

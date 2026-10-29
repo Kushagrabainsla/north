@@ -294,6 +294,7 @@ body { font-size: 13px; }
 .primary-button, .new-chat { box-shadow: 0 0 18px rgba(181,243,109,.18); }
 
 /* North's self-checks, surfaced with the answer rather than buried in the ledger. */
+.live-steps { margin: 6px 0 10px; display: flex; flex-direction: column; gap: 3px; font: 10px "DM Mono", monospace; color: var(--muted); }.live-step { display: flex; gap: 8px; align-items: baseline; min-width: 0; }.live-step > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.live-step-icon { flex: none; width: 1.2em; text-align: center; color: var(--faint); }.live-step-active { color: var(--text); }.live-step-active .live-step-icon { color: var(--accent); animation: pulse 1.4s ease-in-out infinite; }.live-step-failed .live-step-icon { color: var(--red); }.live-step-more { color: var(--faint); font-style: italic; }
 .signal-strip { margin: 10px 0 2px; display: flex; flex-direction: column; gap: 5px; }
 .signal-row { display: flex; gap: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-soft); background: rgba(7,9,11,.35); }
 .signal-row b { display: block; font-weight: 500; font-size: 11px; }
