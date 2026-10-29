@@ -91,8 +91,10 @@ class EntitlementLedger:
         and unactionable. ``resets_in`` is the wait the provider itself reported;
         without one the allowance is held for the standard window.
         """
-        reported = bool(resets_in and resets_in > 0)
-        window = resets_in if reported else self._billing_window
+        if resets_in is not None and resets_in > 0:
+            window, reported = resets_in, True
+        else:
+            window, reported = self._billing_window, False
         self._free[provider] = _Entitlement(Entitlement.FREE_SPENT, reason, time.monotonic() + window, reported)
 
     def forbidden(self, provider: str, reason: str) -> None:

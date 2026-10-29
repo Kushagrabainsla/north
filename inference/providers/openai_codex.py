@@ -515,7 +515,9 @@ class OpenAICodexProvider:
             raise ModelNotFoundError(model_id, self.name, status_code=404)
         if response.status_code == 429:
             body = _json_object(response)
-            error = body.get("error") if isinstance(body.get("error"), dict) else {}
+            error = body.get("error")
+            if not isinstance(error, dict):
+                error = {}
             headers = dict(response.headers)
             if error.get("type") in _QUOTA_ERRORS or error.get("code") in _QUOTA_ERRORS:
                 raise PaymentRequiredError(model_id, self.name, status_code=429, headers=headers, body=body)
