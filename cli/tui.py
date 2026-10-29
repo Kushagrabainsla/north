@@ -1359,8 +1359,9 @@ class NorthApp(App[None]):
             turn["thought_duration"] = elapsed
 
     async def _on_task_synthesis(self, task_id: str, data: dict) -> None:
-        self._set_status("synthesising…")
-        self._update_turn_phase(task_id, "synthesising")
+        # The combined answer replaces what the agents streamed one after another.
+        self._token_buffer[task_id] = str(data.get("output") or "")
+        self._update_turn_phase(task_id, "combined the agents' answers")
 
     @property
     def _approval_pending(self) -> dict | None:

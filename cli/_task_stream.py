@@ -215,6 +215,11 @@ class TaskStepFeed:
         label = f"{branch}{agent}: {summary}{suffix}" if summary else f"{branch}{agent} agent done{suffix}"
         self.steps.append(("✓", label, True))
 
+    def _on_task_synthesis(self, data: dict[str, Any]) -> None:
+        # Several agents answered; what they streamed is replaced by the one answer combining them.
+        self._tokens = str(data.get("output") or "")
+        self.steps.append(("✓", "combined the agents' answers", True))
+
     def _on_tool_called(self, data: dict[str, Any]) -> None:
         # Whatever streamed before a tool call was narration on the way to it
         # ("I'll check the repo for..."), not the answer - keeping it glued the
@@ -311,6 +316,7 @@ _EVENT_HANDLERS: dict[str, Callable[[TaskStepFeed, dict[str, Any]], None]] = {
     "model": TaskStepFeed._on_model,
     "failover": TaskStepFeed._on_failover,
     "agent_completed": TaskStepFeed._on_agent_completed,
+    "task_synthesis": TaskStepFeed._on_task_synthesis,
     "tool_called": TaskStepFeed._on_tool_called,
     "tool_result": TaskStepFeed._on_tool_result,
     "classified": TaskStepFeed._on_classified,

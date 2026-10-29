@@ -178,7 +178,7 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
   const cost = inferenceCategories.length
     ? inferenceCategories.reduce((total, item) => total + item.cost_usd, 0)
     : runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
-  const responseTimestamp = [...entries].reverse().find(entry => entry.action === "agent_completed" && entry.output)?.timestamp;
+  const responseTimestamp = [...entries].reverse().find(entry => (entry.action === "agent_completed" || entry.action === "task_synthesis") && entry.output)?.timestamp;
   const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued", "retrying", "working"].includes(status);
   const reply = replyText(isActive, streamed, detail?.output);
   const control = async (action: "pause" | "resume" | "cancel") => {

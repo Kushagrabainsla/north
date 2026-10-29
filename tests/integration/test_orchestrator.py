@@ -1468,3 +1468,42 @@ async def test_a_task_resumed_after_a_pause_reads_as_running(tmp_path):
     task = await orch.get_task("t1")
 
     assert task is not None and task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_the_answer_combining_several_agents_is_kept_and_shown(tmp_path):
+    """Only streamed, the combined answer was gone once the stream closed; the dashboard showed one agent's."""
+    from unittest.mock import AsyncMock
+
+    from orchestrator.api_context import ApiServices, bind_services
+    from web import api as web_api
+
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+    for agent, answer in (("researcher", "found three sources"), ("writer", "drafted the summary")):
+        await ledger.write(
+            LedgerEntry.new(
+                source=LedgerSource.AGENT,
+                task_id="t1",
+                agent=agent,
+                action="agent_completed",
+                output=answer,
+                status=LedgerStatus.COMPLETED,
+            )
+        )
+    orch._task_context_store.get_all = AsyncMock(
+        return_value={"researcher": {"output": "found three sources"}, "writer": {"output": "drafted the summary"}}
+    )
+    orch._synthesizer.synthesize = AsyncMock(return_value="Three sources, summarised.")
+
+    await orch._maybe_synthesize("t1", ["researcher", "writer"])
+
+    entries = await ledger.query(LedgerFilters(task_id="t1"))
+    assert [e.output for e in entries if e.action == "task_synthesis"] == ["Three sources, summarised."]
+
+    class _NoRuns:
+        async def list_for_task(self, task_id):
+            return []
+
+    with bind_services(ApiServices(orchestrator=orch, ledger=ledger, agent_run_store=_NoRuns())):
+        detail = await web_api._task_detail("t1")
+    assert detail["output"] == "Three sources, summarised."

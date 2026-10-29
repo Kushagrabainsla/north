@@ -1586,7 +1586,7 @@ class Orchestrator:
         """
         entries = await self._ledger.query(LedgerFilters(task_id=task_id, order_asc=True, limit=500))
         answered = "\n\n".join(
-            f"{entry.agent}: {entry.output}" for entry in entries if entry.action == "agent_completed" and entry.output
+            f"{entry.agent}: {entry.output}" for entry in entries if entry.action in _ANSWER_ACTIONS and entry.output
         )
         context = (
             f"{self._with_earlier_decisions(task_id, request.context)}\n\n"
@@ -1623,10 +1623,16 @@ class Orchestrator:
         if synthesized is None:
             return
 
-        await self._stream_manager.emit(
+        # The task's answer, so on the ledger like every other result. Only streamed,
+        # it was gone once the stream closed: the dashboard and Telegram showed one
+        # agent's answer, and a reader that opened late saw nothing of it.
+        await self._journal.record(
             task_id,
             "task_synthesis",
-            {"output": synthesized, "agents": agents},
+            source=LedgerSource.AGENT,
+            agent="synthesizer",
+            output=synthesized,
+            payload={"output": synthesized, "agents": agents},
         )
 
     async def _execute_agent_group(
@@ -1898,6 +1904,8 @@ class Orchestrator:
             )
 
 
+# Ledger actions that carry an answer to the task: each agent's, and the one combining them.
+_ANSWER_ACTIONS = frozenset({"agent_completed", "task_synthesis"})
 _DECISIONS = frozenset(ApprovalDecision)
 _NO_WORDS = frozenset({"reject", "deny", "no", "decline", "cancel", "skip", "keep on branch"})
 

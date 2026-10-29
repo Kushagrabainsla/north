@@ -321,3 +321,24 @@ async def test_a_message_that_joins_the_running_task_opens_no_new_turn():
 
     assert app._current_turn_activity["task_running"]["prompt"] == "Summarise sales"
     assert any("sent into the running task" in line for line in logged)
+
+
+async def test_the_tui_shows_the_combined_answer_when_several_agents_answered():
+    """It showed the agents' answers streamed one after another; the combined one was only a status line."""
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        tid = "task_combined"
+        app._user_task_ids.add(tid)
+        for event, data in [
+            ("token", {"text": "found three sources"}),
+            ("agent_completed", {"agent": "researcher"}),
+            ("token", {"text": "drafted the summary"}),
+            ("agent_completed", {"agent": "writer"}),
+            ("task_synthesis", {"output": "Three sources, summarised.", "agents": ["researcher", "writer"]}),
+            ("task_completed", {"cost_usd": 0.0}),
+        ]:
+            await app._handle_event(event, {"task_id": tid, **data})
+        await pilot.pause()
+
+        assert app._last_assistant_response == "Three sources, summarised."

@@ -418,8 +418,9 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
                 provider_by_model[model.id] = model.provider
     output = ""
     outcome_status = "working"
+    # The newest answer: the one combining several agents' answers is written after theirs.
     for entry in reversed(entries):
-        if entry.action == "agent_completed" and entry.output:
+        if entry.action in ("agent_completed", "task_synthesis") and entry.output:
             output = entry.output
             if isinstance(entry.agent_output, dict) and entry.agent_output.get("outcome_status"):
                 outcome_status = str(entry.agent_output["outcome_status"])

@@ -39,7 +39,10 @@ def wordmark(*, dim: bool = False) -> str:
 
 
 def _reconstruct_task_output(entries: list[dict]) -> str:
-    """Join the ``agent_completed`` outputs from ledger *entries* into one string."""
+    """The task's answer from its ledger *entries*: the combined one, else each agent's joined."""
+    combined = [e["output"] for e in entries if e.get("action") == "task_synthesis" and e.get("output")]
+    if combined:
+        return combined[-1]
     return "\n\n".join(e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output"))
 
 

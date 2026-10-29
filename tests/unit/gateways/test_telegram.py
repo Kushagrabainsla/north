@@ -711,3 +711,15 @@ async def test_tapping_an_option_sends_the_option_it_shows(monkeypatch: pytest.M
     )
 
     gw._respond_approval.assert_awaited_once_with("card_xyz", _LONG_OPTION)
+
+
+def test_the_chat_gets_the_answer_combining_several_agents() -> None:
+    from gateways.telegram import _finished_output
+
+    entries = [  # most recent first, as the ledger returns them
+        {"action": "task_completed", "output": None},
+        {"action": "task_synthesis", "output": "Three sources, summarised."},
+        {"action": "agent_completed", "output": "drafted the summary"},
+        {"action": "agent_completed", "output": "found three sources"},
+    ]
+    assert _finished_output(entries, "t", 1) == "Three sources, summarised."
