@@ -383,6 +383,13 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
             await stream_manager.emit(task_id, "inference_call", data)
 
     cost_tracker.set_call_sink(record_inference_call)
+
+    async def announce_model(task_id: str, model_id: str) -> None:
+        # Named as the call starts: emitted once it returned, "running on <model>" showed only
+        # in the instant before "done", in the TUI, the CLI and the dashboard alike.
+        await stream_manager.emit(task_id, "model", {"model": model_id})
+
+    base_router.set_model_sink(announce_model)
     # What runs after a card is decided. Empty until something registers
     # against a card source, so a guard-rail card is unaffected.
     card_continuations = CardContinuations()

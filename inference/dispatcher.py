@@ -174,6 +174,10 @@ class _DispatchPlan:
     capability: ModelCapability | str | None = None
 
 
+# (task_id, model_id) -> awaitable: called right before a tool-call completion runs.
+ModelSink = Callable[[str, str], Awaitable[None]]
+
+
 class ModelDispatcher(InferenceRouter):
     """Routes inference calls across multiple providers with per-model cooldowns."""
 
@@ -195,6 +199,9 @@ class ModelDispatcher(InferenceRouter):
         self._providers = providers
         self._north_settings = north_settings
         self._confidence_tracker = confidence_tracker
+        # Told which model a tool-call completion is about to run on, with its task, so a
+        # live view can name the model while the call runs rather than once it returns.
+        self._model_sink: ModelSink | None = None
         # (provider_name, model_id) → (ModelInfo, Provider)
         self._registry: dict[tuple[str, str], tuple[ModelInfo, Provider]] = {}
         self._cooldowns = CooldownStore(cooldowns_path)
@@ -549,6 +556,7 @@ class ModelDispatcher(InferenceRouter):
 
         async def _call(provider: Provider, model_id: str) -> ToolCallResponse:
             nonlocal forwarded
+            await self._announce_model(request.task_id, model_id)
             if forwarded:
                 # A previous candidate streamed partial output before failing.
                 # Ask the UI to discard it (when the callback supports reset)
@@ -573,6 +581,18 @@ class ModelDispatcher(InferenceRouter):
             capability=str(ModelCapability.TOOL_CALLS),
             task_id=request.task_id,
         )
+
+    def set_model_sink(self, sink: ModelSink | None) -> None:
+        """Set who is told the model each tool-call completion runs on, before it runs."""
+        self._model_sink = sink
+
+    async def _announce_model(self, task_id: str | None, model_id: str) -> None:
+        if self._model_sink is None or not task_id:
+            return
+        try:
+            await self._model_sink(task_id, model_id)
+        except Exception:
+            logger.debug("model sink failed for task %s", task_id, exc_info=True)
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         candidates = self._prefer_local(self._infrastructure_candidates(ModelCapability.EMBEDDING))

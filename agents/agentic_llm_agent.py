@@ -508,7 +508,6 @@ class AgenticLLMAgent(LLMAgent):
         persona = await self._memory().read_persona()
         messages, tool_map, compact_tokens = self._init_conversation(payload, context, scored_tools, persona)
         tally = _RunTally()
-        emitted_model: str = ""
         soft_budget_noted = False
         messages_read = 0
 
@@ -566,7 +565,6 @@ class AgenticLLMAgent(LLMAgent):
                 await token_cb.flush()
             tally.add(response)
             await self._emit_prompt_profile(payload, iteration + 1, messages, tools, response)
-            emitted_model = await self._maybe_emit_model(response, emitted_model, payload.task_id)
             await self._record_provider_metadata(payload, response)
 
             if response.type == "message":
@@ -791,16 +789,6 @@ class AgenticLLMAgent(LLMAgent):
         # so the status bar's compression counter stays truthful.
         if len(messages) < msgs_before and self._deps.stream_manager and task_id:
             await self._deps.stream_manager.emit(task_id, "compaction", {})
-
-    async def _maybe_emit_model(self, response: Any, emitted_model: str, task_id: str) -> str:
-        """Emit a 'model' event when the answering model changes.
-
-        Returns the model name now reflected in the UI (unchanged when no emit).
-        """
-        if response.model_used and response.model_used != emitted_model and self._deps.stream_manager and task_id:
-            await self._deps.stream_manager.emit(task_id, "model", {"model": response.model_used})
-            return response.model_used
-        return emitted_model
 
     async def _emit_prompt_profile(
         self,
