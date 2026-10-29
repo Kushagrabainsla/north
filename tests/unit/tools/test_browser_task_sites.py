@@ -8,6 +8,7 @@ time, so what was read on one site can only leave through a call the user saw.
 
 from __future__ import annotations
 
+import socket
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -18,6 +19,16 @@ from tools.models import ToolInput, ToolOutput
 from tools.universal.browser import BrowserTool
 
 TASK = "task_linkedin"
+
+
+@pytest.fixture(autouse=True)
+def public_dns(monkeypatch):
+    """Every site resolves to a public address, so the tests need no network."""
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))],
+    )
 
 
 @pytest.fixture
