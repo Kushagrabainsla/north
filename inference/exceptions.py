@@ -274,6 +274,8 @@ _WAITING_FOR_A_MODEL = (
     ModelRateLimitedError,
     ProviderUnavailableError,
 )
+
+
 class WaitingFor(Exception):
     """Work that cannot run yet because *resource* is missing, and will run when it is back.
 
