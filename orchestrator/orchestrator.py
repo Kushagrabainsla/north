@@ -391,6 +391,9 @@ class Orchestrator:
                 return TaskResponse(task_id=task_id, status="retrying", created_at=format_timestamp(entry.timestamp))
             if entry.action == "task_paused":
                 return TaskResponse(task_id=task_id, status="paused", created_at=format_timestamp(entry.timestamp))
+            if entry.action == "task_resumed":
+                # Running again: the pause or queueing before it no longer holds.
+                break
         # No terminal entry yet - the task is still running.
         return TaskResponse(task_id=task_id, status="pending", created_at=format_timestamp(entries[-1].timestamp))
 
@@ -809,6 +812,9 @@ class Orchestrator:
         task_start = time.monotonic()
         self._requests[task_id] = request
         await self._open_inbox(task_id)
+        # Running again after a pause: its stream was closed, and what it streamed before is replaced.
+        if self._stream_manager.reopen(task_id):
+            await self._stream_manager.emit(task_id, "stream_reset", {})
         try:
             await self._run_pipeline(task_id, request)
         except asyncio.CancelledError:

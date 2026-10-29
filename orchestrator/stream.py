@@ -209,6 +209,17 @@ class EventStreamManager:
                 with contextlib.suppress(asyncio.QueueFull):
                     q.put_nowait(message)
 
+    def reopen(self, task_id: str) -> bool:
+        """Let *task_id* stream again, as when a paused task runs again; True if it had finished."""
+        if task_id not in self._done and task_id not in self._recently_finished:
+            return False
+        self._done.discard(task_id)
+        self._recently_finished = deque(
+            (finished for finished in self._recently_finished if finished != task_id),
+            maxlen=self._recently_finished.maxlen,
+        )
+        return True
+
     async def emit_done(self, task_id: str) -> None:
         """Signal the end of a task stream, causing subscribers to close.
 

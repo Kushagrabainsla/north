@@ -1454,3 +1454,17 @@ async def test_a_partial_episode_is_still_recalled_but_labelled(tmp_path: Path) 
 
     assert _label("did half of it", "partial") == "[PARTIAL] did half of it"
     assert _label("did all of it", "success") == "did all of it"
+
+
+@pytest.mark.asyncio
+async def test_a_task_resumed_after_a_pause_reads_as_running(tmp_path):
+    """Its newest step was task_resumed, which the status scan skipped, so it read "paused" until it ended."""
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+    for action in ("task_received", "task_paused", "task_resumed", "agent_started"):
+        await ledger.write(
+            LedgerEntry.new(source=LedgerSource.SYSTEM, task_id="t1", action=action, status=LedgerStatus.PENDING)
+        )
+
+    task = await orch.get_task("t1")
+
+    assert task is not None and task.status == "pending"
