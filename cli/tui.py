@@ -666,13 +666,12 @@ class NorthApp(App[None]):
         self._agent_start_times: dict[str, float] = {}
         self._stream_token_counts: dict[str, int] = {}
         self._streaming_tok_per_sec: float = 0.0
-        self._approval_pending: dict | None = None
-        # Guards against a duplicate prompt for the same card. If two SSE
-        # clients are connected (e.g. TUI + a `north "prompt"` shell, or a
-        # stale reconnect), the server fans the event out to both, which would
-        # otherwise make the user answer twice. Tracking the card_id collapses
-        # repeats of the same pending card into a single prompt.
-        self._pending_card_id: str | None = None
+        # Every card waiting on an answer, by card id, newest last; typed text answers
+        # the newest, the one on screen. Keyed by id, a repeat of the same card (two SSE
+        # clients, a reconnect) is one prompt, not two. A card leaves when it is answered,
+        # here or anywhere else, or its task ends: holding one answered elsewhere, the
+        # TUI sent your next prompt to it, and the server's refusal was swallowed.
+        self._pending_cards: dict[str, dict] = {}
         self._user_task_ids: set[str] = set()
         self._last_submitted_prompt: str = ""
         self._conversation_id: str = ""
@@ -1363,7 +1362,22 @@ class NorthApp(App[None]):
         self._set_status("synthesising…")
         self._update_turn_phase(task_id, "synthesising")
 
+    @property
+    def _approval_pending(self) -> dict | None:
+        """The card your next typed text answers: the newest still waiting."""
+        return next(reversed(self._pending_cards.values()), None)
+
+    @property
+    def _pending_card_id(self) -> str | None:
+        return next(reversed(self._pending_cards), None)
+
+    def _forget_cards_of(self, task_id: str) -> None:
+        """A task that ended asks nothing more: its cards were released with it."""
+        for card_id in [card_id for card_id, card in self._pending_cards.items() if card.get("task_id") == task_id]:
+            del self._pending_cards[card_id]
+
     async def _on_task_completed(self, task_id: str, data: dict) -> None:
+        self._forget_cards_of(task_id)
         sys.stdout.write("\a")
         sys.stdout.flush()
         now = time.monotonic()
@@ -1419,6 +1433,7 @@ class NorthApp(App[None]):
             return ""
 
     async def _on_task_failed(self, task_id: str, data: dict) -> None:
+        self._forget_cards_of(task_id)
         sys.stdout.write("\a")
         sys.stdout.flush()
         self._streaming_active.discard(task_id)
@@ -1446,6 +1461,7 @@ class NorthApp(App[None]):
         self._render_status_bar()
 
     async def _on_task_cancelled(self, task_id: str, data: dict) -> None:
+        self._forget_cards_of(task_id)
         self._streaming_active.discard(task_id)
         partial_output = self._token_buffer.pop(task_id, "")
         self._reasoning_buffer.pop(task_id, None)
@@ -1540,13 +1556,10 @@ class NorthApp(App[None]):
 
     async def _on_approval_required(self, task_id: str, data: dict) -> None:
         card_id = data.get("card_id", "")
-        # Ignore a repeat of a card we're already prompting for (see
-        # self._pending_card_id). Prevents double-prompting when the event is
-        # delivered more than once (multiple SSE clients / reconnects).
-        if self._pending_card_id == card_id and self._approval_pending is not None:
+        # A repeat of a card already waiting (two SSE clients, a reconnect) is not a new prompt.
+        if card_id in self._pending_cards:
             return
-        self._approval_pending = data
-        self._pending_card_id = card_id
+        self._pending_cards[card_id] = {**data, "task_id": data.get("task_id") or task_id}
         self._set_status("")
         options = data.get("options") or ["Approve", "Reject"]
         msg = data.get("message", "")
@@ -1683,6 +1696,13 @@ class NorthApp(App[None]):
 
     async def _on_approval_responded(self, task_id: str, data: dict) -> None:
         decision = data.get("chosen_option") or data.get("decision", "")
+        if self._pending_cards.pop(str(data.get("card_id") or ""), None) is not None:
+            # Answered somewhere else (the dashboard, Telegram): it no longer waits here.
+            turn = self._current_turn_activity.get(task_id)
+            if turn is not None:
+                turn["interaction"] = None
+                turn["phase"] = f"answered elsewhere · {decision}"
+                self._render_active_turns()
         self._log(f"  [bright_black]decision · {decision}[/bright_black]")
 
     async def _on_stream_reset(self, task_id: str, data: dict) -> None:
@@ -1695,11 +1715,10 @@ class NorthApp(App[None]):
     async def _on_question_required(self, task_id: str, data: dict) -> None:
         # Reuses the pending-card input path; a free-form answer is allowed.
         card_id = data.get("card_id", "")
-        if self._pending_card_id == card_id and self._approval_pending is not None:
+        if card_id in self._pending_cards:
             return
         # The agent is asking a clarifying question and is blocked until we answer.
-        self._approval_pending = data
-        self._pending_card_id = card_id
+        self._pending_cards[card_id] = {**data, "task_id": data.get("task_id") or task_id}
         self._set_status("")
         options = data.get("options") or []
         turn = self._current_turn_activity.get(task_id)
@@ -1762,10 +1781,9 @@ class NorthApp(App[None]):
 
     async def _submit_approval(self, raw: str) -> None:
         data = self._approval_pending
-        self._approval_pending = None
-        self._pending_card_id = None
         if data is None:
             return
+        self._pending_cards.pop(str(data.get("card_id") or ""), None)
         # A question card carries "question" and has no Approve/Reject semantics  -
         # any selection (numbered option or free text) is an "answered" decision.
         is_question = bool(data.get("question"))
@@ -1821,7 +1839,7 @@ class NorthApp(App[None]):
 
         try:
             async with self._http() as c:
-                await c.post(
+                r = await c.post(
                     f"{self.base_url}/orchestrator/approval/respond",
                     headers=self.headers,
                     json={
@@ -1833,8 +1851,14 @@ class NorthApp(App[None]):
                     },
                     timeout=10.0,
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log(f"  [red]your answer was not recorded: {exc}[/red]")
+            return
+        if r.status_code >= 400:
+            self._log(
+                f"  [red]your answer was not recorded (HTTP {r.status_code});"
+                " the card may have been answered elsewhere[/red]"
+            )
 
     # ── input ─────────────────────────────────────────────────────────────────
 
