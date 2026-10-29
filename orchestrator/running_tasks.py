@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS running_tasks (
     has_side_effects INTEGER NOT NULL DEFAULT 0,
     status           TEXT NOT NULL DEFAULT 'running',
     domain           TEXT NOT NULL DEFAULT 'general',
-    description      TEXT NOT NULL DEFAULT ''
+    description      TEXT NOT NULL DEFAULT '',
+    forced_agent     TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -51,6 +52,9 @@ _MIGRATION_ADD_SIDE_EFFECTS = "ALTER TABLE running_tasks ADD COLUMN has_side_eff
 _MIGRATION_ADD_STATUS = "ALTER TABLE running_tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'running'"
 _MIGRATION_ADD_DOMAIN = "ALTER TABLE running_tasks ADD COLUMN domain TEXT NOT NULL DEFAULT 'general'"
 _MIGRATION_ADD_DESCRIPTION = "ALTER TABLE running_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+# The agent a task was told to run (a schedule's agent): without it a task that ran
+# again went through the planner and could land on an agent that writes nothing.
+_MIGRATION_ADD_FORCED_AGENT = "ALTER TABLE running_tasks ADD COLUMN forced_agent TEXT NOT NULL DEFAULT ''"
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,8 @@ class RunningTaskStore:
                 conn.execute(_MIGRATION_ADD_DOMAIN)
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(_MIGRATION_ADD_DESCRIPTION)
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(_MIGRATION_ADD_FORCED_AGENT)
 
     async def mark_running(
         self, task_id: str, request: TaskRequest, *, attempt: int = 0, domain: str = "general"
@@ -98,8 +104,9 @@ class RunningTaskStore:
             conn.execute(
                 """
                 INSERT INTO running_tasks
-                    (task_id, prompt, source, workspace, context, attempt, started_at, heartbeat_at, status, domain)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+                    (task_id, prompt, source, workspace, context, attempt, started_at, heartbeat_at, status, domain,
+                     forced_agent)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     prompt=excluded.prompt,
                     source=excluded.source,
@@ -108,7 +115,8 @@ class RunningTaskStore:
                     attempt=excluded.attempt,
                     heartbeat_at=excluded.heartbeat_at,
                     status='running',
-                    domain=excluded.domain
+                    domain=excluded.domain,
+                    forced_agent=excluded.forced_agent
                 """,
                 (
                     task_id,
@@ -120,6 +128,7 @@ class RunningTaskStore:
                     now,
                     now,
                     domain,
+                    request.forced_agent or "",
                 ),
             )
 
@@ -332,6 +341,7 @@ class RunningTaskStore:
             source=source,
             workspace=row["workspace"] or "",
             context=row["context"] or "",
+            forced_agent=row["forced_agent"] or None,
         )
         domain = str(row["domain"]) if "domain" in row else "general"
         description = str(row["description"]) if "description" in row else ""

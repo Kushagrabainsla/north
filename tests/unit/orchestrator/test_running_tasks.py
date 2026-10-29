@@ -151,3 +151,38 @@ async def test_get_existing_and_missing_task(store: RunningTaskStore) -> None:
     assert found.request.prompt == "find me"
 
     assert await store.get("nonexistent") is None
+
+
+async def test_a_task_told_which_agent_to_run_keeps_it_when_it_runs_again(store: RunningTaskStore) -> None:
+    """Lost, a scheduled task that ran again went through the planner and could land on an agent that writes nothing."""
+    await store.mark_running("t1", TaskRequest(prompt="brief", source=LedgerSource.CRON, forced_agent="news"))
+    await store.mark_queued("t1", attempt=1)
+
+    [queued] = await store.list_queued()
+
+    assert queued.request.forced_agent == "news"
+
+
+async def test_a_task_left_to_route_still_reads_as_unforced(store: RunningTaskStore) -> None:
+    await store.mark_running("t1", TaskRequest(prompt="hello", source=LedgerSource.PROMPT))
+
+    stored = await store.get("t1")
+
+    assert stored is not None and stored.request.forced_agent is None
+
+
+def test_an_older_store_gains_the_column(tmp_path) -> None:
+    import sqlite3
+
+    path = tmp_path / "running_tasks.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE running_tasks (task_id TEXT PRIMARY KEY, prompt TEXT NOT NULL, source TEXT NOT NULL, "
+            "workspace TEXT NOT NULL DEFAULT '', context TEXT NOT NULL DEFAULT '', attempt INTEGER NOT NULL DEFAULT 0, "
+            "started_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL)"
+        )
+
+    RunningTaskStore(path)
+
+    with sqlite3.connect(path) as conn:
+        assert "forced_agent" in [row[1] for row in conn.execute("PRAGMA table_info(running_tasks)")]
