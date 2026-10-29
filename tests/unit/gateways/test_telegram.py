@@ -668,3 +668,46 @@ async def test_a_question_with_options_arrives_with_a_button_for_each() -> None:
 
     [message] = sent
     assert [row[0]["text"] for row in message["markup"]["inline_keyboard"]] == ["Q2", "Q3"]
+
+
+_LONG_OPTION = "Keep it on the branch and open a pull request for review"
+
+
+def test_every_option_button_fits_telegrams_64_bytes_however_long_the_option() -> None:
+    """With the option's text in callback_data, a long option made Telegram refuse the card, which reached no one."""
+    from gateways.telegram_api import approval_keyboard
+
+    card_id = "a" * 32  # a card id is 32 hex characters
+    rows = approval_keyboard(card_id, [_LONG_OPTION, "Discard"])["inline_keyboard"]
+
+    assert [row[0]["text"] for row in rows] == [_LONG_OPTION, "Discard"]
+    assert all(len(row[0]["callback_data"].encode()) <= 64 for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_tapping_an_option_sends_the_option_it_shows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+    from gateways.telegram_api import approval_keyboard
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+    gw = TelegramGateway()
+    gw._respond_approval = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    gw._edit_message_text = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    gw._answer_callback_query = AsyncMock()  # type: ignore[method-assign]
+    keyboard = approval_keyboard("card_xyz", ["Discard", _LONG_OPTION])
+
+    await gw._process_callback_query(
+        {
+            "id": "cb_1",
+            "from": {"id": 12345},
+            "message": {
+                "message_id": 55,
+                "chat": {"id": 12345},
+                "text": "Where should it go?",
+                "reply_markup": keyboard,
+            },
+            "data": keyboard["inline_keyboard"][1][0]["callback_data"],
+        }
+    )
+
+    gw._respond_approval.assert_awaited_once_with("card_xyz", _LONG_OPTION)

@@ -78,6 +78,17 @@ def parse_approval_callback(data: str) -> tuple[str, str] | None:
     return parts[1], parts[2]
 
 
+def is_option_choice(decision: str) -> bool:
+    """Whether a button's decision names one of the card's options by its place, as "#1" does."""
+    return decision.startswith("#") and decision[1:].isdigit()
+
+
+def tapped_label(message: dict, callback_data: str) -> str:
+    """The label of the button carrying *callback_data* on *message*, or ""."""
+    rows = (message.get("reply_markup") or {}).get("inline_keyboard") or []
+    return next((str(b.get("text", "")) for row in rows for b in row if b.get("callback_data") == callback_data), "")
+
+
 def approval_keyboard(card_id: str, options: list[str] | None = None) -> dict:
     """The inline keyboard for a decision.
 
@@ -87,7 +98,10 @@ def approval_keyboard(card_id: str, options: list[str] | None = None) -> dict:
     that loses which one it was.
     """
     if options:
-        rows = [[{"text": o, "callback_data": approval_callback_data(o, card_id)}] for o in options]
+        # Each option goes by its place on the card, and its text is the button's label:
+        # Telegram allows 64 bytes of callback_data, the card id takes 32, and an option
+        # longer than about 20 bytes made Telegram refuse the card, which then reached no one.
+        rows = [[{"text": o, "callback_data": approval_callback_data(f"#{i}", card_id)}] for i, o in enumerate(options)]
         return {"inline_keyboard": rows}
     return {
         "inline_keyboard": [

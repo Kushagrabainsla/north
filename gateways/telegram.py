@@ -29,8 +29,10 @@ from gateways.telegram_api import (
 from gateways.telegram_api import (
     approval_keyboard,
     bot_url,
+    is_option_choice,
     parse_approval_callback,
     send_message,
+    tapped_label,
     within_telegram_limit,
 )
 
@@ -485,6 +487,12 @@ class TelegramGateway:
             return
 
         decision, card_id = parsed
+        if is_option_choice(decision):
+            # The button holds the option's place on the card; its label is the option.
+            decision = tapped_label(msg, data)
+            if not decision:
+                await self._answer_callback_query(cb_id, text="❌ Could not read that button; answer on the web.")
+                return
         if not await self._respond_approval(card_id, decision):
             await self._answer_callback_query(cb_id, text="❌ Failed to record decision (already resolved or error)")
             return

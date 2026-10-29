@@ -27,7 +27,7 @@ import pytest
 
 from config.approval_mode import approve_option
 from gateways.telegram import TelegramGateway
-from gateways.telegram_api import parse_approval_callback
+from gateways.telegram_api import is_option_choice, parse_approval_callback
 from inference.models import CompletionRequest, CompletionResponse, ToolCall, ToolCallRequest, ToolCallResponse
 from tests.conftest import MockInferenceRouter
 
@@ -83,7 +83,13 @@ class RecordedTelegram(TelegramGateway):
         choices = [b for b in buttons if parse_approval_callback(b.get("callback_data", ""))]
         if choices:
             # The button a person reads as yes: "✅ Approve" on a yes/no card, the approving option otherwise.
-            labels = [parse_approval_callback(b["callback_data"])[0] for b in choices]
+            # An option button names its option by its place; the option itself is the label.
+            labels = [
+                b["text"]
+                if is_option_choice(parse_approval_callback(b["callback_data"])[0])
+                else parse_approval_callback(b["callback_data"])[0]
+                for b in choices
+            ]
             yes = "approved" if "approved" in labels else approve_option(labels)
             button = choices[labels.index(yes)]
             self.cards.append(text)
