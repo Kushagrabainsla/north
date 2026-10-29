@@ -10,9 +10,6 @@ See docs/CODING_STYLE.md Section 16.1.
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import os
-import signal
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +26,7 @@ from tools.specialized._sandbox import (
     docker_available,
 )
 from utils.edit_scope import narrow_workspace
+from utils.processes import stop_process_group
 
 _TIMEOUT = 30
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the
@@ -283,7 +281,6 @@ class BashTool(Tool):
 
     async def _spawn(self, argv: list[str] | None, cwd: str | None, timeout: int, *, command: str) -> ToolOutput:
         """Run *argv* - or *command* through the host shell when there is none - and collect its output."""
-        use_new_session = hasattr(os, "setsid")
         try:
             if argv is not None:
                 proc = await asyncio.create_subprocess_exec(
@@ -291,7 +288,7 @@ class BashTool(Tool):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
-                    start_new_session=use_new_session,
+                    start_new_session=True,
                 )
             else:
                 proc = await asyncio.create_subprocess_shell(
@@ -299,28 +296,19 @@ class BashTool(Tool):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
-                    start_new_session=use_new_session,
+                    start_new_session=True,
                 )
-            try:
-                stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            except TimeoutError:
-                if use_new_session and hasattr(os, "killpg") and hasattr(os, "getpgid"):
-                    with contextlib.suppress(ProcessLookupError):
-                        pgid = os.getpgid(proc.pid)
-                        os.killpg(pgid, signal.SIGTERM)
-                        try:
-                            await asyncio.wait_for(proc.communicate(), timeout=1.0)
-                        except TimeoutError:
-                            os.killpg(pgid, signal.SIGKILL)
-                            with contextlib.suppress(Exception):
-                                await asyncio.wait_for(proc.communicate(), timeout=1.0)
-                else:
-                    proc.kill()
-                    with contextlib.suppress(Exception):
-                        await proc.communicate()
-                return ToolOutput(success=False, error=f"Command timed out after {timeout}s.")
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            return ToolOutput(success=False, error=f"Command timed out after {timeout}s.")
+        except Exception as exc:
+            return ToolOutput(success=False, error=str(exc))
+        finally:
+            # A timeout or a cancelled task stops the command and whatever it started.
+            await stop_process_group(proc, grace_seconds=1.0)
 
         stdout = _cap(stdout_b.decode("utf-8", errors="replace"))
         stderr = _cap(stderr_b.decode("utf-8", errors="replace"))

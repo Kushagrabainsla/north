@@ -48,7 +48,8 @@ from coding_agents.models import (
     RunOutcome,
     RunSpec,
 )
-from coding_agents.process import stop, tail
+from coding_agents.process import tail
+from utils.processes import stop_process_group
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ class CodexBackend(CodingBackend):
             raise
         finally:
             await server.close()
-            await stop(process)
+            await stop_process_group(process)
             run.stderr = await _finished(stderr)
         return run.outcome(timed_out=timed_out)
 
@@ -282,10 +283,16 @@ class CodexBackend(CodingBackend):
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
             )
-            out, _ = await asyncio.wait_for(process.communicate(), PROBE_TIMEOUT_SECONDS)
-        except (OSError, TimeoutError):
+        except OSError:
             return ""
+        try:
+            out, _ = await asyncio.wait_for(process.communicate(), PROBE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            return ""
+        finally:
+            await stop_process_group(process)
         return out.decode(errors="replace")
 
 

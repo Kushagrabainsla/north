@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from utils.processes import stop_process_group
+
 logger = logging.getLogger(__name__)
 
 _GIT_TIMEOUT = 30
@@ -88,13 +90,14 @@ async def _run_git(
         stdin=asyncio.subprocess.PIPE if input_data is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(input=input_data), timeout=timeout)
     except TimeoutError as exc:
-        proc.kill()
-        await proc.wait()
         raise WorktreeError(f"git {args[0] if args else ''} timed out after {timeout}s") from exc
+    finally:
+        await stop_process_group(proc)
     stdout = out if binary else out.decode(errors="replace")
     return proc.returncode, stdout, err.decode(errors="replace")
 

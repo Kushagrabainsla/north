@@ -17,7 +17,6 @@ import asyncio
 import logging
 import os
 import re
-import signal
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from coding_agents.discovery import check_agents
 from config.settings import settings
 from inference.exceptions import WaitingFor
 from utils.power import fully_awake
+from utils.processes import stop_process_group
 from utils.time import localnow
 
 logger = logging.getLogger(__name__)
@@ -79,14 +79,14 @@ async def nightly_check() -> str:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
-        start_new_session=True,  # its own process group, so a time-out stops the tests it started
+        start_new_session=True,  # its own process group, so stopping it stops the tests it started
     )
     try:
         output, _ = await asyncio.wait_for(process.communicate(), _TIME_LIMIT_S)
     except TimeoutError:
-        os.killpg(process.pid, signal.SIGKILL)
-        await process.wait()
         raise RuntimeError(f"The nightly check did not finish within {_TIME_LIMIT_S // 60} minutes.") from None
+    finally:
+        await stop_process_group(process, grace_seconds=0)
     last = next((line for line in reversed(output.decode(errors="replace").splitlines()) if line.strip()), "")
     # Killed before its verdict - north stopped mid-check on Oct 20 - is no result,
     # not a failure: the run waits, and runs again once north is back.

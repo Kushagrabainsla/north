@@ -161,37 +161,36 @@ class TestBashAllowDangerous:
 
     @pytest.mark.asyncio
     async def test_timeout_kills_process_group(self, monkeypatch) -> None:
-        killed = False
         killpg_called = False
 
         class _P:
+            """Still running until its group is signalled."""
+
             pid = 12345
-            returncode = -9
-            called = 0
+            returncode = None
 
             async def communicate(self):
-                self.called += 1
-                if self.called == 1:
-                    await asyncio.sleep(10)
+                await asyncio.sleep(10)
                 return b"", b""
 
-            def kill(self):
-                nonlocal killed
-                killed = True
+            async def wait(self):
+                return self.returncode
+
+        proc = _P()
 
         async def fake_exec_shell(cmd, **kwargs):
-            return _P()
+            return proc
 
         def fake_killpg(pgid, sig):
             nonlocal killpg_called
             killpg_called = True
+            proc.returncode = -sig
 
         import asyncio
         import os
 
         monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_exec_shell)
         monkeypatch.setattr(os, "killpg", fake_killpg)
-        monkeypatch.setattr(os, "getpgid", lambda pid: pid)
 
         store = MagicMock()
         resolved = MagicMock(status="approved", chosen_option="Run")

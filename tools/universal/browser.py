@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import shutil
-import signal
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -39,6 +38,7 @@ from tools.models import ToolInput, ToolOutput
 from tools.universal.browser_describe import describe_browser_call
 from tools.universal.browser_taskwindow import TaskWindowBrowser
 from utils.net import UnsafeUrlError, validate_public_url
+from utils.processes import stop_process_group
 
 if TYPE_CHECKING:
     from approval.approvals import Request as ApprovalRequest
@@ -419,27 +419,19 @@ async def _run_chrome_agent(command: list[str], timeout: int) -> _CommandResult:
     try:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
-        await _kill_session(proc)
         raise _ChromeAgentError(f"browser timed out after {timeout}s.") from None
     except Exception as exc:
         raise _ChromeAgentError(f"Subprocess execution failed: {exc}") from exc
+    finally:
+        # The whole group: chrome-agent leaves a browser behind otherwise, on a
+        # timeout or when the task is cancelled.
+        await stop_process_group(proc, grace_seconds=0)
 
     return _CommandResult(
         returncode=proc.returncode,
         stdout=stdout_bytes.decode("utf-8", errors="replace").strip(),
         stderr=stderr_bytes.decode("utf-8", errors="replace").strip(),
     )
-
-
-async def _kill_session(proc: asyncio.subprocess.Process) -> None:
-    """Kill the whole process group - chrome-agent leaves a browser behind otherwise."""
-    with contextlib.suppress(ProcessLookupError, OSError):
-        if hasattr(os, "killpg"):
-            os.killpg(proc.pid, signal.SIGKILL)
-        else:
-            proc.kill()
-    with contextlib.suppress(Exception):
-        await proc.communicate()
 
 
 def _parse_payload(action: str, stdout: str) -> _Payload:

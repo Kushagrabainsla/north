@@ -13,10 +13,11 @@ run on the host - a security control must never degrade to "no protection".
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+from utils.processes import stop_process_group
 
 logger = logging.getLogger(__name__)
 
@@ -92,16 +93,14 @@ async def docker_available() -> bool:
             "info",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
         )
+    except OSError:
+        return False
+    try:
         code = await asyncio.wait_for(proc.wait(), timeout=_DOCKER_CHECK_TIMEOUT)
-    except (FileNotFoundError, OSError):
-        return False
     except TimeoutError:
-        with_suppressed_kill(proc)
         return False
+    finally:
+        await stop_process_group(proc)
     return code == 0
-
-
-def with_suppressed_kill(proc: asyncio.subprocess.Process) -> None:
-    with contextlib.suppress(ProcessLookupError):
-        proc.kill()

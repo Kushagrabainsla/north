@@ -8,8 +8,6 @@ DEFAULT_MAX_BUDGET_USD = 2.0
 # A hard stop for a run that neither finishes nor errors. Approvals are not counted here: they
 # never expire (CODING_STYLE 13.5) and a plan run asks for none.
 RUN_TIMEOUT_SECONDS = 1800.0
-# How long a signalled agent gets to exit before it is killed.
-TERMINATE_GRACE_SECONDS = 5.0
 PROBE_TIMEOUT_SECONDS = 15.0
 # How long Claude Code waits for the gate to answer. An approval waits for a person and never expires
 # (CODING_STYLE 13.5), so this is a day, not a limit anyone meets.

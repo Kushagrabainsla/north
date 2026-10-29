@@ -44,7 +44,8 @@ from coding_agents.models import (
     RunOutcome,
     RunSpec,
 )
-from coding_agents.process import stop, tail
+from coding_agents.process import tail
+from utils.processes import stop_process_group
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ class ClaudeBackend(CodingBackend):
         except TimeoutError:
             timed_out = True
         finally:
-            await stop(process)
+            await stop_process_group(process)
         return _outcome(stream, exit_code=exit_code, stderr=stderr, timed_out=timed_out)
 
     async def _drive(
@@ -239,10 +240,16 @@ class ClaudeBackend(CodingBackend):
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
             )
-            out, _ = await asyncio.wait_for(process.communicate(), PROBE_TIMEOUT_SECONDS)
-        except (OSError, TimeoutError):
+        except OSError:
             return ""
+        try:
+            out, _ = await asyncio.wait_for(process.communicate(), PROBE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            return ""
+        finally:
+            await stop_process_group(process)
         return out.decode(errors="replace")
 
 

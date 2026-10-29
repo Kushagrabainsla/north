@@ -9,6 +9,8 @@ See docs/CODING_STYLE.md Section 18.2.
 
 from __future__ import annotations
 
+import asyncio
+import subprocess
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -282,3 +284,20 @@ def sample_provisioned_default(monkeypatch):
     )
     monkeypatch.setattr(scheduler, "PROVISIONED_CRON_ENTRIES", [entry])
     return entry
+
+
+async def started_pid(pid_file: Path, timeout: float = 5.0) -> int:
+    """The pid a test command wrote to *pid_file*, once it has written it."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        text = pid_file.read_text().strip() if pid_file.exists() else ""
+        if text:
+            return int(text)
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"the command never wrote {pid_file}")
+
+
+def is_running(pid: int) -> bool:
+    """True while *pid* exists and is not a zombie waiting to be reaped (ps works on macOS and Linux)."""
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")

@@ -19,6 +19,7 @@ import shutil
 import sys
 
 from tools.specialized._display import Screen
+from utils.processes import stop_process_group
 
 logger = logging.getLogger(__name__)
 
@@ -149,13 +150,14 @@ async def _run(argv: list[str]) -> str:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), _TIMEOUT_SECONDS)
     except TimeoutError:
-        process.kill()
-        await process.wait()
         raise OSError(f"{argv[0]} did not answer in {_TIMEOUT_SECONDS:.0f}s") from None
+    finally:
+        await stop_process_group(process)
     if process.returncode != 0:
         raise OSError(_reason(stderr.decode(errors="replace") or stdout.decode(errors="replace")))
     return stdout.decode(errors="replace").strip()
