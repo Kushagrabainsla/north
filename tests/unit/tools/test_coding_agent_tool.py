@@ -46,6 +46,7 @@ class StubRunner:
         self.landing = landing
         self.review = review
         self.problem = ""
+        self.earlier_branches: tuple[str, ...] = ()
         self.calls: list[dict] = []
         self._outcome = outcome or RunOutcome(ok=True, text="Add subtract() to calc.py.", session_id="s", turns=3)
         self._raises = raises
@@ -64,6 +65,7 @@ class StubRunner:
             self.landing,
             self.review,
             self.problem,
+            self.earlier_branches,
         )
 
 
@@ -287,6 +289,17 @@ class TestWhatHappenedToTheChange:
 
         assert "NOT applied: the same lines changed in your working tree meanwhile" in text
         assert "`north/wt-coding-abc`" in text and "git -C /repo diff abc123..north/wt-coding-abc" in text
+
+    async def test_branches_earlier_rounds_left_are_named(self) -> None:
+        runner = StubRunner(can_edit=True, change=CHANGE, verification=PASSED, landing=Landing(LandingState.APPLIED))
+        runner.earlier_branches = ("north/wt-coding-one", "north/wt-coding-two")
+        tool = _tool(runner)
+
+        result = await tool.execute(_input(mode="edit"))
+        text = tool.format_output(result.data)
+
+        assert "Earlier rounds of this task also left branches" in text
+        assert "`north/wt-coding-one`, `north/wt-coding-two`" in text
 
     async def test_a_declined_change_says_you_kept_it(self) -> None:
         text = await self._text(verification=PASSED, landing=Landing(LandingState.DECLINED, "you kept it"))

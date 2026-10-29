@@ -405,16 +405,17 @@ class ScriptedVerifier:
 
 
 class ScriptedLander:
-    def __init__(self, hang: bool = False) -> None:
+    def __init__(self, hang: bool = False, state: LandingState = LandingState.APPLIED) -> None:
         self.calls: list = []
         self.hang = hang
+        self.state = state
 
     async def land(self, change, verification, task_id, review=None):
         self.calls.append((change, verification, task_id))
         self.review = review
         if self.hang:
             await asyncio.sleep(3600)
-        return Landing(LandingState.APPLIED)
+        return Landing(self.state)
 
 
 class TestVerifyAndLand:
@@ -712,3 +713,68 @@ class TestAskingNorth:
         await runner.run(task_id="t1", task="how does it work", workspace="/repo", backend="claude")
 
         assert author.specs[0].ask is None
+
+
+class TestBranchesLeftByEarlierRounds:
+    def _setup(self, tmp_path, recorder, lander):
+        workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
+        backend = ScriptedBackend()
+        backend.recorder = recorder
+        runner = CodingRunner(
+            {"claude": backend},
+            recorder,
+            workspaces=workspaces,
+            sessions=GateSessions(),
+            gate_url="http://x/gate",
+            verifier=ScriptedVerifier(),
+            lander=lander,
+        )
+        return runner, workspaces
+
+    async def _edit(self, runner, task_id="t1"):
+        return await runner.run(task_id=task_id, task="add subtract", workspace="/repo", mode=Mode.EDIT)
+
+    async def test_each_round_names_the_branches_earlier_rounds_kept(self, tmp_path, recorder) -> None:
+        runner, _ = self._setup(tmp_path, recorder, ScriptedLander(state=LandingState.KEPT))
+
+        first = await self._edit(runner)
+        second = await self._edit(runner)
+        third = await self._edit(runner)
+
+        assert first.earlier_branches == ()
+        assert second.earlier_branches == (first.change.tree.branch,)
+        assert third.earlier_branches == (first.change.tree.branch, second.change.tree.branch)
+
+    async def test_an_earlier_branch_whose_changes_are_in_place_is_deleted_and_not_named(
+        self, tmp_path, recorder
+    ) -> None:
+        lander = ScriptedLander(state=LandingState.KEPT)
+        runner, workspaces = self._setup(tmp_path, recorder, lander)
+        first = await self._edit(runner)
+        lander.state = LandingState.APPLIED
+        workspaces.in_place.add(first.change.tree.branch)
+
+        second = await self._edit(runner)
+        third = await self._edit(runner)
+
+        assert workspaces.dropped == [first.change.tree.branch]
+        assert second.earlier_branches == () and third.earlier_branches == ()
+
+    async def test_an_earlier_branch_that_differs_from_the_working_tree_is_kept(self, tmp_path, recorder) -> None:
+        lander = ScriptedLander(state=LandingState.KEPT)
+        runner, workspaces = self._setup(tmp_path, recorder, lander)
+        first = await self._edit(runner)
+        lander.state = LandingState.APPLIED
+
+        second = await self._edit(runner)
+
+        assert workspaces.dropped == []
+        assert second.earlier_branches == (first.change.tree.branch,)
+
+    async def test_another_tasks_branches_are_not_named(self, tmp_path, recorder) -> None:
+        runner, _ = self._setup(tmp_path, recorder, ScriptedLander(state=LandingState.KEPT))
+
+        await self._edit(runner, task_id="t1")
+        other = await self._edit(runner, task_id="t2")
+
+        assert other.earlier_branches == ()

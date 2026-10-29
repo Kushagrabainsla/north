@@ -84,6 +84,10 @@ class Workspaces(Protocol):
         """What the branch changed, as a unified diff against the commit it was made from."""
         ...
 
+    async def drop_if_in_place(self, tree: WorkTree) -> bool:
+        """Delete *tree*'s branch when everything on it is already in the working tree; True when it is gone."""
+        ...
+
 
 @dataclass(frozen=True)
 class ShellResult:

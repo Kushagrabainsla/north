@@ -369,3 +369,56 @@ class TestACopyStartsFromTheUsersWorkingTree:
         wt = await manager.create("ignored")
 
         assert not (Path(wt.path) / "secret.env").exists() and (Path(wt.path) / "keep.txt").exists()
+
+
+async def test_a_branch_whose_changes_are_in_the_working_tree_is_deleted(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    wt = await manager.create("kept")
+    (Path(wt.path) / "README.md").write_text("changed\n")
+    (Path(wt.path) / "new.txt").write_text("new\n")
+    assert await manager.commit_changes(wt)
+    await manager.remove(wt, keep_branch=True)
+    (repo / "README.md").write_text("changed\n")
+    (repo / "new.txt").write_text("new\n")
+
+    assert await manager.drop_branch_if_in_place(wt.branch, wt.base_sha) is True
+
+    assert wt.branch not in _branches(repo)
+
+
+async def test_a_branch_with_changes_not_in_the_working_tree_is_kept(manager: GitWorktreeManager, repo: Path) -> None:
+    wt = await manager.create("kept")
+    (Path(wt.path) / "README.md").write_text("changed\n")
+    assert await manager.commit_changes(wt)
+    await manager.remove(wt, keep_branch=True)
+    (repo / "README.md").write_text("changed differently\n")
+
+    assert await manager.drop_branch_if_in_place(wt.branch, wt.base_sha) is False
+
+    assert wt.branch in _branches(repo)
+
+
+async def test_a_branch_that_was_already_deleted_counts_as_gone(manager: GitWorktreeManager, repo: Path) -> None:
+    wt = await manager.create("kept")
+    await manager.remove(wt, keep_branch=False)
+
+    assert await manager.drop_branch_if_in_place(wt.branch, wt.base_sha) is True
+
+
+async def test_an_earlier_rounds_branch_is_deleted_once_the_same_change_is_applied(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    rounds = []
+    for label in ("round1", "round2"):
+        wt = await manager.create(label)
+        (Path(wt.path) / "calc.py").write_text("def subtract(a, b):\n    return a - b\n")
+        assert await manager.commit_changes(wt)
+        rounds.append(wt)
+    first, second = rounds
+    await manager.remove(first, keep_branch=True)
+    assert await manager.apply_back(second)
+
+    assert await manager.drop_branch_if_in_place(first.branch, first.base_sha) is True
+
+    assert first.branch not in _branches(repo)

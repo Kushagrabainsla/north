@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -18,6 +19,7 @@ from coding_agents.models import (
     FailureKind,
     GateAccess,
     Landing,
+    LandingState,
     Mode,
     Review,
     ReviewVerdict,
@@ -37,6 +39,10 @@ logger = logging.getLogger(__name__)
 AGENT_PREFIX = "coding:"
 
 
+# How many tasks' kept branches are remembered; a task's rounds run minutes apart, not across hundreds of tasks.
+_TRACKED_TASKS = 200
+
+
 @dataclass(frozen=True)
 class RunReport:
     run_id: str
@@ -48,6 +54,7 @@ class RunReport:
     landing: Landing | None = None  # whether the change reached the working tree
     review: Review | None = None  # the other agent's read of the change
     problem: str = ""  # why the copy's changes could not be saved, when they could not
+    earlier_branches: tuple[str, ...] = ()  # branches earlier edit rounds of this task left, still there
 
 
 class CodingRunner:
@@ -78,6 +85,9 @@ class CodingRunner:
         self._ask_url = ask_url
         self._verifier = verifier
         self._lander = lander
+        # The branches each task's edit rounds left behind, oldest first: a task that edits three times
+        # left three branches in the user's repository and said so only one round at a time.
+        self._kept: OrderedDict[str, list[WorkTree]] = OrderedDict()
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -131,7 +141,38 @@ class CodingRunner:
                 run_id, task_id, change, spec.session_id, task, chosen.name if review else None
             )
         await self._recorder.finish(run_id, outcome)
-        return RunReport(run_id, chosen.name, outcome, change, mode, verification, landing, reviewed, problem)
+        earlier = await self._track_branches(task_id, change, landing) if mode is Mode.EDIT else ()
+        return RunReport(run_id, chosen.name, outcome, change, mode, verification, landing, reviewed, problem, earlier)
+
+    async def _track_branches(
+        self, task_id: str, change: WorkChange | None, landing: Landing | None
+    ) -> tuple[str, ...]:
+        """The branches earlier rounds of *task_id* left that are still there, after this round.
+
+        An earlier branch whose changes are now in the working tree, because this round's same change was
+        applied, is deleted: nothing on it is lost. Any other is kept for the user and named, so the answer
+        can list every branch the task left rather than only the last.
+        """
+        if not task_id or self._workspaces is None:
+            return ()
+        earlier = self._kept.pop(task_id, [])
+        remaining = []
+        for tree in earlier:
+            try:
+                gone = await self._workspaces.drop_if_in_place(tree)
+            except Exception:
+                logger.warning("could not check whether branch %s is still needed", tree.branch, exc_info=True)
+                gone = False
+            if not gone:
+                remaining.append(tree)
+        kept = list(remaining)
+        if change is not None and (landing is None or landing.state is not LandingState.APPLIED):
+            kept.append(change.tree)
+        if kept:
+            self._kept[task_id] = kept
+            while len(self._kept) > _TRACKED_TASKS:
+                self._kept.popitem(last=False)
+        return tuple(tree.branch for tree in remaining)
 
     async def _choose(self, wanted: str | None) -> tuple[CodingBackend, str]:
         """The backend asked for, or the first that can take a run; why none can, when none can."""

@@ -325,6 +325,42 @@ class GitWorktreeManager:
         if not keep_branch:
             await _run_git(["branch", "-D", wt.branch], wt.base)
 
+    async def drop_branch_if_in_place(self, branch: str, base_sha: str) -> bool:
+        """Delete *branch* when everything it changed is already in the working tree; True when it is gone.
+
+        Safe by construction: a branch is deleted only when, for every file it changed, the working tree
+        holds the same content, so nothing on it is lost. A branch that no longer exists counts as gone.
+        """
+        code, _, _ = await _run_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], self._base)
+        if code != 0:
+            return True
+        code, out, _ = await _run_git(["diff", "--name-only", "-z", base_sha, branch], self._base)
+        if code != 0:
+            return False
+        for path in (path for path in out.split("\0") if path):
+            if not await self._same_as_branch(branch, path):
+                return False
+        code, _, err = await _run_git(["branch", "-D", branch], self._base)
+        if code != 0:
+            logger.warning("could not delete branch %s: %s", branch, err.strip())
+            return False
+        return True
+
+    async def _same_as_branch(self, branch: str, path: str) -> bool:
+        """Whether the working tree's *path* holds what *branch* has there, absence included.
+
+        Compared by content hash, not `git diff`: an applied change leaves new files untracked, and git
+        diff does not look at untracked files.
+        """
+        code, wanted, _ = await _run_git(["rev-parse", "--verify", "--quiet", f"{branch}:{path}"], self._base)
+        on_disk = Path(self._base) / path
+        if code != 0:  # the branch deleted it
+            return not on_disk.exists()
+        if not on_disk.is_file():
+            return False
+        code, actual, _ = await _run_git(["hash-object", "--", path], self._base)
+        return code == 0 and actual.strip() == wanted.strip()
+
     async def diff_line_count(self, wt: Worktree) -> int:
         """Total changed lines (insertions + deletions) in *wt* vs its base commit.
 

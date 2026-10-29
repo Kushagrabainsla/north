@@ -92,6 +92,8 @@ class MemoryWorkspaces:
         self.finished: list[WorkTree] = []
         self.change_files = change_files
         self.finish_error: Exception | None = None
+        self.in_place: set[str] = set()  # branches whose changes are already in the working tree
+        self.dropped: list[str] = []
 
     async def create(self, workspace: str, label: str) -> WorkTree:
         path = self._root / label
@@ -105,6 +107,12 @@ class MemoryWorkspaces:
         if self.finish_error:
             raise self.finish_error
         return WorkChange(tree, self.change_files) if self.change_files else None
+
+    async def drop_if_in_place(self, tree: WorkTree) -> bool:
+        if tree.branch in self.in_place:
+            self.dropped.append(tree.branch)
+            return True
+        return False
 
     async def diff(self, tree: WorkTree) -> str:
         return "diff --git a/calc.py b/calc.py\n+def sub(a, b):\n+    return a - b\n"
