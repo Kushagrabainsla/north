@@ -68,7 +68,10 @@ class TelegramNotifier(Notifier):
             return
 
         text = within_telegram_limit(self._render(card))
-        markup = approval_keyboard(card.id, list(card.options)) if card.type is CardType.APPROVAL else None
+        # A question's options are buttons too: listed as text to reply with, a reply
+        # reached north as a new message, and the question went unanswered.
+        answerable = card.type is CardType.APPROVAL or (card.type is CardType.QUESTION and card.options)
+        markup = approval_keyboard(card.id, list(card.options)) if answerable else None
 
         delivered = False
         for chat_id in sorted(settings.parsed_telegram_allowed_chat_ids):
@@ -110,8 +113,8 @@ class TelegramNotifier(Notifier):
                 preview += "…"
             lines.extend(["", "_Source:_", preview])
 
-        if card.type is CardType.QUESTION and card.options:
-            lines.extend(["", "Reply with one of: " + ", ".join(card.options)])
+        if card.type is CardType.QUESTION:
+            lines.extend(["", "Tap an answer, or reply with your own." if card.options else "Reply with your answer."])
 
         footer = f"_{card.agent}_" if card.agent else ""
         if not card.blocking:

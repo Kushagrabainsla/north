@@ -556,6 +556,8 @@ async def test_a_message_while_the_chats_task_works_goes_into_that_task(monkeypa
     sent: list[dict] = []
 
     def north(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":  # the cards waiting on you: none
+            return httpx.Response(200, json=[])
         sent.append({"path": request.url.path, "body": json.loads(request.content)})
         return httpx.Response(200, json={"status": "ok"})
 
@@ -598,3 +600,71 @@ def test_the_chat_gets_the_tasks_last_answer_once_it_has_ended() -> None:
 
     assert _finished_output([first], "t", 1) is None
     assert _finished_output([ended, follow_up, first], "t", 2) == "answer 2, with the 2025 numbers"
+
+
+@pytest.mark.asyncio
+async def test_a_reply_while_the_chats_task_asks_something_answers_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sent into the task, the reply waited behind the very question it answered."""
+    import httpx
+
+    sent: list[dict] = []
+    cards = [
+        {"id": "q-old", "task_id": "t-running", "type": "question", "status": "answered", "created_at": "1"},
+        {"id": "q1", "task_id": "t-running", "type": "question", "status": "pending", "created_at": "2"},
+        {"id": "q-other", "task_id": "t-other", "type": "question", "status": "pending", "created_at": "3"},
+    ]
+
+    def north(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=cards)
+        sent.append({"path": request.url.path, "body": json.loads(request.content)})
+        return httpx.Response(200, json={})
+
+    gw = _chat_gateway(monkeypatch)
+    gw._http = httpx.AsyncClient(transport=httpx.MockTransport(north))
+    gw._submit_task = AsyncMock()  # type: ignore[method-assign]
+    gw._pending[(42, 1)] = {"message_id": 1, "text": "Summarise sales", "task_id": "t-running"}
+
+    reply = await _say(gw, "Q3")
+
+    gw._submit_task.assert_not_awaited()
+    assert sent == [
+        {
+            "path": "/orchestrator/approval/respond",
+            "body": {"card_id": "q1", "decision": "answered", "chosen_option": "Q3"},
+        }
+    ]
+    assert "Answered" in reply
+
+
+@pytest.mark.asyncio
+async def test_a_question_with_options_arrives_with_a_button_for_each() -> None:
+    """Its options were listed as text to reply with, and a reply started a new task."""
+    from approval.models import Card, CardType
+    from approval.telegram import TelegramNotifier
+
+    sent: list[dict] = []
+
+    async def fake_send(http, chat_id, text, reply_markup=None):
+        sent.append({"text": text, "markup": reply_markup})
+        return 1
+
+    import approval.telegram as notifier_module
+
+    card = Card(
+        id="q1",
+        task_id="t1",
+        agent="general",
+        title="Which quarter?",
+        message="",
+        type=CardType.QUESTION,
+        options=["Q2", "Q3"],
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(notifier_module, "send_message", fake_send)
+        mp.setattr("approval.telegram.settings.telegram_bot_token", "token")
+        mp.setattr("approval.telegram.settings.telegram_allowed_chat_ids", "42")
+        await TelegramNotifier(fallback=AsyncMock()).notify(card)
+
+    [message] = sent
+    assert [row[0]["text"] for row in message["markup"]["inline_keyboard"]] == ["Q2", "Q3"]

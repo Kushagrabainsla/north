@@ -347,6 +347,22 @@ class TelegramGateway:
             logger.error("Failed to submit task to north: %s", exc)
             return None
 
+    async def _question_waiting_in(self, task_id: str) -> str | None:
+        """The id of the question *task_id* is waiting for you to answer, or None."""
+        try:
+            resp = await self._http.get(f"{self._orchestrator_base}/web/api/approvals", headers=_headers())
+        except httpx.RequestError as exc:
+            logger.error("Failed to read the cards waiting on you: %s", exc)
+            return None
+        if resp.status_code != 200:
+            return None
+        waiting = [
+            card
+            for card in resp.json()
+            if card.get("task_id") == task_id and card.get("status") == "pending" and card.get("type") == "question"
+        ]
+        return max(waiting, key=lambda card: card.get("created_at") or "")["id"] if waiting else None
+
     async def _send_into_task(self, task_id: str, text: str) -> bool:
         """Send *text* into a running task; False when it has finished or north cannot be reached."""
         try:
@@ -678,9 +694,16 @@ class TelegramGateway:
         """
         await self._send_chat_action(chat.chat_id)
         running = self._pending_task_for(chat.chat_id)
-        if running and await self._send_into_task(running, text):
-            await self._reply(chat, "↳ Added to the task I'm working on; its answer will cover it.")
-            return
+        if running:
+            # The task is asking you something: your reply is the answer. Sent into the
+            # task instead, it waited behind the very question it answered.
+            question = await self._question_waiting_in(running)
+            if question is not None and await self._respond_approval(question, "answered", text):
+                await self._reply(chat, f"✅ Answered: {text}")
+                return
+            if await self._send_into_task(running, text):
+                await self._reply(chat, "↳ Added to the task I'm working on; its answer will cover it.")
+                return
 
         result = await self._submit_task(text)
         if result is None:
