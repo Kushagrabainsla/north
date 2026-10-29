@@ -39,6 +39,7 @@ from bootstrap.onboarding import bootstrap_paused, run_bootstrap_if_needed
 from coding_agents import CodingRunner, CommandVerifier, Gate, GateSessions, discover_backends
 from config.dependencies import build_production_dependencies
 from config.security import load_secret
+from config.server_url import server_url
 from config.settings import settings
 from flows import FlowRegistry, FlowRunStore
 from gateways.telegram import TelegramGateway
@@ -197,7 +198,6 @@ def _register_coding_agent(
     if approvals is not None:
         deps.coding_sessions = GateSessions()
         deps.coding_gate = Gate(ApprovalJudge(approvals, recorder))
-        base = f"{settings.north_orchestrator_url}/orchestrator/coding"
         if approvals.interaction is not None:  # without a way to ask the user, an agent is not offered the door
             deps.coding_asker = ApprovalsAsker(approvals.interaction, recorder)
             deps.coding_fetcher = ApprovalsFetcher(approvals, recorder, _fetch_page)
@@ -206,8 +206,10 @@ def _register_coding_agent(
             recorder,
             workspaces=GitWorkspaces(),
             sessions=deps.coding_sessions,
-            gate_url=f"{base}/gate",
-            ask_url=f"{base}/ask" if getattr(deps, "coding_asker", None) is not None else "",
+            gate_url=lambda: f"{server_url()}/orchestrator/coding/gate",
+            ask_url=(lambda: f"{server_url()}/orchestrator/coding/ask")
+            if getattr(deps, "coding_asker", None) is not None
+            else "",
             verifier=CommandVerifier(detect_verify_command, BashShell(tool_registry)),
             lander=LandingDesk(approvals),
         )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -65,8 +65,8 @@ class CodingRunner:
         *,
         workspaces: Workspaces | None = None,
         sessions: GateSessions | None = None,
-        gate_url: str = "",
-        ask_url: str = "",
+        gate_url: str | Callable[[], str] = "",
+        ask_url: str | Callable[[], str] = "",
         verifier: Verifier | None = None,
         lander: Lander | None = None,
     ) -> None:
@@ -181,9 +181,9 @@ class CodingRunner:
         if self._sessions is not None and (tree or (asking and self._ask_url)):
             session = self._sessions.issue(run_id, task_id, tree.path if tree else spec.workspace, editing=bool(tree))
         if session and tree:
-            spec = _with_gate(spec, GateAccess(self._gate_url, session.token))
+            spec = _with_gate(spec, GateAccess(_resolve(self._gate_url), session.token))
         if session and asking and self._ask_url:
-            spec = replace(spec, ask=AskAccess(self._ask_url, session.token))
+            spec = replace(spec, ask=AskAccess(_resolve(self._ask_url), session.token))
         try:
             outcome = await backend.run(spec, sink)
         except asyncio.CancelledError:
@@ -305,6 +305,11 @@ def _state(backend: CodingBackend, spec: RunSpec, version: str, tree: WorkTree |
     if tree:
         state |= {"worktree": tree.path, "branch": tree.branch, "base_sha": tree.base_sha, "base": tree.base}
     return state
+
+
+def _resolve(url: str | Callable[[], str]) -> str:
+    """A URL given as text, or looked up now; the server's port is known only once it listens."""
+    return url() if callable(url) else url
 
 
 def _with_gate(spec: RunSpec, gate: GateAccess) -> RunSpec:

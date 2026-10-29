@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from approval.models import ApprovalDecision
 from config.security import load_secret, verify_secret
-from config.settings import settings
+from config.server_url import server_url
 from utils.version import NORTH_VERSION
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ async def receive_decision(
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{settings.north_orchestrator_url}/orchestrator/approval/respond",
+                f"{server_url()}/orchestrator/approval/respond",
                 json={
                     "card_id": payload.card_id,
                     "task_id": payload.task_id,

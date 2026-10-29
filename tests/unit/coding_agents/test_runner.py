@@ -250,6 +250,24 @@ class TestEditRuns:
         assert (seen["session"].task_id, seen["session"].worktree) == ("t1", workspaces.created[0].path)
         assert sessions.lookup(seen["gate"].token) is None
 
+    async def test_a_gate_url_given_as_a_function_is_looked_up_when_the_run_starts(self, tmp_path, recorder) -> None:
+        workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
+        backend = ScriptedBackend()
+        backend.recorder = recorder
+        port = {"value": 8000}
+        runner = CodingRunner(
+            {"claude": backend},
+            recorder,
+            workspaces=workspaces,
+            sessions=GateSessions(),
+            gate_url=lambda: f"http://127.0.0.1:{port['value']}/gate",
+        )
+        port["value"] = 9123  # the server binds its port after the runner is built
+
+        await self._edit(runner)
+
+        assert backend.specs[0].gate.url == "http://127.0.0.1:9123/gate"
+
     async def test_the_copy_and_its_branch_are_saved_before_the_agent_starts(self, tmp_path, recorder) -> None:
         runner, backend, workspaces, _ = self._setup(tmp_path, recorder)
 
