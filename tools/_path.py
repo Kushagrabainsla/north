@@ -20,6 +20,7 @@ See docs/CODING_STYLE.md Section 16.1.1.
 from __future__ import annotations
 
 import functools
+import shlex
 import sys
 from pathlib import Path
 
@@ -215,6 +216,44 @@ def is_sensitive_path(path: Path) -> bool:
         # else in north's home (secret.key, .env, DBs) stays sensitive.
         return not _in_personal_subdir(str(resolved))
     return _is_blocked_path(str(resolved))
+
+
+def target_path(path_str: str, workspace: str | None) -> Path:
+    """Where *path_str* points: from *workspace* when relative, else from the CWD. No policy applied."""
+    path = Path(path_str).expanduser()
+    if not path.is_absolute():
+        path = (Path(workspace) if workspace else Path.cwd()) / path
+    try:
+        return path.resolve()
+    except (OSError, ValueError):
+        return path
+
+
+def named_paths(command: str, cwd: str | None) -> tuple[Path, ...]:
+    """The paths a shell command names, resolved from *cwd*: what a "no" to it covers.
+
+    A token counts when it looks like a path (``/``, ``~``, or a ``/`` inside it)
+    or names something that exists in *cwd*. Flags, operators, devices and bare
+    words such as program names do not.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:  # unbalanced quotes: the plain words still name paths
+        tokens = command.split()
+    found: list[Path] = []
+    for token in tokens:
+        if not token or token.startswith("-") or set(token) <= set("&|;<>()"):
+            continue
+        looks_like_a_path = token.startswith(("/", "~")) or "/" in token
+        if not (looks_like_a_path or (cwd and (Path(cwd) / token).exists())):
+            continue
+        path = target_path(token, cwd)
+        if str(path).startswith("/dev/") or path in found:
+            continue
+        found.append(path)
+    return tuple(found)
 
 
 def references_sensitive_path(command: str) -> bool:

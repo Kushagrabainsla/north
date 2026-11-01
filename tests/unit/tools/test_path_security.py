@@ -278,3 +278,14 @@ class TestHandoffRetention:
 
         prune_handoff_dirs(30)
         assert db.exists(), "the task-state database is not a handoff directory"
+
+
+def test_named_paths_finds_what_a_command_names(tmp_path: Path) -> None:
+    """What a "no" to a command covers: its folders and files, not its program names or operators."""
+    from tools._path import named_paths
+
+    (tmp_path / "README.md").write_text("x", encoding="utf-8")
+
+    found = named_paths("cd /srv/repo 2>/dev/null && pwd && ls && cat README.md | head -60", str(tmp_path))
+
+    assert found == (Path("/srv/repo"), tmp_path / "README.md")

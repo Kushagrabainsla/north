@@ -21,8 +21,12 @@ from approval.unattended import forbidden_reason
 from config.approval_mode import approve_option
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
+
     from approval.effects import EffectLog
     from approval.policy import Ruling
+    from approval.rejections import RejectionLog
 
 # Why an irreversible action is refused the second time in one task (see approval/effects.py).
 _ALREADY_DONE = "already done earlier in this task, and it reaches someone else or spends money, so it is not repeated"
@@ -76,10 +80,12 @@ class Approvals:
         policy: ApprovalPolicy,
         interaction: UserInteraction | None,
         effects: EffectLog | None = None,
+        rejections: RejectionLog | None = None,
     ) -> None:
         self._policy = policy
         self._interaction = interaction
         self._effects = effects
+        self._rejections = rejections
 
     @classmethod
     def unbound(cls) -> Approvals:
@@ -99,6 +105,8 @@ class Approvals:
         """Allow, refuse, or ask - and when asking, wait for the answer."""
         if self._already_done(request.action, task_id):
             return Decision(Verdict.REFUSE, _ALREADY_DONE)
+        if (said_no := self.refused_paths(request.action.named_paths(), task_id)) is not None:
+            return Decision(Verdict.REFUSE, said_no)
         ruling = await self._policy.rule(request.action)
         if request.requires_confirmation and ruling.verdict is not Verdict.REFUSE:
             return await self._ask(request, task_id)
@@ -107,6 +115,22 @@ class Approvals:
         if _worth_recording(request.action):
             self._record(request, ruling, task_id)
         return Decision(ruling.verdict, ruling.rule)
+
+    def refused_paths(self, paths: Iterable[Path], task_id: str | None) -> str | None:
+        """Why touching *paths* is refused in this task - a person said no to an action naming them - or None.
+
+        Reads ask this too: a "no" that a read could route around was no "no".
+        """
+        if self._rejections is None or not task_id:
+            return None
+        for path in paths:
+            if (covering := self._rejections.covering(task_id, path)) is not None:
+                rejected, summary = covering
+                return (
+                    f"you said no to `{summary}` earlier in this task, and that covers {rejected}. "
+                    "Do not get it another way: tell the user what you needed it for and ask how to go on"
+                )
+        return None
 
     def completed(self, request: Request, task_id: str | None) -> None:
         """Note that *request* ran successfully, so an irreversible one is never repeated in this task."""
@@ -124,6 +148,8 @@ class Approvals:
             return Decision(Verdict.REFUSE, _NOBODY_TO_ASK)
         card = await self._interaction.ask_person(self._card(request, task_id), event=CardEvent.APPROVAL)
         verdict = Verdict.ALLOW if card.status == ApprovalDecision.APPROVED else Verdict.REFUSE
+        if card.status == ApprovalDecision.REJECTED and task_id and self._rejections is not None:
+            self._rejections.record(task_id, request.action.named_paths(), request.action.summary)
         return Decision(verdict, "you decided", status=card.status)
 
     def _record(self, request: Request, ruling: Ruling, task_id: str | None) -> None:

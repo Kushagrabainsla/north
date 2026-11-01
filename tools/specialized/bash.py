@@ -15,7 +15,7 @@ from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from tools._path import is_sensitive_path
+from tools._path import is_sensitive_path, named_paths
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import _os_sandbox
@@ -173,6 +173,8 @@ class BashTool(Tool):
             workspace=boundary or "",
             # The same command in another folder is another action: `rm -rf build` here is not there.
             place=cwd or boundary or "",
+            # What a "no" to this command covers for the rest of the task.
+            paths=(*named_paths(command, cwd or boundary), *(Path(folder) for folder in outside)),
             read_only=read_only,
             mutating=not read_only,
             leaves_sandbox=bool(outside),

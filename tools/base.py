@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tools._path import target_path
 from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
@@ -75,6 +77,9 @@ class Tool(ABC):
         so `run()` acts on exactly what was approved.
         """
         if not self.mutates(input.params):
+            # A read changes nothing, but it can still go round a "no" given earlier in the task.
+            if (said_no := self._approvals().refused_paths(self.reads(input), input.params.get("task_id"))) is not None:
+                return ToolOutput(success=False, failure_kind="refused", error=f"Blocked: {said_no}.")
             return await self.run(input)
         request = await self.describe(input)
         if request is None:
@@ -88,6 +93,16 @@ class Tool(ABC):
         if output.success:
             approvals.completed(request, task_id)
         return output
+
+    def reads(self, input: ToolInput) -> tuple[Path, ...]:
+        """The paths this call reads, so a "no" given earlier in the task can cover them.
+
+        By default its ``path`` parameter, from its ``workspace``, for a tool that
+        takes one; a tool that reads elsewhere says so.
+        """
+        if "path" not in self.parameters_schema.get("properties", {}):
+            return ()
+        return (target_path(str(input.params.get("path") or "."), input.params.get("workspace")),)
 
     def _approvals(self) -> Approvals:
         from approval.approvals import Approvals

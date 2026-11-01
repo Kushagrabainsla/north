@@ -31,6 +31,7 @@ from approval.decisions import DecisionLog
 from approval.effects import EffectLog
 from approval.interaction import UserInteraction
 from approval.policy import ApprovalPolicy
+from approval.rejections import RejectionLog
 from approval.telegram import TelegramNotifier
 from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
@@ -976,6 +977,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         ),
         # What reached someone or spent money, per task, so a resumed step never repeats it.
         effects=EffectLog(settings.north_home / "approval_memory.db"),
+        # What you said no to, per task, so the "no" holds for the rest of it.
+        rejections=RejectionLog(settings.north_home / "approval_memory.db"),
     )
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)

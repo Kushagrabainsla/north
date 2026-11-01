@@ -25,6 +25,7 @@ from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
+from tools._path import named_paths
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._subprocess import format_diff_output, run_capture
@@ -279,6 +280,8 @@ class GitTool(Tool):
                 workspace=str(call.cwd),
                 # A yes in one repository is not a yes in another.
                 place=str(call.cwd),
+                # What a "no" to this command covers for the rest of the task.
+                paths=named_paths(call.args, str(call.cwd)),
                 mutating=call.mutating,
                 read_only=not call.mutating,
                 obviously_destructive=call.action == "push" and any(_is_force_flag(t) for t in call.cmd[2:]),

@@ -247,6 +247,7 @@ def approvals(
     store=None,
     memory=None,
     decider=None,
+    rejections=None,
 ):
     """The real approval layer, wired for a test - see `bind_approvals`."""
     from approval.approvals import Approvals
@@ -254,7 +255,7 @@ def approvals(
     from approval.store import ApprovalStore
 
     policy = approval_policy(mode, memory=memory, decider=decider)
-    return Approvals(policy, UserInteraction(store or ApprovalStore()))
+    return Approvals(policy, UserInteraction(store or ApprovalStore()), rejections=rejections)
 
 
 def bind_approvals(tool, mode: ApprovalMode | None = None, **kw):

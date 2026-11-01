@@ -127,6 +127,16 @@ class Action:
     # Changes north's own autonomy or settings. Never replayed, and below yolo
     # only a person decides it: a "yes" to yolo once must not raise it again.
     changes_north: bool = False
+    # Every path the action names, resolved: a command's file arguments, the
+    # folders it writes. What a "no" to it covers for the rest of the task. Not
+    # part of the identity.
+    paths: tuple[Path, ...] = ()
+
+    def named_paths(self) -> tuple[Path, ...]:
+        """What a "no" to this action covers: the paths it names, else the one it acts on."""
+        if self.paths:
+            return self.paths
+        return (self.path,) if self.path else ()
 
     def describe(self) -> str:
         """A short, stable identity for this action, for learned decisions.
