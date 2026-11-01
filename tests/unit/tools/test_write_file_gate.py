@@ -160,3 +160,16 @@ async def test_a_yes_to_one_content_is_not_a_yes_to_another(tmp_path: Path) -> N
     second = await tool.describe(ToolInput(params={"path": target, "content": "something else"}))
 
     assert first.action.describe() != second.action.describe()
+
+
+@pytest.mark.asyncio
+async def test_a_write_inside_a_git_repository_is_refused_and_pointed_at_coding_agent(tmp_path: Path) -> None:
+    """Code changes in a repository go to coding_agent, in an isolated copy with the tests run (issue #76, M12)."""
+    (tmp_path / "shop" / ".git").mkdir(parents=True)
+    target = tmp_path / "shop" / "pricing.py"
+    store = _silent_store()
+
+    out = await _tool(ApprovalMode.YOLO, store).execute(ToolInput(params={"path": str(target), "content": "x = 1\n"}))
+
+    assert out.failure_kind == "refused" and "coding_agent" in out.error
+    assert not target.exists()

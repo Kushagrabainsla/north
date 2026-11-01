@@ -131,6 +131,10 @@ class Action:
     # folders it writes. What a "no" to it covers for the rest of the task. Not
     # part of the identity.
     paths: tuple[Path, ...] = ()
+    # The git repository a file edit by north's own tools lands in ("" for none).
+    # Code changes there go to coding_agent, which works in an isolated copy and
+    # runs the tests; north's own tools do not make them (CODING_STYLE §7).
+    edits_repository: str = ""
 
     def named_paths(self) -> tuple[Path, ...]:
         """What a "no" to this action covers: the paths it names, else the one it acts on."""
@@ -229,6 +233,16 @@ class ApprovalPolicy:
         # 1c. An edit inside the isolated copy a coding run was approved to work in, in every mode.
         if action.kind is ActionKind.FILE_EDIT and action.isolated:
             return Ruling(Verdict.ALLOW, "an edit inside the run's isolated copy", DecidedBy.NORTH)
+
+        # 1d. North's own tools do not edit inside a git repository, in any mode: that is
+        #     coding_agent's work, in an isolated copy with the tests run (CODING_STYLE §7).
+        if action.edits_repository:
+            return Ruling(
+                Verdict.REFUSE,
+                f"this edits files in the git repository {action.edits_repository}; hand code changes "
+                "there to coding_agent, which works in an isolated copy and runs the tests",
+                DecidedBy.NORTH,
+            )
 
         # 2. Modes that never ask. The operator has explicitly declined a
         #    hard-danger floor in both.

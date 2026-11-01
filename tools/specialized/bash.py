@@ -15,7 +15,7 @@ from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from tools._path import is_sensitive_path, named_paths
+from tools._path import edited_paths, git_repository, is_sensitive_path, named_paths
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import _os_sandbox
@@ -80,6 +80,14 @@ def _outside_folders(input: ToolInput) -> tuple[str, ...] | ToolOutput:
         if root is None or not folder.is_relative_to(root):
             folders.append(str(folder))
     return tuple(dict.fromkeys(folders))
+
+
+def _edited_repository(command: str, cwd: str | None) -> str:
+    """The git repository a file this command recognisably edits is in, or ""."""
+    for path in edited_paths(command, cwd):
+        if (repository := git_repository(path)) is not None:
+            return str(repository)
+    return ""
 
 
 def _cap(text: str) -> str:
@@ -175,6 +183,7 @@ class BashTool(Tool):
             place=cwd or boundary or "",
             # What a "no" to this command covers for the rest of the task.
             paths=(*named_paths(command, cwd or boundary), *(Path(folder) for folder in outside)),
+            edits_repository=_edited_repository(command, cwd or boundary),
             read_only=read_only,
             mutating=not read_only,
             leaves_sandbox=bool(outside),

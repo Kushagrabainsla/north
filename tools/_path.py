@@ -229,6 +229,93 @@ def target_path(path_str: str, workspace: str | None) -> Path:
         return path
 
 
+def _shell_tokens(command: str) -> list[str]:
+    """*command*'s words, with operators (``&&``, ``|``, ``>``) as tokens of their own."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except ValueError:  # unbalanced quotes: the plain words are still there
+        return command.split()
+
+
+_COMMAND_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")"})
+_REDIRECTIONS = frozenset({">", ">>", ">|", "&>", "&>>"})
+
+
+def edited_paths(command: str, cwd: str | None) -> tuple[Path, ...]:
+    """The files a shell command recognisably writes, resolved from *cwd*.
+
+    Redirection and ``tee`` targets, and the files ``sed -i`` / ``perl -i`` edit
+    in place. Recognisable, not exhaustive: a program that writes files itself
+    is not seen, and still goes to a card like any other command.
+    """
+    found: list[Path] = []
+    words: list[str] = []
+
+    def add(token: str) -> None:
+        if token and not token.startswith("&") and not token.startswith("/dev/"):
+            path = target_path(token, cwd)
+            if path not in found:
+                found.append(path)
+
+    def in_place_targets(args: list[str]) -> list[str]:
+        targets, script_seen, skip = [], False, False
+        for arg in args:
+            if skip:
+                skip, script_seen = False, True
+            elif arg in ("-e", "--expression", "-f", "--file"):
+                skip = True
+            elif arg.startswith("-"):
+                continue
+            elif not script_seen:
+                script_seen = True  # sed's script, when no -e gave one
+            else:
+                targets.append(arg)
+        return targets
+
+    def finish() -> None:
+        if not words:
+            return
+        program, args = Path(words[0]).name, words[1:]
+        if program == "tee":
+            for arg in args:
+                if not arg.startswith("-"):
+                    add(arg)
+        in_place = any(
+            a == "--in-place" or (a.startswith("-") and not a.startswith("--") and "i" in a[1:]) for a in args
+        )
+        if program in ("sed", "perl") and in_place:
+            for arg in in_place_targets(args):
+                add(arg)
+        words.clear()
+
+    tokens = _shell_tokens(command)
+    for index, token in enumerate(tokens):
+        if token in _REDIRECTIONS:
+            if index + 1 < len(tokens):
+                add(tokens[index + 1])
+        elif token in _COMMAND_SEPARATORS:
+            finish()
+        elif not (index and tokens[index - 1] in _REDIRECTIONS) and not set(token) <= set("<>&"):
+            words.append(token)
+    finish()
+    return tuple(found)
+
+
+def git_repository(path: Path) -> Path | None:
+    """The git repository *path* is in, or None.
+
+    Never the home folder or the root: a dotfiles repository there would put
+    every file the user has inside a repository.
+    """
+    start = path if path.is_dir() else path.parent
+    for directory in (start, *start.parents):
+        if (directory / ".git").exists():
+            return None if directory in (Path.home(), Path("/")) else directory
+    return None
+
+
 def named_paths(command: str, cwd: str | None) -> tuple[Path, ...]:
     """The paths a shell command names, resolved from *cwd*: what a "no" to it covers.
 
@@ -236,14 +323,8 @@ def named_paths(command: str, cwd: str | None) -> tuple[Path, ...]:
     or names something that exists in *cwd*. Flags, operators, devices and bare
     words such as program names do not.
     """
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:  # unbalanced quotes: the plain words still name paths
-        tokens = command.split()
     found: list[Path] = []
-    for token in tokens:
+    for token in _shell_tokens(command):
         if not token or token.startswith("-") or set(token) <= set("&|;<>()"):
             continue
         looks_like_a_path = token.startswith(("/", "~")) or "/" in token

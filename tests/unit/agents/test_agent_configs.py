@@ -100,3 +100,12 @@ def test_browser_prompts_select_profile_and_reuse_existing_login(relative_path: 
     assert "read or export passwords" in prompt
     assert "requires_user_action=true" in prompt
     assert "inspect and assert" in prompt
+
+
+def test_the_general_prompt_does_not_deny_the_bash_tool_it_is_given() -> None:
+    """It said "You do NOT have a `bash` tool" while bash was offered; replies about shell use contradicted
+    themselves (issue #76, A13). It now says what bash is for, and that repository edits go to coding_agent."""
+    prompt = (AGENTS_DIR / "general" / "prompts" / "system.md").read_text(encoding="utf-8")
+
+    assert "do NOT have a `bash` tool" not in prompt
+    assert "coding_agent" in prompt

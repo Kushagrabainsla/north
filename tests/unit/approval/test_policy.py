@@ -449,3 +449,23 @@ async def test_north_raising_its_own_autonomy_is_decided_by_a_person(tmp_path: P
 
 async def test_yolo_still_allows_a_settings_change() -> None:
     assert (await policy(ApprovalMode.YOLO).rule(_autonomy("safe"))).verdict is Verdict.ALLOW
+
+
+# ── North's own tools do not edit inside a git repository ────────────────────
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_an_edit_inside_a_git_repository_by_north_is_refused_in_every_mode(mode: ApprovalMode) -> None:
+    """The general agent edited a repository with sed and heredocs (issue #76, M12): that is coding_agent's work."""
+    edit = Action(
+        agent="write_file",
+        kind=ActionKind.FILE_EDIT,
+        summary="write /srv/shop/pricing.py",
+        path=Path("/srv/shop/pricing.py"),
+        edits_repository="/srv/shop",
+    )
+
+    ruling = await policy(mode).rule(edit)
+
+    assert ruling.verdict is Verdict.REFUSE
+    assert "coding_agent" in ruling.rule

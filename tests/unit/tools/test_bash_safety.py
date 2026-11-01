@@ -96,6 +96,24 @@ class TestBashToolApprovalBypass:
         assert here.action.describe() != there.action.describe()
 
     @pytest.mark.asyncio
+    async def test_an_in_place_edit_inside_a_git_repository_is_refused_without_a_card(self, tmp_path) -> None:
+        """`sed -i` on a repository's file is coding_agent's work (issue #76, M12); running its tests is not refused."""
+        from config.approval_mode import ApprovalMode
+
+        repo = tmp_path / "shop"
+        (repo / ".git").mkdir(parents=True)
+        tool, store = self._tool(mode=ApprovalMode.YOLO)
+
+        def call(command):
+            return ToolInput(params={"command": command, "workspace": str(repo)}, granted_workspace=str(repo))
+
+        edit = await tool.approvals.decide(await tool.describe(call("sed -i 's|a|b|' pricing.py")), task_id="t1")
+        tests = await tool.approvals.decide(await tool.describe(call("pytest -q")), task_id="t1")
+
+        assert not edit.allowed and "coding_agent" in edit.reason
+        assert tests.allowed
+
+    @pytest.mark.asyncio
     async def test_a_credential_folder_cannot_be_asked_for(self) -> None:
         tool, store = self._tool(store=approving_store())
         params = {"command": "touch ~/.ssh/key", "write_outside": ["~/.ssh"]}

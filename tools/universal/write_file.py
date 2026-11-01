@@ -19,7 +19,7 @@ from typing import Any
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from tools._diff import unified_diff
-from tools._path import is_north_scratch, resolve_path, scope_refusal
+from tools._path import git_repository, is_north_scratch, resolve_path, scope_refusal
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from utils.text import normalize_dashes, should_normalize_prose
@@ -74,6 +74,7 @@ class WriteFileTool(Tool):
                 path=call.path,
                 # A yes covers this content only, not whatever is written to the path next.
                 content=hashlib.sha256(call.content.encode("utf-8")).hexdigest(),
+                edits_repository=str(repository) if (repository := git_repository(call.path)) else "",
                 # The folder the server granted - never the model's `workspace` param.
                 workspace=input.granted_workspace or "",
                 in_north_scratch=is_north_scratch(call.path),

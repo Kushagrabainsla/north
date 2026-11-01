@@ -289,3 +289,39 @@ def test_named_paths_finds_what_a_command_names(tmp_path: Path) -> None:
     found = named_paths("cd /srv/repo 2>/dev/null && pwd && ls && cat README.md | head -60", str(tmp_path))
 
     assert found == (Path("/srv/repo"), tmp_path / "README.md")
+
+
+def test_edited_paths_sees_redirections_tee_and_in_place_edits(tmp_path: Path) -> None:
+    """The edits the general agent made in a repository with bash (issue #76, M12)."""
+    from tools._path import edited_paths
+
+    cwd = str(tmp_path)
+
+    assert edited_paths("sed -i 's|a|b|' shop/pricing.py && git diff --stat", cwd) == (tmp_path / "shop/pricing.py",)
+    assert edited_paths("cat >> shop/pricing.py <<'EOF'", cwd) == (tmp_path / "shop/pricing.py",)
+    assert edited_paths("echo hi | tee notes.md", cwd) == (tmp_path / "notes.md",)
+    assert edited_paths("perl -pi -e s/a/b/ a.txt", cwd) == (tmp_path / "a.txt",)
+
+
+def test_edited_paths_ignores_commands_that_only_run_or_discard_output(tmp_path: Path) -> None:
+    from tools._path import edited_paths
+
+    for command in (
+        "pytest -q 2>&1 | tail -3",
+        "ls > /dev/null 2>&1",
+        "git status; cat README.md",
+        "sed -n 1,5p a.txt",
+    ):
+        assert edited_paths(command, str(tmp_path)) == (), command
+
+
+def test_a_repository_at_the_home_folder_does_not_count(tmp_path: Path, monkeypatch) -> None:
+    """A dotfiles repository at ~ would otherwise put every file the user has inside one."""
+    from tools._path import git_repository
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "project" / ".git").mkdir(parents=True)
+
+    assert git_repository(tmp_path / "notes" / "today.md") is None
+    assert git_repository(tmp_path / "project" / "src" / "a.py") == tmp_path / "project"
