@@ -148,12 +148,18 @@ export function PromptTelemetry({ run }: { run: AgentRun }) {
   </>;
 }
 
+/** " + 2 unpriced" after a cost that leaves out calls North has no price for, else nothing. */
+export function unpricedNote(count: unknown): string {
+  const calls = Number(count || 0);
+  return calls ? ` + ${calls} unpriced` : "";
+}
+
 export function InferenceCategories({ categories }: { categories: InferenceCategory[] }) {
   if (!categories.length) return <Empty>No model calls were attributed yet.</Empty>;
   return <div className="inference-categories">{categories.map(category =>
     <div className="list-row" key={category.category}>
       <div><b>{category.category}</b><small>{category.components.join(", ")}</small></div>
-      <span>{category.calls} call{category.calls === 1 ? "" : "s"} · {(category.tokens_in + category.tokens_out).toLocaleString()} tokens{category.cost_usd ? ` · $${category.cost_usd.toFixed(4)}` : ""}</span>
+      <span>{category.calls} call{category.calls === 1 ? "" : "s"} · {(category.tokens_in + category.tokens_out).toLocaleString()} tokens{category.cost_usd ? ` · $${category.cost_usd.toFixed(4)}` : ""}{category.unpriced_calls ? ` · ${category.unpriced_calls} unpriced` : ""}</span>
     </div>
   )}</div>;
 }

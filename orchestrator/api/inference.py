@@ -33,6 +33,7 @@ async def inference_costs(
     return CostSummary(
         period=period,
         total_cost_usd=round(breakdown["total"], 6),
+        unpriced_calls=breakdown["unpriced_calls"],
         by_component={k: round(v, 6) for k, v in breakdown["by_component"].items()},
         by_model={k: round(v, 6) for k, v in breakdown["by_model"].items()},
     )

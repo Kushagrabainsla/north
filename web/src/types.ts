@@ -94,6 +94,8 @@ export interface InferenceCategory {
   tokens_out: number;
   cached_tokens: number;
   cost_usd: number;
+  // Calls to a model North has no price for; not in cost_usd.
+  unpriced_calls: number;
   components: string[];
   models: string[];
 }

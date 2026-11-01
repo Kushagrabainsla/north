@@ -125,7 +125,8 @@ class CostTracker(InferenceRouter):
             "tokens_in": int(getattr(response, "tokens_in", 0) or 0),
             "tokens_out": int(getattr(response, "tokens_out", 0) or 0),
             "cached_tokens": int(getattr(response, "cached_tokens", 0) or 0),
-            "cost_usd": float(getattr(response, "cost_usd", 0.0) or 0.0),
+            # None for a call north cannot price: recorded as unpriced, not as free.
+            "cost_usd": float(getattr(response, "cost_usd", 0.0) or 0.0) if getattr(response, "priced", True) else None,
             "run_id": getattr(request, "run_id", None),
         }
         try:

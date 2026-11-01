@@ -146,26 +146,32 @@ class LedgerWriter(ABC):
     ) -> dict:
         """Aggregate the cost of the model calls made since *since*: one per-call row each.
 
-        Returns {"total": float, "by_component": {agent: cost}, "by_model":
-        {model: cost}}. The default implementation aggregates in Python over
+        Returns {"total": float, "unpriced_calls": int, "by_component":
+        {agent: cost}, "by_model": {model: cost}}; an unpriced call (no cost
+        recorded, its model has no price) is counted, never added as $0.
+
+        The default implementation aggregates in Python over
         query() so in-memory/fake stores work unchanged; SQL-backed stores
         override it with a GROUP BY, which also avoids the row-limit truncation
         the query() path is subject to.
         """
         entries = await self.query(LedgerFilters(source=source, agent=agent, since=since, limit=10_000))
         total = 0.0
+        unpriced = 0
         by_component: dict[str, float] = {}
         by_model: dict[str, float] = {}
         for e in entries:
             if e.action != INFERENCE_CALL:
                 continue
+            if e.cost_usd is None:
+                unpriced += 1
             cost = e.cost_usd or 0.0
             total += cost
             component = e.agent or "unknown"
             by_component[component] = by_component.get(component, 0.0) + cost
             model = e.model_used or "unknown"
             by_model[model] = by_model.get(model, 0.0) + cost
-        return {"total": total, "by_component": by_component, "by_model": by_model}
+        return {"total": total, "unpriced_calls": unpriced, "by_component": by_component, "by_model": by_model}
 
     async def component_cost(self, since: datetime, component: str) -> float:
         """What the model calls made by *component* cost since *since*.
@@ -185,13 +191,14 @@ class LedgerWriter(ABC):
         """Return aggregated system metrics for the last `days` days.
 
         Returns a dict with keys: period_days, total_tasks, total_cost_usd,
-        total_tokens_in, total_tokens_out, by_agent (list), by_model (dict),
+        unpriced_calls, total_tokens_in, total_tokens_out, by_agent (list), by_model (dict),
         top_errors (dict). Default no-op returns empty structure.
         """
         return {
             "period_days": days,
             "total_tasks": 0,
             "total_cost_usd": 0.0,
+            "unpriced_calls": 0,
             "total_tokens_in": 0,
             "total_tokens_out": 0,
             "by_agent": [],

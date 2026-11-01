@@ -185,10 +185,68 @@ def test_unknown_model_falls_back_without_claiming_a_published_price():
     assert price > 0  # still a usable estimate for routing, just not presented as fact
 
 
-def test_cost_uses_the_output_rate_for_both_directions():
-    # Deliberately overstating cost (treating input tokens at the output rate)
-    # rather than understating it - see the comment on _cost_usd.
-    assert _cost_usd(1000, 1000, "claude-opus-5") == pytest.approx(2000 * 25.00e-6)
+@pytest.mark.parametrize(
+    ("model", "per_output_token"),
+    [("claude-haiku-5-5", 0.50e-6), ("claude-sonnet-5-5", 10.00e-6), ("claude-opus-5-5", 20.00e-6)],
+)
+def test_the_5_5_models_are_priced(model, per_output_token):
+    # They fell to the $10/M estimate, so Haiku 5.5 also ranked as a Sonnet-priced model.
+    assert _model_price(model) == (pytest.approx(per_output_token), True)
+
+
+def _billed(input_tokens=0, output_tokens=0, cache_read=0, cache_write=0):
+    return _usage_fields(_usage(input_tokens, output_tokens, cache_read, cache_write))
+
+
+def test_a_call_costs_what_anthropic_bills_for_it():
+    """The issue #76 test's first chat task, on Haiku 5.5 ($0.10/$0.50 per million).
+
+    A counting proxy saw 11,525 + 27,570 tokens in and 159 + 280 out: $0.0041.
+    North recorded $0.39534, input charged at a $10/M guess for the output rate.
+    """
+    planner = _cost_usd(_billed(11_525, 159), "claude-haiku-5-5")
+    agent = _cost_usd(_billed(27_570, 280), "claude-haiku-5-5")
+    assert planner + agent == pytest.approx(0.004129)
+
+
+def test_input_is_charged_at_the_input_rate():
+    # The run's coding calls on Sonnet 5.5 ($2/$10): billed $5.05, recorded at $10/M both ways.
+    assert _cost_usd(_billed(2_403_241, 24_155), "claude-sonnet-5-5") == pytest.approx(5.0480, abs=1e-4)
+
+
+def test_each_token_class_has_its_own_rate():
+    # Sonnet 5.5: input $2, cache read $0.20, cache write $2.50 (1.25x input), output $10.
+    usage = _billed(input_tokens=1_000, output_tokens=500, cache_read=20_000, cache_write=3_000)
+    assert _cost_usd(usage, "claude-sonnet-5-5") == pytest.approx((2_000 + 4_000 + 7_500 + 5_000) / 1e6)
+
+
+def test_a_long_haiku_5_5_prompt_is_charged_the_long_prompt_rate():
+    # Above 100K prompt tokens Haiku 5.5 is $0.50/$2.50, cache included in the count.
+    assert _cost_usd(_billed(30_000, 1_000, cache_read=120_000), "claude-haiku-5-5") == pytest.approx(
+        (30_000 * 0.50 + 120_000 * 0.05 + 1_000 * 2.50) / 1e6
+    )
+    assert _cost_usd(_billed(90_000, 1_000), "claude-haiku-5-5") == pytest.approx((9_000 + 500) / 1e6)
+
+
+def test_haiku_4_5_is_priced_under_the_id_the_models_list_returns():
+    assert _model_price("claude-haiku-4-5-20251001") == (pytest.approx(5.00e-6), True)
+
+
+def test_a_model_without_a_price_is_unpriced_not_guessed():
+    assert _cost_usd(_billed(10_000, 100), "claude-some-future-model") is None
+    message = SimpleNamespace(content=[_text_block("hi")], usage=_usage(), stop_reason="end_turn", stop_details=None)
+
+    response = _tool_call_response(message, "claude-some-future-model", "anthropic")
+    assert response.priced is False
+    assert response.cost_usd == 0.0
+    assert _tool_call_response(message, "claude-haiku-5-5", "anthropic").priced is True
+
+
+def test_tokens_in_is_the_whole_prompt_cached_or_not():
+    # Anthropic's input_tokens leaves out what the cache read and wrote. The agent
+    # loop compacts by tokens_in, as every other provider reports it: the whole prompt.
+    usage = _billed(input_tokens=310, output_tokens=40, cache_read=26_000, cache_write=1_200)
+    assert (usage.tokens_in, usage.cached_tokens, usage.cache_write_tokens) == (27_510, 26_000, 1_200)
 
 
 # ---------------------------------------------------------------------- #

@@ -132,6 +132,9 @@ class CompletionResponse(BaseModel):
     tokens_in: int
     tokens_out: int
     cost_usd: float
+    # False when north has no price for the model: cost_usd is then 0.0 and
+    # means "not known", and the ledger records the call as unpriced.
+    priced: bool = True
     # Prompt tokens the provider served from its cache, and wrote to it. Both 0
     # when the provider reports nothing about caching - see inference/usage.py.
     cached_tokens: int = 0
@@ -180,6 +183,8 @@ class ToolCallResponse(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    # See CompletionResponse.priced.
+    priced: bool = True
     # Prompt tokens the provider served from its cache, and wrote to it. Both 0
     # when the provider reports nothing about caching - see inference/usage.py.
     cached_tokens: int = 0
@@ -233,5 +238,7 @@ class CostSummary(BaseModel):
 
     period: str
     total_cost_usd: float
+    # Calls to a model north has no price for, left out of the total.
+    unpriced_calls: int = 0
     by_component: dict[str, float] = Field(default_factory=dict)
     by_model: dict[str, float] = Field(default_factory=dict)

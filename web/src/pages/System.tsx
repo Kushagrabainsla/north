@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Empty, HealthIndicator, PageHeader, Panel, YoloBadge } from "../components";
+import { Empty, HealthIndicator, PageHeader, Panel, unpricedNote, YoloBadge } from "../components";
 import { useResource } from "../hooks";
 import { PartChain } from "./Settings";
 
@@ -19,6 +19,7 @@ export function SystemPage() {
   const totalCost = Number(
     costs.data?.total_cost_usd ?? metrics.data?.total_cost_usd ?? 0,
   );
+  const unpriced = costs.data?.unpriced_calls ?? metrics.data?.unpriced_calls;
 
   return (
     <div className="page">
@@ -49,7 +50,7 @@ export function SystemPage() {
         </div>
         <div>
           <span>Model cost · month</span>
-          <strong>${totalCost.toFixed(4)}</strong>
+          <strong>${totalCost.toFixed(4)}{unpricedNote(unpriced)}</strong>
         </div>
       </div>
         {/* What actually picks a model. This panel used to show "model pools" -

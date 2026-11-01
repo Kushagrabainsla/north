@@ -333,10 +333,11 @@ class SQLiteLedgerWriter(LedgerWriter):
         where = " AND ".join(clauses)
 
         with open_db_connection(self._db_path) as conn:
-            total = conn.execute(
-                f"SELECT COALESCE(SUM(cost_usd), 0.0) AS total FROM ledger WHERE {where}",
+            totals = conn.execute(
+                f"""SELECT COALESCE(SUM(cost_usd), 0.0) AS total, COUNT(*) - COUNT(cost_usd) AS unpriced
+                    FROM ledger WHERE {where}""",
                 params,
-            ).fetchone()["total"]
+            ).fetchone()
             component_rows = conn.execute(
                 f"""SELECT COALESCE(agent, 'unknown') AS component,
                            COALESCE(SUM(cost_usd), 0.0) AS cost
@@ -351,7 +352,8 @@ class SQLiteLedgerWriter(LedgerWriter):
             ).fetchall()
 
         return {
-            "total": total,
+            "total": totals["total"],
+            "unpriced_calls": totals["unpriced"],
             "by_component": {r["component"]: r["cost"] for r in component_rows},
             "by_model": {r["model"]: r["cost"] for r in model_rows},
         }
@@ -387,6 +389,7 @@ class SQLiteLedgerWriter(LedgerWriter):
             # Every call, with a task or not: a background call is spent all the same.
             totals = conn.execute(
                 """SELECT COALESCE(SUM(cost_usd), 0.0) as total_cost,
+                          COUNT(*) - COUNT(cost_usd) as unpriced_calls,
                           COALESCE(SUM(tokens_in), 0) as total_tokens_in,
                           COALESCE(SUM(tokens_out), 0) as total_tokens_out
                    FROM ledger WHERE action = ? AND timestamp >= ?""",
@@ -509,6 +512,8 @@ class SQLiteLedgerWriter(LedgerWriter):
             "period_days": days,
             "total_tasks": total_tasks or 0,
             "total_cost_usd": round(totals["total_cost"] or 0.0, 6),
+            # Calls to a model north has no price for: in no cost above.
+            "unpriced_calls": totals["unpriced_calls"] or 0,
             "total_tokens_in": totals["total_tokens_in"] or 0,
             "total_tokens_out": totals["total_tokens_out"] or 0,
             "by_agent": by_agent,

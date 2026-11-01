@@ -356,6 +356,7 @@ def _inference_categories(entries: list[Any]) -> list[dict[str, Any]]:
                 "tokens_out": 0,
                 "cached_tokens": 0,
                 "cost_usd": 0.0,
+                "unpriced_calls": 0,
                 "components": set(),
                 "models": set(),
             },
@@ -364,7 +365,11 @@ def _inference_categories(entries: list[Any]) -> list[dict[str, Any]]:
         row["tokens_in"] += int(getattr(entry, "tokens_in", None) or 0)
         row["tokens_out"] += int(getattr(entry, "tokens_out", None) or 0)
         row["cached_tokens"] += int(getattr(entry, "cached_tokens", None) or 0)
-        row["cost_usd"] += float(getattr(entry, "cost_usd", None) or 0.0)
+        cost = getattr(entry, "cost_usd", None)
+        if cost is None:
+            row["unpriced_calls"] += 1
+        else:
+            row["cost_usd"] += float(cost)
         if component := getattr(entry, "output", None):
             row["components"].add(component)
         if model := getattr(entry, "model_used", None):

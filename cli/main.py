@@ -1105,6 +1105,7 @@ def inference_costs(
     _console.print(f"  [bold white]inference costs[/bold white]  [dim]{data['period']}[/dim]")
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
     _console.print(f"  [dim]total      [/dim]  ${data['total_cost_usd']:.6f}")
+    _print_unpriced(data)
 
     if data.get("by_component"):
         _console.print("\n  [dim]by component[/dim]")
@@ -1332,6 +1333,13 @@ def limits() -> None:
 # ── metrics ──────────────────────────────────────────────────────────────────
 
 
+def _print_unpriced(data: dict) -> None:
+    """Say how many calls the cost leaves out. A server from before unpriced calls sends no count."""
+    if count := data.get("unpriced_calls", 0):
+        calls = "call" if count == 1 else "calls"
+        _console.print(f"  [yellow]+ {count} {calls} unpriced[/yellow]  [dim]north has no price for the model[/dim]")
+
+
 @app.command("metrics")
 def metrics(
     period: int = typer.Option(7, "--period", "-p", help="Look-back window in days (default 7)."),
@@ -1345,6 +1353,7 @@ def metrics(
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
     _console.print(f"  [dim]tasks      [/dim]  {data['total_tasks']}")
     _console.print(f"  [dim]cost       [/dim]  ${data['total_cost_usd']:.6f}")
+    _print_unpriced(data)
     _console.print(f"  [dim]tokens in  [/dim]  {data['total_tokens_in']:,}")
     _console.print(f"  [dim]tokens out [/dim]  {data['total_tokens_out']:,}")
 

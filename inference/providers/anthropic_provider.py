@@ -62,34 +62,63 @@ _DEFAULT_MAX_TOKENS_TOOLS = 64_000
 
 # Anthropic does not publish price via the Models API, so context window comes
 # from client.models.list() live, but price is this table - it is the one
-# thing about a Claude model this provider cannot discover at runtime. Prices
-# are USD per output token; ModelInfo.price_known=False for anything not
-# listed, so an unrecognised model still routes (ranked by quality prior) but
-# never reports a cost it does not actually know.
-# Source: shared/live-sources.md pricing page (Claude API docs), checked 2026.
-_KNOWN_MODEL_PRICE_PER_OUTPUT_TOKEN: dict[str, float] = {
-    "claude-fable-5-1": 50.00e-6,
-    "claude-fable-5": 50.00e-6,
-    "claude-opus-5": 25.00e-6,
-    "claude-opus-4-8": 25.00e-6,
-    "claude-opus-4-7": 25.00e-6,
-    "claude-opus-4-6": 25.00e-6,
-    "claude-sonnet-5": 10.00e-6,
-    "claude-sonnet-4-6": 15.00e-6,
-    "claude-haiku-4-5": 5.00e-6,
+# thing about a Claude model this provider cannot discover at runtime.
+#
+# Each token class has its own rate. The table had one rate per model, the
+# output rate, and charged input with it, and it predated the 5.5 models,
+# which fell to a $10/M guess: Haiku 5.5 input was charged 100 times over, and
+# north recorded $192.51 for calls that cost $12.86. A model missing from the
+# table is unpriced, not guessed at: its calls record no cost.
+# Source: Anthropic's pricing (claude-api skill reference), checked 2026-11-01.
+
+
+@dataclass(frozen=True)
+class _Rates:
+    """USD per million tokens."""
+
+    input: float
+    output: float
+    cache_read: float
+
+    @property
+    def cache_write(self) -> float:
+        # A 5-minute cache entry, the only kind north writes, costs 1.25x input.
+        return self.input * 1.25
+
+
+_PRICES: dict[str, _Rates] = {
+    "claude-fable-5-1": _Rates(10.00, 50.00, 0.25),
+    "claude-mythos-5-1": _Rates(10.00, 50.00, 0.25),
+    "claude-fable-5": _Rates(10.00, 50.00, 1.00),
+    "claude-mythos-5": _Rates(10.00, 50.00, 1.00),
+    "claude-opus-5-5": _Rates(4.00, 20.00, 0.20),
+    "claude-opus-5": _Rates(5.00, 25.00, 0.50),
+    "claude-opus-4-8": _Rates(5.00, 25.00, 0.50),
+    "claude-opus-4-7": _Rates(5.00, 25.00, 0.50),
+    "claude-opus-4-6": _Rates(5.00, 25.00, 0.50),
+    "claude-sonnet-5-5": _Rates(2.00, 10.00, 0.20),
+    "claude-sonnet-5": _Rates(2.00, 10.00, 0.20),
+    "claude-sonnet-4-6": _Rates(3.00, 15.00, 0.30),
+    "claude-haiku-5-5": _Rates(0.10, 0.50, 0.01),
+    "claude-haiku-4-5": _Rates(1.00, 5.00, 0.10),
+    # What models.list() returns for Haiku 4.5.
+    "claude-haiku-4-5-20251001": _Rates(1.00, 5.00, 0.10),
 }
-# A generic fallback for a model this table has not been updated for yet -
-# Sonnet-tier pricing, a reasonable middle estimate. price_known=False on any
-# model that lands here, so routing never presents this as a published figure.
-_FALLBACK_PRICE_PER_OUTPUT_TOKEN = 10.00e-6
+# Above this many prompt tokens a call is billed at the long-prompt rates.
+_LONG_PROMPT_PRICES: dict[str, tuple[int, _Rates]] = {
+    "claude-haiku-5-5": (100_000, _Rates(0.50, 2.50, 0.05)),
+}
+# Routing still needs a figure to rank a model it cannot price; price_known=False
+# says it is an estimate, and no call is ever charged at it.
+_ROUTING_ESTIMATE_PER_OUTPUT_TOKEN = 10.00e-6
 
 
 def _model_price(model_id: str) -> tuple[float, bool]:
-    """(price_per_output_token, price_known) for a live model id."""
-    price = _KNOWN_MODEL_PRICE_PER_OUTPUT_TOKEN.get(model_id)
-    if price is not None:
-        return price, True
-    return _FALLBACK_PRICE_PER_OUTPUT_TOKEN, False
+    """(USD per output token, price_known) for ranking a live model."""
+    rates = _PRICES.get(model_id)
+    if rates is None:
+        return _ROUTING_ESTIMATE_PER_OUTPUT_TOKEN, False
+    return rates.output / 1_000_000, True
 
 
 # ---------------------------------------------------------------------- #
@@ -221,28 +250,60 @@ def _to_anthropic_tools(tools: list[dict]) -> list[dict]:
 
 @dataclass(frozen=True)
 class _Usage:
+    # The whole prompt, as every other provider reports it. Anthropic's
+    # input_tokens is only the part read neither from nor into the cache, so
+    # with caching on it would read as a few hundred tokens of a 30k prompt and
+    # the agent loop, which compacts by prompt size, would never compact.
     tokens_in: int
     tokens_out: int
     cached_tokens: int
     cache_write_tokens: int
 
+    @property
+    def uncached_tokens(self) -> int:
+        return self.tokens_in - self.cached_tokens - self.cache_write_tokens
+
 
 def _usage_fields(usage: Any) -> _Usage:
+    cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    written = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     return _Usage(
-        tokens_in=int(getattr(usage, "input_tokens", 0) or 0),
+        tokens_in=int(getattr(usage, "input_tokens", 0) or 0) + cached + written,
         tokens_out=int(getattr(usage, "output_tokens", 0) or 0),
-        cached_tokens=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
-        cache_write_tokens=int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+        cached_tokens=cached,
+        cache_write_tokens=written,
     )
 
 
-def _cost_usd(tokens_in: int, tokens_out: int, model_id: str) -> float:
-    price_per_output_token, _ = _model_price(model_id)
-    # Anthropic does not publish a separate input price in a form this table
-    # tracks per-model; using the output rate for input tokens overstates cost
-    # (input is always cheaper than output) rather than understating it, which
-    # is the safer direction for a number that feeds budget/spend tracking.
-    return (tokens_in + tokens_out) * price_per_output_token
+def _cost_usd(usage: _Usage, model_id: str) -> float | None:
+    """What one call cost in USD, each token class at its own rate; None when the model is unpriced."""
+    long_prompt = _LONG_PROMPT_PRICES.get(model_id)
+    if long_prompt is not None and usage.tokens_in > long_prompt[0]:
+        rates: _Rates | None = long_prompt[1]
+    else:
+        rates = _PRICES.get(model_id)
+    if rates is None:
+        return None
+    per_million = (
+        usage.uncached_tokens * rates.input
+        + usage.cached_tokens * rates.cache_read
+        + usage.cache_write_tokens * rates.cache_write
+        + usage.tokens_out * rates.output
+    )
+    return per_million / 1_000_000
+
+
+def _cost_fields(usage: _Usage, model_id: str) -> dict[str, Any]:
+    """The usage and cost fields every response from this provider carries."""
+    cost = _cost_usd(usage, model_id)
+    return {
+        "cost_usd": cost or 0.0,
+        "priced": cost is not None,
+        "tokens_in": usage.tokens_in,
+        "tokens_out": usage.tokens_out,
+        "cached_tokens": usage.cached_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
+    }
 
 
 def _raise_if_degenerate(message: Any, model_id: str, provider_name: str) -> None:
@@ -268,34 +329,13 @@ def _tool_call_response(message: Any, model_id: str, provider_name: str) -> Tool
             calls.append(ToolCall(name=block.name, call_id=block.id, params=dict(block.input or {})))
         elif block.type == "text":
             text_parts.append(block.text)
-    usage = _usage_fields(message.usage)
-    cost = _cost_usd(usage.tokens_in, usage.tokens_out, model_id)
+    usage = _cost_fields(_usage_fields(message.usage), model_id)
     if calls:
-        return ToolCallResponse(
-            type="tool_calls",
-            calls=calls,
-            content=None,
-            model_used=model_id,
-            cost_usd=cost,
-            tokens_in=usage.tokens_in,
-            tokens_out=usage.tokens_out,
-            cached_tokens=usage.cached_tokens,
-            cache_write_tokens=usage.cache_write_tokens,
-        )
+        return ToolCallResponse(type="tool_calls", calls=calls, content=None, model_used=model_id, **usage)
     content = "".join(text_parts)
     if not content:
         raise ModelDegenerateError(model_id, provider_name, reason="empty completion text and no tool calls")
-    return ToolCallResponse(
-        type="message",
-        calls=[],
-        content=content,
-        model_used=model_id,
-        cost_usd=cost,
-        tokens_in=usage.tokens_in,
-        tokens_out=usage.tokens_out,
-        cached_tokens=usage.cached_tokens,
-        cache_write_tokens=usage.cache_write_tokens,
-    )
+    return ToolCallResponse(type="message", calls=[], content=content, model_used=model_id, **usage)
 
 
 # ---------------------------------------------------------------------- #
@@ -359,8 +399,7 @@ class AnthropicProvider:
         """Fetch the live, account-accessible model list from the Models API.
 
         Context window comes from here (`max_input_tokens`); price does not -
-        see `_KNOWN_MODEL_PRICE_PER_OUTPUT_TOKEN` - the Models API does not
-        publish it.
+        see `_PRICES` - the Models API does not publish it.
         """
         live: dict[str, ModelInfo] = {}
         try:
@@ -413,15 +452,8 @@ class AnthropicProvider:
         text = "".join(b.text for b in message.content if b.type == "text")
         if not text:
             raise ModelDegenerateError(model_id, self.name, reason="empty completion text")
-        usage = _usage_fields(message.usage)
         return CompletionResponse(
-            text=text,
-            model_used=model_id,
-            cost_usd=_cost_usd(usage.tokens_in, usage.tokens_out, model_id),
-            tokens_in=usage.tokens_in,
-            tokens_out=usage.tokens_out,
-            cached_tokens=usage.cached_tokens,
-            cache_write_tokens=usage.cache_write_tokens,
+            text=text, model_used=model_id, **_cost_fields(_usage_fields(message.usage), model_id)
         )
 
     async def complete_with_tools(

@@ -375,7 +375,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
                 tokens_in=int(data["tokens_in"]),
                 tokens_out=int(data["tokens_out"]),
                 cached_tokens=int(data["cached_tokens"]),
-                cost_usd=float(data["cost_usd"]),
+                cost_usd=None if data["cost_usd"] is None else float(data["cost_usd"]),
                 status=LedgerStatus.COMPLETED,
             )
         )
