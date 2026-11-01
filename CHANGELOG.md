@@ -5,6 +5,7 @@ All notable changes to north are documented here.
 ## [Unreleased]
 
 ### Added
+- **CODING_STYLE §7: what an approval decision covers** (`docs/CODING_STYLE.md`): exact replays only, no replay for sends, spends or north's own settings, a "no" that holds for the task, learned tools gated on every call, no repository edits by north's own tools, and a folderless task that asks instead of guessing.
 - **CODING_STYLE §23.8: fix the shared cause, not each symptom** (`docs/CODING_STYLE.md`): when several bugs share a cause, one change at that seam, with a test for each bug it covers.
 - **Experiment: can a run's first Codex call reuse an earlier run's cache?** (`experiments/codex_prompt_cache/`). No: Codex caches the tool list ahead of the instructions, and runs pick different tools. Sharing a session per task would save 0.4% of uncached input, per agent 1.9-3.7%, so `session_id` stays the run id. Inside a run the prompt is already append-only: since Oct 18, the only calls that lost cached prompt (3 of 98, 34.7k tokens) followed `find_tools` adding a tool.
 - **CODING_STYLE §19.4 says experiments live in `experiments/`** (`docs/CODING_STYLE.md`), not in separate notes or md files elsewhere.

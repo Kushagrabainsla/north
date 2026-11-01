@@ -456,6 +456,17 @@ Two consequences worth keeping:
 **Why:** each mode must mean one thing the user can predict.
 **How to apply:** old mode names stay as aliases; autonomous logs every decision with its reason and the memory it used. Every decided card names who decided it. You can overrule any decision north took: the card keeps both, memory learns yours, and nothing re-runs.
 
+**What a decision covers:**
+
+- A remembered answer replays only the exact action: its facts as written (case and quoting kept), its folder or repository, and for a file write its content. A send, a spend, or a change to north's own autonomy or settings is never replayed, and below yolo only a person decides it.
+- A "no" holds for the rest of the task: any later action on a path the rejected action named, reads included, is refused, and the agent is told you said no.
+- A tool north wrote for itself goes through the gate on every call; its own code cannot mark it harmless.
+- North's own tools do not edit files inside a git repository: `write_file` there, and shell commands that recognisably edit files there (`sed -i`, redirection or `tee` into a file), are refused and pointed at `coding_agent`, which works in an isolated copy and runs the tests.
+- A task with no chosen folder is told so, and asks which folder the user means instead of guessing a path or calling its own folder theirs.
+
+**Why:** the issue #76 test found each broken: replays covered other files, repositories and commands; north switched itself to yolo; a rejected read was done with another tool; a learned tool printed north's secret; the general agent edited a repository with `sed`; an agent guessed a repository path.
+**How to apply:** tools report these as facts on their `Action` (paths, repository, content); `ApprovalPolicy` and `Approvals` enforce them, never the tool.
+
 **One layer per concern.** Approvals, execution, memory, capabilities, inference and channels each have one layer with one entry point; nothing outside it re-implements or bypasses it.
 **Why:** fewer parts; every behaviour has one place to read and fix.
 **How to apply:** new code calls the layer's entry point; an architecture test fails on a bypass.
