@@ -93,10 +93,12 @@ def _quote(path: str | Path) -> str:
 
 
 def _secret_dirs() -> list[str]:
+    from config.settings import settings
+
     home = Path.home()
     paths = [str(home / name) for name in _SECRET_DIRS]
-    if north_home := os.environ.get("NORTH_HOME"):
-        paths.append(north_home)
+    if str(settings.north_home) not in paths:
+        paths.append(str(settings.north_home))
     return paths
 
 

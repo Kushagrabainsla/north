@@ -22,6 +22,7 @@ from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
+from tools._path import resolve_path
 from tools.base import Tool
 from tools.confidence import ConfidenceTracker
 from tools.models import ToolInput, ToolOutput
@@ -754,6 +755,21 @@ def test_task_message_includes_task_id(tmp_path: Path) -> None:
     payload = AgentPayload(task_id="task-abc-123", prompt="Implement login.")
     msg = agent._build_task_message(payload, context="", scored_tools=[])
     assert "task-abc-123" in msg
+
+
+def test_task_message_names_this_tasks_notes_folder_in_north_home(tmp_path: Path, move_north_home) -> None:
+    """The general prompt says to save notes there, so it must be a folder north lets agents write.
+
+    The prompt used to say `~/.north/notes/<Task ID>/`, which north blocks when its
+    home is elsewhere: "remember this" ended in "That path is blocked".
+    """
+    home = move_north_home(tmp_path / "data")
+    agent = _load_agent("general", tmp_path)
+    msg = agent._build_task_message(AgentPayload(task_id="t1", prompt="Save my plan."), context="", scored_tools=[])
+
+    notes = msg.split("## Notes Directory\n", 1)[1].split("\n", 1)[0]
+    assert notes == f"{home.resolve()}/notes/t1"
+    assert resolve_path(f"{notes}/plan.md", None) is not None
 
 
 def test_task_message_includes_prompt(tmp_path: Path) -> None:

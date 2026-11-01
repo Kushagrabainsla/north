@@ -45,6 +45,8 @@ def _is_north_server(host: str, port: int) -> bool:
 
 def _sync_docker_secret(compose_file: Path) -> None:
     """Read the north secret from the running Docker container and cache it locally."""
+    from config.settings import settings
+
     try:
         result = subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "exec", "-T", "north", "cat", "/data/secret.key"],
@@ -53,7 +55,7 @@ def _sync_docker_secret(compose_file: Path) -> None:
             timeout=10,
         )
         if result.returncode == 0 and result.stdout.strip():
-            secret_path = Path.home() / ".north" / "secret.key"
+            secret_path = settings.north_home / "secret.key"
             secret_path.parent.mkdir(parents=True, exist_ok=True)
             secret_path.write_text(result.stdout.strip(), encoding="utf-8")
             secret_path.chmod(0o600)
@@ -104,7 +106,7 @@ def _find_compose_file() -> Path | None:
 
     Priority:
     1. Walk up from CWD for a docker-compose.yml the user dropped in their tree.
-    2. ~/.north/docker-compose.yml - written on first run from the bundled copy.
+    2. <north home>/docker-compose.yml - written on first run from the bundled copy.
     3. Bundled copy inside the installed package (cli/docker-compose.yml).
 
     The source-build variant lives at docker-compose.dev.yml and is selected
@@ -112,8 +114,9 @@ def _find_compose_file() -> Path | None:
     never auto-discovered here, so `north start --docker` behaves identically
     regardless of the working directory.
     """
-    north_home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
-    installed = north_home / "docker-compose.yml"
+    from config.settings import settings
+
+    installed = settings.north_home / "docker-compose.yml"
 
     cwd = Path.cwd()
     for candidate in [cwd, *cwd.parents]:
@@ -124,7 +127,7 @@ def _find_compose_file() -> Path | None:
     if not installed.exists():
         bundled = Path(__file__).parent / "docker-compose.yml"
         if bundled.exists():
-            north_home.mkdir(parents=True, exist_ok=True)
+            settings.north_home.mkdir(parents=True, exist_ok=True)
             shutil.copy2(bundled, installed)
 
     return installed if installed.exists() else None

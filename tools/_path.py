@@ -6,11 +6,13 @@ check_types, search_symbols, find_references) resolves it through
 ``resolve_path()``, and every tool that walks a tree prunes via
 ``PRUNED_DIRS``/``SENSITIVE_DIR_NAMES``. The sensitive-path blocklist applies
 in *all* branches - with or without a workspace - so setting a broad workspace
-(e.g. $HOME) can never re-open access to ~/.ssh, ~/.north, /etc, etc.
+(e.g. $HOME) can never re-open access to ~/.ssh, north's home, /etc, etc.
 
-The sole exception is ``<NORTH_HOME>/tasks/`` (see ``_handoff_root``): a narrow,
-always-allowed carve-out for internal agent handoff files. Secrets and all DB
-files inside ~/.north stay blocked even there.
+North's home is ``settings.north_home`` (NORTH_HOME), blocked wherever it is;
+``~/.north`` stays blocked too, since a default install's secrets may sit there.
+The exceptions are ``<NORTH_HOME>/tasks/`` (see ``_handoff_root``), a narrow,
+always-allowed carve-out for internal agent handoff files, and the personal-data
+subdirs. Secrets and all DB files inside north's home stay blocked even there.
 
 See docs/CODING_STYLE.md Section 16.1.1.
 """
@@ -18,10 +20,10 @@ See docs/CODING_STYLE.md Section 16.1.1.
 from __future__ import annotations
 
 import functools
-import os
 import sys
 from pathlib import Path
 
+from config.settings import settings
 from utils.edit_scope import EditAuthorizer
 
 # The pure filesystem-traversal exclusion set now lives in the platform layer
@@ -66,16 +68,16 @@ _BLOCKED_PREFIXES: tuple[str, ...] = (
     "~/.aws",
     "~/.gnupg",
     "~/.config",
-    "~/.north",  # north's own home: secret.key, .env, ledger DBs
+    "~/.north",  # a default install's home: secret.key, .env, ledger DBs
 )
 
 # Filenames whose contents are secrets wherever they live.
 _BLOCKED_FILENAMES: frozenset[str] = frozenset({"secret.key"})
 
 # SQLite state suffixes. north's own DBs (ledger, jobs, task-context, ...) live
-# under ~/.north - including the task-context DBs that share ~/.north/tasks/ with
+# in north's home - including the task-context DBs that share <home>/tasks/ with
 # the agent handoff carve-out. Agents must never write these directly; they go
-# through the proper stores/tools. Enforced only inside ~/.north so a workspace
+# through the proper stores/tools. Enforced only inside north's home so a workspace
 # may still contain editable .db files. Public because the cockpit's artifact
 # library reads that same directory and must exclude exactly these files.
 DB_SUFFIXES: tuple[str, ...] = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3")
@@ -94,9 +96,13 @@ _PROJECT_ROOT_MARKERS: tuple[str, ...] = (
 
 @functools.lru_cache(maxsize=1)
 def _resolved_blocked_prefixes() -> tuple[str, ...]:
-    """Expand and resolve _BLOCKED_PREFIXES once; falls back to the raw prefix."""
+    """Expand and resolve _BLOCKED_PREFIXES and north's home once; falls back to the raw prefix.
+
+    North's home is wherever NORTH_HOME put it. Blocking only ``~/.north`` left a
+    moved home (Docker's /data) open: its .env and settings.json were readable.
+    """
     resolved: list[str] = []
-    for prefix in _BLOCKED_PREFIXES:
+    for prefix in (*_BLOCKED_PREFIXES, str(settings.north_home)):
         try:
             resolved.append(str(Path(prefix).expanduser().resolve()))
         except Exception:
@@ -116,15 +122,15 @@ def _in_handoff_root(resolved: str) -> bool:
 
 
 # Personal-data subdirectories inside NORTH_HOME that agents are allowed to
-# write to (research digests, notes and plans), one folder per task inside. The rest of ~/.north
-# stays blocked (secret.key, .env, ledger/jobs/facts DBs). Kept in sync with
+# write to (research digests, notes and plans), one folder per task inside. The rest of north's
+# home stays blocked (secret.key, .env, ledger/jobs/facts DBs). Kept in sync with
 # agent prompts so output never lands in the CWD/workspace.
 _PERSONAL_SUBDIRS: tuple[str, ...] = ("news", "notes")
 
 
 def _personal_root() -> str:
-    """Absolute path of NORTH_HOME (the personal-data parent)."""
-    base = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
+    """Absolute path of north's home (the personal-data parent)."""
+    base = settings.north_home
     try:
         return str(base.resolve())
     except Exception:
@@ -177,13 +183,13 @@ def _is_blocked_path(resolved: str) -> bool:
     if Path(resolved).name in _BLOCKED_FILENAMES:
         return True
     # Carve-out: the per-task handoff area is writable agent scratch even though
-    # the rest of ~/.north is blocked. Checked after the filename block above so
+    # the rest of north's home is blocked. Checked after the filename block above so
     # a secret.key inside tasks/ can never be exposed. The task-context SQLite
-    # DBs share ~/.north/tasks/ with this carve-out, so DB files stay blocked.
+    # DBs share <home>/tasks/ with this carve-out, so DB files stay blocked.
     if _in_handoff_root(resolved):
         return resolved.endswith(DB_SUFFIXES)
     # Carve-out: the personal-data subdirs (news/notes/wellness) are the only
-    # other writable part of ~/.north. The home root and every other sibling
+    # other writable part of north's home. The home root and every other sibling
     # (secret.key, .env, ledger/jobs/facts DBs) stay blocked.
     if _in_personal_subdir(resolved):
         return False
@@ -204,9 +210,9 @@ def is_sensitive_path(path: Path) -> bool:
         return True  # unresolvable - treat as sensitive (fail closed)
     if any(part in SENSITIVE_DIR_NAMES for part in resolved.parts):
         # A path inside a sensitive-named dir is blocked by default - but the
-        # personal-data subdirs under ~/.north (news/notes/wellness) are the
+        # personal-data subdirs in north's home (news/notes/wellness) are the
         # intended, readable output of agents, so carve them out. Everything
-        # else under ~/.north (secret.key, .env, DBs) stays sensitive.
+        # else in north's home (secret.key, .env, DBs) stays sensitive.
         return not _in_personal_subdir(str(resolved))
     return _is_blocked_path(str(resolved))
 
@@ -251,7 +257,7 @@ def resolve_path(path_str: str, workspace: str | None, *, contained: bool = True
       *contained*, the resolved path must stay inside it.
     - Without workspace: path is resolved from CWD.
     - In *both* cases the sensitive-path blocklist applies, so a workspace of
-      $HOME (or any broad root) never grants access to ~/.ssh, ~/.north, /etc…
+      $HOME (or any broad root) never grants access to ~/.ssh, north's home, /etc…
 
     Pass ``contained=False`` for a read, and for a write the approval layer
     rules on by the task's folder (`write_file`): the folder is a boundary for

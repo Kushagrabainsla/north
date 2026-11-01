@@ -130,7 +130,9 @@ class CreateSkillTool(Tool):
         agent_registry=None,
     ) -> None:
         self._registry = registry
-        self._learned_dir = learned_dir or (Path.home() / ".north" / "skills")
+        from config.settings import settings
+
+        self._learned_dir = learned_dir or (settings.north_home / "skills")
         self._self_edit_policy = self_edit_policy
         self._skill_selector = skill_selector
         self._tool_registry = tool_registry

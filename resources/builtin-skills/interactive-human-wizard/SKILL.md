@@ -51,7 +51,7 @@ Create a structured bash script (typically under `scripts/setup_<service>.sh` or
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="${1:-$HOME/.north/.env}"
+ENV_FILE="${1:-${NORTH_HOME:-$HOME/.north}/.env}"
 mkdir -p "$(dirname "$ENV_FILE")"
 touch "$ENV_FILE"
 

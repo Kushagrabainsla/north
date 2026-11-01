@@ -100,7 +100,9 @@ class CreateFlowTool(Tool):
         runner=None,
     ) -> None:
         self._registry = registry
-        self._learned_dir = learned_dir or (Path.home() / ".north" / "flows")
+        from config.settings import settings
+
+        self._learned_dir = learned_dir or (settings.north_home / "flows")
         self._self_edit_policy = self_edit_policy
         self._tool_registry = tool_registry
         self._skill_registry = skill_registry

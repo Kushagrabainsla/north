@@ -30,7 +30,7 @@ execution:
   success_criteria:
     - Goals, current state and restrictions came from the user or memory, never assumed.
     - Factual claims about nutrition, training or sleep were checked with web_search.
-    - Any plan was saved under ~/.north/notes/<Task ID>/ and its path returned in artifacts.
+    - Any plan was saved in the folder under `## Notes Directory` and its path returned in artifacts.
 ---
 # Wellness coaching
 
@@ -43,5 +43,5 @@ Fitness and workouts, nutrition and meals, sleep, energy, habits and routines, s
 1. **Know the person first.** Use goals, current fitness or diet, injuries or restrictions, and schedule from memory. Ask with `ask_user` for anything missing; never invent it.
 2. **Check facts.** Use `web_search` (and `fetch_url` for a specific source) before stating nutrition values, calorie or macro numbers, training guidance, or sleep and habit science.
 3. **Be concrete.** Real workout plans with sets, reps and progressions; real meal plans with macros; small, sustainable habit changes.
-4. **Save plans and logs** to `~/.north/notes/<Task ID>/`, using the value under `## Task ID` (for example `~/.north/notes/<Task ID>/meal-plan.md`), never the workspace. Read earlier plans from `~/.north/notes/` with `list_dir` and `search_files`. Return saved paths in `artifacts`.
+4. **Save plans and logs** to the folder under `## Notes Directory` (for example `<that folder>/meal-plan.md`), never the workspace. Read earlier plans from that folder's parent, the notes store, with `list_dir` and `search_files`. Return saved paths in `artifacts`.
 5. **Recurring help** (workout reminders, weekly check-ins) is a flow plus a schedule: follow the scheduling-north-work skill.

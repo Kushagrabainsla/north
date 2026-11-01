@@ -18,16 +18,16 @@ def test_provider_menu_is_generated_from_registry(capsys) -> None:
     assert "No inference provider is configured" in output
 
 
-def test_auth_status_lists_codex(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+def test_auth_status_lists_codex(tmp_path, move_north_home) -> None:
+    move_north_home(tmp_path)
     result = runner.invoke(app, ["auth", "status"])
     assert result.exit_code == 0
     assert "OpenAI Codex" in result.output
     assert "Not logged in" in result.output
 
 
-def test_auth_logout_removes_north_owned_token(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+def test_auth_logout_removes_north_owned_token(tmp_path, move_north_home) -> None:
+    move_north_home(tmp_path)
     store = CodexTokenStore()
     store.save(CodexToken("access", "refresh", time.time() + 3600, "account"))
 

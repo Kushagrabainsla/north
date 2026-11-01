@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,9 +28,10 @@ class McpManager:
     def find_config_files(self) -> list[Path]:
         """Return list of candidate MCP configuration files in priority order."""
         candidates: list[Path] = []
-        # 1. Global config in ~/.north/mcp.json (or NORTH_HOME/mcp.json)
-        north_home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
-        global_cfg = north_home / "mcp.json"
+        # 1. Global config in north's home: <NORTH_HOME>/mcp.json
+        from config.settings import settings
+
+        global_cfg = settings.north_home / "mcp.json"
         if global_cfg.is_file():
             candidates.append(global_cfg)
 

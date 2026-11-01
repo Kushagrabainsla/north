@@ -199,9 +199,11 @@ def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
         # returning an empty list and an empty explanation.
         refused = _authentication_failed(result.stderr or "") + _authentication_failed(output)
         if refused:
+            from config.settings import settings
+
             return [], (
                 f"{refused} device(s) refused authentication. Newer Kasa firmware needs a TP-Link "
-                "account: set NORTH_KASA_USERNAME and NORTH_KASA_PASSWORD in ~/.north/.env."
+                f"account: set NORTH_KASA_USERNAME and NORTH_KASA_PASSWORD in {settings.north_home / '.env'}."
             )
         return [], last_err or "kasa discover found nothing on this network"
 
@@ -736,9 +738,11 @@ class KasaTool(Tool):
             # is a missing one - and the fix belongs in the message, not in a
             # docstring the user will never read.
             if "AuthenticationError" in diagnostic and not _credential_args():
+                from config.settings import settings
+
                 diagnostic += (
                     " No TP-Link account is configured: set NORTH_KASA_USERNAME and "
-                    "NORTH_KASA_PASSWORD in ~/.north/.env. Kasa firmware since 2023 requires one."
+                    f"NORTH_KASA_PASSWORD in {settings.north_home / '.env'}. Kasa firmware since 2023 requires one."
                 )
             return (
                 {},

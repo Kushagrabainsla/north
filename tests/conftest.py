@@ -78,6 +78,26 @@ def _isolated_north_home(tmp_path_factory, monkeypatch):
     _path._resolved_blocked_prefixes.cache_clear()
 
 
+@pytest.fixture
+def move_north_home(monkeypatch):
+    """Move north's home for one test: NORTH_HOME and `settings.north_home` together.
+
+    Code asks `settings.north_home`; `utils.handoff` reads NORTH_HOME, since it
+    may not import config. Setting one of them alone leaves the two disagreeing.
+    """
+    from config.settings import settings
+    from tools import _path
+
+    def move(home: Path) -> Path:
+        monkeypatch.setenv("NORTH_HOME", str(home))
+        monkeypatch.setattr(settings, "north_home", home)
+        _path._handoff_root.cache_clear()
+        _path._resolved_blocked_prefixes.cache_clear()
+        return home
+
+    return move
+
+
 class MockInferenceRouter(InferenceRouter):
     """Deterministic stand-in for InferenceRouter in tests.
 

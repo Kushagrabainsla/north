@@ -180,8 +180,8 @@ def test_registry_normalizes_codex_name() -> None:
     assert definition.auth_kind is AuthKind.OAUTH_PKCE
 
 
-def test_factory_activates_codex_from_north_owned_token(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+def test_factory_activates_codex_from_north_owned_token(tmp_path, move_north_home) -> None:
+    move_north_home(tmp_path)
     CodexTokenStore().save(CodexToken("access", "refresh", time.time() + 3600, "account"))
 
     router = build_router(openrouter_api_key="")

@@ -11,20 +11,24 @@ import json
 import os
 from typing import Any
 
+from config.settings import settings
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from utils.time import utcnow
 
+
 # ── Data directory ─────────────────────────────────────────────────────────
-INTERVIEW_DIR = os.path.expanduser("~/.north/interview")
+def _interview_dir() -> str:
+    """Where interview prep is kept: in north's home, wherever NORTH_HOME put it."""
+    return str(settings.north_home / "interview")
 
 
 def _ensure_dir() -> None:
-    os.makedirs(INTERVIEW_DIR, exist_ok=True)
+    os.makedirs(_interview_dir(), exist_ok=True)
 
 
 def _load_json(filename: str) -> dict:
-    path = os.path.join(INTERVIEW_DIR, filename)
+    path = os.path.join(_interview_dir(), filename)
     if os.path.exists(path):
         with open(path) as f:
             return json.load(f)
@@ -33,7 +37,7 @@ def _load_json(filename: str) -> dict:
 
 def _save_json(filename: str, data: dict) -> None:
     _ensure_dir()
-    path = os.path.join(INTERVIEW_DIR, filename)
+    path = os.path.join(_interview_dir(), filename)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 

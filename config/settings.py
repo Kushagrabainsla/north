@@ -10,12 +10,22 @@ import logging
 import os
 import stat as _stat
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import AliasChoices, Field, PrivateAttr
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
+
+
+def _north_home_from_environment() -> Path:
+    """North's home as the process was started with it: NORTH_HOME, else ~/.north.
+
+    Read here and in `utils.handoff` (a platform utility that may not import
+    config), nowhere else: everything else asks `settings.north_home`, so a moved
+    home (Docker's /data, a second install, a test) is moved everywhere at once.
+    """
+    return Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
 
 
 def read_secret_file(secret_file: Path) -> str:
@@ -61,8 +71,9 @@ class Settings(BaseSettings):
     # Set NORTH_OPENCODE_ZEN_API_KEY in environment or .env.
     opencode_zen_api_key: str = ""
 
-    # Paths - NORTH_HOME env var is the canonical override (used in Docker)
-    north_home: Path = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
+    # Paths - NORTH_HOME env var is the canonical override (used in Docker). Read
+    # when Settings is created, not when this module is imported.
+    north_home: Path = Field(default_factory=_north_home_from_environment)
 
     # Default workspace for filesystem/shell tools when no workspace is provided per-request.
     # Set via NORTH_NORTH_WORKSPACE env var. Must never default to $HOME - the workspace
@@ -272,11 +283,17 @@ class Settings(BaseSettings):
         configured = self.onboarding_enabled
         return not self.is_test if configured is None else configured
 
-    # Only ~/.north/.env is a trusted config source. A .env in the CWD is
-    # attacker-influenced in any cloned repo and must never override config
-    # (e.g. NORTH_SECRET), so it is deliberately not loaded.
+    def __init__(self, **values: Any) -> None:
+        # Only the .env in north's home is a trusted config source: the file the
+        # installer, `north setup` and the dashboard write keys to. It used to be
+        # ~/.north/.env whatever NORTH_HOME said, so with a moved home the keys
+        # they saved were never read. A .env in the CWD is attacker-influenced in
+        # any cloned repo and must never override config (e.g. NORTH_SECRET), so
+        # it is deliberately not loaded. `_env_file=None` still means no file.
+        values.setdefault("_env_file", _north_home_from_environment() / ".env")
+        super().__init__(**values)
+
     model_config = {
-        "env_file": str(Path.home() / ".north" / ".env"),
         "env_prefix": "NORTH_",
         "extra": "ignore",
         "populate_by_name": True,
@@ -284,7 +301,7 @@ class Settings(BaseSettings):
 
 
 def reload_settings() -> Settings:
-    """Re-read ~/.north/.env and return a fresh Settings instance.
+    """Re-read the .env in north's home and return a fresh Settings instance.
 
     Import sites that captured the old `settings` singleton (e.g.
     `from config.settings import settings`) keep their reference, so callers

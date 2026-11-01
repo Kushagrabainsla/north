@@ -12,7 +12,6 @@ immediately (the inference router is rebuilt in place — no restart needed).
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -113,13 +112,15 @@ class NorthConfigTool(Tool):
 
     def _env_path(self) -> Path:
         """Path to the .env file."""
-        home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
-        return home / ".env"
+        from config.settings import settings
+
+        return settings.north_home / ".env"
 
     def _settings_path(self) -> Path:
         """Path to the NorthSettings JSON file."""
-        home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
-        return home / "settings.json"
+        from config.settings import settings
+
+        return settings.north_home / "settings.json"
 
     def _read_env(self) -> dict[str, str]:
         """Parse the .env file into a dict. Returns empty dict on any error."""

@@ -67,16 +67,16 @@ class TestPersonalDataCarveOut:
     the path under test stay in sync (``~`` expands to $HOME, not NORTH_HOME).
     """
 
-    def test_allows_news_subdir_write(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+    def test_allows_news_subdir_write(self, move_north_home, tmp_path: Path) -> None:
+        move_north_home(tmp_path)
         target = tmp_path / "news" / "2026-08-20.md"
         resolved = resolve_path(str(target), None)
         assert resolved == target
 
-    def test_allows_notes_subdir_write_inside_workspace(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_allows_notes_subdir_write_inside_workspace(self, move_north_home, tmp_path: Path) -> None:
         # Even when the agent runs scoped to a project workspace, personal dirs
         # must be reachable - otherwise output silently falls back to CWD.
-        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+        move_north_home(tmp_path)
         target = tmp_path / "notes" / "0123456789abcdef0123456789abcdef" / "meal-plan.md"
         resolved = resolve_path(str(target), "/srv/project")
         assert resolved == target
@@ -93,8 +93,20 @@ class TestPersonalDataCarveOut:
         monkeypatch.setenv("NORTH_HOME", str(tmp_path))
         assert resolve_path(str(tmp_path / "secret.key"), None) is None
 
-    def test_personal_subdir_readable_not_sensitive(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+    def test_a_moved_home_is_blocked_like_the_default_one(self, move_north_home, tmp_path: Path) -> None:
+        # Docker's NORTH_HOME is /data. Blocking only ~/.north left its .env,
+        # settings.json and databases readable and writable by any agent.
+        home = move_north_home(tmp_path / "data")
+        for name in (".env", "settings.json", "ledger.db", "mcp.json"):
+            assert resolve_path(str(home / name), None) is None, name
+            assert is_sensitive_path(home / name) is True, name
+        assert references_sensitive_path(f"cat {home}/.env") is True
+        # Its own writable parts stay open.
+        assert resolve_path(str(home / "notes" / "t1" / "plan.md"), None) is not None
+        assert resolve_path(str(home / "tasks" / "t1" / "spec.md"), None) is not None
+
+    def test_personal_subdir_readable_not_sensitive(self, move_north_home, tmp_path: Path) -> None:
+        move_north_home(tmp_path)
         assert is_sensitive_path(tmp_path / "news") is False
         assert is_sensitive_path(tmp_path / "notes" / "plan.md") is False
         # Sibling secret stays sensitive even though it bears the .north parent.

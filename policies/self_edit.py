@@ -53,7 +53,9 @@ class SelfEditPolicy:
         # Only skills/flows opt in. Source code and other policy users retain
         # the North-authorship requirement without exception.
         self.user_document = user_document
-        self.registry_root = (registry_root or (Path.home() / ".north" / "mutations")).resolve()
+        from config.settings import settings
+
+        self.registry_root = (registry_root or (settings.north_home / "mutations")).resolve()
         self.registry_root.mkdir(parents=True, exist_ok=True)
         self._registry = self.registry_root / "authorship.json"
         self._snapshots = self.registry_root / "before"

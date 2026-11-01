@@ -726,7 +726,8 @@ startup only resumes a run the person started that paused. Each concept has one 
 Settings holds preferences and connections, Approvals holds waiting cards, past decisions
 and safe actions, Memory holds documents, facts and episodes, System is read-only health,
 model choice and cost. Artifacts are grouped by the flow, session or task that made them;
-durable notes live in ~/.north/notes/<task id>/ so they stay grouped and are never pruned.
+durable notes live in <north home>/notes/<task id>/ (the agent is given the path under
+`## Notes Directory`) so they stay grouped and are never pruned.
 Browser profiles have owner-defined purposes; the agent selects an enabled `profile_id`
 per tool call from task context and asks through the central policy when ambiguous.
 Existing profiles go through TaskWindow (MIT, github.com/clawnify/taskwindow), audited at

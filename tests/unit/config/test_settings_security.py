@@ -27,12 +27,16 @@ class TestSecretFilePermissions:
 
 
 class TestTrustedEnvSources:
-    def test_cwd_dotenv_is_not_a_config_source(self) -> None:
+    def test_cwd_dotenv_is_not_a_config_source(self, monkeypatch, tmp_path) -> None:
         """A .env in an arbitrary cloned repo must never override NORTH_SECRET et al."""
-        env_file = Settings.model_config["env_file"]
-        files = [env_file] if isinstance(env_file, str) else list(env_file)
-        assert ".env" not in files  # the bare CWD-relative entry
-        assert all(str(Path.home()) in f for f in files)
+        repo = tmp_path / "cloned-repo"
+        repo.mkdir()
+        (repo / ".env").write_text("NORTH_GEMINI_API_KEY=from-the-repo\n", encoding="utf-8")
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("NORTH_HOME", str(tmp_path / "home"))
+        monkeypatch.delenv("NORTH_GEMINI_API_KEY", raising=False)
+
+        assert Settings().gemini_api_key == ""
 
 
 class TestRuntimeEnvironment:

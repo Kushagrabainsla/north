@@ -789,7 +789,9 @@ class NorthApp(App[None]):
         yield Static("", id="hint")
 
     def on_mount(self) -> None:
-        history_file = Path.home() / ".north" / "tui_history"
+        from config.settings import settings
+
+        history_file = settings.north_home / "tui_history"
         if history_file.exists():
             with contextlib.suppress(Exception):
                 self._input_history = [line for line in history_file.read_text().splitlines() if line.strip()]
@@ -1938,7 +1940,9 @@ class NorthApp(App[None]):
         self._history_index = -1
         self._current_input = ""
         try:
-            history_file = Path.home() / ".north" / "tui_history"
+            from config.settings import settings
+
+            history_file = settings.north_home / "tui_history"
             history_file.parent.mkdir(parents=True, exist_ok=True)
             history_file.write_text("\n".join(self._input_history[-_MAX_REMEMBERED_INPUTS:]))
         except Exception:

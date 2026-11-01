@@ -8,7 +8,7 @@ workspace" by the model's own `workspace` argument. Only the server's grant
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -128,12 +128,11 @@ async def test_a_file_outside_the_task_folder_can_be_read(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_north_notes_are_written_without_a_card_in_interactive(tmp_path: Path) -> None:
+async def test_north_notes_are_written_without_a_card_in_interactive(tmp_path: Path, move_north_home) -> None:
     store = _silent_store()
-    target = tmp_path / "home" / "notes" / "today.md"
+    target = move_north_home(tmp_path / "home") / "notes" / "today.md"
 
-    with patch.dict("os.environ", {"NORTH_HOME": str(tmp_path / "home")}):
-        out = await _tool(ApprovalMode.ASK, store).execute(ToolInput(params={"path": str(target), "content": "done\n"}))
+    out = await _tool(ApprovalMode.ASK, store).execute(ToolInput(params={"path": str(target), "content": "done\n"}))
 
     assert out.success, out.error
     assert target.read_text() == "done\n"

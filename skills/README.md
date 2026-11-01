@@ -46,7 +46,7 @@ the skill and binds step inputs. Runtime tool discovery cannot widen the allowli
 
 ## How it works
 
-- **Built-in** skills ship under `resources/builtin-skills/`; **learned** skills live in `~/.north/skills/`.
+- **Built-in** skills ship under `resources/builtin-skills/`; **learned** skills live in `skills/` in north's home (`~/.north` unless NORTH_HOME moves it).
 - For an engineering or research task, north embeds the prompt and offers the **top ~3** most
   similar skills (above a threshold) as one-line descriptions. The agent calls `use_skill` to
   pull the full procedure when one matches. If none fit, it offers nothing.

@@ -48,7 +48,7 @@ from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import AllModelsRateLimitedError, ContextTooLargeError, is_model_unavailable_error
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from tools._path import handoff_dir_for
+from tools._path import handoff_dir_for, personal_dir
 from tools.base import Tool
 from tools.models import ToolInput
 from tools.output_spill import overflow_note, store_overflow
@@ -1060,6 +1060,7 @@ class AgenticLLMAgent(LLMAgent):
             f"{recent_conv}"
             f"## Task ID\n{payload.task_id}\n\n"
             f"## Handoff Directory\n{handoff_dir_for(payload.task_id)}\n\n"
+            f"## Notes Directory\n{personal_dir('notes')}/{payload.task_id}\n\n"
             f"## Context\n{background or '(none)'}\n\n"
             f"## Tool reliability hints\n{reliability_lines or '(none)'}\n"
             f"\n{runtime_context()}\n\n"

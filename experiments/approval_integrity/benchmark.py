@@ -36,6 +36,7 @@ from config.settings import settings
 from gateways import telegram as telegram_gateway
 from inference.models import ToolCall
 from orchestrator.orchestrator import Orchestrator
+from tools import _path
 
 # Long enough for a pending card to be seen and answered. Cards never expire, so
 # "nobody answers" is the benchmark giving up after _UNANSWERED, not the card.
@@ -176,8 +177,14 @@ async def _north_notes_write(tmp: Path) -> str:
     north_home = tmp / "north_home"
     target = north_home / "notes" / "today.md"
     registry = _registry(tmp, ApprovalMode.ASK, ApprovalStore(tmp / "approvals.db"))
-    with patch.dict("os.environ", {"NORTH_HOME": str(north_home)}):
-        await _dispatch("write_file", {"path": str(target), "content": "done\n"}, workspace, registry)
+    # North's home moves with settings.north_home, which the path guard reads;
+    # NORTH_HOME alone is what utils.handoff reads.
+    with patch.dict("os.environ", {"NORTH_HOME": str(north_home)}), patch.object(settings, "north_home", north_home):
+        _path._resolved_blocked_prefixes.cache_clear()
+        try:
+            await _dispatch("write_file", {"path": str(target), "content": "done\n"}, workspace, registry)
+        finally:
+            _path._resolved_blocked_prefixes.cache_clear()
     return "written" if target.exists() else "not_written"
 
 

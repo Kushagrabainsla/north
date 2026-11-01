@@ -69,11 +69,11 @@ class ProviderDefinition:
         if value:
             return value
         north_home = getattr(settings, "north_home", None) if settings is not None else None
-        env_path = (
-            Path(north_home) / ".env"
-            if north_home
-            else Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser() / ".env"
-        )
+        if not north_home:
+            from config.settings import settings as current
+
+            north_home = current.north_home
+        env_path = Path(north_home) / ".env"
         with contextlib.suppress(OSError):
             for line in env_path.read_text(encoding="utf-8").splitlines():
                 key, separator, candidate = line.partition("=")

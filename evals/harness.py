@@ -238,6 +238,8 @@ class HttpNorthClient:
 
 
 def load_secret(path: Path | None = None) -> str:
-    """Read north's shared API secret (default ``~/.north/secret.key``)."""
-    secret_file = path or (Path.home() / ".north" / "secret.key")
+    """Read north's shared API secret (default: ``secret.key`` in north's home)."""
+    from config.settings import settings
+
+    secret_file = path or (settings.north_home / "secret.key")
     return secret_file.read_text(encoding="utf-8").strip()

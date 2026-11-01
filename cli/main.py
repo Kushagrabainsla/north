@@ -1693,7 +1693,7 @@ def config_set(
         display_val = value
 
     typer.secho(f"✓ {env_key}={display_val}", fg=typer.colors.GREEN)
-    typer.echo("  Saved to ~/.north/.env (restart north to apply).")
+    typer.echo(f"  Saved to {env_file} (restart north to apply).")
 
 
 @config_app.command("get")
@@ -1811,7 +1811,7 @@ def setup_interactive() -> None:
             _update_env_file(env_file, "NORTH_TELEGRAM_ALLOWED_CHAT_IDS", tg_chat)
 
     _console.print()
-    typer.secho("  ✓ Configuration saved to ~/.north/.env", fg=typer.colors.GREEN, bold=True)
+    typer.secho(f"  ✓ Configuration saved to {env_file}", fg=typer.colors.GREEN, bold=True)
     _console.print("  Run [bold green]north start[/bold green] to launch North.\n")
 
 

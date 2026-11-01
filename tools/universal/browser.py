@@ -82,6 +82,8 @@ def _profile_ask(label: str, action: str, params: dict[str, Any]) -> str:
 
 def _find_chrome_agent_binary() -> list[str] | None:
     """Locate the chrome-agent executable or return an npx fallback command."""
+    from config.settings import settings
+
     # 1. Check PATH
     which_bin = shutil.which("chrome-agent")
     if which_bin:
@@ -94,7 +96,7 @@ def _find_chrome_agent_binary() -> list[str] | None:
         Path("/usr/local/bin/chrome-agent"),
         Path.home() / ".npm-global" / "bin" / "chrome-agent",
         Path.home() / ".local" / "bin" / "chrome-agent",
-        Path.home() / ".north" / "bin" / "chrome-agent",
+        settings.north_home / "bin" / "chrome-agent",
     ]
     for p in candidates:
         if p.is_file() and os.access(p, os.X_OK):

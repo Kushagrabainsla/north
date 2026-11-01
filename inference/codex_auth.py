@@ -46,8 +46,9 @@ CREDENTIALS_DIR_NAME = "credentials"
 
 
 def default_codex_token_path() -> Path:
-    north_home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
-    return north_home / CREDENTIALS_DIR_NAME / "openai_codex.json"
+    from config.settings import settings
+
+    return settings.north_home / CREDENTIALS_DIR_NAME / "openai_codex.json"
 
 
 def _b64url(data: bytes) -> str:
