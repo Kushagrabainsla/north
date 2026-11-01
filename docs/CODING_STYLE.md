@@ -1934,3 +1934,11 @@ $ uv lock           # regenerates uv.lock
 # 4. Commit message
 Release 1.3.5: coding enhancements + three-layer BashTool safety + pre-commit checklist
 ```
+
+### 23.8 Fix the Shared Cause, Not Each Symptom
+
+When several bugs come from one cause, fix the cause once instead of patching each bug. Prefer the change that makes a whole class of failure impossible (one source of truth, one enforcement point, one path every request takes) over a patch per finding.
+
+**Why:** north is reliable when it has few paths, each checked well; a patch per symptom adds special cases and lets the next variant of the same bug through.
+
+**How to apply:** before fixing a finding, name its cause and list the other findings that cause explains; fix at that seam, with a test per finding it covers (each fails on the old code). A one-off fix is fine only when no shared cause exists; say so in the commit.
