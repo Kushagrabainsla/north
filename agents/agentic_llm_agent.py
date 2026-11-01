@@ -327,6 +327,13 @@ class AgenticLLMAgent(LLMAgent):
                 )
 
         results = await self._execute_calls_ordered(calls, payload, tool_map)
+        # Where results enter the conversation, and the one place they are
+        # bounded: every tool, delegate_task's sub-agent answer and every error
+        # alike. The run history and the model then see the same text.
+        results = [
+            (call, _bound_tool_result(result_str, call.name), success, images)
+            for call, result_str, success, images in results
+        ]
 
         if payload.execution_profile == "quick_readonly":
             await self._record_quick_evidence(payload, results, tool_map)
@@ -1407,7 +1414,7 @@ class AgenticLLMAgent(LLMAgent):
         except Exception as exc:
             logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
             return _failed_json(str(exc)), []
-        return _cap_tool_result(data, tool_name), images
+        return json.dumps(data), images
 
 
 _EMPTY: tuple[Any, ...] = (None, "", [], {})
@@ -1433,14 +1440,31 @@ def _tool_result_event(tool_name: str, result_str: str, success: bool) -> dict[s
     return event
 
 
+def _bound_tool_result(result: str, tool_name: str) -> str:
+    """*result* as the model is given it: within MAX_TOOL_RESULT_CHARS, the rest kept in the overflow store."""
+    if len(result) <= MAX_TOOL_RESULT_CHARS:
+        return result
+    try:
+        data = json.loads(result)
+    except json.JSONDecodeError:
+        data = None
+    return _cap_tool_result(data if isinstance(data, dict) else {"output": result}, tool_name)
+
+
 def _cap_tool_result(data: dict[str, Any], tool_name: str = "") -> str:
     """Serialize a tool result, bounded to MAX_TOOL_RESULT_CHARS.
 
     A single large tool response must not exhaust the model's context window.
-    Truncation happens *inside* the data dict so the JSON returned to the model
-    is always syntactically valid: first each string field is capped, then  -
-    when non-string fields (large lists/dicts) still blow the budget - the
-    whole data block is replaced with a bounded summary.
+    Truncation happens *inside* the result so the JSON returned to the model
+    is always syntactically valid: first every long string is shortened, then
+    - when large lists or dicts still blow the budget - all of it but its
+    status fields is replaced with one bounded excerpt.
+
+    Every string counts, wherever it sits. A tool's readable `formatted` copy
+    and its `error` sit beside `data`, and a cap that shortened only `data`
+    let a 250 KB file through whole: 153k input tokens a call instead of 29k,
+    resent on every later step, and a 30 MB file ended its task with "the
+    conversation is too long".
 
     What does not fit is kept, not dropped. The full serialization goes to the
     overflow store and the note carries its handle, so ``read_tool_output`` can
@@ -1455,27 +1479,29 @@ def _cap_tool_result(data: dict[str, Any], tool_name: str = "") -> str:
 
     handle = store_overflow(tool_name or "tool", raw)
     total = len(raw)
-    inner = data.get("data", {})
-    if isinstance(inner, dict):
-        per_field = max(
-            _TOOL_RESULT_MIN_FIELD_CHARS,
-            (MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS) // max(len(inner), 1),
-        )
-        data["data"] = {
-            k: (salient_excerpt(v, per_field) if isinstance(v, str) and len(v) > per_field else v)
-            for k, v in inner.items()
-        }
+    inner = data.get("data")
+    places = [data, inner] if isinstance(inner, dict) else [data]
+    strings = [(place, key) for place in places for key, value in place.items() if isinstance(value, str)]
+    per_field = max(
+        _TOOL_RESULT_MIN_FIELD_CHARS,
+        (MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS) // max(len(strings), 1),
+    )
+    for place, key in strings:
+        if len(place[key]) > per_field:
+            place[key] = salient_excerpt(place[key], per_field)
+    note = overflow_note(handle, MAX_TOOL_RESULT_CHARS, total)
     data["_handle"] = handle
-    data["_note"] = overflow_note(handle, MAX_TOOL_RESULT_CHARS, total)
+    data["_note"] = note
     raw = json.dumps(data)
     if len(raw) > MAX_TOOL_RESULT_CHARS:
         # Trim against the *serialized* length, not an estimate of it: escaping
         # a summary back into JSON can double its size, so a budget computed up
-        # front overshoots and the "bounded" result is not bounded.
-        summary = json.dumps(data["data"])
+        # front overshoots and the "bounded" result is not bounded. The status
+        # fields stay as they are: whether the call succeeded, how it failed.
+        status = {key: value for key, value in data.items() if key in _OVERFLOW_KEYS or _is_status_field(value)}
+        summary = json.dumps({key: value for key, value in data.items() if key not in status})
         while True:
-            data["data"] = {"_reduced": salient_excerpt(summary, len(summary))}
-            raw = json.dumps(data)
+            raw = json.dumps({**status, "_reduced": salient_excerpt(summary, len(summary))})
             overshoot = len(raw) - MAX_TOOL_RESULT_CHARS
             if overshoot <= 0 or len(summary) <= _TOOL_RESULT_MIN_FIELD_CHARS:
                 break
@@ -1484,6 +1510,16 @@ def _cap_tool_result(data: dict[str, Any], tool_name: str = "") -> str:
                 max(_TOOL_RESULT_MIN_FIELD_CHARS, len(summary) - overshoot),
             )
     return raw
+
+
+_OVERFLOW_KEYS = ("_handle", "_note")
+
+
+def _is_status_field(value: Any) -> bool:
+    """A flag, a count or a short code such as ``failure_kind``."""
+    if isinstance(value, str):
+        return len(value) <= _TOOL_RESULT_MIN_FIELD_CHARS
+    return value is None or isinstance(value, bool | int | float)
 
 
 class _TokenRelay:

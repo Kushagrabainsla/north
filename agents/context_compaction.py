@@ -40,7 +40,7 @@ _COMPACT_TRUNCATE_KEEP: int = 300  # chars kept from oversized outputs
 _TOOL_SUMMARY_MAX_WORDS: int = 220
 _TOOL_SUMMARY_MAX_TOKENS: int = 400
 # Ceiling on what is sent to the summariser. In practice it never binds:
-# `_cap_tool_result` caps a result at 40k chars before it ever enters history,
+# `_bound_tool_result` caps every result at 40k chars as it enters history,
 # so this only guards against a caller that bypassed it.
 _TOOL_SUMMARY_INPUT_MAX_CHARS: int = 60_000
 
