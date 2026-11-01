@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus, LedgerSummary
+from ledger.models import INFERENCE_CALL, LedgerEntry, LedgerSource, LedgerStatus, LedgerSummary
 
 
 @dataclass
@@ -144,7 +144,7 @@ class LedgerWriter(ABC):
         source: LedgerSource | None = None,
         agent: str | None = None,
     ) -> dict:
-        """Aggregate cost_usd for entries since *since*.
+        """Aggregate the cost of the model calls made since *since*: one per-call row each.
 
         Returns {"total": float, "by_component": {agent: cost}, "by_model":
         {model: cost}}. The default implementation aggregates in Python over
@@ -157,6 +157,8 @@ class LedgerWriter(ABC):
         by_component: dict[str, float] = {}
         by_model: dict[str, float] = {}
         for e in entries:
+            if e.action != INFERENCE_CALL:
+                continue
             cost = e.cost_usd or 0.0
             total += cost
             component = e.agent or "unknown"

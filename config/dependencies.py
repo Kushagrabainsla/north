@@ -29,7 +29,7 @@ from inference.exceptions import EmbeddingCountMismatchError
 from inference.models import DatesFn, EmbedFn, GlossaryFn, SupersedeFn
 from inference.runtime import build_inference_router_from_settings
 from jobs import JobProcessor, SQLiteJobProcessor
-from ledger import LedgerEntry, LedgerSource, LedgerStatus, LedgerWriter, SQLiteLedgerWriter
+from ledger import INFERENCE_CALL, LedgerEntry, LedgerSource, LedgerStatus, LedgerWriter, SQLiteLedgerWriter
 from memory import ContextStore, SQLiteContextStore
 from utils.prompts import load_prompt
 from utils.time import configure_timezone, system_timezone_name
@@ -369,7 +369,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
                 task_id=task_id,
                 **identity,
                 agent=str(data["category"]),
-                action="inference_call",
+                action=INFERENCE_CALL,
                 output=str(data["component"]),
                 model_used=str(data["model"]),
                 tokens_in=int(data["tokens_in"]),

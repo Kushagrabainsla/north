@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ledger.base import LedgerFilters, LedgerWriter, SearchResult
 from ledger.exceptions import LedgerReadError, LedgerWriteError
-from ledger.models import TASK_ENDINGS, LedgerEntry, LedgerSource, LedgerStatus, LedgerSummary
+from ledger.models import INFERENCE_CALL, TASK_ENDINGS, LedgerEntry, LedgerSource, LedgerStatus, LedgerSummary
 from utils.db import open_db_connection
 
 # Columns a LedgerSummary needs - deliberately excludes input/output/agent_output,
@@ -322,8 +322,8 @@ class SQLiteLedgerWriter(LedgerWriter):
             raise LedgerReadError(f"Failed to aggregate costs: {e}") from e
 
     def _cost_breakdown_sync(self, since: datetime, source: LedgerSource | None, agent: str | None) -> dict:
-        clauses = ["timestamp >= ?"]
-        params: list = [since.isoformat()]
+        clauses = ["action = ?", "timestamp >= ?"]
+        params: list = [INFERENCE_CALL, since.isoformat()]
         if source is not None:
             clauses.append("source = ?")
             params.append(source.value)
@@ -364,23 +364,40 @@ class SQLiteLedgerWriter(LedgerWriter):
         since_iso = since.isoformat()
 
         with open_db_connection(self._db_path) as conn:
+            total_tasks = conn.execute(
+                "SELECT COUNT(DISTINCT task_id) FROM ledger WHERE timestamp >= ? AND task_id IS NOT NULL",
+                (since_iso,),
+            ).fetchone()[0]
+            # Every call, with a task or not: a background call is spent all the same.
             totals = conn.execute(
-                """SELECT COUNT(DISTINCT task_id) as total_tasks,
-                          COALESCE(SUM(cost_usd), 0.0) as total_cost,
+                """SELECT COALESCE(SUM(cost_usd), 0.0) as total_cost,
                           COALESCE(SUM(tokens_in), 0) as total_tokens_in,
                           COALESCE(SUM(tokens_out), 0) as total_tokens_out
-                   FROM ledger WHERE timestamp >= ? AND task_id IS NOT NULL""",
-                (since_iso,),
+                   FROM ledger WHERE action = ? AND timestamp >= ?""",
+                (INFERENCE_CALL, since_iso),
             ).fetchone()
 
+            # A per-call row's agent column names the call's purpose ("planning",
+            # "memory"), not an agent, so agents are read from every other row.
             agent_rows = conn.execute(
-                """SELECT agent,
-                          COUNT(DISTINCT task_id) as tasks,
-                          COALESCE(SUM(cost_usd), 0.0) as cost_usd
+                """SELECT agent, COUNT(DISTINCT task_id) as tasks
                    FROM ledger
                    WHERE timestamp >= ? AND agent IS NOT NULL AND task_id IS NOT NULL
-                   GROUP BY agent ORDER BY cost_usd DESC""",
-                (since_iso,),
+                     AND action IS NOT ?
+                   GROUP BY agent""",
+                (since_iso, INFERENCE_CALL),
+            ).fetchall()
+
+            # An agent's cost is its own calls, found by the run they were made in.
+            agent_cost_rows = conn.execute(
+                """SELECT runs.agent, COALESCE(SUM(calls.cost_usd), 0.0) as cost_usd
+                   FROM ledger AS calls
+                   JOIN (SELECT DISTINCT run_id, agent FROM ledger
+                         WHERE run_id IS NOT NULL AND agent IS NOT NULL AND action IS NOT ?) AS runs
+                     ON calls.run_id = runs.run_id
+                   WHERE calls.action = ? AND calls.timestamp >= ?
+                   GROUP BY runs.agent""",
+                (INFERENCE_CALL, INFERENCE_CALL, since_iso),
             ).fetchall()
 
             dur_rows = conn.execute(
@@ -425,9 +442,9 @@ class SQLiteLedgerWriter(LedgerWriter):
             model_rows = conn.execute(
                 """SELECT model_used, COALESCE(SUM(cost_usd), 0.0) as cost
                    FROM ledger
-                   WHERE timestamp >= ? AND model_used IS NOT NULL
+                   WHERE action = ? AND timestamp >= ? AND model_used IS NOT NULL
                    GROUP BY model_used ORDER BY cost DESC LIMIT 10""",
-                (since_iso,),
+                (INFERENCE_CALL, since_iso),
             ).fetchall()
 
             top_error_rows = conn.execute(
@@ -443,6 +460,7 @@ class SQLiteLedgerWriter(LedgerWriter):
             if r["agent"] and r["duration_ms"]:
                 agent_durations[r["agent"]].append(r["duration_ms"])
 
+        cost_by_agent: dict[str, float] = {r["agent"]: r["cost_usd"] for r in agent_cost_rows}
         failed_by_agent: dict[str, int] = {r["agent"]: r["failed_tasks"] for r in error_rows}
         incomplete_by_agent: dict[str, int] = {r["agent"]: r["incomplete_tasks"] for r in incomplete_rows}
 
@@ -464,15 +482,16 @@ class SQLiteLedgerWriter(LedgerWriter):
                     "tasks": tasks,
                     "success_rate": round((tasks - failed) / tasks, 3) if tasks > 0 else 0.0,
                     "incomplete": incomplete_by_agent.get(agent, 0),
-                    "cost_usd": round(r["cost_usd"] or 0.0, 6),
+                    "cost_usd": round(cost_by_agent.get(agent, 0.0), 6),
                     "p50_ms": _pct(durs, 50),
                     "p95_ms": _pct(durs, 95),
                 }
             )
+        by_agent.sort(key=lambda row: row["cost_usd"], reverse=True)
 
         return {
             "period_days": days,
-            "total_tasks": totals["total_tasks"] or 0,
+            "total_tasks": total_tasks or 0,
             "total_cost_usd": round(totals["total_cost"] or 0.0, 6),
             "total_tokens_in": totals["total_tokens_in"] or 0,
             "total_tokens_out": totals["total_tokens_out"] or 0,

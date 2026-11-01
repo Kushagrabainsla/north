@@ -24,7 +24,7 @@ from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
 from jobs.models import display_job_status, late_note
 from ledger.base import LedgerFilters
-from ledger.models import LedgerSource
+from ledger.models import INFERENCE_CALL, LedgerSource
 from memory.extraction import learning_status
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
@@ -344,7 +344,7 @@ def _inference_categories(entries: list[Any]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for entry in entries:
         source = getattr(entry, "source", "")
-        if str(source) != LedgerSource.INFERENCE_ROUTER.value or getattr(entry, "action", None) != "inference_call":
+        if str(source) != LedgerSource.INFERENCE_ROUTER.value or getattr(entry, "action", None) != INFERENCE_CALL:
             continue
         category = str(getattr(entry, "agent", None) or "background")
         row = grouped.setdefault(

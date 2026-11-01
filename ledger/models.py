@@ -58,6 +58,14 @@ TASK_ENDINGS: dict[str, str] = {
 }
 
 
+# The action of the one row written per model call, with its model, tokens and
+# cost. Agent and task rows repeat their calls' cost and tokens as a summary, so a
+# sum over every row counted a call two or three times: a task whose two calls
+# cost $0.395 was totalled as $1.069. Every cost and token figure adds up these
+# rows only.
+INFERENCE_CALL = "inference_call"
+
+
 class LedgerSummary(BaseModel):
     """The narrow projection of a ledger row: everything except the bulk text.
 
