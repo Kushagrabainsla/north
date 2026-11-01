@@ -356,6 +356,22 @@ class SQLiteLedgerWriter(LedgerWriter):
             "by_model": {r["model"]: r["cost"] for r in model_rows},
         }
 
+    async def component_cost(self, since: datetime, component: str) -> float:
+        try:
+            return await asyncio.to_thread(self._component_cost_sync, since, component)
+        except sqlite3.Error as e:
+            raise LedgerReadError(f"Failed to add up {component} costs: {e}") from e
+
+    def _component_cost_sync(self, since: datetime, component: str) -> float:
+        # A per-call row keeps its component in `output`.
+        prefix = f"{component}:"
+        with open_db_connection(self._db_path) as conn:
+            return conn.execute(
+                """SELECT COALESCE(SUM(cost_usd), 0.0) FROM ledger
+                   WHERE action = ? AND timestamp >= ? AND (output = ? OR substr(output, 1, ?) = ?)""",
+                (INFERENCE_CALL, since.isoformat(), component, len(prefix), prefix),
+            ).fetchone()[0]
+
     async def get_metrics(self, days: int = 7) -> dict:
         return await asyncio.to_thread(self._get_metrics_sync, days)
 

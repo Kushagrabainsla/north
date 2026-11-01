@@ -167,6 +167,20 @@ class LedgerWriter(ABC):
             by_model[model] = by_model.get(model, 0.0) + cost
         return {"total": total, "by_component": by_component, "by_model": by_model}
 
+    async def component_cost(self, since: datetime, component: str) -> float:
+        """What the model calls made by *component* cost since *since*.
+
+        Its sub-components count too: ``extraction_pipeline`` includes
+        ``extraction_pipeline:dedup``. A feature with its own budget measures it
+        here; north's whole spend is not its budget.
+        """
+        entries = await self.query(LedgerFilters(source=LedgerSource.INFERENCE_ROUTER, since=since, limit=10_000))
+        return sum(
+            e.cost_usd or 0.0
+            for e in entries
+            if e.action == INFERENCE_CALL and (e.output == component or (e.output or "").startswith(f"{component}:"))
+        )
+
     async def get_metrics(self, days: int = 7) -> dict:
         """Return aggregated system metrics for the last `days` days.
 

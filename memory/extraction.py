@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest
 from ledger.base import LedgerFilters, LedgerWriter
+from ledger.exceptions import LedgerReadError
 from ledger.models import TASK_ENDINGS, LedgerEntry, LedgerSource, LedgerStatus
 from memory.backup import snapshot_memory
 from memory.base import ContextStore
@@ -31,6 +32,9 @@ if TYPE_CHECKING:
     from memory.facts import FactStore
 
 logger = logging.getLogger(__name__)
+
+# What its model calls are recorded as; its daily budget counts these alone.
+COMPONENT = "extraction_pipeline"
 
 # Ledger rows read per query. A run keeps reading until it reaches the end of the
 # ledger: it read one batch of 50 per finished task, while a task writes ~40 rows
@@ -264,8 +268,9 @@ class ExtractionPipeline:
 
     async def _process_batch_locked(self, since_override: datetime.datetime | None = None) -> int:
         try:
-            metrics = await self._ledger.get_metrics(days=1)
-            daily_cost = metrics.get("total_cost_usd", 0.0)
+            # Its own calls in the last day. North's whole spend is not its budget:
+            # compared with that, one Sonnet task passed $0.10 and nothing was learned.
+            daily_cost = await self._ledger.component_cost(utcnow() - datetime.timedelta(days=1), COMPONENT)
             if daily_cost >= self._max_daily_cost:
                 logger.info(
                     "ExtractionPipeline: daily cost cap $%.2f reached (used $%.4f), skipping",
@@ -273,8 +278,8 @@ class ExtractionPipeline:
                     daily_cost,
                 )
                 return 0
-        except Exception:
-            pass  # don't block extraction if metrics query fails
+        except LedgerReadError:
+            logger.warning("ExtractionPipeline: could not read its own spend; extracting anyway", exc_info=True)
 
         await self._maybe_backup()
         since = since_override or self._load_watermark()
@@ -303,7 +308,7 @@ class ExtractionPipeline:
         response = await self._inference_router.complete(
             CompletionRequest(
                 prompt=prompt,
-                component="extraction_pipeline",
+                component=COMPONENT,
                 task_id=entry.task_id,
                 json_mode=True,
             )
@@ -431,7 +436,7 @@ class ExtractionPipeline:
                 resp = await self._inference_router.complete(
                     CompletionRequest(
                         prompt=prompt,
-                        component="extraction_pipeline:dedup",
+                        component=f"{COMPONENT}:dedup",
                         task_id=task_id,
                         json_mode=True,
                         max_tokens=20,
@@ -468,7 +473,7 @@ class ExtractionPipeline:
             resp = await self._inference_router.complete(
                 CompletionRequest(
                     prompt=prompt,
-                    component="extraction_pipeline:trim",
+                    component=f"{COMPONENT}:trim",
                     task_id=task_id,
                     max_tokens=1024,
                 )
