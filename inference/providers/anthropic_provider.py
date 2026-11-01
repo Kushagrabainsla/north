@@ -60,6 +60,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_TOKENS_COMPLETE = 16_000
 _DEFAULT_MAX_TOKENS_TOOLS = 64_000
 
+# A 5-minute cache entry: an agent's steps start well within 5 minutes of each
+# other, and each read renews it. Writing costs 1.25x input, reading 0.1x or less.
+_CACHED: dict[str, str] = {"type": "ephemeral"}
+
 # Anthropic does not publish price via the Models API, so context window comes
 # from client.models.list() live, but price is this table - it is the one
 # thing about a Claude model this provider cannot discover at runtime.
@@ -463,9 +467,15 @@ class AnthropicProvider:
         token_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> ToolCallResponse:
         system, messages = _to_anthropic_messages(request.messages)
-        kwargs: dict[str, Any] = {}
+        # Every step of an agent run resends the tools, the system prompt and the
+        # history so far. Sent without a cache marker, none of it was ever read
+        # from cache: 851 calls in the issue #76 test, 0 cached tokens, and a
+        # "17 x 23" cost 27.6k input tokens a step. The marker on the system
+        # prompt caches tools and system for every step; the top-level marker
+        # caches the conversation up to its last message, and moves with it.
+        kwargs: dict[str, Any] = {"cache_control": _CACHED}
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = [{"type": "text", "text": system, "cache_control": _CACHED}]
         if request.tools:
             kwargs["tools"] = _to_anthropic_tools(request.tools)
         try:
