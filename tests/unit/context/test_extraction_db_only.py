@@ -42,7 +42,9 @@ async def test_user_fact_does_not_write_user_document(tmp_path: Path) -> None:
     pipeline, entry, facts, documents, _ = _setup(tmp_path, _reply(("user", "User prefers window seats.")))
 
     assert await pipeline._process_entry(entry) == 1
-    facts.add_fact.assert_awaited_once_with("User prefers window seats.", "user", valid_from=None, valid_until=None)
+    facts.add_fact.assert_awaited_once_with(
+        "User prefers window seats.", "user", valid_from=None, valid_until=None, about=None, said_at=entry.timestamp
+    )
     assert await documents.read(ContextDocument.USER) == ""
 
 
@@ -121,8 +123,9 @@ async def test_the_day_said_and_each_facts_dates_reach_the_store(tmp_path: Path)
     prompt = pipeline._inference_router.complete.await_args.args[0].prompt
     assert f"The user said this on {entry.timestamp.astimezone(local_timezone()).strftime('%A')}" in prompt
     first, second = facts.add_fact.await_args_list
-    assert first.kwargs == {"valid_from": None, "valid_until": "2026-08-14"}
-    assert second.kwargs == {"valid_from": None, "valid_until": None}
+    said = {"about": None, "said_at": entry.timestamp}
+    assert first.kwargs == {"valid_from": None, "valid_until": "2026-08-14", **said}
+    assert second.kwargs == {"valid_from": None, "valid_until": None, **said}
 
 
 def test_the_extraction_prompt_keeps_requests_and_task_state_out_of_memory() -> None:

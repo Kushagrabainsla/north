@@ -301,8 +301,12 @@ class ExtractionPipeline:
         """Ask the LLM for the durable facts in the user's message; return how many were stored."""
         # The day it was said, so "Monday" and "next week" can become real dates.
         said_on = entry.timestamp.astimezone(local_timezone()).strftime("%A, %B %-d, %Y")
+        # What facts are about already, so a correction names the same thing and replaces it.
+        known = await self._fact_store.abouts() if self._fact_store is not None else []
         prompt = load_prompt("prompts/fact_extraction.md").format(
-            message=(entry.input or "").strip()[:2000], day=said_on
+            message=(entry.input or "").strip()[:2000],
+            day=said_on,
+            known="\n".join(f"- {label}" for label in known) or "(none yet)",
         )
 
         response = await self._inference_router.complete(
@@ -331,17 +335,24 @@ class ExtractionPipeline:
                 str(fact.get("document", "user")),
                 str(fact.get("delta", "")).strip(),
                 (fact.get("from"), fact.get("until")),
+                fact.get("about"),
             ):
                 stored += 1
         return stored
 
     async def _store_fact(
-        self, entry: LedgerEntry, doc_key: str, delta: str, dates: tuple[object, object] = (None, None)
+        self,
+        entry: LedgerEntry,
+        doc_key: str,
+        delta: str,
+        dates: tuple[object, object] = (None, None),
+        about: object = None,
     ) -> bool:
         """Store one extracted fact where its document says; False if it was empty, unknown or known.
 
         *dates* are the days the user said it is true from and until; the fact
-        store keeps the ones that are real days.
+        store keeps the ones that are real days. *about* is what a fact about the
+        user is about: the newest thing they said about it replaces the rest.
         """
         if not delta or doc_key not in _DOCUMENT_MAP:
             return False
@@ -354,7 +365,12 @@ class ExtractionPipeline:
         if doc is ContextDocument.USER and self._fact_store is not None:
             try:
                 inserted = await self._fact_store.add_fact(
-                    delta, doc_key, valid_from=_day(dates[0]), valid_until=_day(dates[1])
+                    delta,
+                    doc_key,
+                    valid_from=_day(dates[0]),
+                    valid_until=_day(dates[1]),
+                    about=about if isinstance(about, str) else None,
+                    said_at=entry.timestamp,
                 )
             except Exception:
                 logger.warning("FactStore: failed to persist fact '%s'", delta[:80])

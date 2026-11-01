@@ -40,7 +40,7 @@ inside it - "draft the applications, but I always submit them myself" carries th
 rule "User submits job applications personally". Keep that; drop the request.
 
 Respond with JSON, one entry per fact, in the order the user stated them:
-{{"facts": [{{"document": "<user|judgement_rules|north_stars>", "delta": "<fact>", "from": "<YYYY-MM-DD or null>", "until": "<YYYY-MM-DD or null>"}}]}}
+{{"facts": [{{"document": "<user|judgement_rules|north_stars>", "delta": "<fact>", "about": "<label or null>", "from": "<YYYY-MM-DD or null>", "until": "<YYYY-MM-DD or null>"}}]}}
 
 With no durable fact:
 {{"facts": []}}
@@ -71,6 +71,22 @@ Fact format:
   horizon>" - only include the horizon if the user actually stated one.
 - Write dates as real dates, never relative words: said on a Wednesday, "I start
   Monday" becomes "User starts at Acme on October 19, 2026".
+
+What each "user" fact is about:
+- "about" is a short label for the one thing the fact gives the current value
+  of: "penicillin allergy", "dog's name", "employer", "favourite food". The
+  newest fact with a label replaces every older fact with that label, so a
+  correction or an update keeps the label of the fact it corrects. These labels
+  are already in use - reuse one whenever the fact is about the same thing:
+{known}
+- Make the label name one thing. Two facts that are both true at once must have
+  different labels: "penicillin allergy" and "amoxicillin allergy", not
+  "allergy"; "sister Priya's birthday", not "birthday".
+- A fact that says something no longer holds keeps its label: "User is not
+  allergic to penicillin" is about "penicillin allergy".
+- Use null when the fact is one of many that are all true together and none
+  replaces another (a hobby, a skill, something the user did), and for
+  "judgement_rules" and "north_stars".
 
 Dates:
 - "from" is the first day the fact holds and "until" the last, as YYYY-MM-DD,

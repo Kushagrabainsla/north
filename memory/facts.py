@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS context_facts (
     superseded_by   TEXT,
     valid_from      TEXT,
     valid_until     TEXT,
-    dates_checked   INTEGER  NOT NULL DEFAULT 0
+    dates_checked   INTEGER  NOT NULL DEFAULT 0,
+    about           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_context_facts_cat_updated ON context_facts (category, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_context_facts_updated ON context_facts (updated_at DESC);
@@ -83,6 +84,8 @@ _MIGRATION_STATEMENTS = [
     "ALTER TABLE context_facts ADD COLUMN valid_from TEXT",
     "ALTER TABLE context_facts ADD COLUMN valid_until TEXT",
     "ALTER TABLE context_facts ADD COLUMN dates_checked INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE context_facts ADD COLUMN about TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_context_facts_about ON context_facts (subject, about, status)",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_cat_updated ON context_facts (category, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_updated ON context_facts (updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_cat_content ON context_facts (category, content)",
@@ -183,6 +186,16 @@ _IDENTIFIER_MIN_USES: int = 2
 
 _STATUS_ACTIVE: str = "active"
 _STATUS_SUPERSEDED: str = "superseded"
+# What a fact is about: one thing with one current value, such as "penicillin
+# allergy" or "employer". The newest thing the user said about it is its value,
+# and stating it again retires the old one. Without it a correction was only one
+# more fact: "User is allergic to penicillin" and "User is not allergic to
+# penicillin" were both active, because noticing that two free-text facts
+# contradict needed embeddings (unavailable that day) and a model call. Two facts
+# with different labels are about different things, so they never merge.
+_ABOUT_MAX_CHARS: int = 80
+# Labels shown to extraction so a correction reuses the one already in use.
+_ABOUT_LABELS_SHOWN: int = 200
 # When a fact is true: calendar days (YYYY-MM-DD) in the zone set on the Settings
 # page, either one unknown. A day is not an instant, so it is stored as the day and
 # compares as text. A fact whose last day has passed is history: it stays on the
@@ -247,6 +260,14 @@ def _already_explained(fact: str, meaning: str) -> bool:
     lowered = unicodedata.normalize("NFKD", fact.lower()).encode("ascii", "ignore").decode()
     present = sum(1 for w in words if w in lowered)
     return present / len(words) >= _EXPLAIN_OVERLAP
+
+
+def _about_key(label: object) -> str | None:
+    """*label* as a key: lower case, single spaces, no surrounding punctuation; None when empty."""
+    if not isinstance(label, str):
+        return None
+    key = re.sub(r"\s+", " ", label).strip(" \t.,;:!?\"'()[]{}").casefold()
+    return key[:_ABOUT_MAX_CHARS] or None
 
 
 def _today() -> str:
@@ -380,7 +401,7 @@ class FactStore:
         # must not interleave loads and clobber each other's cache.
         self._cache_lock = asyncio.Lock()
 
-    async def _supersede_contradicted(self, content: str, new_emb: list[float]) -> int:
+    async def _supersede_contradicted(self, content: str, new_emb: list[float], about: str | None = None) -> int:
         """Retire active facts that *content* makes untrue. Returns how many.
 
         Across every topic, not only the new fact's own: "I finished my internship",
@@ -404,6 +425,7 @@ class FactStore:
                 new_emb,
                 _SUPERSEDE_MIN_SIMILARITY,
                 _DEDUP_SIMILARITY_THRESHOLD,
+                about,
             )
             if not candidates:
                 return 0
@@ -421,20 +443,27 @@ class FactStore:
             logger.warning("FactStore: supersede check failed - the older fact stays active", exc_info=True)
             return 0
 
-    def _candidates_in_band_sync(self, emb: list[float], low: float, high: float) -> list[tuple[str, str]]:
-        """Active facts whose similarity to *emb* falls in [low, high)."""
+    def _candidates_in_band_sync(
+        self, emb: list[float], low: float, high: float, about: str | None = None
+    ) -> list[tuple[str, str]]:
+        """Active facts whose similarity to *emb* falls in [low, high).
+
+        For a fact with a label, only facts with none: one labelled differently
+        is about something else, and one labelled the same was already replaced.
+        """
         emb_json = json.dumps(emb)
-        sql = """
+        unlabelled = "AND about IS NULL" if about is not None else ""
+        sql = f"""
         SELECT id, content FROM (
             SELECT id, content, (1.0 - vec_distance_cosine(embedding, ?)) AS sim
             FROM context_facts
-            WHERE status = ?
+            WHERE status = ? {unlabelled}
               AND embedding IS NOT NULL AND embedding != '' AND embedding != '[]'
             ORDER BY updated_at DESC LIMIT ?
         )
         WHERE sim >= ? AND sim < ?
         ORDER BY sim DESC LIMIT ?
-        """
+        """  # noqa: S608 - the only interpolation is a fixed clause
         try:
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(
@@ -446,8 +475,8 @@ class FactStore:
             # No sqlite-vec: fall back to scoring in Python over the recent window.
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(
-                    "SELECT id, content, embedding FROM context_facts "
-                    "WHERE status = ? ORDER BY updated_at DESC LIMIT ?",
+                    f"SELECT id, content, embedding FROM context_facts "  # noqa: S608 - a fixed clause
+                    f"WHERE status = ? {unlabelled} ORDER BY updated_at DESC LIMIT ?",
                     (_STATUS_ACTIVE, _DEDUP_SCAN_LIMIT),
                 ).fetchall()
             scored: list[tuple[float, str, str]] = []
@@ -614,14 +643,17 @@ class FactStore:
         if len(rows) < 2:
             return 0
         retired: dict[str, str] = {}
-        for i, (id_a, text_a, emb_a) in enumerate(rows):
+        for i, (id_a, text_a, emb_a, about_a) in enumerate(rows):
             if id_a in retired:
                 continue
-            for id_b, text_b, emb_b in rows[i + 1 :]:
+            for id_b, text_b, emb_b, about_b in rows[i + 1 :]:
                 # A fact already retired cannot be either party: not a loser
                 # twice, and not a survivor, or the pointer would lead to a row
                 # that is itself superseded.
                 if id_b in retired or len(emb_a) != len(emb_b):
+                    continue
+                # Labelled differently, they are about different things however alike they read.
+                if about_a and about_b and about_a != about_b:
                     continue
                 if cosine_similarity(emb_a, emb_b) < _SWEEP_DEDUP_THRESHOLD:
                     continue
@@ -638,22 +670,22 @@ class FactStore:
         logger.info("FactStore: merged %d duplicate fact(s) left by a previous embedding space", len(retired))
         return len(retired)
 
-    def _active_with_vectors_sync(self) -> list[tuple[str, str, list[float]]]:
+    def _active_with_vectors_sync(self) -> list[tuple[str, str, list[float], str | None]]:
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT id, content, embedding FROM context_facts "
+                "SELECT id, content, embedding, about FROM context_facts "
                 "WHERE status = ? AND embedding IS NOT NULL AND embedding != '' AND embedding != '[]' "
                 "ORDER BY updated_at DESC",
                 (_STATUS_ACTIVE,),
             ).fetchall()
-        out: list[tuple[str, str, list[float]]] = []
+        out: list[tuple[str, str, list[float], str | None]] = []
         for r in rows:
             try:
                 emb = json.loads(r["embedding"])
             except (json.JSONDecodeError, ValueError):
                 continue
             if emb:
-                out.append((r["id"], r["content"], emb))
+                out.append((r["id"], r["content"], emb, r["about"]))
         return out
 
     async def render_profile(
@@ -773,8 +805,14 @@ class FactStore:
         *,
         valid_from: str | None = None,
         valid_until: str | None = None,
+        about: str | None = None,
+        said_at: datetime | None = None,
     ) -> bool:
         """Embed and persist one fact. Returns True when a new row was inserted.
+
+        *about* names what the fact is about ("penicillin allergy"). The newest
+        fact said about it, by *said_at* (now when not given), is its one
+        current value; the others are kept, superseded. See `_state_about`.
 
         Dedup is two-layered and lives entirely in the store (bootstrap and the
         normal pipeline share this exact path):
@@ -796,7 +834,13 @@ class FactStore:
         Silently skips empty content.
         """
         return await self.add_fact_with_provenance(
-            content, category, valid_from=valid_from, valid_until=valid_until, dates_checked=True
+            content,
+            category,
+            valid_from=valid_from,
+            valid_until=valid_until,
+            dates_checked=True,
+            about=about,
+            said_at=said_at,
         )
 
     async def add_fact_with_provenance(
@@ -813,6 +857,8 @@ class FactStore:
         valid_from: str | None = None,
         valid_until: str | None = None,
         dates_checked: bool = False,
+        about: str | None = None,
+        said_at: datetime | None = None,
     ) -> bool:
         """Embed and persist one fact with full provenance. Returns True when a new row was inserted.
 
@@ -827,6 +873,23 @@ class FactStore:
         if _contains_secret(content):
             logger.warning("FactStore: rejected fact containing secret/credential")
             return False
+
+        if (key := _about_key(about)) is not None:
+            return await self._state_about(
+                content,
+                category,
+                key,
+                said_at or datetime.now(UTC),
+                dates,
+                dates_checked,
+                subject=subject,
+                confidence=confidence,
+                status=status,
+                source_path=source_path,
+                source_hash=source_hash,
+                source_mtime=source_mtime,
+                evidence=evidence,
+            )
 
         # Exact-match dedup runs BEFORE any embedding call: identical content
         # is a duplicate by definition, and skipping the embed for it saves
@@ -879,6 +942,124 @@ class FactStore:
         if inserted:
             await self._supersede_contradicted(content, new_emb)
         return inserted
+
+    async def _state_about(
+        self,
+        content: str,
+        category: str,
+        about: str,
+        said_at: datetime,
+        dates: tuple[str | None, str | None],
+        dates_checked: bool,
+        **provenance: Any,
+    ) -> bool:
+        """Store a fact about *about*, and keep only the newest thing said about it current.
+
+        Newest by when it was said, not when it was stored: extraction reads a
+        backlog several messages at a time, and a correction stored before the
+        message it corrects must still win. Saying something again makes it
+        current again, even when it was replaced in between. No embedding is
+        needed to decide any of this, and none is compared: "allergic to
+        penicillin" and "allergic to amoxicillin" are close in meaning and are
+        two different facts.
+        """
+        subject = str(provenance.get("subject") or "user")
+        said = said_at.isoformat()
+        fact_id = await asyncio.to_thread(self._restate_sync, category, subject, about, content, said, dates)
+        inserted = fact_id is None
+        new_emb: list[float] = []
+        if inserted:
+            new_emb = await self._embedding(content)
+            _, fact_id = await asyncio.to_thread(
+                self._insert_or_replace_sync,
+                content,
+                category,
+                json.dumps(new_emb),
+                None,
+                subject,
+                provenance.get("confidence", 0.8),
+                provenance.get("status", _STATUS_ACTIVE),
+                provenance.get("source_path"),
+                provenance.get("source_hash"),
+                provenance.get("source_mtime"),
+                provenance.get("evidence"),
+                dates,
+                dates_checked,
+                about,
+                said,
+            )
+        retired = await asyncio.to_thread(self._keep_newest_sync, subject, about)
+        self.invalidate_cache()
+        if retired:
+            logger.info("FactStore: %d older fact(s) about %r replaced by %r", retired, about, content[:80])
+        if inserted:
+            # A fact stored before labels existed can still contradict this one.
+            await self._supersede_contradicted(content, new_emb, about)
+        return inserted
+
+    async def _embedding(self, content: str) -> list[float]:
+        try:
+            embeddings = await self._embed_fn([content])
+        except Exception:
+            logger.warning("FactStore: embed failed - storing fact without embedding")
+            return []
+        return embeddings[0] if embeddings else []
+
+    def _restate_sync(
+        self,
+        category: str,
+        subject: str,
+        about: str,
+        content: str,
+        said: str,
+        dates: tuple[str | None, str | None],
+    ) -> str | None:
+        """The id of the current fact saying *content* about *about* - or saying it with no label - now restated.
+
+        A fact stored before labels existed takes the label. None when no
+        current fact says it.
+        """
+        normalized = _normalize_for_dedup(content)
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM context_facts WHERE status = ? AND category = ? AND subject = ? "
+                "AND (about = ? OR about IS NULL) ORDER BY about IS NULL, updated_at DESC LIMIT ?",
+                (_STATUS_ACTIVE, category, subject, about, _DEDUP_SCAN_LIMIT),
+            ).fetchall()
+            match = next((r["id"] for r in rows if _normalize_for_dedup(r["content"]) == normalized), None)
+            if match is not None:
+                conn.execute(
+                    "UPDATE context_facts SET about = ?, updated_at = ?, "
+                    "observed_at = MAX(COALESCE(observed_at, updated_at), ?), "
+                    "valid_from = COALESCE(?, valid_from), valid_until = COALESCE(?, valid_until) WHERE id = ?",
+                    (about, datetime.now(UTC).isoformat(), said, *dates, match),
+                )
+        return match
+
+    def _keep_newest_sync(self, subject: str, about: str) -> int:
+        """Supersede every current fact about *about* but the newest said. Returns how many."""
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id FROM context_facts WHERE status = ? AND subject = ? AND about = ? "
+                "ORDER BY COALESCE(observed_at, updated_at) DESC, rowid DESC",
+                (_STATUS_ACTIVE, subject, about),
+            ).fetchall()
+        if len(rows) < 2:
+            return 0
+        return self._mark_superseded_sync([r["id"] for r in rows[1:]], rows[0]["id"])
+
+    async def abouts(self, subject: str = "user") -> list[str]:
+        """What current facts about *subject* are about, most recently stated first."""
+        return await asyncio.to_thread(self._abouts_sync, subject)
+
+    def _abouts_sync(self, subject: str) -> list[str]:
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT about FROM context_facts WHERE status = ? AND subject = ? AND about IS NOT NULL "
+                "GROUP BY about ORDER BY MAX(COALESCE(observed_at, updated_at)) DESC LIMIT ?",
+                (_STATUS_ACTIVE, subject, _ABOUT_LABELS_SHOWN),
+            ).fetchall()
+        return [r["about"] for r in rows]
 
     async def search(
         self,
@@ -1173,6 +1354,8 @@ class FactStore:
         evidence: str | None = None,
         dates: tuple[str | None, str | None] = (None, None),
         dates_checked: bool = False,
+        about: str | None = None,
+        observed_at: str | None = None,
     ) -> tuple[bool, str]:
         """Insert *content*; returns (is_new_row, fact_id).
 
@@ -1194,8 +1377,8 @@ class FactStore:
                 """INSERT INTO context_facts
                 (id, content, category, embedding, updated_at, subject, confidence, status,
                  source_path, source_hash, source_mtime, evidence, observed_at,
-                 valid_from, valid_until, dates_checked)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 valid_from, valid_until, dates_checked, about)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     fact_id,
                     content,
@@ -1209,9 +1392,10 @@ class FactStore:
                     source_hash,
                     source_mtime,
                     evidence,
-                    now,
+                    observed_at or now,
                     *dates,
                     int(dates_checked),
+                    about,
                 ),
             )
             # Retention: keep the store (and every scan over it) bounded, giving
@@ -1269,7 +1453,7 @@ class FactStore:
             return conn.execute("SELECT COUNT(*) FROM context_facts").fetchone()[0]
 
     def _all_facts_sync(self, category: str | None) -> list[dict]:
-        columns = "id, content, category, subject, confidence, status, updated_at, valid_from, valid_until"
+        columns = "id, content, category, subject, about, confidence, status, updated_at, valid_from, valid_until"
         with open_db_connection(self._db_path) as conn:
             if category:
                 rows = conn.execute(
