@@ -22,7 +22,7 @@ from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
-from tools._path import resolve_path
+from tools._path import handoff_dir_for, resolve_path
 from tools.base import Tool
 from tools.confidence import ConfidenceTracker
 from tools.models import ToolInput, ToolOutput
@@ -770,6 +770,22 @@ def test_task_message_names_this_tasks_notes_folder_in_north_home(tmp_path: Path
     notes = msg.split("## Notes Directory\n", 1)[1].split("\n", 1)[0]
     assert notes == f"{home.resolve()}/notes/t1"
     assert resolve_path(f"{notes}/plan.md", None) is not None
+
+
+def test_a_task_with_no_folder_chosen_is_told_so_instead_of_its_folder_being_called_the_workspace(
+    tmp_path: Path,
+) -> None:
+    """Agents called their empty scratch folder "your workspace" and guessed a repository path (issue #76, M7)."""
+    agent = _load_agent("general", tmp_path)
+    own = AgentPayload(task_id="t1", prompt="whats this repo do", workspace=handoff_dir_for("t1"))
+    chosen = AgentPayload(task_id="t1", prompt="whats this repo do", workspace="/srv/shop")
+
+    folderless = agent._build_task_message(own, context="", scored_tools=[])
+    with_folder = agent._build_task_message(chosen, context="", scored_tools=[])
+
+    assert "workspace: none chosen" in folderless
+    assert f"workspace: {handoff_dir_for('t1')}" not in folderless
+    assert "- workspace: /srv/shop" in with_folder and "none chosen" not in with_folder
 
 
 def test_task_message_includes_prompt(tmp_path: Path) -> None:

@@ -1032,8 +1032,19 @@ class AgenticLLMAgent(LLMAgent):
         """User message without the tool list (tools are passed as function defs)."""
         reliability_lines = "\n".join(f"- {t.name} reliability: {score:.0%}" for t, score in scored_tools)
         system_lines = []
-        if payload.workspace:
+        if payload.workspace and payload.workspace != handoff_dir_for(payload.task_id):
             system_lines.append(f"- workspace: {payload.workspace}")
+        else:
+            # No folder was chosen: the task works in its own (CODING_STYLE §16.1.1). Called
+            # "the workspace", it read as the user's: an agent reported "your workspace is
+            # empty" and guessed /home/user/north for "this repo".
+            system_lines.append(
+                "- workspace: none chosen. This task works in its own folder (the Handoff Directory), "
+                "which starts empty and is not the user's project. When the user means their project, "
+                'repository or files ("this repo", "my workspace", "the notes folder"), ask which folder '
+                "they mean (they can choose one in the composer) instead of guessing a path or calling "
+                "your own folder theirs."
+            )
         system_lines.append(
             "- interaction: when a requirement or a design decision is genuinely ambiguous, use "
             "ask_user rather than guessing. The approval mode decides who answers."
