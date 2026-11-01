@@ -173,3 +173,11 @@ async def test_extraction_files_the_correction_under_the_label_it_corrects(tmp_p
     # The second message is read with the label the first one made, so the correction can reuse it.
     assert "- penicillin allergy" in model.prompts[1]
     assert await _current(store) == {"User is not allergic to penicillin.", "User is allergic to amoxicillin."}
+
+
+def test_a_labelled_fact_states_one_thing() -> None:
+    """ "i work as a nurse at valley medical" became one fact labelled employer, and the job
+    correction that replaced it erased "nurse" too."""
+    prompt = (Path(__file__).parents[3] / "resources" / "prompts" / "fact_extraction.md").read_text(encoding="utf-8")
+
+    assert '"User works as a nurse" (job title) and "User works at Valley\n  Medical" (employer)' in prompt

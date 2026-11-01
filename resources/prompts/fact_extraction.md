@@ -82,6 +82,10 @@ What each "user" fact is about:
 - Make the label name one thing. Two facts that are both true at once must have
   different labels: "penicillin allergy" and "amoxicillin allergy", not
   "allergy"; "sister Priya's birthday", not "birthday".
+- A fact with a label states that one thing and nothing else, or a later
+  update to one part erases the other: "i work as a nurse at valley medical" is
+  two facts, "User works as a nurse" (job title) and "User works at Valley
+  Medical" (employer).
 - A fact that says something no longer holds keeps its label: "User is not
   allergic to penicillin" is about "penicillin allergy".
 - Use null when the fact is one of many that are all true together and none

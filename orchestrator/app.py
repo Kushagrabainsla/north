@@ -102,6 +102,7 @@ from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.fetch_url import FetchUrlTool
 from tools.universal.flow_runner import DISCARD_OPTION, RESUME_OPTION, STOPPED_RUN_SOURCE, FlowRunner
+from tools.universal.forget import ForgetTool
 from tools.universal.get_active_sessions import GetActiveSessionsTool
 from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.list_schedules import ListSchedulesTool
@@ -271,6 +272,8 @@ def _build_tool_registry(
     )
     tool_registry.register(create_agent_tool)
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
+    if deps.fact_store is not None:
+        tool_registry.register(ForgetTool(deps.fact_store, deps.context_store))
     deps.offered_store = SeenStore(settings.north_home / "jobs.db")  # shared with the agents: one memory
     tool_registry.register(OfferedBeforeTool(deps.offered_store))
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))

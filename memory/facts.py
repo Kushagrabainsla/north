@@ -270,6 +270,28 @@ def _about_key(label: object) -> str | None:
     return key[:_ABOUT_MAX_CHARS] or None
 
 
+# Words that say how to forget, not what.
+_NOT_NAMING = frozenset(
+    {"user", "users", "forget", "remember", "everything", "anything", "all", "about", "fact", "facts", "please", "pls"}
+)
+
+
+def _naming_words(text: str) -> list[str]:
+    return [w for w in _normalize_for_dedup(text).split() if w not in _NOT_NAMING and len(w) > 1]
+
+
+def _same_word(a: str, b: str) -> bool:
+    """Equal once a plural s is dropped, or sharing their first five letters ("allergy", "allergic")."""
+    a, b = (w[:-1] if len(w) > 3 and w.endswith("s") else w for w in (a, b))
+    return a == b or (len(a) >= 5 and len(b) >= 5 and a[:5] == b[:5])
+
+
+def _names(words: list[str], text: str) -> bool:
+    """Whether every one of *words* is in *text*."""
+    present = _normalize_for_dedup(text).split()
+    return all(any(_same_word(word, other) for other in present) for word in words)
+
+
 def _today() -> str:
     return localnow().date().isoformat()
 
@@ -1221,6 +1243,44 @@ class FactStore:
         if result.rowcount:
             self.invalidate_cache()
         return result.rowcount > 0
+
+    async def matching(self, what: str) -> list[dict]:
+        """The facts that *what* names, current or earlier: every word of it is in the fact or its label.
+
+        Words, not embeddings: what to forget is chosen by a person reading the
+        list, so it must not depend on whether the embedding model loaded, and a
+        fact that only resembles the words is not one they named.
+        """
+        words = _naming_words(what)
+        if not words:
+            return []
+        rows = await asyncio.to_thread(self._all_facts_sync, None)
+        return [row for row in rows if _names(words, f"{row['content']} {row.get('about') or ''}")]
+
+    async def forget(self, fact_ids: Iterable[str]) -> list[str]:
+        """Delete these facts and the earlier values of what they are about. Returns what was deleted."""
+        deleted = await asyncio.to_thread(self._forget_sync, list(fact_ids))
+        if deleted:
+            self.invalidate_cache()
+        return deleted
+
+    def _forget_sync(self, fact_ids: list[str]) -> list[str]:
+        if not fact_ids:
+            return []
+        placeholders = ",".join("?" for _ in fact_ids)
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                f"SELECT id, content FROM context_facts WHERE id IN ({placeholders}) "  # noqa: S608 - placeholders only
+                f"OR (about IS NOT NULL AND (subject, about) IN "
+                f"(SELECT subject, about FROM context_facts WHERE id IN ({placeholders})))",
+                (*fact_ids, *fact_ids),
+            ).fetchall()
+            ids = [r["id"] for r in rows]
+            conn.execute(
+                f"DELETE FROM context_facts WHERE id IN ({','.join('?' for _ in ids)})",  # noqa: S608 - placeholders only
+                ids,
+            )
+        return [r["content"] for r in rows]
 
     async def delete_fact(self, fact_id: str) -> bool:
         deleted = await asyncio.to_thread(self._delete_fact_sync, fact_id)
