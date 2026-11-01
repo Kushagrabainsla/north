@@ -29,6 +29,7 @@ from skills.parser import parse_skill_document
 from skills.registry import parse_execution_contract, rejection_reason
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.registry import is_learned_tool
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_tool import (
@@ -407,7 +408,7 @@ async def list_tools() -> list[dict[str, Any]]:
         tool.name: {
             "name": tool.name,
             "description": tool.description,
-            "source": "learned" if str(type(tool).__module__).startswith("north_learned_tool_") else "built-in",
+            "source": "learned" if is_learned_tool(tool) else "built-in",
             "status": "active",
             "mutating": tool.is_mutating,
         }

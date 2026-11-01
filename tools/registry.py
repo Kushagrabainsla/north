@@ -19,14 +19,16 @@ import importlib.util
 import inspect
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from tools.base import Tool
 from tools.exceptions import ToolNotFoundError
+from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
-    from approval.approvals import Approvals
+    from approval.approvals import Approvals, Request
 
 logger = logging.getLogger(__name__)
 
@@ -143,9 +145,51 @@ def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
     )
 
 
-def _is_learned_tool(tool: Tool) -> bool:
+def is_learned_tool(tool: Tool) -> bool:
+    """A tool north wrote for itself (or a candidate of one), wrapped or not."""
+    if isinstance(tool, LearnedTool):
+        return True
     module = type(tool).__module__
     return module.startswith(("north_learned_tool_", "north_tool_candidate_"))
+
+
+class LearnedTool(Tool):
+    """A tool north wrote for itself, as everything that calls it sees it: every call is a change.
+
+    Its own code cannot mark it harmless (CODING_STYLE §7): the learned class's
+    `is_mutating`, `mutates()`, `describe()` and `execute()` are never consulted;
+    only its `run()` does the work, once the call is decided. A learned tool that
+    called itself read-only ran later with no card and printed north's secret key
+    into chat (issue #76, finding M5). In safe mode an identical call you approved
+    before replays, like any other action.
+    """
+
+    is_mutating = True
+
+    def __init__(self, inner: Tool) -> None:
+        self.inner = inner
+        self.name = inner.name
+        self.description = inner.description
+        self.parameters_schema = inner.parameters_schema
+
+    def mutates(self, params: dict[str, Any] | None = None) -> bool:
+        return True
+
+    async def describe(self, input: ToolInput) -> Request | None:
+        request = await super().describe(input)
+        if request is None:
+            return None
+        return replace(
+            request,
+            title=f"Run {self.name} - Approval Required",
+            message=f"Run `{self.name}`, a tool north wrote for itself, with:\n{request.message}",
+        )
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        return await self.inner.run(input)
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        return self.inner.format_output(data)
 
 
 class ToolRegistry:
@@ -225,9 +269,11 @@ class ToolRegistry:
         return True
 
     def register(self, tool: Tool) -> None:
-        """Add a tool to the global catalog."""
+        """Add a tool to the global catalog. A learned one goes through the gate on every call."""
+        if is_learned_tool(tool) and not isinstance(tool, LearnedTool):
+            tool = LearnedTool(tool)
         current = self._tools.get(tool.name)
-        if current is not None and not _is_learned_tool(current):
+        if current is not None and not is_learned_tool(current):
             self._fallbacks[tool.name] = current
         self._tools[tool.name] = self._bind(tool)
 
