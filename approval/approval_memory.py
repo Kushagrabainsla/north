@@ -104,6 +104,33 @@ def _drop_message_keyed_decisions(conn: Any) -> None:
         )
 
 
+# Marks the one-time withdrawal of decisions keyed by the normalized action.
+_NORMALIZED_KEY_PURGE_KEY = "normalized_fingerprints_dropped"
+
+
+def _drop_normalized_fingerprints(conn: Any) -> None:
+    """Stop replaying decisions recorded under the old, normalized identity, once.
+
+    That identity lowercased the action and dropped its backticks, so a yes to a
+    write to `Report.txt` replayed for `report.txt`, and a yes to `echo touch f`
+    for `` echo `touch f` ``. It also left out the repository and the content, so
+    a yes in one repository replayed in another. The fingerprints cannot be
+    re-keyed: the exact action was never stored. The rows stay (they are still
+    what you decided, and flows learn from them) but no longer replay; north asks
+    again and remembers the exact action.
+    """
+    if conn.execute("SELECT 1 FROM approval_memory_meta WHERE key = ?", (_NORMALIZED_KEY_PURGE_KEY,)).fetchone():
+        return
+    withdrawn = conn.execute("UPDATE decisions SET fingerprint = '' WHERE fingerprint != ''").rowcount
+    conn.execute("INSERT INTO approval_memory_meta(key, value) VALUES (?, '1')", (_NORMALIZED_KEY_PURGE_KEY,))
+    if withdrawn:
+        logger.info(
+            "ApprovalMemory: %d remembered decision(s) were keyed by a normalized action that could "
+            "match other files, commands or repositories. north will ask about those actions again.",
+            withdrawn,
+        )
+
+
 def _has_old_table(conn: Any) -> bool:
     """Whether the pre-#32 replay table is still here, not yet merged into `decisions`."""
     return bool(
@@ -120,8 +147,7 @@ _DISPLAY_SIGNATURE_CHARS = 80
 
 def _normalize(message: str) -> str:
     """The action text with formatting noise removed. Not truncated."""
-    text = _FENCE_RE.sub(" ", message or "")
-    text = text.replace("`", " ").strip().lower()
+    text = _FENCE_RE.sub(" ", message or "").strip()
     return _WS_RE.sub(" ", text)
 
 
@@ -131,7 +157,11 @@ def _display_signature(message: str) -> str:
 
 
 def _fingerprint(agent: str, message: str) -> str:
-    """Identity of an action, over its *whole* normalized text.
+    """Identity of an action: its whole text, exactly as given.
+
+    *message* is `Action.describe()`. Nothing is normalized away: case and
+    backticks change what an action does (`Report.txt` is another file,
+    `` `touch f` `` runs a command), so both are part of the identity.
 
     This used to hash only the first 80 characters, which made any two actions
     sharing a long prefix the same action. A `cd`-and-activate preamble is
@@ -144,7 +174,7 @@ def _fingerprint(agent: str, message: str) -> str:
     asks again instead of replaying. That is the safe direction to be wrong in -
     an extra question costs a moment, a false match acts without being asked.
     """
-    return hashlib.sha256(f"{agent}::{_normalize(message)}".encode()).hexdigest()
+    return hashlib.sha256(f"{agent}::{message}".encode()).hexdigest()
 
 
 class ApprovalMemory:
@@ -160,6 +190,7 @@ class ApprovalMemory:
             _drop_prefix_fingerprints(conn)
             _drop_message_keyed_decisions(conn)
             ensure_decisions_table(conn)
+            _drop_normalized_fingerprints(conn)
         # fingerprint -> decision, loaded lazily and kept in sync on record().
         self._cache: dict[str, str] | None = None
 

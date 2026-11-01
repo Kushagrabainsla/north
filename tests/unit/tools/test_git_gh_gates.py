@@ -283,3 +283,37 @@ class TestWhatLeavesTheSandbox:
 
         assert write.action.leaves_sandbox is True
         assert read.action.leaves_sandbox is False
+
+
+async def test_git_in_a_repository_outside_the_tasks_folder_names_it_and_is_not_safe_listed(
+    tmp_path, fake_run_capture
+) -> None:
+    """Safe mode ran `git add`/`commit` in any repository the model named (issue #76, A11)."""
+    from approval.policy import Verdict
+    from tests.conftest import approval_policy
+
+    task_folder, elsewhere = tmp_path / "task", tmp_path / "other-repo"
+    task_folder.mkdir()
+    elsewhere.mkdir()
+
+    def call(folder):
+        return ToolInput(
+            params={"action": "add", "args": ".", "workspace": str(folder)}, granted_workspace=str(task_folder)
+        )
+
+    outside = await GitTool().describe(call(elsewhere))
+    inside = await GitTool().describe(call(task_folder))
+
+    assert str(elsewhere) in outside.message
+    assert (await approval_policy(ApprovalMode.SAFE).rule(outside.action)).verdict is Verdict.ASK
+    assert (await approval_policy(ApprovalMode.SAFE).rule(inside.action)).verdict is Verdict.ALLOW
+    assert outside.action.describe() != inside.action.describe()
+
+
+async def test_git_with_no_folder_named_works_in_the_tasks_folder(tmp_path, fake_run_capture) -> None:
+    """Never the folder north was started in (CODING_STYLE §16.1.1)."""
+    request = await GitTool().describe(
+        ToolInput(params={"action": "add", "args": "."}, granted_workspace=str(tmp_path))
+    )
+
+    assert request.action.place == str(tmp_path.resolve())

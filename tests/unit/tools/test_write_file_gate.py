@@ -148,3 +148,15 @@ async def test_an_unbound_instance_refuses_rather_than_writes(tmp_path: Path) ->
 
     assert out.failure_kind == "refused" and "fail closed" in out.error
     assert not target.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_yes_to_one_content_is_not_a_yes_to_another(tmp_path: Path) -> None:
+    """The content is part of what you approve (issue #76, A9)."""
+    tool = WriteFileTool()
+    target = str(tmp_path / "plan.txt")
+
+    first = await tool.describe(ToolInput(params={"path": target, "content": "the plan"}))
+    second = await tool.describe(ToolInput(params={"path": target, "content": "something else"}))
+
+    assert first.action.describe() != second.action.describe()

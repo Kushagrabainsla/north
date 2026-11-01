@@ -7,6 +7,7 @@ previously had no single answer because it was decided in seven places.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -352,3 +353,99 @@ async def test_only_file_edits_use_the_isolated_rule() -> None:
     ruling = await policy(ApprovalMode.ASK).rule(shell("rm -rf build", isolated=True))
 
     assert ruling.verdict is Verdict.ASK
+
+
+# ── A replay covers the exact action, never a send or north's own settings ───
+
+
+def _remembering(tmp_path: Path, action: Action, decision: str = ApprovalDecision.APPROVED) -> ApprovalMemory:
+    memory = ApprovalMemory(tmp_path / "memory.db")
+    memory.record(action.agent, action.describe(), decision)
+    return memory
+
+
+def _reset(repo: str) -> Action:
+    return Action(
+        agent="git",
+        kind=ActionKind.GIT,
+        summary="git reset HEAD~1",
+        operation="reset",
+        args="HEAD~1",
+        workspace=repo,
+        place=repo,
+    )
+
+
+def _write(path: str, content: str) -> Action:
+    return Action(
+        agent="write_file",
+        kind=ActionKind.FILE_EDIT,
+        summary=f"write {path}",
+        path=Path(path),
+        content=hashlib.sha256(content.encode()).hexdigest(),
+    )
+
+
+def _autonomy(value: str) -> Action:
+    return Action(
+        agent="north_config",
+        kind=ActionKind.OTHER,
+        summary=f"north_config autonomy={value}",
+        operation="autonomy",
+        args=f"autonomy={value}",
+        changes_north=True,
+    )
+
+
+async def test_a_yes_in_one_repository_is_not_replayed_in_another(tmp_path: Path) -> None:
+    """One approval in one repo discarded uncommitted work in two others (issue #76, A8)."""
+    memory = _remembering(tmp_path, _reset("/repos/a"))
+    safe = policy(ApprovalMode.SAFE, memory=memory)
+
+    assert (await safe.rule(_reset("/repos/b"))).verdict is Verdict.ASK
+    assert (await safe.rule(_reset("/repos/a"))).decided_by == DecidedBy.REPLAY
+
+
+async def test_a_yes_to_one_content_is_not_replayed_for_another(tmp_path: Path) -> None:
+    """One approved write let any later content go to the same path (issue #76, A9)."""
+    memory = _remembering(tmp_path, _write("/srv/outside/plan.txt", "the plan"))
+
+    ruling = await policy(ApprovalMode.SAFE, memory=memory).rule(_write("/srv/outside/plan.txt", "something else"))
+
+    assert ruling.verdict is Verdict.ASK
+
+
+async def test_a_yes_to_a_send_is_never_replayed(tmp_path: Path) -> None:
+    """The safe list refuses sends; a replay must not be the way round it (issue #76, A10)."""
+    send = Action(
+        agent="gmail", kind=ActionKind.OTHER, summary="send to bob", operation="send", reaches_third_party=True
+    )
+
+    ruling = await policy(ApprovalMode.SAFE, memory=_remembering(tmp_path, send)).rule(send)
+
+    assert ruling.verdict is Verdict.ASK
+
+
+async def test_a_no_to_a_send_still_replays(tmp_path: Path) -> None:
+    send = Action(
+        agent="gmail", kind=ActionKind.OTHER, summary="send to bob", operation="send", reaches_third_party=True
+    )
+    memory = _remembering(tmp_path, send, ApprovalDecision.REJECTED)
+
+    assert (await policy(ApprovalMode.SAFE, memory=memory).rule(send)).verdict is Verdict.REFUSE
+
+
+@pytest.mark.parametrize("mode", [ApprovalMode.ASK, ApprovalMode.SAFE, ApprovalMode.AUTONOMOUS])
+async def test_north_raising_its_own_autonomy_is_decided_by_a_person(tmp_path: Path, mode: ApprovalMode) -> None:
+    """One yes to yolo let north raise itself to yolo three more times, unasked (issue #76, A3)."""
+    decider = deciding(ApprovalDecision.APPROVED)
+    memory = _remembering(tmp_path, _autonomy("yolo"))
+
+    ruling = await policy(mode, memory=memory, decider=decider).rule(_autonomy("yolo"))
+
+    assert ruling.verdict is Verdict.ASK
+    assert decider.asked == []
+
+
+async def test_yolo_still_allows_a_settings_change() -> None:
+    assert (await policy(ApprovalMode.YOLO).rule(_autonomy("safe"))).verdict is Verdict.ALLOW

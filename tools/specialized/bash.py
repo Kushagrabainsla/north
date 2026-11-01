@@ -154,7 +154,13 @@ class BashTool(Tool):
         self._egress = EgressProxy(allowed_domains) if allowed_domains is not None else EgressProxy()
 
     def _action(
-        self, command: str, *, read_only: bool = False, boundary: str | None = None, outside: tuple[str, ...] = ()
+        self,
+        command: str,
+        *,
+        read_only: bool = False,
+        boundary: str | None = None,
+        outside: tuple[str, ...] = (),
+        cwd: str | None = None,
     ) -> Action:
         """What this command is, as facts. What that *means* is the policy's call."""
         return Action(
@@ -165,6 +171,8 @@ class BashTool(Tool):
             # The folders are part of what you approve: the same command writing elsewhere asks again.
             args=" ".join(f"writes={folder}" for folder in outside),
             workspace=boundary or "",
+            # The same command in another folder is another action: `rm -rf build` here is not there.
+            place=cwd or boundary or "",
             read_only=read_only,
             mutating=not read_only,
             leaves_sandbox=bool(outside),
@@ -182,10 +190,11 @@ class BashTool(Tool):
         if not command or isinstance(outside, ToolOutput):
             return None
         boundary = _boundary(input)
-        proved = await self._prove_read_only(command, boundary, _cwd(input, boundary))
+        cwd = _cwd(input, boundary)
+        proved = await self._prove_read_only(command, boundary, cwd)
         also = "\n\nAlso writes to:\n" + "\n".join(f"- `{folder}`" for folder in outside) if outside else ""
         return Request(
-            action=self._action(command, read_only=proved is not None, boundary=boundary, outside=outside),
+            action=self._action(command, read_only=proved is not None, boundary=boundary, outside=outside, cwd=cwd),
             title="Shell Command - Approval Required",
             message=f"```\n{command}\n```{also}",
             declined="Command cancelled by user.",

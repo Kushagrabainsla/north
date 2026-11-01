@@ -141,5 +141,8 @@ def test_the_old_tables_move_into_the_new_one_whichever_opens_first(tmp_path: Pa
     opened_first(db)
 
     assert {"approval_decisions", "card_decisions"}.isdisjoint(_tables(db))
-    assert ApprovalMemory(db).recall("bash", memory_key) == "approved"
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT decision FROM decisions WHERE agent = 'bash'").fetchall() == [("approved",)]
+    # Moved, but keyed by the old normalized identity: it no longer replays, north asks again.
+    assert ApprovalMemory(db).recall("bash", memory_key) is None
     assert DecisionLog(db).rejection_reasons("job_applications") == ["too junior"]

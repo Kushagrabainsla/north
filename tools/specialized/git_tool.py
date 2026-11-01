@@ -266,6 +266,9 @@ class GitTool(Tool):
         call = self._prepare(input)
         if isinstance(call, ToolOutput):
             return None
+        # A repository outside the task's folder is the model's choice, not yours: never safe-listed.
+        granted = input.granted_workspace
+        elsewhere = bool(granted) and not call.cwd.is_relative_to(Path(granted).resolve())
         return Request(
             action=Action(
                 agent="git",
@@ -274,13 +277,15 @@ class GitTool(Tool):
                 operation=call.action,
                 args=call.args,
                 workspace=str(call.cwd),
+                # A yes in one repository is not a yes in another.
+                place=str(call.cwd),
                 mutating=call.mutating,
                 read_only=not call.mutating,
                 obviously_destructive=call.action == "push" and any(_is_force_flag(t) for t in call.cmd[2:]),
-                leaves_sandbox=call.action == "push",
+                leaves_sandbox=call.action == "push" or elsewhere,
             ),
             title="Git Operation - Approval Required",
-            message=f"```\n{' '.join(call.cmd)}\n```",
+            message=f"In `{call.cwd}`:\n```\n{' '.join(call.cmd)}\n```",
             declined="Git operation rejected by user.",
             refused_hint="Push to a new branch instead.",
             prepared=call,
@@ -297,7 +302,8 @@ class GitTool(Tool):
         """Check the call and build its command, or say why it cannot run."""
         action = str(input.params.get("action", "")).strip()
         args = str(input.params.get("args", "")).strip()
-        workspace = input.params.get("workspace") or None
+        # The task's folder when the model names none, never the folder north was started in (§16.1.1).
+        workspace = input.params.get("workspace") or input.granted_workspace or None
         cwd = Path(workspace).resolve() if workspace else Path.cwd()
 
         if not shutil.which("git"):

@@ -11,6 +11,7 @@ See docs/CODING_STYLE.md Sections 7.3 and 16.1.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,8 @@ class WriteFileTool(Tool):
                 kind=ActionKind.FILE_EDIT,
                 summary=f"write {call.path}",
                 path=call.path,
+                # A yes covers this content only, not whatever is written to the path next.
+                content=hashlib.sha256(call.content.encode("utf-8")).hexdigest(),
                 # The folder the server granted - never the model's `workspace` param.
                 workspace=input.granted_workspace or "",
                 in_north_scratch=is_north_scratch(call.path),

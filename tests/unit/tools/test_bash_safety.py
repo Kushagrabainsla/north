@@ -82,6 +82,20 @@ class TestBashToolApprovalBypass:
         assert not (await tool.approvals.decide(request, task_id="task-1")).allowed
 
     @pytest.mark.asyncio
+    async def test_the_same_command_in_another_folder_is_another_action(self) -> None:
+        """A yes to `rm -rf build` in one folder is not a yes in another (issue #76, A8)."""
+        tool, _ = self._tool()
+
+        def describe(folder):
+            params = {"command": "rm -rf build", "workspace": folder}
+            return tool.describe(ToolInput(params=params, granted_workspace="/Users/Shared"))
+
+        here = await describe("/Users/Shared/a")
+        there = await describe("/Users/Shared/b")
+
+        assert here.action.describe() != there.action.describe()
+
+    @pytest.mark.asyncio
     async def test_a_credential_folder_cannot_be_asked_for(self) -> None:
         tool, store = self._tool(store=approving_store())
         params = {"command": "touch ~/.ssh/key", "write_outside": ["~/.ssh"]}

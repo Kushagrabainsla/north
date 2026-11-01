@@ -56,10 +56,21 @@ def test_the_same_action_still_matches_itself(memory: ApprovalMemory) -> None:
     assert memory.recall("bash", "pytest tests/unit") == "approved"
 
 
-def test_formatting_noise_does_not_change_identity() -> None:
-    """A card wraps its command in a fence; the fence is not part of the action."""
-    assert _fingerprint("bash", "```\npytest tests/unit\n```") == _fingerprint("bash", "pytest    tests/unit")
-    assert _fingerprint("bash", "PYTEST tests/unit") == _fingerprint("bash", "pytest tests/unit")
+def test_letter_case_is_part_of_the_identity() -> None:
+    """`Report.txt` and `report.txt` are two files: a yes to one overwrote the other (issue #76, A1)."""
+    write = "write_file file_edit path=/srv/outside/{}"
+
+    assert _fingerprint("write_file", write.format("Report.txt")) != _fingerprint(
+        "write_file", write.format("report.txt")
+    )
+
+
+def test_backticks_are_part_of_the_identity() -> None:
+    """`echo touch f` prints; `` echo `touch f` `` runs touch, and ran on the first one's yes (issue #76, A2)."""
+    printed = _fingerprint("bash", "bash shell_command cmd=echo touch f")
+    executed = _fingerprint("bash", "bash shell_command cmd=echo `touch f`")
+
+    assert printed != executed
 
 
 def test_the_same_command_from_a_different_agent_is_a_different_action() -> None:
@@ -159,6 +170,25 @@ def test_a_fresh_database_is_unaffected(tmp_path) -> None:
     memory.record("bash", "pytest", "approved")
 
     assert ApprovalMemory(tmp_path / "fresh.db").recall("bash", "pytest") == "approved"
+
+
+# ── The one-time withdrawal of normalized fingerprints ───────────────────────
+
+
+def test_decisions_keyed_by_the_normalized_action_stop_replaying_once(tmp_path) -> None:
+    """Those keys matched other files and commands; the rows stay, but north asks again."""
+    db_path = tmp_path / "approval_memory.db"
+    ApprovalMemory(db_path).record("bash", "bash shell_command cmd=pytest", "approved")
+    with sqlite3.connect(db_path) as conn:  # as an install from before the withdrawal
+        conn.execute("DELETE FROM approval_memory_meta WHERE key = 'normalized_fingerprints_dropped'")
+
+    reopened = ApprovalMemory(db_path)
+
+    assert reopened.recall("bash", "bash shell_command cmd=pytest") is None
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 1
+    reopened.record("bash", "bash shell_command cmd=pytest", "approved")
+    assert ApprovalMemory(db_path).recall("bash", "bash shell_command cmd=pytest") == "approved"
 
 
 # ── The one-time purge of message-keyed rows ─────────────────────────────────

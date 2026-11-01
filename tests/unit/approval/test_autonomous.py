@@ -13,11 +13,13 @@ def test_record_and_recall(tmp_path: Path):
     assert m.recall("bash", "```\nnpm install left-pad\n```") == "approved"
 
 
-def test_recall_normalizes_fences_and_whitespace(tmp_path: Path):
+def test_recall_matches_only_the_exact_action(tmp_path: Path):
+    """What is recalled is `Action.describe()`, as written: nothing about it is normalized away."""
     m = ApprovalMemory(tmp_path / "am.db")
-    m.record("bash", "```bash\nnpm   install   x\n```", "approved")
-    # different fence/whitespace, same command -> same fingerprint
-    assert m.recall("bash", "npm install x") == "approved"
+    m.record("bash", "bash shell_command cmd=npm install x", "approved")
+
+    assert m.recall("bash", "bash shell_command cmd=npm install x") == "approved"
+    assert m.recall("bash", "bash shell_command cmd=NPM install x") is None
 
 
 def test_unknown_recall_is_none(tmp_path: Path):

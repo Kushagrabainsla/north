@@ -117,13 +117,24 @@ class Action:
     # What a person would read to judge the action - a card's filled-in fields.
     # Shown to the memory decider; not part of the action's identity.
     details: str = ""
+    # Where the action happens when that changes what it does: the folder a
+    # command runs in, the repository a git command acts on. Part of the identity,
+    # so a yes for one repository is not a yes for another.
+    place: str = ""
+    # A digest of what a write puts in place. Part of the identity, so a yes for
+    # one content is not a yes for any content written to the same path later.
+    content: str = ""
+    # Changes north's own autonomy or settings. Never replayed, and below yolo
+    # only a person decides it: a "yes" to yolo once must not raise it again.
+    changes_north: bool = False
 
     def describe(self) -> str:
         """A short, stable identity for this action, for learned decisions.
 
         Built from the facts rather than the rendered message, so "did you
         approve this before?" asks about the action itself and not about a
-        sentence that happened to contain it.
+        sentence that happened to contain it. The facts are kept as they are:
+        `Report.txt` is not `report.txt`, and `` `touch f` `` runs a command.
         """
         parts = [self.agent, self.kind.value]
         for name, value in (
@@ -131,6 +142,8 @@ class Action:
             ("cmd", self.command),
             ("args", self.args),
             ("path", str(self.path) if self.path else ""),
+            ("in", self.place),
+            ("content", self.content),
         ):
             if value:
                 parts.append(f"{name}={value}")
@@ -211,6 +224,12 @@ class ApprovalPolicy:
         #    hard-danger floor in both.
         if mode is ApprovalMode.YOLO:
             return Ruling(Verdict.ALLOW, "yes to everything", DecidedBy.YOLO)
+
+        # 2b. North changing its own autonomy or settings: below yolo, a person
+        #     decides, every time. Not the safe list, not a replay, not the model.
+        if action.changes_north:
+            return Ruling(Verdict.ASK, "a change to north's own settings")
+
         if mode is ApprovalMode.AUTONOMOUS:
             return await self._autonomous(action)
 
@@ -289,7 +308,12 @@ class ApprovalPolicy:
             and self.unattended.approves_command(action.command)
         ):
             return Ruling(Verdict.ALLOW, "test, lint or build command", DecidedBy.SAFE_LIST)
-        if action.kind is ActionKind.GIT and self.unattended.approves_git(action.operation, action.args):
+        if (
+            action.kind is ActionKind.GIT
+            # A repository outside the task's folder is yours to allow, whatever the operation.
+            and not action.leaves_sandbox
+            and self.unattended.approves_git(action.operation, action.args)
+        ):
             return Ruling(Verdict.ALLOW, "local-only git", DecidedBy.SAFE_LIST)
         if action.kind is ActionKind.DEVICE and self.unattended.approves_device(action.operation):
             return Ruling(Verdict.ALLOW, "reversible device toggle", DecidedBy.SAFE_LIST)
@@ -306,10 +330,17 @@ class ApprovalPolicy:
         return None
 
     def _recall(self, action: Action) -> Ruling | None:
-        """Replay the user's own prior decision for this exact action."""
+        """Replay the user's own prior decision for this exact action.
+
+        A "no" always replays. A "yes" does not for a send, a spend or a change to
+        north's own settings: those are asked about every time, and the safe list
+        already refuses them, so a replay must not be the way round it.
+        """
         if self.approval_memory is None:
             return None
         recalled = self.approval_memory.recall(action.agent, action.describe())
+        if recalled == "approved" and (action.changes_north or forbidden_reason(action)):
+            return None
         if recalled == "approved":
             return Ruling(Verdict.ALLOW, "you approved this action before", DecidedBy.REPLAY)
         if recalled == "rejected":

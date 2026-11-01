@@ -12,15 +12,19 @@ immediately (the inference router is rebuilt in place — no restart needed).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from config.approval_mode import ApprovalMode, require_approval_mode
 from inference.registry import PROVIDER_DEFINITIONS
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+
+if TYPE_CHECKING:
+    from approval.approvals import Request
 
 
 def _upsert_env_key(path: Path, key: str, value: str) -> None:
@@ -109,6 +113,49 @@ class NorthConfigTool(Tool):
         },
         "required": ["action"],
     }
+
+    def mutates(self, params: dict[str, Any] | None = None) -> bool:
+        """Only `set`, and `power` or `autonomy` with a value, change anything; reading the settings never asks."""
+        params = params or {}
+        action = str(params.get("action", "")).strip().lower()
+        if action == "set":
+            return True
+        return action in ("power", "autonomy") and bool(str(params.get("value") or "").strip())
+
+    async def describe(self, input: ToolInput) -> Request | None:
+        """A change to north's own settings: never replayed, and below yolo a person decides it.
+
+        A secret's value is kept out of the card and of the remembered identity;
+        a digest still tells one value from another.
+        """
+        from approval.approvals import Request
+        from approval.policy import Action, ActionKind
+
+        params = input.params
+        action = str(params.get("action", "")).strip().lower()
+        value = str(params.get("value") or "").strip()
+        if action == "set":
+            key = str(params.get("key") or "").strip().upper()
+            key = _KEY_ALIASES.get(key, key)
+            secret = key in _SECRET_KEYS
+            shown = f"{key}={self._mask(key, value)}"
+            identity = (
+                f"{key}=sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}" if secret else f"{key}={value}"
+            )
+        else:
+            shown = identity = f"{action}={value.lower()}"
+        return Request(
+            action=Action(
+                agent=self.name,
+                kind=ActionKind.OTHER,
+                summary=f"north_config {shown}",
+                operation=action,
+                args=identity,
+                changes_north=True,
+            ),
+            title="North Settings - Approval Required",
+            message=f"Change north's own settings: `{shown}`",
+        )
 
     def _env_path(self) -> Path:
         """Path to the .env file."""
