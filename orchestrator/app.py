@@ -38,6 +38,7 @@ from approval.unattended import UnattendedPolicy
 from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import bootstrap_paused, run_bootstrap_if_needed
 from coding_agents import CodingRunner, CommandVerifier, Gate, GateSessions, discover_backends
+from coding_agents.runner import AGENT_PREFIX as CODING_AGENT_PREFIX
 from config.dependencies import build_production_dependencies
 from config.run_file import remove_run_file, write_run_file
 from config.security import keep_home_private, load_secret
@@ -57,6 +58,7 @@ from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
 from memory.injection import ContextInjector
 from memory.profile import move_rule_and_goal_facts, rebuild_profile
+from orchestrator.agent_runs import AgentRunStore
 from orchestrator.api import coding_ask_router, coding_gate_router, health_router, webhook_router
 from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
@@ -932,6 +934,25 @@ async def _serve_mcp(manager: McpManager, tool_registry: ToolRegistry, tool_inde
             await _populate_tool_index(tool_index, tool_registry)
 
 
+async def _close_runs_cut_off(store: AgentRunStore, *, before: datetime.datetime) -> int:
+    """Close the in-process agent runs a stop cut off; the task they belonged to resumes in a new run.
+
+    They died with the process, but read "running" for good: after a restart the
+    task resumed and finished while its interrupted run e054abe0 stayed running
+    with no end time (issue #76, finding M19). A coding run is a process of its
+    own and is checked by its recorder instead.
+    """
+    closed = 0
+    for run in await store.list_unfinished(""):
+        if run.agent.startswith(CODING_AGENT_PREFIX) or run.started_at >= before:
+            continue
+        await store.finish_with_error(run.run_id, "interrupted", "north stopped while this run was working.")
+        closed += 1
+    if closed:
+        logger.info("Closed %d agent run(s) cut off by the last stop", closed)
+    return closed
+
+
 async def _record_where_this_server_listens(attempts: int = 600, every: float = 0.1) -> None:
     """Write the run file once uvicorn has bound its socket, which happens after startup."""
     for _ in range(attempts):
@@ -980,6 +1001,7 @@ def _warn_unknown_cron_agents(agent_registry: AgentRegistry) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    started_at = utcnow()
     configure_structured_logging(logging.getLevelNamesMapping().get(settings.log_level.upper(), logging.INFO))
 
     _step("loading secret")
@@ -1162,7 +1184,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     orchestrator = _build_orchestrator(
         deps, agent_registry, tool_registry, extraction_pipeline, approvals.interaction, approval_memory
     )
+    orchestrator.when_cancelled(flow_runner.cancel_running)
     context_injector = _build_context_injector(deps)
+    _step("closing agent runs the last stop cut off")
+    await _close_runs_cut_off(deps.agent_run_store, before=started_at)
 
     if settings.autonomous_background_tasks_active:
         if getattr(deps, "coding_recorder", None) is not None:

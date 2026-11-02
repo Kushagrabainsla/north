@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +177,8 @@ class Orchestrator:
         self._tracked_router = tracked_router
         # Tasks one of whose agents ended blocked, so the task's ending row says so (see _finish_task).
         self._blocked_tasks: set[str] = set()
+        # What else ends when you cancel a task: the runs it started, such as a flow's test run.
+        self._on_cancelled: list[Callable[[str], object]] = []
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
         # Composition-injected factory that builds a tool-call envelope
@@ -399,15 +402,26 @@ class Orchestrator:
         # No terminal entry yet - the task is still running.
         return TaskResponse(task_id=task_id, status="pending", created_at=format_timestamp(entries[-1].timestamp))
 
+    def when_cancelled(self, callback: Callable[[str], object]) -> None:
+        """Call *callback* with a task's id when you cancel it, to end what the task started."""
+        self._on_cancelled.append(callback)
+
     async def cancel_task(self, task_id: str) -> bool:
         """Cancel a running task: stop its pipeline and write a terminal ledger entry.
 
         Returns False when the task is not in flight (unknown id or already
         finished) - writing a CANCELLED entry then would rewrite the history
         of a completed task, since get_task() reads the most recent entry.
+        Runs the task started end with it: a cancelled task's flow test runs
+        read "running now" on the Flows page for good (issue #76, finding M16).
         """
         if not await self._stop_task(task_id):
             return False
+        for end_what_it_started in self._on_cancelled:
+            try:
+                end_what_it_started(task_id)
+            except Exception:
+                logger.warning("Could not end what task %s started", task_id, exc_info=True)
         await self._journal.record(task_id, "task_cancelled", status=LedgerStatus.CANCELLED)
         await self._stream_manager.emit_done(task_id)
         return True

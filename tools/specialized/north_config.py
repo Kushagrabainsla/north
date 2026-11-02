@@ -284,7 +284,17 @@ class NorthConfigTool(Tool):
         )
 
     def _north_settings(self):
-        """Open the shared settings file with North's live zone as its fallback."""
+        """The settings the running server decides by; the file itself only with no server running.
+
+        It opened its own copy of settings.json and saved that. The reply said
+        "Autonomy is now yolo" while the server went on asking in safe mode, and
+        the change took effect, unannounced, at the next restart (issue #76,
+        finding A4). The Settings page changes this same live object.
+        """
+        from config.runtime import get_runtime
+
+        if (live := getattr(get_runtime(), "north_settings", None)) is not None:
+            return live
         from config.strategy import NorthSettings
         from utils.time import local_timezone_name
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -401,6 +402,7 @@ class FlowRunner:
                 input_errors = schema_errors(step_inputs, execution.inputs, path="inputs") if execution else []
                 if input_errors:
                     raise ValueError("; ".join(input_errors))
+                instructions = _fill_placeholders(step.instructions, run.inputs, outputs)
             except ValueError as exc:
                 return self._store.update(
                     run.run_id,
@@ -468,6 +470,7 @@ class FlowRunner:
                             prompt=_step_prompt(
                                 flow.name,
                                 step,
+                                instructions,
                                 step_inputs,
                                 outputs,
                                 success_criteria,
@@ -502,6 +505,16 @@ class FlowRunner:
                         current_step=index,
                         outputs=outputs,
                         error=result.question or f"Skill step '{step.name}' needs user attention.",
+                    )
+                # The agent's record says what was asked of it did not happen: a change was
+                # refused or failed, or it hit a limit. Not a completed step, whatever it wrote.
+                if (result.data or {}).get("outcome_status") == "blocked":
+                    return self._store.update(
+                        run.run_id,
+                        status="paused",
+                        current_step=index,
+                        outputs=outputs,
+                        error=f"Step '{step.name}' could not finish: {result.summary or result.output}"[:2_000],
                     )
 
                 # What the agent promises to leave behind (its config's `produces`) is
@@ -636,6 +649,7 @@ def _produced(run: FlowRun) -> str:
 def _step_prompt(
     flow_name: str,
     step,
+    instructions: str,
     inputs: dict[str, Any],
     outputs: list[dict[str, Any]],
     success_criteria: tuple[str, ...],
@@ -663,7 +677,7 @@ def _step_prompt(
     return (
         f"Execute flow '{flow_name}', step '{step.name}', using {step.skill or 'the inline procedure'}.\n\n"
         f"{resumed}{checked}"
-        f"Step instructions:\n{step.instructions}\n\n"
+        f"Step instructions:\n{instructions}\n\n"
         f"Resolved inputs:\n{json.dumps(inputs, indent=2, default=str)}\n\n"
         f"Previous step outputs:\n{json.dumps(previous, indent=2, default=str)}\n\n"
         f"Required success criteria:\n{criteria}\n\n"
@@ -692,6 +706,24 @@ def _contract_output(result, schema: dict[str, Any]) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         return data
     return parsed if isinstance(parsed, dict) else data
+
+
+_PLACEHOLDER = re.compile(r"\$\{(?:inputs|steps)\.[A-Za-z0-9_.-]+\}")
+
+
+def _fill_placeholders(instructions: str, flow_inputs: dict[str, Any], outputs: list[dict[str, Any]]) -> str:
+    """*instructions* with each ``${inputs.x}`` / ``${steps.s.x}`` replaced by its value.
+
+    Raises ValueError naming one that has no value. A step was handed a literal
+    ``${inputs.journal_path}``, could do nothing with it, and the run was still
+    recorded "completed" (issue #76, finding M15); it now stops asking for the input.
+    """
+
+    def value(match: re.Match[str]) -> str:
+        resolved = _resolve_inputs({"_": match.group(0)}, flow_inputs, outputs)["_"]
+        return resolved if isinstance(resolved, str) else json.dumps(resolved, default=str)
+
+    return _PLACEHOLDER.sub(value, instructions or "")
 
 
 def _resolve_inputs(
