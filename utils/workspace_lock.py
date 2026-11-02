@@ -1,9 +1,10 @@
 """Per-workspace mutation locks shared by every agent instance.
 
-The agent loop serializes mutating tool calls, but that ordering used to be
-per agent *instance* - a delegated coder and reviewer working in the same
-workspace could interleave file/git mutations. These locks key on the resolved
-workspace path, so any two agents mutating the same tree take the same lock.
+Two agents changing the same tree - a delegated coder and reviewer, two
+sessions in one folder - could interleave file and git changes. These locks key
+on the resolved workspace path, so any two changes to the same tree take the
+same lock. `Tool.execute` holds it around a change itself and nothing more: not
+across the wait for an approval, and not across a run the tool starts.
 """
 
 from __future__ import annotations

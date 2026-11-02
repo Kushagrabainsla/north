@@ -1115,11 +1115,11 @@ async def test_a_tool_that_takes_the_workspace_lock_itself_is_not_run_under_it(t
     """`coding_agent` lands a change under the workspace lock; the loop holding it too waited for itself for ever."""
     import asyncio
 
-    from agents.workspace_lock import workspace_lock
     from config.approval_mode import ApprovalMode
     from tests.conftest import bind_approvals
     from tools.base import Tool
     from tools.models import ToolOutput
+    from utils.workspace_lock import workspace_lock
 
     class LandsItself(Tool):
         name = "lands_itself"

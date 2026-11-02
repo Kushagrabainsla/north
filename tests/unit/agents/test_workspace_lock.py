@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agents.workspace_lock import workspace_lock
+from utils.workspace_lock import workspace_lock
 
 
 def test_same_workspace_shares_one_lock(tmp_path: Path) -> None:

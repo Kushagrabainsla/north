@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from tools._path import target_path
 from tools.models import ToolInput, ToolOutput
+from utils.workspace_lock import workspace_lock
 
 if TYPE_CHECKING:
     from approval.approvals import Approvals, Decision, Request
@@ -41,6 +42,9 @@ class Tool(ABC):
     # `coding_agent`). The agent loop must not hold that lock around such a tool: the lock is not re-entrant, so
     # the tool would wait for the loop that is waiting for it.
     locks_workspace_itself: bool = False
+    # A tool that starts runs of its own (a flow's test run, `run_flow`). Those runs' steps take the lock for
+    # their own changes, so holding it for the whole tool call left them waiting on their parent for ever.
+    starts_runs: bool = False
     # Override in subclasses with an OpenAI-compatible JSON Schema for the
     # function parameters.  The default accepts any key/value object.
     parameters_schema: dict = {
@@ -83,16 +87,30 @@ class Tool(ABC):
             return await self.run(input)
         request = await self.describe(input)
         if request is None:
-            return await self.run(input)
+            return await self._change(input)
         approvals = self._approvals()
         task_id = input.params.get("task_id")
         decision = await approvals.decide(request, task_id=task_id)
         if not decision.allowed:
             return _refused(decision, request)
-        output = await self.run(input.model_copy(update={"approved": request}))
+        output = await self._change(input.model_copy(update={"approved": request}))
         if output.success:
             approvals.completed(request, task_id)
         return output
+
+    async def _change(self, input: ToolInput) -> ToolOutput:
+        """`run()`, under the lock of the folder it changes, so two changes to one tree never interleave.
+
+        The lock covers the change and nothing else. The agent loop held it for
+        the whole call, approval included: a card left waiting in one session
+        stalled every other session's writes to that folder (issue #76, finding
+        A5), and a flow made from chat waited for ever on its own test run, which
+        needed the lock its parent held (M3).
+        """
+        if self.locks_workspace_itself or self.starts_runs:
+            return await self.run(input)
+        async with workspace_lock(str(input.params.get("workspace") or input.granted_workspace or "")):
+            return await self.run(input)
 
     def reads(self, input: ToolInput) -> tuple[Path, ...]:
         """The paths this call reads, so a "no" given earlier in the task can cover them.

@@ -43,6 +43,7 @@ class CreateFlowTool(Tool):
 
     name = "create_flow"
     is_mutating = True
+    starts_runs = True  # its runs' steps take the workspace lock; see `Tool.starts_runs`
     description = (
         "Create, update, inspect or activate a reusable declarative flow. Before creating one, use the "
         "authoring-a-north-flow skill, resolve missing setup choices with ask_user including explicit manual-only, "

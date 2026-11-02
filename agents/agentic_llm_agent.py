@@ -41,7 +41,6 @@ from agents.tool_results import extract_success as _extract_success
 from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
 from agents.tool_results import is_delegation_failure as _is_delegation_failure
-from agents.workspace_lock import workspace_lock
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent
 from approval.models import ApprovalDecision, Card, CardField, CardType
 from inference.cache_stats import CacheWasteTracker
@@ -437,18 +436,11 @@ class AgenticLLMAgent(LLMAgent):
                 for (index, call), outcome in zip(chunk, gathered, strict=True):
                     results[index] = outcome if not isinstance(outcome, BaseException) else _failed_call(call, outcome)
             else:
-                # Mutating calls execute sequentially under the workspace lock
+                # Mutating calls run one at a time, in order. Each takes the
+                # workspace lock itself, for the change alone (Tool.execute):
+                # never across an approval wait, a delegation or a run it starts.
                 for index, call in chunk:
-                    if call.name == "delegate_task" or _locks_workspace_itself(tool_map.get(call.name)):
-                        # Never hold the workspace lock across delegation - the
-                        # sub-agent acquires it for its own mutations and would
-                        # deadlock against its parent. A tool that takes the lock
-                        # itself (`coding_agent`, when it lands a change) is the same.
-                        res = await self._safe_execute_call(call, payload, tool_map)
-                    else:
-                        async with workspace_lock(payload.workspace):
-                            res = await self._safe_execute_call(call, payload, tool_map)
-                    results[index] = res
+                    results[index] = await self._safe_execute_call(call, payload, tool_map)
 
         ordered = [results[index] for index in range(len(calls))]
         # Recorded once for the whole turn: the flag is a per-task boolean, so
@@ -1558,10 +1550,6 @@ class _TokenRelay:
     async def reset(self) -> None:
         self._splitter = ReasoningStreamSplitter()
         await self._stream_manager.emit(self._task_id, "stream_reset", {})
-
-
-def _locks_workspace_itself(tool: Tool | None) -> bool:
-    return bool(tool and tool.locks_workspace_itself)
 
 
 def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:

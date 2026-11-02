@@ -14,6 +14,7 @@ _NEEDS_YOU = frozenset({"failed", "needs_approval", "rejected", "paused"})
 class RunFlowTool(Tool):
     name = "run_flow"
     is_mutating = True
+    starts_runs = True  # its runs' steps take the workspace lock; see `Tool.starts_runs`
     description = (
         "Start or resume a named skill-based flow. The flow runs sequentially and persists checkpoints; "
         "a step that errors pauses the run there, and passing its run_id resumes it at that step. "

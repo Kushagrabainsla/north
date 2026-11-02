@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
-from agents.workspace_lock import workspace_lock
 from approval.approvals import Approvals, Request
 from approval.policy import Action, ActionKind
 from coding_agents import (
@@ -19,6 +18,7 @@ from coding_agents import (
     WorkChange,
 )
 from orchestrator.worktree import GitWorktreeManager, Worktree
+from utils.workspace_lock import workspace_lock
 
 AGENT = "coding_agent"
 
