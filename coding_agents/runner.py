@@ -329,6 +329,8 @@ class CodingRunner:
                     "files": len(change.files),
                     "insertions": change.insertions,
                     "deletions": change.deletions,
+                    # What the branch holds, on the record: the agent's own account of its edit can differ.
+                    **({"diff": change.diff_shown()} if change.diff else {}),
                 },
             )
         return change, ""

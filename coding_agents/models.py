@@ -94,6 +94,15 @@ class WorkChange:
 
     tree: WorkTree
     files: tuple[FileDelta, ...]
+    # The unified diff itself, which is what applying puts in the working tree. The agent's own account of
+    # its edit can differ from it: Claude Code reported `"Hello, {name}!"` and the branch held `"Hello,{name}!"`.
+    diff: str = ""
+
+    def diff_shown(self, limit: int = 8_000) -> str:
+        """The diff, cut to *limit* characters with a note saying how much more there is."""
+        if len(self.diff) <= limit:
+            return self.diff
+        return f"{self.diff[:limit]}\n[... {len(self.diff) - limit} more characters of diff]"
 
     @property
     def insertions(self) -> int:

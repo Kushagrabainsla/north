@@ -212,6 +212,7 @@ def _output(report: RunReport) -> ToolOutput:
             "files": [{"path": f.path, "insertions": f.insertions, "deletions": f.deletions} for f in change.files],
             "insertions": change.insertions,
             "deletions": change.deletions,
+            "diff": change.diff_shown(),
         }
     elif report.mode is Mode.EDIT:
         data["mode"] = Mode.EDIT.value
@@ -262,6 +263,7 @@ def _edit_summary(data: dict) -> str:
     if not change:
         return "The agent made no changes."
     files = "\n".join(f"- {f['path']} (+{f['insertions']} -{f['deletions']})" for f in change["files"][:20])
+    files += _diff_note(change)
     size = f"{len(change['files'])} file(s), +{change['insertions']} -{change['deletions']}"
     tests = _tests_summary(data.get("verification"))
     if data.get("review"):
@@ -292,6 +294,16 @@ def _edit_summary(data: dict) -> str:
             "do not run another edit round to satisfy both."
         )
     return text
+
+
+def _diff_note(change: dict) -> str:
+    """Where the real change is: the agent's own account of its edit can differ from what it wrote."""
+    if not change.get("diff"):
+        return ""
+    return (
+        "\n\n`change.diff` is the diff the agent's branch holds. Describe the change from it, not from the "
+        "agent's own account, which can differ."
+    )
 
 
 def _review_summary(review: dict) -> str:

@@ -152,8 +152,17 @@ def _normalize(message: str) -> str:
 
 
 def _display_signature(message: str) -> str:
-    """A short label for the cockpit's list of remembered decisions."""
-    return _normalize(message)[:_DISPLAY_SIGNATURE_CHARS]
+    """A short label for the cockpit's list of remembered decisions: its start and its end.
+
+    Cut at the end, nine writes in one folder all read "write_file file_edit
+    path=/tmp/claude-0/-home-user-north/17e1ae8d-673e-5f46-9673": the file name,
+    which tells them apart, was what was cut.
+    """
+    text = _normalize(message)
+    if len(text) <= _DISPLAY_SIGNATURE_CHARS:
+        return text
+    keep = _DISPLAY_SIGNATURE_CHARS - 1
+    return f"{text[: keep // 2]}…{text[-(keep - keep // 2) :]}"
 
 
 def _fingerprint(agent: str, message: str) -> str:

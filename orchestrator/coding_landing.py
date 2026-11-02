@@ -76,11 +76,13 @@ def _request(change: WorkChange, verification: Verification, review: Review | No
         workspace=tree.base,
         details=f"{files}\n{tests}",
     )
+    # The diff itself, not only the file names: "README.md (+1 -1)" could not show the space the edit lost.
+    diff = f"\n\n```diff\n{change.diff_shown()}\n```" if change.diff else ""
     return Request(
         action,
         "Apply Coding Agent Changes - Approval Required",
         f"Apply the coding agent's changes to `{tree.base}` as uncommitted changes? "
-        f"(+{change.insertions} -{change.deletions})\n\n{files}\n\n{tests}",
+        f"(+{change.insertions} -{change.deletions})\n\n{files}{diff}\n\n{tests}",
         declined="Changes left on their branch.",
     )
 

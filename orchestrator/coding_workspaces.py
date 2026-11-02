@@ -51,9 +51,10 @@ class GitWorkspaces:
                 await manager.remove(copy, keep_branch=False)
                 return None
             files = await manager.changes(copy)
+            diff = await manager.diff_text(copy)
         except WorktreeError as exc:
             raise CodingAgentError(str(exc)) from exc
-        return WorkChange(tree, tuple(FileDelta(f.path, f.insertions, f.deletions) for f in files))
+        return WorkChange(tree, tuple(FileDelta(f.path, f.insertions, f.deletions) for f in files), diff)
 
     async def drop_if_in_place(self, tree: WorkTree) -> bool:
         """Delete *tree*'s branch when its changes are already in the working tree; True when it is gone."""

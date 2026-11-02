@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, del, patch, post } from "../api";
-import { Empty, ErrorNotice, Loading, NoticeList, PageHeader, Panel, Status, timeAgo, reveal } from "../components";
+import { Empty, ErrorNotice, Loading, Markdown, NoticeList, PageHeader, Panel, Status, timeAgo, reveal } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Link, useSearchParams } from "react-router-dom";
@@ -133,7 +133,8 @@ export function ApprovalCard({
   const sideBySide = !card.blocking && Boolean(card.context);
   const body = (
     <>
-      {card.message && <p>{card.message}</p>}
+      {/* Markdown, as it is written: shown raw, a command read "```git checkout -- draft.txt```". */}
+      {card.message && <Markdown>{card.message}</Markdown>}
       {fields.length > 0 && (
         <div className="card-fields">
           {fields.map((field) => (
@@ -574,6 +575,13 @@ export function DecisionRow({
         </div>
         <Status value={card.status} />
       </div>
+      {/* What was decided: the command, the path, the diff. A row with only "Git Operation -
+        Approval Required · Decided by the safe list" gave nothing to judge an overrule by. */}
+      {card.message && (
+        <div className="decision-what">
+          <Markdown>{card.message}</Markdown>
+        </div>
+      )}
       <DecisionDetail
         label={card.decided_by_label}
         reason={card.reason}

@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { agentDeletionPrompt } from "./Agents";
-import { ApprovalCard, memoryLabel, memoryLink } from "./Approvals";
+import { ApprovalCard, DecisionRow, memoryLabel, memoryLink } from "./Approvals";
+import { ApprovalCard as InlineApprovalCard } from "./Chat";
 import type { Approval } from "../types";
 
 describe("personal-agent deletion confirmation", () => {
@@ -67,5 +68,34 @@ describe("answering a question on the approvals page", () => {
     const html = markup(["Q2", "Q3"]);
     expect(html).toContain(">Q2</button>");
     expect(html).toContain('placeholder="Type your answer"');
+  });
+});
+
+// Issue #76, A18: cards showed markdown fences raw ("```git checkout -- draft.txt```"), and a resolved
+// row showed only its title and who decided, so there was nothing to judge an overrule by.
+describe("what an approval card shows", () => {
+  const card = (status: string, decided_by = "") =>
+    ({ id: "a1", type: "approval", task_id: "t1", agent: "git", title: "Git Operation - Approval Required",
+       message: "Run git?\n```\ngit checkout -- draft.txt\n```", options: ["Approve", "Reject"], status,
+       chosen_option: "", created_at: "", fields: [], context: "", response: {}, blocking: true, source: "",
+       decided_by, decided_by_label: decided_by ? "the safe list" : "", reason: "local-only git",
+       memory_used: [] }) as unknown as Approval;
+
+  it("renders the command as code on the approvals page and in the chat", () => {
+    const page = renderToStaticMarkup(createElement(ApprovalCard, { card: card("pending"), onDecide: () => undefined }));
+    const inline = renderToStaticMarkup(
+      createElement(InlineApprovalCard, { card: card("pending"), respond: async () => undefined }),
+    );
+    for (const html of [page, inline]) {
+      expect(html).toContain("<pre><code>git checkout -- draft.txt</code></pre>");
+      expect(html).not.toContain("```");
+    }
+  });
+
+  it("shows what a resolved card decided", () => {
+    const html = renderToStaticMarkup(
+      createElement(DecisionRow, { card: card("approved", "safe_list"), onOverrule: async () => undefined }),
+    );
+    expect(html).toContain("git checkout -- draft.txt");
   });
 });

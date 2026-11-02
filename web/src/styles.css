@@ -1701,6 +1701,10 @@ button:not(:disabled):active { transform: translateY(1px); }
 .decision-row { padding: 0 15px 10px; border-bottom: 1px solid var(--line-soft); }
 .decision-row .table-row { padding-left: 0; padding-right: 0; border-bottom: 0; }
 .decision-detail { margin: 2px 0 6px; color: var(--muted); font-size: 11px; }
+/* What a resolved card decided; a long diff scrolls inside the row rather than stretching the list. */
+.decision-what { max-height: 220px; overflow: auto; margin: 0 0 6px; }
+.decision-what .markdown { font-size: 11px; line-height: 1.6; color: #c8c9c7; }.decision-what .markdown p { margin: 0 0 8px; overflow-wrap: anywhere; }
+.decision-what .markdown pre { margin: 0; }
 .decision-memory { margin: 5px 0 0; padding-left: 16px; }
 .decision-memory li { margin: 2px 0; }
 .decision-memory a { color: var(--accent); }
