@@ -14,7 +14,8 @@ from agents.models import AgentPayload
 from approval import ApprovalDecision
 from approval.continuation import CardOutcome
 from approval.interaction import UserInteraction
-from flows.models import flow_fingerprint
+from flows.exceptions import FlowNotFoundError
+from flows.models import FlowSource, flow_fingerprint
 from flows.registry import FlowRegistry
 from flows.store import FlowRun, FlowRunStore
 from flows.validation import (
@@ -248,6 +249,11 @@ class FlowRunner:
         if self._interaction is None or run.status not in _ENDED:
             return
         try:
+            if run.status == "completed" and self._is_norths_own(run.flow_name):
+                # north's housekeeping (cleanup, its self-check, the waiting-cards
+                # reminder, which tells you itself) finishing is not news: "removed
+                # 0 stale rows" every night would bury the reminders. Stopping is.
+                return
             if run.status == "completed":
                 await self._interaction.deliver(
                     task_id=run.task_id or None,
@@ -274,6 +280,12 @@ class FlowRunner:
                 )
         except Exception:
             logger.warning("Could not tell the user how scheduled flow %s ended", run.flow_name, exc_info=True)
+
+    def _is_norths_own(self, flow_name: str) -> bool:
+        try:
+            return self._flows.get(flow_name).source is FlowSource.BUILTIN
+        except FlowNotFoundError:
+            return False
 
     async def _execute(
         self,

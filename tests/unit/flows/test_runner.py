@@ -180,6 +180,14 @@ def _flow(tmp_path, text: str):
     return FlowRegistry(tmp_path / "flows")
 
 
+def _users_flow(tmp_path, text: str):
+    """*text* as a flow the user made, not one north ships."""
+    flow_dir = tmp_path / "learned" / "demo"
+    flow_dir.mkdir(parents=True)
+    (flow_dir / "FLOW.yaml").write_text(text, encoding="utf-8")
+    return FlowRegistry(tmp_path / "flows", tmp_path / "learned")
+
+
 async def test_runner_executes_skills_and_persists_outputs(tmp_path):
     registry = _flow(
         tmp_path,
@@ -1009,7 +1017,7 @@ steps:
 async def test_a_scheduled_run_sends_the_user_what_it_wrote(tmp_path):
     interaction = RecordingInteraction()
     runner = FlowRunner(
-        _flow(tmp_path, _ONE_STEP),
+        _users_flow(tmp_path, _ONE_STEP),
         FakeAgents(BriefingAgent(tmp_path)),
         _skills(tmp_path),
         FlowRunStore(tmp_path / "runs.db"),

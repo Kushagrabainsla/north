@@ -46,7 +46,7 @@ from flows import FlowRegistry, FlowRunStore
 from gateways.telegram import TelegramGateway
 from gateways.telegram_api import bot_username as telegram_bot_username
 from jobs.exceptions import JobCancelled, JobNeedsAttention
-from jobs.models import Job, JobStatus
+from jobs.models import Job, JobStatus, late_note
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
 from jobs.seen import SeenStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
@@ -248,6 +248,7 @@ def _build_tool_registry(
             job_processor=deps.job_processor,
             cron_store=deps.cron_store,
             skill_registry=skill_registry,
+            reaches=_where_reminders_appear,
         )
     )
     tool_registry.register(
@@ -671,6 +672,28 @@ async def _not_cancelled() -> bool:
     return False
 
 
+def _where_reminders_appear() -> list[str]:
+    """Where a delivered reminder shows up: the dashboard always, Telegram once it is set up."""
+    return ["the dashboard", *(["Telegram"] if settings.telegram_ready else [])]
+
+
+async def _deliver_reminder(job: Job, message: str, approvals: Approvals | None) -> None:
+    """A reminder is its text, delivered as it is: no flow, no model, nothing to test or keep.
+
+    Each one used to become a permanent flow that ran once as a "test" when it
+    was approved - announcing the reminder early - and whose result reached no
+    one. One that ran late, after north was off at its time, said nothing of it.
+    """
+    if approvals is None or approvals.interaction is None:
+        raise JobNeedsAttention("there is no way to deliver a reminder")
+    late = late_note(job)
+    await approvals.interaction.deliver(
+        title=str((job.payload or {}).get("label") or "Reminder"),
+        message=f"{message}\n\n({late})" if late else message,
+        source="reminder",
+    )
+
+
 async def _run_scheduled_task(
     orchestrator: Orchestrator,
     prompt: str,
@@ -808,6 +831,9 @@ def _launch_background_tasks(
             stored = await deps.job_processor.get(job.job_id)
             return stored is not None and stored.status is JobStatus.CANCELLED
 
+        if message := str((job.payload or {}).get("message") or "").strip():
+            await _deliver_reminder(job, message, approvals)
+            return
         flow = str((job.payload or {}).get("flow") or "").strip()
         if flow:
             try:
@@ -999,6 +1025,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             cron_store=deps.cron_store,
             skill_registry=skill_registry,
             flow_registry=flow_registry,
+            reaches=_where_reminders_appear,
         )
     )
     tool_registry.register(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from flows.validation import schedulable_flow_error
@@ -43,20 +44,27 @@ def _whole_number(params: dict, field: str, ceiling: int, default: int | None = 
 
 
 NO_FLOW = (
-    "Schedules run flows. Pass the 'flow' to run. To schedule something that is not a flow yet, "
-    "create one first with create_flow (a single step of instructions or an existing skill is enough), "
-    "test it with run_flow in test mode, activate it once the user confirms, then schedule it here."
+    "Pass 'message' for a reminder: the text north delivers at that time. Pass 'flow' for work north must do "
+    "then. To schedule work that is not a flow yet, create one first with create_flow, test it with run_flow "
+    "in test mode, activate it once the user confirms, then schedule it here."
 )
+BOTH = "Pass either 'message' (a reminder) or 'flow' (work to do), not both."
+
+
+def _dashboard_only() -> list[str]:
+    return ["the dashboard"]
 
 
 class ScheduleTaskTool(Tool):
     name = "schedule_task"
     description = (
-        "Schedule a flow for north to run later in the background, even when the user is not "
-        "chatting. Every schedule runs a flow: pass its name as 'flow' and give a short title in "
-        "'label' so it reads well in a list. The flow must be active - use create_flow to make "
-        "one, run_flow in test mode to prove it, then activate it before scheduling. A reminder "
-        "or a routine is a flow with one step of instructions. Times are the USER'S LOCAL TIME - "
+        "Schedule something for later, even when the user is not chatting, and give a short title in "
+        "'label' so it reads well in a list. A reminder is a 'message': at its time north delivers that "
+        "text to the user as it is - on the dashboard and every channel set up - with no flow, no model "
+        "and no test run. Work north must do at that time (a check, a briefing) is a 'flow': it must be "
+        "active - create_flow, prove it with run_flow in test mode, then activate it. Pass one of the "
+        "two. The result says where a reminder will appear; tell the user exactly that. "
+        "Times are the USER'S LOCAL TIME - "
         "pass the hour they said, do not convert to UTC. For a single future run, pass run_at as "
         "'YYYY-MM-DDTHH:MM' local (an explicit offset or trailing Z is honoured if given). "
         "For a fixed interval such as every five minutes, pass interval_minutes. "
@@ -70,6 +78,10 @@ class ScheduleTaskTool(Tool):
     parameters_schema = {
         "type": "object",
         "properties": {
+            "message": {
+                "type": "string",
+                "description": "For a reminder: the text to deliver, written to the user ('Take the laundry out.').",
+            },
             "flow": {"type": "string", "description": "Name of the active flow to run"},
             "label": {
                 "type": "string",
@@ -89,7 +101,7 @@ class ScheduleTaskTool(Tool):
                 ),
             },
         },
-        "required": ["flow"],
+        "required": [],
     }
 
     def __init__(
@@ -100,9 +112,12 @@ class ScheduleTaskTool(Tool):
         flow_registry: FlowRegistry | None = None,
         agent_registry: AgentRegistry | None = None,
         tool_registry=None,
+        reaches: Callable[[], list[str]] = _dashboard_only,
     ) -> None:
         self._job_processor = job_processor
         self._cron_store = cron_store
+        # Where a delivered reminder will appear: the dashboard always, other channels when set up.
+        self._reaches = reaches
         self._skill_registry = skill_registry
         self._flow_registry = flow_registry
         self._agent_registry = agent_registry
@@ -112,13 +127,19 @@ class ScheduleTaskTool(Tool):
         if {"tz", "timezone"} & input.params.keys():
             return ToolOutput(success=False, error=TIMEZONE_INPUT_ERROR)
         flow = str(input.params.get("flow", "")).strip()
-        if not flow:
+        message = str(input.params.get("message", "") or "").strip()
+        if flow and message:
+            return ToolOutput(success=False, error=BOTH)
+        if not flow and not message:
             return ToolOutput(success=False, error=NO_FLOW)
         # Every schedule is run by the general agent through its flow: what it does
         # is the flow's business, so there is no agent or skill to choose here.
         agent, skill = "general", ""
         task = str(input.params.get("task", "")).strip()
-        if self._flow_registry is not None:
+        if message:
+            # A reminder is its text: nothing to run, test or keep afterwards.
+            task = str(input.params.get("label", "")).strip() or message
+        elif self._flow_registry is not None:
             from flows.exceptions import FlowNotFoundError
 
             try:
@@ -147,15 +168,14 @@ class ScheduleTaskTool(Tool):
             )
 
         if run_at is not None:
-            return await self._one_shot(task, agent, str(run_at), skill, flow)
-        if interval_minutes is not None:
-            return await self._interval(task, agent, input.params, skill, flow)
-        if hour is not None:
-            return await self._recurring(task, agent, input.params, skill, flow)
-        return ToolOutput(
-            success=False,
-            error="Provide 'run_at', 'hour', or 'interval_minutes'.",
-        )
+            output = await self._one_shot(task, agent, str(run_at), skill, flow, message, input.params)
+        elif interval_minutes is not None:
+            output = await self._interval(task, agent, input.params, skill, flow, message)
+        else:
+            output = await self._recurring(task, agent, input.params, skill, flow, message)
+        if output.success and message and output.data is not None:
+            output.data["delivered_to"] = self._reaches()
+        return output
 
     async def _interval(
         self,
@@ -164,6 +184,7 @@ class ScheduleTaskTool(Tool):
         params: dict,
         skill: str = "",
         flow: str = "",
+        message: str = "",
     ) -> ToolOutput:
         try:
             interval = int(params["interval_minutes"])
@@ -182,6 +203,7 @@ class ScheduleTaskTool(Tool):
                 anchor_epoch=anchor,
                 skill=skill,
                 flow=flow,
+                message=message,
             )
         except (TypeError, ValueError) as exc:
             return ToolOutput(success=False, error=str(exc))
@@ -199,11 +221,21 @@ class ScheduleTaskTool(Tool):
             flow=entry.flow,
             interval_minutes=entry.interval_minutes,
             anchor_epoch=entry.anchor_epoch,
+            message=entry.message,
         )
         row = await self._cron_store.get(entry.name)
         return ToolOutput(success=True, data={"type": "recurring", **entry_view(row)})
 
-    async def _one_shot(self, task: str, agent: str, run_at: str, skill: str = "", flow: str = "") -> ToolOutput:
+    async def _one_shot(
+        self,
+        task: str,
+        agent: str,
+        run_at: str,
+        skill: str = "",
+        flow: str = "",
+        message: str = "",
+        params: dict | None = None,
+    ) -> ToolOutput:
         try:
             epoch = parse_local(run_at)
         except ValueError as exc:
@@ -218,6 +250,7 @@ class ScheduleTaskTool(Tool):
                 "scheduled_by": "schedule_task",
                 **({"skill": skill} if skill else {}),
                 **({"flow": flow} if flow else {}),
+                **({"message": message, "label": str((params or {}).get("label") or "Reminder")} if message else {}),
             },
             priority=JobPriority.MEDIUM,
             scheduled_at=from_epoch(epoch),
@@ -235,7 +268,9 @@ class ScheduleTaskTool(Tool):
             },
         )
 
-    async def _recurring(self, task: str, agent: str, params: dict, skill: str = "", flow: str = "") -> ToolOutput:
+    async def _recurring(
+        self, task: str, agent: str, params: dict, skill: str = "", flow: str = "", message: str = ""
+    ) -> ToolOutput:
         from jobs.scheduler import CronEntry
 
         # `weekday` is the old single-day spelling; still read so a caller working
@@ -255,6 +290,7 @@ class ScheduleTaskTool(Tool):
                 tz=tz,
                 skill=skill,
                 flow=flow,
+                message=message,
             )
         except ValueError as exc:
             return ToolOutput(success=False, error=str(exc))
@@ -270,11 +306,13 @@ class ScheduleTaskTool(Tool):
             label=entry.label,
             skill=entry.skill,
             flow=entry.flow,
+            message=entry.message,
         )
         row = await self._cron_store.get(entry.name)
         return ToolOutput(success=True, data={"type": "recurring", **entry_view(row)})
 
     def format_output(self, data: dict) -> str:
+        where = f" It will appear on {' and on '.join(data['delivered_to'])}." if data.get("delivered_to") else ""
         if data.get("type") == "one-shot":
-            return f"Scheduled once: {data['task']} - runs {data['runs_at']} (job {data['job_id']})."
-        return f"Scheduled {data['schedule']}: {data['title']} - next run {data['next_run']}."
+            return f"Scheduled once: {data['task']} - runs {data['runs_at']} (job {data['job_id']}).{where}"
+        return f"Scheduled {data['schedule']}: {data['title']} - next run {data['next_run']}.{where}"

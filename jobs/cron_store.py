@@ -67,6 +67,8 @@ _ADDED_COLUMNS = {
     # fields instead of overloading a wall-clock hour/minute pair.
     "interval_minutes": "INTEGER",
     "anchor_epoch": "REAL",
+    # A reminder: the text delivered as it is when the schedule fires, instead of a flow.
+    "message": "TEXT",
 }
 
 # User-created entries carry this prefix so a listing can tell them apart from
@@ -87,6 +89,7 @@ _UPDATABLE = (
     "label",
     "skill",
     "flow",
+    "message",
     "interval_minutes",
     "anchor_epoch",
 )
@@ -167,6 +170,7 @@ class UserCronStore:
         flow: str = "",
         interval_minutes: int | None = None,
         anchor_epoch: float | None = None,
+        message: str = "",
     ) -> None:
         await asyncio.to_thread(
             self._add_sync,
@@ -183,6 +187,7 @@ class UserCronStore:
             flow,
             interval_minutes,
             anchor_epoch,
+            message,
         )
 
     def _add_sync(
@@ -200,14 +205,15 @@ class UserCronStore:
         flow: str = "",
         interval_minutes: int | None = None,
         anchor_epoch: float | None = None,
+        message: str = "",
     ) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO user_cron_entries
                     (name, agent, task, hour, minute, weekdays, tz, enabled, label, skill, flow,
-                     interval_minutes, anchor_epoch, created_epoch)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     interval_minutes, anchor_epoch, created_epoch, message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -224,6 +230,7 @@ class UserCronStore:
                     interval_minutes,
                     anchor_epoch,
                     now_epoch(),
+                    message or None,
                 ),
             )
 
@@ -346,6 +353,7 @@ def _row_to_entry(row: sqlite3.Row) -> dict:
         "label": row["label"] or "",
         "skill": row["skill"] or "",
         "flow": row["flow"] or "",
+        "message": row["message"] or "",
         "interval_minutes": row["interval_minutes"],
         "anchor_epoch": row["anchor_epoch"],
         "created_epoch": row["created_epoch"],

@@ -44,4 +44,4 @@ Fitness and workouts, nutrition and meals, sleep, energy, habits and routines, s
 2. **Check facts.** Use `web_search` (and `fetch_url` for a specific source) before stating nutrition values, calorie or macro numbers, training guidance, or sleep and habit science.
 3. **Be concrete.** Real workout plans with sets, reps and progressions; real meal plans with macros; small, sustainable habit changes.
 4. **Save plans and logs** to the folder under `## Notes Directory` (for example `<that folder>/meal-plan.md`), never the workspace. Read earlier plans from that folder's parent, the notes store, with `list_dir` and `search_files`. Return saved paths in `artifacts`.
-5. **Recurring help** (workout reminders, weekly check-ins) is a flow plus a schedule: follow the scheduling-north-work skill.
+5. **Recurring help**: a workout reminder is a schedule with a `message`; a weekly check-in that needs north to look at something is a flow plus a schedule. Follow the scheduling-north-work skill for both.

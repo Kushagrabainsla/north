@@ -20,7 +20,7 @@ from flows import FlowRunStore
 from ledger import SQLiteLedgerWriter
 from ledger.base import LedgerFilters
 from orchestrator.api_context import ApiServices, bind_services
-from tests.unit.flows.test_runner import _ONE_STEP, BriefingAgent, FakeAgents, _flow, _skills
+from tests.unit.flows.test_runner import _ONE_STEP, BriefingAgent, FakeAgents, _flow, _skills, _users_flow
 from tools.universal.flow_runner import FlowRunner
 from web import api as web_api
 
@@ -37,7 +37,7 @@ def home(tmp_path: Path) -> dict:
 async def test_a_scheduled_runs_result_waits_on_the_dashboard(home) -> None:
     tmp_path = home["path"]
     runner = FlowRunner(
-        _flow(tmp_path, _ONE_STEP),
+        _users_flow(tmp_path, _ONE_STEP),
         FakeAgents(BriefingAgent(tmp_path)),
         _skills(tmp_path),
         FlowRunStore(tmp_path / "runs.db"),
@@ -50,6 +50,23 @@ async def test_a_scheduled_runs_result_waits_on_the_dashboard(home) -> None:
         [notice] = await web_api.notices()
     assert notice["title"] == "demo is ready"
     assert "PWM: Personalized World Models" in notice["message"]
+
+
+async def test_north_finishing_its_own_housekeeping_is_not_delivered(home) -> None:
+    """Delivered, "nightly-cleanup is ready: removed 0 stale rows" arrived every night and buried the reminders."""
+    tmp_path = home["path"]
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(BriefingAgent(tmp_path)),
+        _skills(tmp_path),
+        FlowRunStore(tmp_path / "runs.db"),
+        home["interaction"],
+    )
+
+    run = await runner.run("demo", trigger="schedule")
+
+    assert run.status == "completed"
+    assert home["notices"].waiting() == []
 
 
 async def test_a_delivery_is_recorded_and_outlives_a_restart(home) -> None:

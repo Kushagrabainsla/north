@@ -100,6 +100,8 @@ class CronEntry:
     skill: str = ""
     # Optional named declarative flow to execute when this schedule fires.
     flow: str = ""
+    # A reminder: delivered to the user as it is when this schedule fires, with no flow and no model.
+    message: str = ""
     # What this schedule is for, in a sentence. Only the built-ins carry one:
     # a routine the user wrote explains itself through its prompt, but a
     # built-in whose prompt is an internal slug does not. "task_context_cleanup"
@@ -142,6 +144,7 @@ class CronEntry:
             label=row.get("label") or "",
             skill=row.get("skill") or "",
             flow=row.get("flow") or "",
+            message=row.get("message") or "",
             created_epoch=row.get("created_epoch"),
         )
 
@@ -333,6 +336,7 @@ class CronScheduler:
                 "cron_entry": entry.name,
                 **({"skill": entry.skill} if entry.skill else {}),
                 **({"flow": entry.flow} if entry.flow else {}),
+                **({"message": entry.message, "label": entry.title} if entry.message else {}),
                 **({"late_because": late_because} if late_because else {}),
             },
             priority=JobPriority.MEDIUM,
