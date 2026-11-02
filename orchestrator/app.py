@@ -497,6 +497,7 @@ def _build_orchestrator(
         approval_memory=approval_memory,
         plan_store=deps.plan_store,
         task_inbox=deps.task_inbox,
+        agent_run_store=deps.agent_run_store,
     )
 
 

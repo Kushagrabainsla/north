@@ -59,6 +59,8 @@ def _bare_orchestrator(*, registry, factory) -> Orchestrator:
     orch._tool_registry = registry
     orch._tool_input_factory = factory
     orch._running_task_store = None
+    orch._agent_run_store = None
+    orch._blocked_tasks = set()
     orch._stream_manager = MagicMock()
     orch._stream_manager.emit = _async_noop
     orch._journal = MagicMock()
@@ -177,7 +179,10 @@ class TestDirectSingleToolExecution:
 
         await orch._execute_single_tool("t1", "prompt", _plan("screen_brightness"), workspace=".", context="")
 
-        assert fallbacks == ["screen_brightness answered: No screen matches 'Alienware'."]
+        assert fallbacks == [
+            '`screen_brightness` was called with {"path": "x", "content": "y"} and answered: '
+            "No screen matches 'Alienware'."
+        ]
         assert recorded == {}
 
     async def test_a_call_that_raises_goes_to_the_agent_too(self) -> None:
@@ -185,7 +190,9 @@ class TestDirectSingleToolExecution:
 
         await orch._execute_single_tool("t1", "prompt", _plan("screen_brightness"), workspace=".", context="")
 
-        assert fallbacks == ["screen_brightness raised: osascript did not answer"]
+        assert fallbacks == [
+            '`screen_brightness` was called with {"path": "x", "content": "y"} and raised: osascript did not answer'
+        ]
 
     async def test_mutating_tool_success_marks_side_effect(self) -> None:
         class _MutatingTool(_RecordingTool):

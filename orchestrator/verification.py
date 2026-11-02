@@ -112,7 +112,10 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
             r"|\b(?:briefing|digest|report|summary|file|script|document|doc)\s+(?:is\s+|was\s+)?(?:saved|written|compiled|generated|created|produced|stored|built)\b",
             re.IGNORECASE,
         ),
-        frozenset({"write_file", "create_tool", "coding_agent"}),
+        # `bash` writes files too: a flow step that appended to journal.txt with
+        # `>>` was flagged "no write_file call was recorded". A claim naming a path
+        # is still checked against the disk (_verify_path_existence).
+        frozenset({"write_file", "create_tool", "coding_agent", "bash"}),
     ),
     (
         "running a check, test, or verification",

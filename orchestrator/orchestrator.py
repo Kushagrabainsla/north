@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -24,6 +25,7 @@ from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.exceptions import missing_resource
 from ledger import TASK_ENDINGS, LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
+from orchestrator.agent_runs import AgentRunStore
 from orchestrator.constants import (
     MAX_CONCURRENT_TASKS,
     MAX_QUEUE_BACKOFF_SECONDS,
@@ -68,6 +70,7 @@ from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from utils.edit_scope import EditAuthorizer
+from utils.execution_context import ExecutionIdentity, bind_execution
 from utils.handoff import declared_artifact_paths, ensure_handoff_dir, handoff_dir_for, missing_artifact_paths
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
@@ -84,6 +87,8 @@ logger = logging.getLogger(__name__)
 
 # Max characters of a handoff artifact injected into a downstream agent's context.
 _HANDOFF_ARTIFACT_MAX_CHARS: int = 6000
+# The run a tool call north makes directly, with no agent, is recorded under.
+DIRECT_TOOL_AGENT = "tool_executor"
 
 
 def _task_folder(task_id: str, chosen: str) -> str:
@@ -154,8 +159,11 @@ class Orchestrator:
         approval_memory: ApprovalMemory | None = None,
         plan_store: Any | None = None,
         task_inbox: TaskInbox | None = None,
+        agent_run_store: AgentRunStore | None = None,
     ) -> None:
         self._ledger = ledger
+        # Where a tool call north makes directly is recorded as a run, as an agent's is.
+        self._agent_run_store = agent_run_store
         # What you send a task while it works, shared with its agents (CODING_STYLE §15.4).
         self._inbox = task_inbox or TaskInbox()
         # The request each task in flight was started with, to answer a message that arrives after its agents did.
@@ -1426,70 +1434,120 @@ class Orchestrator:
         dispatched directly - e.g. a routed ``write_file`` -
         enforces the same scope it would inside an agent. ``None`` (the default)
         leaves edits unrestricted, preserving prior behavior.
+
+        The call is a run of its own, like an agent's: its tool_called and
+        tool_result events and its ledger row carry the run, so the task's record
+        shows what was called, with what, and what it answered. Without that an
+        approved order cancellation left "0 tool events" and no trace of the call.
         """
         await self._stream_manager.emit(task_id, "executing", {"agents": []})
-        await self._stream_manager.emit(
-            task_id, "tool_called", {"tool": plan.direct_tool, "params": plan.direct_tool_params}
-        )
+        run = AgentPayload(task_id=task_id, prompt=prompt, workspace=workspace)
+        with bind_execution(ExecutionIdentity(run.run_id)):
+            failed = await self._call_tool_directly(run, plan, edit_scope)
+        # A direct call that failed, other than by your refusal, goes to the agent,
+        # which reads the error and tries again. Shown the error itself, the
+        # planner's "screen=Alienware" ended the task, though a step that read the
+        # screens' names, "AW3425DWM" among them, would have done it.
+        if failed is not None:
+            await self._fall_back_to_agent(task_id, prompt, workspace, context, edit_scope, failed)
+            return
+        await self._finish_task(task_id, skip_extraction=True)
 
-        output = ""
-        success = False
+    async def _call_tool_directly(
+        self, run: AgentPayload, plan: ExecutionPlan, edit_scope: EditAuthorizer | None
+    ) -> str | None:
+        """Run the plan's one tool as *run* and record it; what it answered if the agent should take over."""
+        task_id, name = run.task_id, str(plan.direct_tool)
+        if self._agent_run_store is not None:
+            await self._agent_run_store.start(run, DIRECT_TOOL_AGENT)
+        started = time.monotonic()
+        await self._stream_manager.emit(task_id, "tool_called", {"tool": name, "params": plan.direct_tool_params})
+        sent = f"`{name}` was called with {json.dumps(plan.direct_tool_params, default=str)}"
         try:
             if self._tool_registry is None:
                 raise ToolNotFoundError("No tool registry available.")
             if self._tool_input_factory is None:
                 raise ToolNotFoundError("No tool input factory available.")
-            tool = self._tool_registry.get(plan.direct_tool)  # type: ignore[arg-type]
+            tool = self._tool_registry.get(name)
             params = {**plan.direct_tool_params}
-            if workspace and "workspace" not in params:
-                params["workspace"] = workspace
+            if run.workspace and "workspace" not in params:
+                params["workspace"] = run.workspace
             if task_id and "task_id" not in params:
                 params["task_id"] = task_id
             result = await tool.execute(
-                self._tool_input_factory(params=params, edit_scope=edit_scope, granted_workspace=workspace or None)
+                self._tool_input_factory(params=params, edit_scope=edit_scope, granted_workspace=run.workspace or None)
             )
-            # A direct call that failed, other than by your refusal, goes to the agent,
-            # which reads the error and tries again. Shown the error itself, the
-            # planner's "screen=Alienware" ended the task, though a step that read the
-            # screens' names, "AW3425DWM" among them, would have done it.
-            if not result.success and result.failure_kind != "refused":
-                await self._fall_back_to_agent(
-                    task_id, prompt, workspace, context, edit_scope, f"{plan.direct_tool} answered: {result.error}"
-                )
-                return
-            success = result.success
-            output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
-            # No image-interpretation branch here on purpose: every tool that returns
-            # an image (take_screenshot, take_photo) is in the planner's
-            # _INTERPRETATION_TOOLS set, so it can never be routed to single-tool
-            # mode - it always runs inside an agent's ReAct loop, which feeds the
-            # image to the model as a proper image message. A second synthesis path
-            # here would be unreachable and worse.
-            if success and tool_mutates(tool, params) and self._running_task_store is not None:
-                await self._running_task_store.mark_side_effect(task_id)
         except ToolNotFoundError:
-            logger.warning("single_tool fallback: tool %r not found, re-routing to agent", plan.direct_tool)
-            await self._fall_back_to_agent(task_id, prompt, workspace, context, edit_scope, "")
-            return
+            logger.warning("single_tool fallback: tool %r not found, re-routing to agent", name)
+            await self._end_direct_run(run, name, f"There is no tool named {name}.", fall_back=True)
+            return ""
         except Exception as exc:
             logger.warning("Direct tool execution error in task %s: %s", task_id, exc, exc_info=True)
-            await self._fall_back_to_agent(
-                task_id, prompt, workspace, context, edit_scope, f"{plan.direct_tool} raised: {exc}"
-            )
+            await self._end_direct_run(run, name, f"{exc}", fall_back=True)
+            return f"{sent} and raised: {exc}"
+        if not result.success and result.failure_kind != "refused":
+            await self._end_direct_run(run, name, f"{result.error}", fall_back=True)
+            return f"{sent} and answered: {result.error}"
+        # No image-interpretation branch here on purpose: every tool that returns
+        # an image (take_screenshot, take_photo) is in the planner's
+        # _INTERPRETATION_TOOLS set, so it can never be routed to single-tool
+        # mode - it always runs inside an agent's ReAct loop, which feeds the
+        # image to the model as a proper image message. A second synthesis path
+        # here would be unreachable and worse.
+        output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
+        if result.success and tool_mutates(tool, params) and self._running_task_store is not None:
+            await self._running_task_store.mark_side_effect(task_id)
+        if not result.success:
+            self._blocked_tasks.add(task_id)  # you refused the change: the task is blocked, as an agent's would be
+        await self._end_direct_run(
+            run, name, output, success=result.success, duration_ms=int((time.monotonic() - started) * 1000)
+        )
+        return None
+
+    async def _end_direct_run(
+        self,
+        run: AgentPayload,
+        tool: str,
+        answer: str,
+        *,
+        success: bool = False,
+        fall_back: bool = False,
+        duration_ms: int | None = None,
+    ) -> None:
+        """Record what the direct call answered and close its run.
+
+        A call the agent takes over ends the run failed and writes no answer: the
+        agent's own answer is the task's. Otherwise *answer* is the task's answer.
+        """
+        event: dict[str, Any] = {"tool": tool, "success": success}
+        event["formatted" if success else "error"] = answer
+        await self._stream_manager.emit(run.task_id, "tool_result", event)
+        store = self._agent_run_store
+        if fall_back:
+            if store is not None:
+                await store.finish_with_error(run.run_id, "failed", answer)
             return
-
-        await self._stream_manager.emit(task_id, "tool_result", {"tool": plan.direct_tool, "success": success})
-
         await self._journal.record(
-            task_id,
+            run.task_id,
             "agent_completed",
             source=LedgerSource.AGENT,
-            agent="tool_executor",
-            output=output,
+            agent=DIRECT_TOOL_AGENT,
+            output=answer,
+            tools_used=[tool],
             event="token",
-            payload={"text": output},
+            payload={"text": answer},
         )
-        await self._finish_task(task_id, skip_extraction=True)
+        if store is not None:
+            await store.complete(
+                run.run_id,
+                AgentResult(
+                    output=answer,
+                    summary=answer[:300],
+                    tools_used=[tool],
+                    successful_tools=[tool] if success else [],
+                    duration_ms=duration_ms,
+                ),
+            )
 
     async def _fall_back_to_agent(
         self,

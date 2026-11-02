@@ -61,6 +61,7 @@ class TaskJournal:
         input: str = "",
         output: str = "",
         agent_output: dict[str, Any] | None = None,
+        tools_used: list[str] | None = None,
         error_type: str | None = None,
         event: str | None = None,
         payload: dict[str, Any] | None = None,
@@ -85,6 +86,7 @@ class TaskJournal:
                 input=input,
                 output=output,
                 agent_output=agent_output,
+                tools_used=tools_used or [],
                 status=status,
                 error_type=error_type,
             )
