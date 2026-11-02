@@ -60,6 +60,8 @@ class ApiServices:
     north_settings: NorthSettings | None = None
     agent_run_store: AgentRunStore | None = None
     approval_store: ApprovalStore | None = None
+    # What north delivered to you (reminders, scheduled results), until dismissed.
+    notice_store: Any | None = None
     conversation_store: Any | None = None
     fact_store: Any | None = None
     # What north has learned about the user, beyond the fact store: the

@@ -143,6 +143,7 @@ def configure(
     north_settings,
     agent_run_store,
     north_home: Path,
+    notice_store=None,
     fact_store=None,
     inference_router=None,
     skill_registry=None,
@@ -176,6 +177,7 @@ def configure(
         job_processor=job_processor,
         cron_store=cron_store,
         approval_store=approval_store,
+        notice_store=notice_store,
         north_settings=north_settings,
         agent_run_store=agent_run_store,
         north_home=north_home,
@@ -611,6 +613,23 @@ async def web_task_detail(task_id: str) -> dict[str, Any]:
     if detail is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return detail
+
+
+def _notices() -> list[dict[str, Any]]:
+    """What north delivered and you have not dismissed: reminders, how scheduled runs ended."""
+    store = current_services().notice_store
+    return [] if store is None else [notice.as_dict() for notice in store.waiting()]
+
+
+@router.get("/notices")
+async def notices() -> list[dict[str, Any]]:
+    return _notices()
+
+
+@router.post("/notices/{notice_id}/dismiss", status_code=204)
+async def dismiss_notice(notice_id: str) -> None:
+    if not current_services().require("notice_store").dismiss(notice_id):
+        raise HTTPException(status_code=404, detail="No such notice waiting")
 
 
 @router.get("/approvals")
@@ -1352,6 +1371,7 @@ async def dashboard() -> dict[str, Any]:
     return {
         "system": {"status": "online", "power": settings.power.value, "autonomy": settings.autonomy.value},
         "attention": [card.model_dump(mode="json") for card in current_services().require("approval_store").pending()],
+        "notices": _notices(),
         "active_tasks": [task.model_dump(mode="json") for task in active],
         "conversations": [_conversation_payload(item) for item in conversations],
         "agents": [{"name": agent.name, "domain": agent.domain} for agent in agents],

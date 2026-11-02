@@ -198,9 +198,20 @@ export interface PriorDecision {
   memory_used: MemoryRef[];
 }
 
+/** Something north delivered to you - a reminder, how a scheduled run ended - shown until dismissed. */
+export interface Notice {
+  id: string;
+  title: string;
+  message: string;
+  source: string;
+  task_id: string | null;
+  created_at: string;
+}
+
 export interface DashboardData {
   system: { status: string; power: string; autonomy: string };
   attention: Approval[];
+  notices: Notice[];
   active_tasks: { task_id: string; status: string; created_at: string }[];
   conversations: Conversation[];
   agents: { name: string; domain: string }[];

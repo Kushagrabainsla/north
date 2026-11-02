@@ -545,6 +545,7 @@ def _configure_routers(
         job_processor=deps.job_processor,
         cron_store=deps.cron_store,
         approval_store=deps.approval_store,
+        notice_store=deps.notice_store,
         north_settings=deps.north_settings,
         agent_run_store=deps.agent_run_store,
         north_home=settings.north_home,
@@ -977,6 +978,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             stream_manager=deps.stream_manager,
             policy=approval_policy,
             ledger=deps.ledger,
+            notices=deps.notice_store,
         ),
         # What reached someone or spent money, per task, so a resumed step never repeats it.
         effects=EffectLog(settings.north_home / "approval_memory.db"),

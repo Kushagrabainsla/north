@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { api, del, patch, post } from "../api";
-import { Empty, ErrorNotice, Loading, PageHeader, Panel, Status, timeAgo, reveal } from "../components";
+import { Empty, ErrorNotice, Loading, NoticeList, PageHeader, Panel, Status, timeAgo, reveal } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Link, useSearchParams } from "react-router-dom";
-import type { Approval, CardField, MemoryRef } from "../types";
+import type { Approval, CardField, MemoryRef, Notice } from "../types";
 
 export const fieldLabel = (field: CardField) =>
   field.label ||
@@ -309,6 +309,7 @@ export function Approvals() {
   // card appear; the poll is what stops a dropped connection turning into a
   // queue that has silently stopped updating.
   const resource = useResource<Approval[]>("/web/api/approvals", 30000);
+  const notices = useResource<Notice[]>("/web/api/notices", 30000);
   const { reload } = resource;
   useEffect(() => {
     const stream = new EventSource("/orchestrator/stream");
@@ -411,6 +412,15 @@ export function Approvals() {
       {tab === "decisions" && <ApprovalMemoryPanel find={find} />}
       {tab === "rules" && <SafeActionsPanel />}
       {tab === "waiting" && <>
+      {(notices.data || []).length > 0 && (
+        <>
+          <h2 className="section-title">From north</h2>
+          <p className="muted memory-note">
+            Reminders and how scheduled runs ended. Nothing to decide; dismiss each once read.
+          </p>
+          <div className="table-list"><NoticeList notices={notices.data || []} onDismissed={() => void notices.reload()}/></div>
+        </>
+      )}
       {blocking.length > 0 && (
         <>
           <h2 className="section-title">Needs you now</h2>
@@ -432,7 +442,7 @@ export function Approvals() {
         </>
       )}
 
-      {!pending.length && <Empty>Nothing needs your attention.</Empty>}
+      {!pending.length && !(notices.data || []).length && <Empty>Nothing needs your attention.</Empty>}
 
       <h2 className="section-title">Resolved</h2>
       <div className="table-list">

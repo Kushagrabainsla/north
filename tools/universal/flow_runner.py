@@ -249,8 +249,11 @@ class FlowRunner:
             return
         try:
             if run.status == "completed":
-                await self._interaction.inform(
-                    task_id=run.task_id or None, agent="flow", title=f"{run.flow_name} is ready", message=_produced(run)
+                await self._interaction.deliver(
+                    task_id=run.task_id or None,
+                    source="flow",
+                    title=f"{run.flow_name} is ready",
+                    message=_produced(run),
                 )
             elif run.status in STOPPED:
                 await self._interaction.report(
@@ -263,9 +266,9 @@ class FlowRunner:
                     options=[RESUME_OPTION, DISCARD_OPTION],
                 )
             else:
-                await self._interaction.inform(
+                await self._interaction.deliver(
                     task_id=run.task_id or None,
-                    agent="flow",
+                    source="flow",
                     title=f"{run.flow_name} stopped",
                     message=run.error or "It did not finish.",
                 )

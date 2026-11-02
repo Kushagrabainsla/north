@@ -1,6 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { MessageSquare, Sun, File, ChevronRight } from "lucide-react";
-import { Empty, ErrorNotice, formatDateTime, HealthIndicator, Loading, PageHeader, Panel, Status, timeAgo, unpricedNote, YoloBadge } from "../components";
+import { Empty, ErrorNotice, formatDateTime, HealthIndicator, Loading, NoticeList, PageHeader, Panel, Status, timeAgo, unpricedNote, YoloBadge } from "../components";
 import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
 import { SetupReminder } from "./Setup";
@@ -20,8 +20,9 @@ export function Dashboard() {
       <Panel title="System" label="Status" to="/system" className="system-panel">
         <div className="hero-status"><HealthIndicator variant="panel"/><div><p>Power {data.system.power} · {data.system.autonomy}<YoloBadge mode={data.system.autonomy}/></p></div></div>
       </Panel>
-      <Panel title="Attention" label={`${data.attention.length} items`} to="/approvals" className={data.attention.length ? "attention-panel" : ""}>
-        {data.attention.length ? data.attention.slice(0, 3).map(item => <NavLink className="list-row" to="/approvals" key={item.id}><div><b>{item.title}</b><small>{item.agent} needs a decision</small></div><ChevronRight size={15}/></NavLink>) : <Empty>Nothing needs you right now.</Empty>}
+      <Panel title="Attention" label={`${data.attention.length + data.notices.length} items`} to="/approvals" className={data.attention.length + data.notices.length ? "attention-panel" : ""}>
+        <NoticeList notices={data.notices.slice(0, 3)} onDismissed={() => void reload()}/>
+        {data.attention.length ? data.attention.slice(0, 3).map(item => <NavLink className="list-row" to="/approvals" key={item.id}><div><b>{item.title}</b><small>{item.agent} needs a decision</small></div><ChevronRight size={15}/></NavLink>) : !data.notices.length && <Empty>Nothing needs you right now.</Empty>}
       </Panel>
       <Panel title="Active now" label={`${data.active_tasks.length} tasks`} to="/tasks">
         {data.active_tasks.length ? data.active_tasks.map(task => <div className="list-row" key={task.task_id}><div><b>{task.task_id.slice(0, 12)}</b><small>{timeAgo(task.created_at)}</small></div><Status value={task.status}/></div>) : <Empty>North is ready.</Empty>}

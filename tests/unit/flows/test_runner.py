@@ -974,10 +974,10 @@ async def test_a_waiting_run_being_tried_again_is_left_to_finish(tmp_path):
 
 class RecordingInteraction:
     def __init__(self) -> None:
-        self.informed: list[dict] = []
+        self.delivered: list[dict] = []
 
-    async def inform(self, **card) -> None:
-        self.informed.append(card)
+    async def deliver(self, **notice) -> None:
+        self.delivered.append(notice)
 
 
 class BriefingAgent(FakeAgent):
@@ -1019,7 +1019,7 @@ async def test_a_scheduled_run_sends_the_user_what_it_wrote(tmp_path):
     run = await runner.run("demo", trigger="schedule")
 
     assert run.status == "completed"
-    [card] = interaction.informed
+    [card] = interaction.delivered
     assert card["title"] == "demo is ready"
     assert "PWM: Personalized World Models" in card["message"]
     assert str(tmp_path / "2026-10-07.md") in card["message"]
@@ -1125,7 +1125,7 @@ async def test_a_run_started_by_hand_is_not_announced(tmp_path):
     await runner.run("demo", trigger="manual")
     await runner.run("demo", trigger="schedule", test_mode=True)
 
-    assert interaction.informed == []
+    assert interaction.delivered == []
 
 
 class SavingAgent(FakeAgent):

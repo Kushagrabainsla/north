@@ -26,6 +26,7 @@ from ledger import LedgerEntry, LedgerSource, LedgerStatus
 
 if TYPE_CHECKING:
     from approval.base import Notifier
+    from approval.notices import Notice, NoticeStore
     from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
     from ledger import LedgerWriter
@@ -69,12 +70,14 @@ class UserInteraction:
         stream_manager: Any | None = None,
         policy: ApprovalPolicy | None = None,
         ledger: LedgerWriter | None = None,
+        notices: NoticeStore | None = None,
     ) -> None:
         self._store = store
         self._notifier = notifier
         self._stream = stream_manager
         self._policy = policy
         self._ledger = ledger
+        self._notices = notices
 
     async def request_approval(
         self,
@@ -208,9 +211,40 @@ class UserInteraction:
         return await self.request_decision(card, event=CardEvent.QUESTION)
 
     async def inform(self, *, task_id: str | None, agent: str, title: str, message: str) -> None:
-        """Surface an INFORMATION card. Never blocks."""
+        """Surface an INFORMATION card. Never blocks.
+
+        A passing notice, for whoever is watching. What must reach the user when
+        nobody is watching - a reminder, a scheduled run's result - is `deliver`.
+        """
         card = self._build(CardType.INFORMATION, task_id, agent, title, message, [])
         await self.notify(card)
+
+    async def deliver(self, *, title: str, message: str, source: str, task_id: str | None = None) -> Notice | None:
+        """Bring *message* to the user, and record that it was delivered. Never blocks.
+
+        It waits on the dashboard until dismissed - the one channel every install
+        has - and goes to every other wired channel (TUI, Telegram, macOS) too.
+        The stored notice and a ledger entry are the record. Returns the notice,
+        or None when no notice store is wired.
+        """
+        notice = None
+        if self._notices is not None:
+            notice = self._notices.add(title=title, message=message, source=source, task_id=task_id)
+        await self.notify(self._build(CardType.INFORMATION, task_id, source, title, message, []))
+        if self._ledger is not None:
+            await self._ledger.write(
+                LedgerEntry.new(
+                    source=LedgerSource.SYSTEM,
+                    task_id=task_id,
+                    agent=source,
+                    action="notice_delivered",
+                    input=title,
+                    output=message,
+                    agent_output={"notice_id": notice.id if notice else None, "dashboard": notice is not None},
+                    status=LedgerStatus.COMPLETED,
+                )
+            )
+        return notice
 
     async def remind_waiting(self) -> str:
         """Tell the user what is still waiting on them. Cards never expire, so they are reminded instead."""

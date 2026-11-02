@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from agents.inbox import TaskInbox
 from approval import Notifier, TerminalNotifier
 from approval.continuation import CardContinuations
+from approval.notices import NoticeStore
 from approval.store import ApprovalStore
 from config.settings import settings
 from config.strategy import NorthSettings
@@ -69,6 +70,7 @@ class Dependencies:
     cost_tracker: CostTracker
     stream_manager: EventStreamManager
     approval_store: ApprovalStore
+    notice_store: NoticeStore
     cron_store: UserCronStore
     confidence_tracker: ConfidenceTracker
     episodic_store: EpisodicStore
@@ -403,6 +405,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         cost_tracker=cost_tracker,
         stream_manager=stream_manager,
         approval_store=ApprovalStore(settings.north_home / "approvals.db", continuations=card_continuations),
+        notice_store=NoticeStore(settings.north_home / "notices.db"),
         card_continuations=card_continuations,
         cron_store=UserCronStore(settings.north_home / "jobs.db"),
         confidence_tracker=confidence_tracker,

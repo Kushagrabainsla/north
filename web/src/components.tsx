@@ -2,7 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
-import type { AgentRun, Conversation, InferenceCategory } from "./types";
+import type { AgentRun, Conversation, InferenceCategory, Notice } from "./types";
 import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Bot, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
@@ -152,6 +152,20 @@ export function PromptTelemetry({ run }: { run: AgentRun }) {
 export function unpricedNote(count: unknown): string {
   const calls = Number(count || 0);
   return calls ? ` + ${calls} unpriced` : "";
+}
+
+/** What north delivered to you, newest first, each until you dismiss it. */
+export function NoticeList({ notices, onDismissed }: { notices: Notice[]; onDismissed: () => void }) {
+  const dismiss = async (id: string) => {
+    await post(`/web/api/notices/${id}/dismiss`, {});
+    onDismissed();
+  };
+  return <>{notices.map(notice =>
+    <div className="list-row notice-row" key={notice.id}>
+      <div><b>{notice.title}</b><small>{notice.message}</small><small>{timeAgo(notice.created_at)}</small></div>
+      <button className="ghost-button" onClick={() => void dismiss(notice.id)}>Dismiss</button>
+    </div>
+  )}</>;
 }
 
 export function InferenceCategories({ categories }: { categories: InferenceCategory[] }) {
