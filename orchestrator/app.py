@@ -40,7 +40,7 @@ from bootstrap.onboarding import bootstrap_paused, run_bootstrap_if_needed
 from coding_agents import CodingRunner, CommandVerifier, Gate, GateSessions, discover_backends
 from config.dependencies import build_production_dependencies
 from config.run_file import remove_run_file, write_run_file
-from config.security import load_secret
+from config.security import keep_home_private, load_secret
 from config.server_url import listening_url, server_url
 from config.settings import settings
 from flows import FlowRegistry, FlowRunStore
@@ -972,6 +972,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _step("loading secret")
     load_secret()
+    keep_home_private()
     _validate_config()
 
     _step("building dependencies")

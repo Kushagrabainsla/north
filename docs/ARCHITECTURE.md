@@ -649,9 +649,9 @@ context_overflow -> notify immediately. needs user input to resolve.
 
 ### 6.8 Orchestrator REST API
 
-The Orchestrator exposes a local REST API on `localhost:8000`. Both the CLI and the TUI are clients of this API. The notification callback server also calls this API when the user taps an action button.
+The Orchestrator exposes a local REST API, on `localhost:8000` unless started on another port; the server records where it listens in `<NORTH_HOME>/run/server.json` (0600), which is how the CLI finds it. Both the CLI and the TUI are clients of this API. The notification callback server also calls this API when the user taps an action button.
 
-All endpoints require the shared secret header `X-North-Secret: {secret}` (see Section 9.1).
+All endpoints require the shared secret header `X-North-Secret: {secret}` (see Section 9.1), or a dashboard session. Before sending the secret, the CLI asks the server to prove it holds it (`GET /health/proof?nonce=`, answered with an HMAC of the nonce), so nothing else listening on the port receives it. A dashboard session is issued only to a browser signed in here: once, by the one-time link `north web` asks for with the secret (`POST /web/api/pair`), then by the key that sign-in leaves in the browser's cookies. Being on the same machine is not enough.
 
 ```
 POST   /orchestrator/task                -> submit a prompt

@@ -1,9 +1,34 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, post } from "./api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { api, bootstrapSession, post } from "./api";
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
 
+const page = (search = "") => ({ location: { search, pathname: "/app/", hash: "#/" }, history: { replaceState: vi.fn() } });
+
+beforeEach(() => vi.stubGlobal("window", page()));
 afterEach(() => vi.unstubAllGlobals());
+
+describe("signing a browser in", () => {
+  it("sends the one-time token from `north web` once and clears it from the address", async () => {
+    const window = page("?pair=one-time");
+    vi.stubGlobal("window", window);
+    const fetch = vi.fn(async (_path: string, _init: RequestInit) => json(200, { csrf: "c" }));
+    vi.stubGlobal("fetch", fetch);
+
+    await bootstrapSession();
+
+    const [, init] = fetch.mock.calls[0]!;
+    expect(JSON.parse(String(init.body))).toEqual({ pair: "one-time" });
+    expect(window.history.replaceState).toHaveBeenCalledWith(null, "", "/app/#/");
+  });
+
+  it("says why a browser that is not signed in gets nothing", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      json(401, { detail: "This browser is not signed in to north. Open the dashboard with: north web" })));
+
+    await expect(bootstrapSession()).rejects.toThrow("Open the dashboard with: north web");
+  });
+});
 
 describe("a session the server forgot", () => {
   it("is renewed once and the request retried with the new token", async () => {

@@ -19,7 +19,13 @@ from approval.models import CardType, DecidedBy, MemoryKind
 from approval.unattended_rules import KINDS as RULE_KINDS
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
 from config.approval_mode import ApprovalMode
-from config.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
+from config.security import (
+    WEB_SESSION_COOKIE,
+    consume_pairing,
+    issue_pairing,
+    issue_web_session,
+    verify_api_access,
+)
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
 from jobs.models import display_job_status, late_note
@@ -37,6 +43,7 @@ from web.artifacts import (
     is_readable_artifact,
     resolve_artifact,
 )
+from web.browser_keys import BROWSER_KEY_COOKIE, BROWSER_KEY_MAX_AGE_SECONDS, known_browser, remember_browser
 
 from . import extensions as _extensions
 from .conversations import ConversationStore, Turn
@@ -221,11 +228,34 @@ def _codex_credentials(*, authorization_callback: Callable[[str], None] | None =
     return factory(authorization_callback=authorization_callback)
 
 
+NOT_SIGNED_IN = "This browser is not signed in to north. Open the dashboard with: north web"
+
+
+class SessionRequest(BaseModel):
+    # The one-time token in the address `north web` opens.
+    pair: str | None = Field(default=None, max_length=200)
+
+
 @session_router.post("/session")
-async def create_local_session(request: Request, response: Response) -> dict[str, Any]:
-    """Silently establish a browser session for a loopback-hosted app."""
+async def create_local_session(
+    request: Request, response: Response, body: SessionRequest | None = None
+) -> dict[str, Any]:
+    """A browser session, for a browser signed in here or bringing a pairing token from `north web`."""
     if (request.url.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1", "testserver"}:
         raise HTTPException(status_code=403, detail="The North web interface is local-only.")
+    home = current_services().require("north_home")
+    if not known_browser(home, request.cookies.get(BROWSER_KEY_COOKIE, "")):
+        if body is None or not body.pair or not consume_pairing(body.pair):
+            raise HTTPException(status_code=401, detail=NOT_SIGNED_IN)
+        response.set_cookie(
+            BROWSER_KEY_COOKIE,
+            remember_browser(home),
+            httponly=True,
+            samesite="strict",
+            secure=False,
+            max_age=BROWSER_KEY_MAX_AGE_SECONDS,
+            path="/",
+        )
     session = issue_web_session()
     response.set_cookie(
         WEB_SESSION_COOKIE,
@@ -237,6 +267,19 @@ async def create_local_session(request: Request, response: Response) -> dict[str
         path="/",
     )
     return {"csrf": session.csrf, "expires_at": session.expires_at}
+
+
+class PairingOut(BaseModel):
+    token: str
+    path: str
+    expires_at: float
+
+
+@router.post("/pair", response_model=PairingOut)
+async def pair_browser() -> PairingOut:
+    """A one-time token that signs one browser in. Asked for with the secret, by `north web`."""
+    token, expires_at = issue_pairing()
+    return PairingOut(token=token, path=f"/app/?pair={token}", expires_at=expires_at)
 
 
 class ConversationCreate(BaseModel):

@@ -1,8 +1,20 @@
 let csrf = "";
 
+// `north web` opens the dashboard with a one-time `?pair=` token that signs this
+// browser in; after that a cookie remembers it, across server restarts too.
 export async function bootstrapSession(): Promise<void> {
-  const response = await fetch("/web/session", { method: "POST", credentials: "same-origin" });
-  if (!response.ok) throw new Error("North could not establish a local browser session.");
+  const pair = new URLSearchParams(window.location.search).get("pair");
+  const response = await fetch("/web/session", {
+    method: "POST",
+    credentials: "same-origin",
+    ...(pair ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pair }) } : {}),
+  });
+  // The token works once; leave nothing to copy from the address bar or history.
+  if (pair) window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || "North could not establish a local browser session.");
+  }
   csrf = (await response.json()).csrf;
 }
 

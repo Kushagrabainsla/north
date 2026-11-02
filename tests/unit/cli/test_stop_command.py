@@ -77,6 +77,7 @@ def test_web_starts_the_server_without_auto_reload(monkeypatch):
     monkeypatch.setattr("cli.main._ensure_web_build", lambda: None)
     monkeypatch.setattr("cli.main._port_in_use", lambda host, port: False)
     monkeypatch.setattr("cli.main.start", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr("cli.main.pairing_url", lambda url: f"{url}/app/?pair=t")
 
     result = runner.invoke(app, ["web", "--no-open"])
     assert result.exit_code == 0

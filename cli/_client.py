@@ -68,6 +68,18 @@ def _headers(url: str | None = None) -> dict[str, str]:
     return {"X-North-Secret": load_secret()}
 
 
+def pairing_url(url: str) -> str:
+    """The dashboard address that signs a browser in: a one-time token from this home's north at *url*.
+
+    The dashboard is no longer open to any local process; `north web` asks for
+    the token with the secret, so only someone who can read it can sign a browser in.
+    """
+    url = url.rstrip("/")
+    response = httpx.post(f"{url}/web/api/pair", headers=_headers(url), timeout=_TIMEOUT)
+    response.raise_for_status()
+    return f"{url}{response.json()['path']}"
+
+
 # One client per CLI process - reused across calls so a command that makes several
 # requests (submit + poll + ledger fetch) keeps the connection alive instead of
 # paying TCP/TLS setup on every call.

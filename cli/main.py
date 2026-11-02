@@ -54,7 +54,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from cli._client import NotThisNorth, _api, _headers, base_url, running_port
+from cli._client import NotThisNorth, _api, _headers, base_url, pairing_url, running_port
 from cli._server import (
     _docker_available,
     _find_compose_file,
@@ -2062,10 +2062,26 @@ def web(
         # omitted option as its OptionInfo default, which is truthy, and that is
         # how `north web` came to run uvicorn with --reload over the home folder.
         start(host=host, port=port, reload=False, docker=docker, no_chat=True, workspace=workspace)
-    url = f"http://{host}:{port}/app/"
-    _console.print(f"  [dim]web cockpit [/dim]  {url}")
-    if not no_open:
-        webbrowser.open(url)
+    try:
+        url = pairing_url(f"http://{host}:{port}")
+    except NotThisNorth:
+        typer.secho(
+            f"ERROR: The server on port {port} is not your north, so no sign-in link was asked for. "
+            "Pick another port with --port.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    except httpx.HTTPError as exc:
+        typer.secho(f"ERROR: north did not give a sign-in link on port {port}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    if no_open:
+        # The link signs one browser in, once, within ten minutes.
+        _console.print(f"  [dim]web cockpit [/dim]  {url}")
+        return
+    signed_in = "[dim](this browser is signed in through a one-time link)[/dim]"
+    _console.print(f"  [dim]web cockpit [/dim]  http://{host}:{port}/app/  {signed_in}")
+    webbrowser.open(url)
 
 
 @app.command("stop")

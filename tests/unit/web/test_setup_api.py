@@ -13,6 +13,7 @@ from approval.interaction import UserInteraction
 from approval.models import ApprovalDecision
 from approval.store import ApprovalStore
 from config.browser_profiles import BrowserProfile, SetupProgress
+from config.security import issue_pairing
 from config.strategy import NorthSettings
 from orchestrator.api.settings import SettingsUpdate, update_settings
 from orchestrator.api_context import ApiServices, attach, bind_services
@@ -29,7 +30,7 @@ def services(tmp_path, monkeypatch):
     monkeypatch.setattr(setup, "PROVIDER_DEFINITIONS", ())
     settings = NorthSettings(tmp_path / "settings.json")
     settings.set_browser_profiles([BrowserProfile(id="university", name="University", purpose="University work")])
-    return ApiServices(north_settings=settings, web_runtime=WebRuntime())
+    return ApiServices(north_settings=settings, web_runtime=WebRuntime(), north_home=tmp_path)
 
 
 @pytest.mark.asyncio
@@ -141,7 +142,7 @@ def test_setup_routes_inherit_existing_session_and_csrf_protection(services):
     app.include_router(session_router)
     app.include_router(router)
     client = TestClient(app, base_url="http://127.0.0.1")
-    session = client.post("/web/session")
+    session = client.post("/web/session", json={"pair": issue_pairing()[0]})
     assert session.status_code == 200
     assert client.get("/web/api/setup").status_code == 200
     assert client.post("/web/api/setup", json={"status": "skipped", "step": 0}).status_code == 403

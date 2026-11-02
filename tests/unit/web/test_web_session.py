@@ -3,12 +3,15 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from config.security import verify_api_access
+from config.security import issue_pairing, verify_api_access
+from config.settings import settings
+from orchestrator.api_context import ApiServices, attach
 from web.api import session_router
 
 
 def _app() -> FastAPI:
     app = FastAPI()
+    attach(app, ApiServices(north_home=settings.north_home))
     app.include_router(session_router)
 
     @app.get("/protected", dependencies=[Depends(verify_api_access)])
@@ -22,9 +25,9 @@ def _app() -> FastAPI:
     return app
 
 
-def test_local_web_session_is_silent_and_csrf_protects_mutations() -> None:
+def test_a_signed_in_browser_gets_a_session_and_csrf_protects_mutations() -> None:
     client = TestClient(_app(), base_url="http://127.0.0.1")
-    session = client.post("/web/session")
+    session = client.post("/web/session", json={"pair": issue_pairing()[0]})
     assert session.status_code == 200
     assert "north_web_session" in client.cookies
 

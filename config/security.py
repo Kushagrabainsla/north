@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
+import os
 import secrets
 import time
 from dataclasses import dataclass
@@ -14,6 +16,8 @@ from dataclasses import dataclass
 from fastapi import Header, HTTPException, Request
 
 from config.settings import read_secret_file, settings
+
+logger = logging.getLogger(__name__)
 
 WEB_SESSION_COOKIE = "north_web_session"
 _WEB_SESSION_TTL_SECONDS = 12 * 60 * 60
@@ -42,6 +46,47 @@ def issue_web_session() -> WebSession:
     )
     _web_sessions[session.token] = session
     return session
+
+
+# Being on the same machine is not being the owner. Any local process, another
+# OS user's included, could POST /web/session and drive north (issue #76,
+# finding P1: user "nobody", who cannot read secret.key, switched north to yolo
+# and ran tasks on the owner's key). A browser is signed in once, by a one-time
+# pairing token only the owner can get (`north web` asks for it with the
+# secret), and is then remembered (web/browser_keys.py).
+_PAIRING_TTL_SECONDS = 10 * 60
+_pairings: dict[str, float] = {}
+
+
+def issue_pairing() -> tuple[str, float]:
+    """A one-time token that signs one browser in, and when it stops working."""
+    now = time.time()
+    for token in [token for token, expires_at in _pairings.items() if expires_at <= now]:
+        _pairings.pop(token, None)
+    token = secrets.token_urlsafe(32)
+    _pairings[token] = now + _PAIRING_TTL_SECONDS
+    return token, _pairings[token]
+
+
+def consume_pairing(token: str) -> bool:
+    """Whether *token* is a live pairing token. It works once."""
+    expires_at = _pairings.pop(token, 0.0)
+    return expires_at > time.time()
+
+
+def keep_home_private() -> None:
+    """Make north's home a folder only its owner can enter.
+
+    It was 0755 with every database 0644 inside, so conversations and memory were
+    readable by any local user whenever the parent folder was.
+    """
+    home = settings.north_home
+    try:
+        status = home.stat()
+        if hasattr(os, "getuid") and status.st_uid == os.getuid() and status.st_mode & 0o077:
+            home.chmod(0o700)
+    except OSError:
+        logger.warning("could not make %s private", home, exc_info=True)
 
 
 def _loopback_request(request: Request) -> bool:
