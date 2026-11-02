@@ -52,8 +52,12 @@ class ReadFileTool(Tool):
             return "(empty)"
         start = data.get("start_line", 1)
         numbered = "\n".join(f"{i:>6}\t{line}" for i, line in enumerate(content.splitlines(), start))
-        if data.get("truncated"):
-            numbered += f"\n… (truncated at {_MAX_LINES} lines)"
+        # Where these lines sit in the file. Every slice said "(truncated at 10000 lines)", a one-line
+        # read of line 2500 included, and on the direct path that note was the user's whole answer.
+        total = data.get("total_lines")
+        if data.get("truncated") and total:
+            numbered += f"\n… (lines {start}-{data.get('end_line', start)} of {total}"
+            numbered += f"; at most {_MAX_LINES} are read at once)" if data.get("lines", 0) >= _MAX_LINES else ")"
         return numbered
 
     async def run(self, input: ToolInput) -> ToolOutput:
@@ -114,6 +118,7 @@ def _read_sync(path: Path, start_line: int | None, end_line: int | None) -> Tool
                 "end_line": min(total, _MAX_LINES),
                 "lines": len(body),
                 "truncated": truncated,
+                "total_lines": total,
             },
         )
 
@@ -134,5 +139,6 @@ def _read_sync(path: Path, start_line: int | None, end_line: int | None) -> Tool
             "end_line": end,
             "lines": len(body),
             "truncated": end < total,
+            "total_lines": total,
         },
     )

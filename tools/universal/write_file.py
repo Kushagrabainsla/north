@@ -59,7 +59,9 @@ class WriteFileTool(Tool):
     }
 
     def format_output(self, data: dict[str, Any]) -> str:
-        return f"Created `{data.get('path', '?')}` ({data.get('bytes_written', 0)} bytes written)."
+        # An overwrite said "Created": the sentence that was the whole reply hid that a file's content was replaced.
+        done = "Replaced the content of" if data.get("replaced") else "Created"
+        return f"{done} `{data.get('path', '?')}` ({data.get('bytes_written', 0)} bytes written)."
 
     async def describe(self, input: ToolInput) -> Request | None:
         call = self._prepare(input)
@@ -129,11 +131,12 @@ def _read_existing(path: Path) -> str:
 
 def _write_sync(path: Path, content: str) -> ToolOutput:
     try:
+        replaced = path.is_file()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return ToolOutput(
             success=True,
-            data={"path": str(path), "bytes_written": len(content.encode("utf-8"))},
+            data={"path": str(path), "bytes_written": len(content.encode("utf-8")), "replaced": replaced},
         )
     except Exception as exc:
         return ToolOutput(success=False, error=str(exc))

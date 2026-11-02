@@ -5,6 +5,27 @@ import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
 import { SetupReminder } from "./Setup";
 
+/** What decides the model: the pinned one under manual routing, where power is not in use, else power. */
+export function dialsLine(system: DashboardData["system"]): string {
+  // The model's own name; the provider prefix crowded the health label out of the tile.
+  const pinned = system.routing === "manual" && system.model ? system.model.split(":").pop() : "";
+  const dial = pinned ? `Model ${pinned} (pinned)` : `Power ${system.power}`;
+  return `${dial} · ${system.autonomy}`;
+}
+
+/** What memory holds, counted. The tile said "4 context documents" over an empty memory. */
+export function memoryLine(memory: DashboardData["memory"]): { count: number; label: string; note: string } {
+  const facts = memory?.facts ?? 0;
+  const documents = memory?.documents ?? 0;
+  return {
+    count: facts,
+    label: facts === 1 ? "fact about you" : "facts about you",
+    note: documents
+      ? `${documents} of ${memory?.of_documents ?? 2} documents written: north stars and judgement rules.`
+      : "No north stars or judgement rules written yet.",
+  };
+}
+
 export function Dashboard() {
   const { data, error, loading, reload } = useResource<DashboardData>("/web/api/dashboard", 10000);
   if (loading) return <Loading />;
@@ -18,7 +39,7 @@ export function Dashboard() {
     <SetupReminder/>
     <div className="cockpit-grid">
       <Panel title="System" label="Status" to="/system" className="system-panel">
-        <div className="hero-status"><HealthIndicator variant="panel"/><div><p>Power {data.system.power} · {data.system.autonomy}<YoloBadge mode={data.system.autonomy}/></p></div></div>
+        <div className="hero-status"><HealthIndicator variant="panel"/><div><p>{dialsLine(data.system)}<YoloBadge mode={data.system.autonomy}/></p></div></div>
       </Panel>
       <Panel title="Attention" label={`${data.attention.length + data.notices.length} items`} to="/approvals" className={data.attention.length + data.notices.length ? "attention-panel" : ""}>
         <NoticeList notices={data.notices.slice(0, 3)} onDismissed={() => void reload()}/>
@@ -36,14 +57,14 @@ export function Dashboard() {
       <Panel title={todaysBriefing ? "Today's briefing" : "Latest briefing"} label="Daily intelligence" to="/artifacts" className="wide-panel briefing-panel">
         {briefing ? <div className="briefing-summary"><div className="sun-mark"><Sun size={18}/></div><div><b>{briefing.name}</b><p>{todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}</p></div><NavLink to="/artifacts" className="primary-button">Open artifact</NavLink></div> : <Empty>No briefing has been generated yet.</Empty>}
       </Panel>
-      <Panel title="Flows" label={`${data.cron.length} scheduled`} to="/flows">
+      <Panel title="Flows" label={`${data.scheduled ?? data.cron.length} scheduled`} to="/flows">
         {data.jobs.length ? data.jobs.slice(0, 3).map(job => <div className="list-row" key={job.job_id}><div><b>{job.task}</b><small>{[formatDateTime(job.scheduled_at), job.late_note].filter(Boolean).join(" · ")}</small></div><Status value={job.status}/></div>) : <Empty>No flow has run yet.</Empty>}
       </Panel>
       <Panel title="Artifacts" label={`${data.artifacts.length} recent`} to="/artifacts">
         {data.artifacts.length ? data.artifacts.slice(0, 4).map(file => <div className="list-row compact" key={file.id}><div><b>{file.name}</b><small>{file.kind} · {timeAgo(file.updated_at)}</small></div><File size={14}/></div>) : <Empty>No generated outputs.</Empty>}
       </Panel>
       <Panel title="Memory" label="Context" to="/memory">
-        <div className="metric"><strong>4</strong><span>context documents</span></div><p className="muted">Identity, goals, preferences, and judgement rules are available to North.</p>
+        {(() => { const memory = memoryLine(data.memory); return <><div className="metric"><strong>{memory.count}</strong><span>{memory.label}</span></div><p className="muted">{memory.note}</p></>; })()}
       </Panel>
       <Panel title="Usage" label="Last 7 days" to="/insights">
         <div className="metric-row"><div className="metric"><strong>{String(data.metrics.total_tasks || 0)}</strong><span>tasks</span></div><div className="metric"><strong>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</strong><span>model cost</span></div></div>

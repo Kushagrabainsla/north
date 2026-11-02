@@ -1446,9 +1446,16 @@ def status() -> None:
         settings = _api("GET", "/orchestrator/settings").json()
         power, autonomy = settings["power"], settings["autonomy"]
     except Exception:
-        power, autonomy = "?", "?"
+        settings, power, autonomy = {}, "?", "?"
     badge = f"  {YOLO_BADGE}" if autonomy == ApprovalMode.YOLO else ""
-    _console.print(f"  [dim]power     [/dim] {power}   [bright_black](autonomy: {autonomy})[/bright_black]{badge}")
+    if settings.get("routing") == "manual" and settings.get("model"):
+        # A pinned model decides; power is not in use (the Settings page says so). This said "power cruise".
+        _console.print(
+            f"  [dim]model     [/dim] {settings['model']} (pinned; power not in use)   "
+            f"[bright_black](autonomy: {autonomy})[/bright_black]{badge}"
+        )
+    else:
+        _console.print(f"  [dim]power     [/dim] {power}   [bright_black](autonomy: {autonomy})[/bright_black]{badge}")
 
     # ── Inference models per pool ──
     try:

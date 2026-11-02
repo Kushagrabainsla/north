@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
-from inference.decisions import EXHAUSTED, FAILED, DecisionLog, RoutingDecision
+from inference.decisions import EXHAUSTED, FAILED, SUCCESS, DecisionLog, RoutingDecision
 from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
@@ -422,6 +422,9 @@ def _finish(decision: RoutingDecision, walk: ChainWalk) -> RoutingDecision:
     decision.skipped = [skip.as_dict() for skip in walk.skipped]
     # The stored list is capped, so the true total travels separately - otherwise
     # a reader counts 40 endpoints and concludes that is all north tried.
-    decision.endpoints = len(walk.skipped)
-    decision.attempted = sum(1 for skip in walk.skipped if skip.tried)
+    # The endpoint that answered is not a skip, so it was counted in neither: every call answered
+    # first time read "1 models · 0 endpoints · 0 called".
+    answered = 1 if decision.outcome == SUCCESS else 0
+    decision.endpoints = len(walk.skipped) + answered
+    decision.attempted = sum(1 for skip in walk.skipped if skip.tried) + answered
     return decision

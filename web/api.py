@@ -7,7 +7,7 @@ import contextlib
 import mimetypes
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -29,8 +29,10 @@ from config.security import (
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
 from jobs.models import display_job_status, late_note
+from jobs.scheduler import V1_CRON_ENTRIES, merge_entries
 from ledger.base import LedgerFilters
 from ledger.models import INFERENCE_CALL, LedgerSource
+from memory import ContextDocument
 from memory.extraction import learning_status
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
@@ -1389,6 +1391,30 @@ async def get_artifact(artifact_id: str) -> dict[str, Any]:
     }
 
 
+# The documents you write yourself; your profile is rebuilt from your facts and soul is north's own.
+_YOUR_DOCUMENTS = (ContextDocument.NORTH_STARS, ContextDocument.JUDGEMENT_RULES)
+
+
+def _scheduled_count(user_rows: list[Mapping[str, Any]]) -> int:
+    """The schedules that run, built-ins included, as the Flows page lists them."""
+    return sum(1 for entry in merge_entries(list(V1_CRON_ENTRIES), user_rows) if entry.enabled)
+
+
+async def _memory_counts() -> dict[str, int]:
+    """What memory holds, for the dashboard tile: it showed a fixed "4 context documents" over an empty folder."""
+    services = current_services()
+    facts = await services.fact_store.all_facts() if services.fact_store is not None else []
+    documents = 0
+    if services.context_store is not None:
+        for document in _YOUR_DOCUMENTS:
+            documents += 1 if (await services.context_store.read(document)).strip() else 0
+    return {
+        "facts": sum(1 for fact in facts if fact.get("status", "active") == "active"),
+        "documents": documents,
+        "of_documents": len(_YOUR_DOCUMENTS),
+    }
+
+
 @router.get("/dashboard")
 async def dashboard() -> dict[str, Any]:
     active, jobs, cron, metrics, ledger_entries, conversations, artifacts = await asyncio.gather(
@@ -1412,7 +1438,18 @@ async def dashboard() -> dict[str, Any]:
         for artifact in recent_artifacts
     ]
     return {
-        "system": {"status": "online", "power": settings.power.value, "autonomy": settings.autonomy.value},
+        "system": {
+            "status": "online",
+            "power": settings.power.value,
+            "autonomy": settings.autonomy.value,
+            # Under manual routing the pinned model decides and power is not in use.
+            "routing": settings.routing_mode.value,
+            "model": settings.pinned_model,
+        },
+        # The schedules that run, built-ins included, as the Flows page counts them: the tile counted only
+        # yours and read "0 scheduled" beside two built-ins under Next up.
+        "scheduled": _scheduled_count(cron),
+        "memory": await _memory_counts(),
         "attention": [card.model_dump(mode="json") for card in current_services().require("approval_store").pending()],
         "notices": _notices(),
         "active_tasks": [task.model_dump(mode="json") for task in active],

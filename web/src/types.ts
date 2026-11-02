@@ -209,7 +209,9 @@ export interface Notice {
 }
 
 export interface DashboardData {
-  system: { status: string; power: string; autonomy: string };
+  system: { status: string; power: string; autonomy: string; routing?: string; model?: string | null };
+  scheduled?: number;
+  memory?: { facts: number; documents: number; of_documents: number };
   attention: Approval[];
   notices: Notice[];
   active_tasks: { task_id: string; status: string; created_at: string }[];
