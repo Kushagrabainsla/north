@@ -147,6 +147,10 @@ class _RunTally:
     successful_tool_actions: dict[str, int] = field(default_factory=dict)
     models_used: list[str] = field(default_factory=list)
     tool_call_count: int = 0
+    # The last change the run tried, when it was refused or failed and nothing changed after it.
+    stopped_change: str | None = None
+    # Whether the run left a card for the user to decide.
+    left_for_user: bool = False
 
     def add(self, response: ToolCallResponse) -> None:
         self.cost_usd += response.cost_usd
@@ -175,7 +179,26 @@ class _RunTally:
             key = f"{tool_name}:{action.strip().lower()}"
             self.successful_tool_actions[key] = self.successful_tool_actions.get(key, 0) + 1
 
-    def answer(self, output: str, summary: str) -> dict[str, Any]:
+    def note_outcome(self, tool_name: str, params: dict[str, Any], *, mutating: bool, success: bool) -> None:
+        """What one call says about how the run ends: a change that did not happen, a card left for you."""
+        if mutating:
+            self.stopped_change = None if success else tool_name
+        if success and tool_name == "request_approval" and params.get("wait") is False:
+            self.left_for_user = True
+
+    def outcome(self) -> str:
+        """How the run ended, from what it did: never from the words of its answer.
+
+        The answer's words were matched against regexes: "Yes. blocked" was badged
+        BLOCKED, and any answer ending in a question WAITING FOR USER (issue #76,
+        finding M10). Blocked means the last change it tried was refused or
+        failed; waiting means it left you a card to decide.
+        """
+        if self.stopped_change is not None:
+            return "blocked"
+        return "waiting_for_user" if self.left_for_user else "response_ready"
+
+    def answer(self, output: str, summary: str, *, outcome: str | None = None) -> dict[str, Any]:
         return _final_answer(
             output,
             summary,
@@ -190,6 +213,7 @@ class _RunTally:
             cache_miss_count=self.cache_waste.totals.miss_count,
             evidence_counts=self.successful_tool_calls,
             evidence_actions=self.successful_tool_actions,
+            outcome=outcome or self.outcome(),
         )
 
 
@@ -561,6 +585,7 @@ class AgenticLLMAgent(LLMAgent):
                 return tally.answer(
                     "Context window exceeded - the conversation is too long to continue.",
                     "Context overflow",
+                    outcome="blocked",
                 )
 
             # Stream finished - release any reasoning/answer fragment the splitter
@@ -590,6 +615,7 @@ class AgenticLLMAgent(LLMAgent):
                 return tally.answer(
                     content or "The model returned no tool calls and no message.",
                     "No actionable response",
+                    outcome="blocked",
                 )
 
             for call in response.calls:
@@ -603,10 +629,13 @@ class AgenticLLMAgent(LLMAgent):
             for call, (name, success) in zip(response.calls, evidence, strict=True):
                 if success:
                     tally.note_success(name, call.params)
+                mutating = self._is_mutating_call(call, tool_map)
+                tally.note_outcome(name, call.params, mutating=mutating, success=success)
 
         return tally.answer(
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
+            outcome="blocked",
         )
 
     async def _heartbeat(self, payload: AgentPayload) -> None:
@@ -1615,6 +1644,7 @@ def _final_answer(
     cache_miss_count: int = 0,
     evidence_counts: dict[str, int] | None = None,
     evidence_actions: dict[str, int] | None = None,
+    outcome: str = "response_ready",
 ) -> dict[str, Any]:
     return {
         "output": output,
@@ -1622,7 +1652,7 @@ def _final_answer(
         "data": {
             "evidence_counts": evidence_counts or {},
             "evidence_actions": evidence_actions or {},
-            "outcome_status": _infer_outcome_status(output),
+            "outcome_status": outcome,
         },
         "requires_approval": False,
         "has_question": False,
@@ -1642,24 +1672,3 @@ def _final_answer(
     }
 
 
-_WAITING_FOR_USER_RE = re.compile(
-    r"\b(?:tell me once|let me know once|please (?:confirm|choose|provide|open|start)|"
-    r"waiting for (?:your|the user)|need you to|which (?:option|browser|profile)|"
-    r"once (?:it|you) [^.\n]{0,100}(?:tell me|let me know)|"
-    r"(?:do|would|could|can) you (?:want|prefer|confirm|choose|provide|open|start))\b",
-    re.IGNORECASE,
-)
-_BLOCKED_OUTCOME_RE = re.compile(
-    r"\b(?:blocked|cannot continue|can't continue|unable to continue|"
-    r"missing (?:a )?(?:capability|credential|dependency))\b",
-    re.IGNORECASE,
-)
-
-
-def _infer_outcome_status(output: str) -> str:
-    """Classify what the turn achieved without equating an answer with a finished goal."""
-    if _WAITING_FOR_USER_RE.search(output) or output.rstrip().endswith("?"):
-        return "waiting_for_user"
-    if _BLOCKED_OUTCOME_RE.search(output):
-        return "blocked"
-    return "response_ready"

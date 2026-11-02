@@ -22,6 +22,7 @@ import { Empty, ErrorNotice, formatDateTime, InferenceCategories, Loading, PageH
 import type { AgentRun, Approval, Artifact, Conversation, LedgerEntry, TaskDetail } from "../types";
 import { RoutingAttempts } from "./routing";
 import { stageIcon } from "./Artifacts";
+import { turnStatus } from "./Chat";
 
 /** One source of truth for the lifecycle actions shown in the task list. */
 const TASK_ACTION_STATUS: Record<string, string> = {
@@ -41,9 +42,12 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "needs_attention"]
 export const isTerminal = (entry: LedgerEntry) =>
   Boolean(entry.action && TERMINAL.has(TASK_ACTION_STATUS[entry.action]));
 
-const taskStatus = (rows: LedgerEntry[]) => {
+export const taskStatus = (rows: LedgerEntry[]) => {
   const lifecycle = rows.find(row => row.action && TASK_ACTION_STATUS[row.action]);
-  return lifecycle?.action ? TASK_ACTION_STATUS[lifecycle.action] : "running";
+  if (!lifecycle?.action) return "running";
+  // Finished, but what was asked did not happen: the chat says BLOCKED, so the list does too.
+  if (lifecycle.action === "task_completed" && lifecycle.error_type === "blocked") return "blocked";
+  return TASK_ACTION_STATUS[lifecycle.action];
 };
 
 export interface TaskSummary {
@@ -140,9 +144,14 @@ function TaskActivity({ taskId }: { taskId: string }) {
   const runs = detail.data?.runs || [];
   const inferenceCategories = detail.data?.inference_categories || [];
   const prompt = entries.find(entry => entry.action === "task_received")?.input || taskId;
-  const status = detail.data?.task?.status || taskStatus(entries);
-  const mine = (artifacts.data || []).filter(file => file.task === taskId);
   const asked = (approvals.data || []).filter(card => card.task_id === taskId);
+  // The same status the chat shows for this task, from the same record.
+  const status = turnStatus(
+    String(detail.data?.task?.status || taskStatus(entries)),
+    asked.some(card => card.status === "pending"),
+    detail.data?.outcome_status,
+  );
+  const mine = (artifacts.data || []).filter(file => file.task === taskId);
   const spend = inferenceCategories.length
     ? inferenceCategories.reduce((total, item) => total + item.cost_usd, 0)
     : runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
@@ -151,7 +160,7 @@ function TaskActivity({ taskId }: { taskId: string }) {
   // last entry carrying any output, which for a running task is whatever it
   // happened to log - a skill list, a classification - presented under a
   // heading that claims it is the answer.
-  const finished = ["completed", "failed", "cancelled", "needs_attention"].includes(String(status));
+  const finished = !["running", "queued", "retrying", "paused", "working", "waiting_for_approval"].includes(status);
 
   return <div className="page task-detail">
     <PageHeader eyebrow="Task" title={prompt}

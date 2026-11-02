@@ -3,7 +3,8 @@
 // every field the task list shows has to be recovered from it.
 
 import { describe, expect, it } from "vitest";
-import { isTerminal, summarise } from "./Tasks";
+import { turnStatus } from "./Chat";
+import { isTerminal, summarise, taskStatus } from "./Tasks";
 import type { LedgerEntry } from "../types";
 
 let counter = 0;
@@ -96,5 +97,17 @@ describe("what counts as the end of a task", () => {
     expect(isTerminal(entry({ action: "agent_completed" }))).toBe(false);
     expect(isTerminal(entry({ action: "task_received" }))).toBe(false);
     expect(isTerminal(entry({}))).toBe(false);
+  });
+});
+
+describe("a task whose work was blocked", () => {
+  it("is listed as blocked, not as completed work, as the chat shows it", () => {
+    const rows = [
+      { id: "e2", timestamp: "2026-11-02T10:00:01Z", source: "system", task_id: "t1", action: "task_completed", error_type: "blocked" },
+      { id: "e1", timestamp: "2026-11-02T10:00:00Z", source: "prompt", task_id: "t1", action: "task_received", input: "save my plan" },
+    ] as LedgerEntry[];
+
+    expect(taskStatus(rows)).toBe("blocked");
+    expect(turnStatus("completed", false, "blocked")).toBe("blocked");
   });
 });

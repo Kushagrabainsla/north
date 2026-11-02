@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agents.agentic_llm_agent import _infer_outcome_status
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
@@ -100,12 +99,6 @@ async def test_mcp_dispatch_retains_north_context_without_forwarding_it_to_the_e
     assert success, output
     assert "synthetic-alert" in output
     client.call_tool.assert_awaited_once_with("search_gmail_messages", call.params)
-
-
-def test_outcome_status_marks_direct_questions_and_user_handoffs_as_waiting() -> None:
-    assert _infer_outcome_status("Do you want me to continue?") == "waiting_for_user"
-    assert _infer_outcome_status("Once it is open, tell me and I will verify the connection.") == "waiting_for_user"
-    assert _infer_outcome_status("The requested report is ready.") == "response_ready"
 
 
 @pytest.mark.parametrize("name", ["general"])

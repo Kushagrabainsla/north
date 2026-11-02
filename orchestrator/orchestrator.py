@@ -174,6 +174,8 @@ class Orchestrator:
         self._interaction = interaction
         self._synthesizer = synthesizer
         self._tracked_router = tracked_router
+        # Tasks one of whose agents ended blocked, so the task's ending row says so (see _finish_task).
+        self._blocked_tasks: set[str] = set()
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
         # Composition-injected factory that builds a tool-call envelope
@@ -1540,6 +1542,11 @@ class Orchestrator:
         output_parts: list[str] = []
         if failures:
             output_parts.append(f"Failed agents: {', '.join(failures)}")
+        # The work ended but what was asked did not happen: the Tasks page listed these as
+        # "completed" and counted them as finished work while the chat said BLOCKED (finding P11).
+        if task_id in self._blocked_tasks and err is None:
+            err = "blocked"
+        self._blocked_tasks.discard(task_id)
         await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
@@ -1859,6 +1866,8 @@ class Orchestrator:
             value=result.output,
             status="completed",
         )
+        if isinstance(result.data, dict) and result.data.get("outcome_status") == "blocked":
+            self._blocked_tasks.add(task_id)
 
         await self._journal.write(
             LedgerEntry.new(
