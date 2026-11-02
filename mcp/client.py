@@ -6,9 +6,9 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 from typing import Any
 
+from coding_agents.environment import agent_environment
 from mcp.models import McpCallResult, McpServerConfig, McpToolDefinition
 from utils.version import NORTH_VERSION
 
@@ -47,7 +47,9 @@ class McpClient:
             if self._proc is not None:
                 return
 
-            env = {**os.environ, **self.config.env}
+            # A third-party tool server gets what a process needs plus its own `env`
+            # block, never north's: it inherited everything, NORTH_ANTHROPIC_API_KEY included.
+            env = {**agent_environment(network=True), **self.config.env}
             try:
                 self._proc = await asyncio.create_subprocess_exec(
                     self.config.command,

@@ -47,6 +47,11 @@ def _answer(request: dict) -> dict:
     return {}
 
 
+# The names (never values) of the variables this server was started with, for a test that checks what it inherits.
+if dump := os.environ.get("FAKE_MCP_ENV_DUMP"):
+    with open(dump, "w", encoding="utf-8") as handle:
+        json.dump(sorted(os.environ), handle)
+
 for line in sys.stdin:
     request = json.loads(line)
     if "id" not in request:

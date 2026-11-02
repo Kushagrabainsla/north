@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -60,19 +61,32 @@ class McpManager:
                 logger.warning("Failed to load MCP config from %s", path, exc_info=True)
         return servers
 
-    async def start_all(self) -> None:
-        """Start all enabled MCP servers."""
-        configs = self.load_configs()
-        for name, cfg in configs.items():
-            if name in self._clients:
-                continue
-            client = McpClient(name, cfg)
-            try:
-                await client.start()
-                self._clients[name] = client
-                logger.info("Started MCP server %r with %d tools", name, len(client.tools))
-            except Exception:
-                logger.warning("Failed to start MCP server %r", name, exc_info=True)
+    async def start_all(self, registry: ToolRegistry | None = None) -> None:
+        """Start all enabled MCP servers at once, offering each one's tools in *registry* as soon as it is up.
+
+        One after another, a server that never answered held north's startup for
+        its whole timeout, each in turn (36 s with one hung server in the issue
+        #76 test), and was then left running as north's child.
+        """
+        configs = {name: cfg for name, cfg in self.load_configs().items() if name not in self._clients}
+        await asyncio.gather(*(self._start(name, cfg, registry) for name, cfg in configs.items()))
+
+    async def _start(self, name: str, config: McpServerConfig, registry: ToolRegistry | None = None) -> None:
+        client = McpClient(name, config)
+        try:
+            await client.start()
+        except asyncio.CancelledError:
+            await client.close()  # north is stopping while this server starts
+            raise
+        except Exception:
+            logger.warning("Failed to start MCP server %r; stopping it", name, exc_info=True)
+            await client.close()
+            return
+        self._clients[name] = client
+        logger.info("Started MCP server %r with %d tools", name, len(client.tools))
+        if registry is not None:
+            for tool_def in client.tools:
+                registry.register(McpTool(name, client, tool_def))
 
     def register_tools(self, registry: ToolRegistry) -> int:
         """Register all tools from active MCP clients into the given ToolRegistry."""

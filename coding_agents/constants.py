@@ -44,3 +44,20 @@ INHERITED_ENVIRONMENT: tuple[str, ...] = (
     "TZ",
     "__CF_USER_TEXT_ENCODING",
 )
+# How a child that reaches the network gets out: proxies and the certificates to trust. Settings,
+# not secrets, given to a tool server that calls a web API; a coding agent runs without them.
+NETWORK_ENVIRONMENT: tuple[str, ...] = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+)

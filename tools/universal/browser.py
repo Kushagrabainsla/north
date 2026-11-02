@@ -739,6 +739,8 @@ class BrowserTool(Tool):
         self._binary_cmd = binary_cmd
         self._north_settings = north_settings
         self._existing_browser = existing_browser
+        # Browsers chrome-agent started for north (isolated profiles, plain sessions), closed by aclose.
+        self._started_browsers: set[str] = set()
         self._verified_bindings: dict[tuple[str, str], tuple[str, str]] = {}
         # Sites each (task, profile) has opened with your approval; reading there needs no more.
         self._task_sites: dict[tuple[str, str], set[str]] = {}
@@ -808,10 +810,10 @@ class BrowserTool(Tool):
                 return connection
             connection_data = connection.data
         prefix = self._prefix({**params, "page": "north-profile-check"}, profile.browser_name)
-        navigation = await _run_chrome_agent([*prefix, "goto", "chrome://version"], timeout)
+        navigation = await self._chrome_agent([*prefix, "goto", "chrome://version"], timeout)
         if not _tool_output_for("goto", navigation).success:
             return ToolOutput(success=False, error="Could not open the browser profile identity check.")
-        result = await _run_chrome_agent(
+        result = await self._chrome_agent(
             [*prefix, "eval", 'document.getElementById("profile_path").textContent'], timeout
         )
         identity = _tool_output_for("eval", result)
@@ -1033,8 +1035,30 @@ class BrowserTool(Tool):
             self._task_sites.pop(key, None)
         return output
 
+    async def _chrome_agent(self, command: list[str], timeout: int) -> _CommandResult:
+        """Run chrome-agent, remembering the browser the command starts so north can close it."""
+        if "--browser" in command:
+            name = command[command.index("--browser") + 1]
+            if command[-1] == "close" and "--page" not in command:
+                self._started_browsers.discard(name)
+            else:
+                self._started_browsers.add(name)
+        return await _run_chrome_agent(command, timeout)
+
     async def aclose(self) -> None:
-        """Disconnect existing Chrome without closing task drafts or the user's browser."""
+        """Close every browser north started; disconnect existing Chrome without closing the user's browser.
+
+        chrome-agent starts Chrome as a daemon outside its own process group, so
+        stopping chrome-agent left it running. In the issue #76 test one headless
+        Chromium outlived three `north stop`s, with an unauthenticated DevTools
+        port and a tab for every task, one holding a URL with a secret in it.
+        """
+        for name in sorted(self._started_browsers):
+            try:
+                await _run_chrome_agent([*self._get_cmd(), "--json", "--browser", name, "close"], 15)
+            except (_ChromeAgentError, RuntimeError):
+                logger.warning("could not close the browser %s north started", name, exc_info=True)
+        self._started_browsers.clear()
         if self._existing_browser is not None:
             await self._existing_browser.aclose()
 
@@ -1100,14 +1124,14 @@ class BrowserTool(Tool):
             if action == "read" and params.get("url"):
                 navigation = _tool_output_for(
                     "goto",
-                    await _run_chrome_agent(
+                    await self._chrome_agent(
                         self._get_cmd() + self._build_args("goto", params, session_id),
                         int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)),
                     ),
                 )
                 if not navigation.success:
                     return navigation
-            result = await _run_chrome_agent(command, int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)))
+            result = await self._chrome_agent(command, int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)))
         except _ChromeAgentError as exc:
             return ToolOutput(success=False, error=str(exc))
 

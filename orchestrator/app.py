@@ -911,13 +911,25 @@ async def _start_mcp_servers(tool_registry: ToolRegistry) -> McpManager:
     Only `~/.north/mcp.json`, the user's own file: an `mcp.json` inside a workspace (a cloned repository)
     is not loaded, because starting a server runs whatever command that file names. The manager existed
     for months but nothing started it, so a configured server was never loaded. A server that fails to
-    start is logged and skipped; it does not stop north.
+    start is logged, stopped and skipped; it does not stop north.
     """
     manager = McpManager(workspace_root=None)
-    await manager.start_all()
+    await _serve_mcp(manager, tool_registry)
+    return manager
+
+
+async def _serve_mcp(manager: McpManager, tool_registry: ToolRegistry, tool_index: ToolIndex | None = None) -> None:
+    """Start *manager*'s servers and offer their tools; indexed for retrieval once they are registered.
+
+    Run after north is serving: awaited during startup, one server that never
+    answered kept north from answering anything for its whole timeout (36 s in
+    the issue #76 test).
+    """
+    await manager.start_all(tool_registry)
     if registered := manager.register_tools(tool_registry):
         logger.info("Registered %d MCP tool(s)", registered)
-    return manager
+        if tool_index is not None:
+            await _populate_tool_index(tool_index, tool_registry)
 
 
 async def _record_where_this_server_listens(attempts: int = 600, every: float = 0.1) -> None:
@@ -1060,8 +1072,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     tool_registry.register(create_skill_tool)
     tool_registry.register(UseFlowTool(flow_registry))
-    _step("starting MCP servers")
-    deps.mcp_manager = await _start_mcp_servers(tool_registry)
+    # Started once north is serving (below); closed at shutdown either way.
+    deps.mcp_manager = McpManager(workspace_root=None)
     flow_store = FlowRunStore(settings.north_home / "flow_runs.db")
     if cut_off := flow_store.pause_interrupted():
         logger.info("Paused %d flow run(s) cut off by the last shutdown; they can be resumed", cut_off)
@@ -1254,6 +1266,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # The CLI finds this server, on whatever port, through the run file.
     background_tasks.append(asyncio.create_task(_record_where_this_server_listens(), name="run_file"))
+    background_tasks.append(
+        asyncio.create_task(_guarded(_serve_mcp(deps.mcp_manager, tool_registry, tool_index), "mcp"), name="mcp")
+    )
     _step("startup complete - yielding to server")
     try:
         yield
