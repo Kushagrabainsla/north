@@ -42,7 +42,7 @@ from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
 from agents.tool_results import is_delegation_failure as _is_delegation_failure
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent
-from approval.models import ApprovalDecision, Card, CardField, CardType
+from approval.models import ApprovalDecision, Card, CardField, CardType, DecidedBy
 from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import AllModelsRateLimitedError, ContextTooLargeError, is_model_unavailable_error
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
@@ -968,6 +968,7 @@ class AgenticLLMAgent(LLMAgent):
             result_str = json.dumps(
                 {
                     "decision": card.status,
+                    "decided_by": _answered_by(card),
                     "response": card.response,
                     "card_id": card.id,
                 }
@@ -1398,7 +1399,7 @@ class AgenticLLMAgent(LLMAgent):
         answer = (card.chosen_option or "").strip()
         if not answer:
             return json.dumps({"success": False, "answered": False, "error": _ASK_USER_NO_ANSWER})
-        return json.dumps({"success": True, "answered": True, "answer": answer})
+        return json.dumps({"success": True, "answered": True, "answer": answer, "answered_by": _answered_by(card)})
 
     async def _call_tool(
         self,
@@ -1439,6 +1440,23 @@ class AgenticLLMAgent(LLMAgent):
 
 
 _EMPTY: tuple[Any, ...] = (None, "", [], {})
+
+
+# Who answered a card, as the agent is told it. Told only the answer, an agent
+# reported north's yolo answers as yours: "you've said you'll delete it yourself",
+# "You approved the deletion", for cards you never saw.
+_ANSWERED_BY: dict[str, str] = {
+    DecidedBy.YOU: "the user",
+    DecidedBy.REPLAY: "north, replaying the user's own answer to the same card",
+    DecidedBy.SAFE_LIST: "north's safe list; the user has not seen this card",
+    DecidedBy.MEMORY_DECIDER: "north's memory decider, for the user; the user has not seen this card",
+    DecidedBy.YOLO: "north in yolo mode, which says yes to everything; the user has not seen this card",
+    DecidedBy.NORTH: "north's fixed rules; the user has not seen this card",
+}
+
+
+def _answered_by(card: Card) -> str:
+    return _ANSWERED_BY.get(card.decided_by or DecidedBy.YOU, "north; the user has not seen this card")
 
 
 def _tool_result_event(tool_name: str, result_str: str, success: bool) -> dict[str, Any]:
@@ -1670,5 +1688,3 @@ def _final_answer(
         "successful_tools": successful_tools if successful_tools is not None else [],
         "models_used": models_used or [],
     }
-
-

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from approval.models import ApprovalDecision, DecidedBy, MemoryRef
 from approval.unattended import forbidden_reason
-from config.approval_mode import YES_ANSWER, ApprovalMode, approve_option
+from config.approval_mode import YES_ANSWER, ApprovalMode, affirmative_option
 
 if TYPE_CHECKING:
     from approval.approval_memory import ApprovalMemory
@@ -287,10 +287,15 @@ class ApprovalPolicy:
 
         YOLO gives the yes answer. Autonomous lets the memory decider answer.
         Ask and Safe put every question to you: no model answers in your place.
+
+        A question whose options include no yes gets "proceed with your best
+        judgement", not its first option: asked "How would you like to proceed?"
+        with "I'll delete it myself" first, YOLO picked that, and the reply told
+        you that you had said you would delete it yourself.
         """
         mode = self.mode_provider()
         if mode is ApprovalMode.YOLO:
-            chosen = approve_option(card.options) if card.options else YES_ANSWER
+            chosen = affirmative_option(card.options) or YES_ANSWER
             return Answer(ApprovalDecision.ANSWERED, chosen, "yes to everything", DecidedBy.YOLO)
         if mode is ApprovalMode.AUTONOMOUS and self.decider is not None:
             return await self.decider.answer(card)

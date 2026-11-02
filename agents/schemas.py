@@ -140,7 +140,9 @@ REQUEST_APPROVAL_SCHEMA: dict = {
         "name": "request_approval",
         "description": (
             "Request explicit user approval before taking an irreversible action "
-            "(send email, submit form, delete data, etc.)."
+            "(send email, submit form, delete data, etc.). Approving the card runs nothing by itself: "
+            "you then carry out the action with one of your tools, which may ask again. If no tool of "
+            "yours can do the action, raise no card: tell the user you cannot do it."
         ),
         "parameters": {
             "type": "object",

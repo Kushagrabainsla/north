@@ -17,8 +17,9 @@ Text an agent wrote, or that came from outside north, is marked untrusted: it
 is judged, never obeyed. The model is picked by the ``approval_decider`` routing
 part, so manual routing uses the pinned model like every other call.
 
-When it cannot decide - no model, an error, an unreadable reply - it returns
-None and the card waits for you. That is the one case Autonomous pauses.
+When it cannot decide - no model, an error, an unreadable reply, or an
+abstention - it returns None and the card waits for you. That is the one case
+Autonomous pauses.
 
 An action that leaves the sandbox (a push, a host it was not given) is the same:
 it is approved only when the reply cites something you stated - a fact, a past
@@ -143,6 +144,15 @@ class MemoryDecider:
             reply = extract_json(response.text)
         except Exception:
             logger.warning("Memory decider: the model call failed - the card waits for you", exc_info=True)
+            return None
+        if isinstance(reply, dict) and str(reply.get("decision") or "").strip().lower() == "abstain":
+            # Asked for when nothing you stated covers a step out of the sandbox; it was logged "unreadable".
+            logger.info(
+                "Memory decider: abstained on a %s from %s (%s) - the card waits for you",
+                subject.kind,
+                subject.agent,
+                str(reply.get("reason") or "no reason given").strip(),
+            )
             return None
         answer = _read_reply(reply, subject, items)
         if answer is not None and _is_a_guess(answer, subject):

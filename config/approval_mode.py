@@ -5,9 +5,11 @@ Four modes, from most to least supervised (CODING_STYLE §7.3):
 - ``ask`` (default): read-only runs; every mutating action asks.
 - ``safe``: read-only, safe mutating actions and exact replays of your past
   answers run; everything else asks. No model decides anything.
-- ``autonomous``: never asks.
+- ``autonomous``: decides for you from what north knows about you; asks only
+  when that cannot decide, as for a step outside the workspace that nothing you
+  said covers.
 - ``yolo``: never asks; every approval is yes and every question gets the yes
-  answer.
+  answer (or, when no option says yes, "proceed with your best judgement").
 
 Older names still load as aliases (``interactive``, ``auto``, the
 ``unattended_mode``/``autonomous_mode`` booleans), so no stored setting breaks.
@@ -41,11 +43,14 @@ class ApprovalMode(StrEnum):
 _DESCRIPTIONS: dict[ApprovalMode, str] = {
     ApprovalMode.ASK: "Read-only work runs; every change asks you.",
     ApprovalMode.SAFE: "Read-only work, safe changes and your exact past answers run; everything else asks.",
-    ApprovalMode.AUTONOMOUS: "Never asks you.",
+    ApprovalMode.AUTONOMOUS: (
+        "Decides for you from what north knows about you. Asks only when that cannot decide: "
+        "a step outside the workspace that nothing you said covers."
+    ),
     ApprovalMode.YOLO: "Never asks you: every approval is yes and every question gets the yes answer.",
 }
 
-# What YOLO answers to a question that offers no options.
+# What YOLO answers to a question that offers no options, or none that says yes.
 YES_ANSWER = "Yes. Proceed with your best judgement."
 
 # Older and friendlier names, so a stored setting or a typed word still means something.
@@ -90,12 +95,21 @@ def mode_options() -> list[dict[str, str]]:
     return [{"value": mode.value, "description": mode.description} for mode in ApprovalMode]
 
 
+_YES_WORDS = frozenset({"approve", "apply", "run", "yes", "allow", "proceed"})
+
+
+def affirmative_option(options: list[str]) -> str | None:
+    """The option that says yes ("Approve", "Yes, delete it"), or None when none does."""
+    for opt in options or []:
+        words = opt.lower().replace(",", " ").split()
+        if words and words[0].strip(".!:") in _YES_WORDS:
+            return opt
+    return None
+
+
 def approve_option(options: list[str]) -> str:
     """Pick the option string that means 'approve' for a card."""
-    for opt in options or []:
-        if opt.lower() in ("approve", "apply", "run", "yes", "allow", "proceed"):
-            return opt
-    return (options or ["Approve"])[0]
+    return affirmative_option(options) or (options or ["Approve"])[0]
 
 
 def resolve_approval_mode(settings: object) -> ApprovalMode:

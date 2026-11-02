@@ -55,7 +55,12 @@ async def test_autonomous_answers_from_memory_and_keeps_the_reason(tmp_path: Pat
 
     out = json.loads(await _ask(agent))
 
-    assert out == {"success": True, "answered": True, "answer": "Postgres"}
+    assert out == {
+        "success": True,
+        "answered": True,
+        "answer": "Postgres",
+        "answered_by": "north's memory decider, for the user; the user has not seen this card",
+    }
     [card] = store.all()
     assert card.reason == "you use Postgres everywhere"
     assert card.decided_by == "memory_decider"
@@ -131,7 +136,7 @@ async def test_login_handoff_waits_when_central_mode_requires_person(tmp_path: P
 
         store.resolve(card.id, ApprovalDecision.ANSWERED, chosen_option="Done")
         answer = json.loads(await asyncio.wait_for(asking, timeout=1))
-        assert answer == {"success": True, "answered": True, "answer": "Done"}
+        assert answer == {"success": True, "answered": True, "answer": "Done", "answered_by": "the user"}
         assert not store.tasks_waiting_on_you()
     finally:
         if not asking.done():
