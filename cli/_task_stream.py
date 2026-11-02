@@ -20,8 +20,8 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from cli._client import _api, _headers
-from cli.constants import _BASE_URL, _STEP_ICONS, _STEP_LABELS
+from cli._client import _api, _headers, base_url
+from cli.constants import _STEP_ICONS, _STEP_LABELS
 from cli.formatting import _build_steps_table
 
 _AFFIRMATIVE = frozenset({"approve", "approved", "yes", "y", "apply", "run", "ok"})
@@ -47,7 +47,7 @@ class TaskStream:
 
     @property
     def url(self) -> str:
-        return f"{_BASE_URL}/orchestrator/stream/{self.task_id}"
+        return f"{base_url()}/orchestrator/stream/{self.task_id}"
 
 
 def _approval_decision(chosen: str) -> str:

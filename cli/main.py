@@ -1,6 +1,6 @@
 """Typer CLI for north.
 
-Commands talk exclusively to the Orchestrator API on port 8000.
+Commands talk exclusively to the Orchestrator API of the north running from this home (see cli/_client.py).
 
 Usage:
     north task "Help me plan my week"
@@ -54,7 +54,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from cli._client import _api, _headers
+from cli._client import NotThisNorth, _api, _headers, base_url, running_port
 from cli._server import (
     _docker_available,
     _find_compose_file,
@@ -69,7 +69,6 @@ from cli._server import (
 )
 from cli._task_stream import TaskStream, follow_task
 from cli.constants import (
-    _BASE_URL,
     _CONFIG_KEYS,
     _PROVIDERS,
     _VALID_DOCS,
@@ -259,10 +258,11 @@ def _use_saved_timezone() -> None:
 
 def _launch_tui(
     host: str = "127.0.0.1",
-    port: int = 8000,
+    port: int | None = None,
     workspace: str | None = None,
 ) -> None:
     """Auto-start the server if not running, then launch the TUI."""
+    port = port or running_port()
     if not _port_in_use(host, port) or not _is_north_server(host, port):
         _console.print("  [dim]server offline - starting…[/dim]")
         # Re-invoke `north start --no-chat` to start the server only, then TUI below.
@@ -278,7 +278,16 @@ def _launch_tui(
         workspace = resolved_workspace
 
     base_url = f"http://{host}:{port}"
-    headers = _headers()
+    try:
+        headers = _headers(base_url)
+    except NotThisNorth:
+        typer.secho(
+            f"ERROR: The server at {base_url} is not your north: it could not prove it holds this home's secret, "
+            "so the secret was not sent. Pick another port with --port.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
     resolved_workspace = _resolve_workspace(workspace)
     _apply_yolo()
 
@@ -395,7 +404,7 @@ def stream_task(
     task_id: str = typer.Argument(..., help="Task ID to stream raw events for."),
 ) -> None:
     """Stream raw SSE events for a task (debug view)."""
-    url = f"{_BASE_URL}/orchestrator/stream/{task_id}"
+    url = f"{base_url()}/orchestrator/stream/{task_id}"
     _console.print(f"[dim]Streaming {task_id} - Ctrl+C to stop[/dim]\n")
     try:
         with httpx.stream("GET", url, headers=_headers(), timeout=None) as response:
@@ -1429,7 +1438,8 @@ def status() -> None:
 
     if not reachable:
         _console.print()
-        return
+        # A script checking the exit code must be able to tell: this exited 0 while printing "server down".
+        raise typer.Exit(1)
 
     # ── Dials ──
     try:
@@ -1453,22 +1463,14 @@ def status() -> None:
             parts.append(f"[{style}]{pool_name}={count}[/{style}]")
         _console.print("  [dim]models    [/dim] " + "  ".join(parts))
 
-    # ── Providers (from settings, which keys are present) ──
+    # ── Providers: the server's view. The CLI's own settings read only its environment
+    # and ~/.north/.env, so keys saved in the dashboard showed as missing, and the fixed
+    # list never named Anthropic, the provider actually in use. ──
     try:
-        from config.settings import settings as cfg
-
-        providers = []
-        for key, label in (
-            ("openrouter_api_key", "openrouter"),
-            ("groq_api_key", "groq"),
-            ("gemini_api_key", "gemini"),
-            ("opencode_zen_api_key", "opencode_zen"),
-        ):
-            if getattr(cfg, key, "").strip():
-                providers.append(f"[green]{label}[/green]")
-            else:
-                providers.append(f"[bright_black]{label}[/bright_black]")
-        _console.print("  [dim]providers [/dim] " + "  ".join(providers))
+        configured = [p["id"] for p in _api("GET", "/web/api/system").json()["providers"] if p.get("configured")]
+        _console.print(
+            "  [dim]providers [/dim] " + ("  ".join(f"[green]{name}[/green]" for name in configured) or "none set up")
+        )
     except Exception:
         pass
 
@@ -1578,7 +1580,7 @@ class _PushToTalk:
         try:
             with httpx.Client(timeout=_TRANSCRIBE_TIMEOUT_SECONDS) as client:
                 response = client.post(
-                    f"{_BASE_URL}/orchestrator/transcribe",
+                    f"{base_url()}/orchestrator/transcribe",
                     content=wav_bytes,
                     headers={**_headers(), "Content-Type": "audio/wav"},
                 )
@@ -2042,7 +2044,7 @@ def _ensure_web_build() -> None:
 @app.command("web")
 def web(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
-    port: int = typer.Option(8000, "--port", "-p", help="North server port."),
+    port: int | None = typer.Option(None, "--port", "-p", help="North server port (default: the running one)."),
     workspace: str | None = typer.Option(
         None,
         "--workspace",
@@ -2053,6 +2055,7 @@ def web(
     no_open: bool = typer.Option(False, "--no-open", help="Start the server without opening a browser."),
 ) -> None:
     """Start North's web cockpit and open it in the default browser."""
+    port = port or running_port()
     _ensure_web_build()
     if not _port_in_use(host, port) or not _is_north_server(host, port):
         # Every option is passed: a typer command called as a function receives an
@@ -2067,11 +2070,12 @@ def web(
 
 @app.command("stop")
 def stop(
-    port: int = typer.Option(8000, "--port", "-p", help="Port to stop."),
+    port: int | None = typer.Option(None, "--port", "-p", help="Port to stop. Default: the running north's."),
     all: bool = typer.Option(False, "--all", "-a", help="Kill all running north processes and background jobs."),
     docker: bool = typer.Option(False, "--docker", help="Stop Docker Compose deployment instead of a local process."),
 ) -> None:
     """Stop north."""
+    port = port or running_port()
     if docker:
         compose_file = _find_compose_file()
         if not _docker_available() or compose_file is None:
@@ -2350,7 +2354,7 @@ def _update_from_git(install_url: str, options: _UpdateOptions) -> None:
 
 @app.command("update")
 def update(
-    port: int = typer.Option(8000, "--port", "-p", help="Port the server is running on."),
+    port: int | None = typer.Option(None, "--port", "-p", help="Port north runs on (default: the running one)."),
     docker: bool = typer.Option(False, "--docker", help="Update a Docker Compose deployment."),
     restart: bool = typer.Option(True, "--restart/--no-restart", help="Restart the server after updating."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
@@ -2375,7 +2379,7 @@ def update(
     _console.print(f"  {wordmark()} [bold white]update[/bold white]")
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
 
-    options = _UpdateOptions(port=port, restart=restart, assume_yes=yes)
+    options = _UpdateOptions(port=port or running_port(), restart=restart, assume_yes=yes)
     if docker:
         if source.lower().strip() != "remote" or path is not None:
             raise typer.BadParameter("--source and --path cannot be combined with --docker")

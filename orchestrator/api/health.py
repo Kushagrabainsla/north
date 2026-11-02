@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import Request
+from fastapi import Query, Request
 
+from config.security import server_proof
 from ledger.base import LedgerFilters
 from memory.models import ContextDocument
 from orchestrator.api.deps import health_router
@@ -85,3 +86,13 @@ def _overall_status(checks: dict[str, dict[str, Any]]) -> str:
     if statuses <= {"ok", "starting"}:
         return "starting"
     return "degraded"
+
+
+@health_router.get("/health/proof", include_in_schema=False)
+async def prove_identity(nonce: str = Query(min_length=16, max_length=128, pattern=r"^[0-9a-f]+$")) -> dict[str, str]:
+    """Prove this server holds this home's secret, so the CLI can trust it before sending the secret.
+
+    Unauthenticated by design: the answer reveals nothing a caller can use, since
+    the proof is bound to its own nonce and to this one purpose.
+    """
+    return {"proof": server_proof(nonce)}

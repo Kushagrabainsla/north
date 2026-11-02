@@ -36,11 +36,14 @@ def _port_in_use(host: str, port: int) -> bool:
 
 
 def _is_north_server(host: str, port: int) -> bool:
+    """Whether this home's north serves *port*: it proves it holds the secret. Any FastAPI app serves /docs."""
+    from cli._client import NotThisNorth, _check_genuine
+
     try:
-        resp = httpx.get(f"http://{host}:{port}/docs", timeout=2.0)
-        return resp.status_code == 200
-    except Exception:
+        _check_genuine(f"http://{host}:{port}")
+    except (NotThisNorth, httpx.HTTPError):
         return False
+    return True
 
 
 def _sync_docker_secret(compose_file: Path) -> None:

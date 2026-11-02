@@ -39,8 +39,9 @@ from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import bootstrap_paused, run_bootstrap_if_needed
 from coding_agents import CodingRunner, CommandVerifier, Gate, GateSessions, discover_backends
 from config.dependencies import build_production_dependencies
+from config.run_file import remove_run_file, write_run_file
 from config.security import load_secret
-from config.server_url import server_url
+from config.server_url import listening_url, server_url
 from config.settings import settings
 from flows import FlowRegistry, FlowRunStore
 from gateways.telegram import TelegramGateway
@@ -919,6 +920,16 @@ async def _start_mcp_servers(tool_registry: ToolRegistry) -> McpManager:
     return manager
 
 
+async def _record_where_this_server_listens(attempts: int = 600, every: float = 0.1) -> None:
+    """Write the run file once uvicorn has bound its socket, which happens after startup."""
+    for _ in range(attempts):
+        if (url := listening_url()) is not None:
+            write_run_file(url)
+            return
+        await asyncio.sleep(every)
+    logger.warning("north never saw its own listening socket; the CLI will look on the default port")
+
+
 async def _shutdown(
     deps,
     callback_server: uvicorn.Server,
@@ -1240,10 +1251,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         _step("personal-file reading waits for the person to start it")
 
+    # The CLI finds this server, on whatever port, through the run file.
+    background_tasks.append(asyncio.create_task(_record_where_this_server_listens(), name="run_file"))
     _step("startup complete - yielding to server")
     try:
         yield
     finally:
+        remove_run_file()
         await _shutdown(deps, callback_server, background_tasks, tool_registry)
 
 

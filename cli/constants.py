@@ -13,7 +13,7 @@ from typing import TypedDict
 from inference.registry import PROVIDER_DEFINITIONS
 
 # ── HTTP client ─────────────────────────────────────────────────────────────
-_BASE_URL = "http://127.0.0.1:8000"
+# Where the server is comes from its run file (`cli._client.base_url`).
 _TIMEOUT = 30.0
 
 

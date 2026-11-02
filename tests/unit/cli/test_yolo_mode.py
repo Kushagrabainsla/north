@@ -95,4 +95,5 @@ def test_a_server_that_does_not_answer_reads_down(monkeypatch) -> None:
     monkeypatch.setattr(main, "_api", unreachable)
     result = runner.invoke(main.app, ["status"])
 
-    assert result.exit_code == 0 and "down" in result.output
+    # Exit 1, so a script checking the code can tell (issue #76 finding P3: it exited 0).
+    assert result.exit_code == 1 and "down" in result.output

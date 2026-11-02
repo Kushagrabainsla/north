@@ -37,6 +37,11 @@ def server_url() -> str:
     return f"http://{host}:{port}"
 
 
+def listening_url() -> str | None:
+    """This server's base URL once it listens; None before uvicorn has bound its socket."""
+    return server_url() if _listening_address() is not None else None
+
+
 def _listening_address() -> tuple[str, int] | None:
     """The one TCP address this process listens on, besides the callback server; None when not exactly one."""
     try:

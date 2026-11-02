@@ -5,6 +5,8 @@ See docs/CODING_STYLE.md Sections 5.2, 12.3.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import secrets
 import time
 from dataclasses import dataclass
@@ -85,6 +87,20 @@ def load_secret() -> str:
     except FileExistsError:
         return read_secret_file(secret_file)
     return secret
+
+
+# Domain-separated, so an answer to a proof request is never usable as anything else.
+_PROOF_CONTEXT = b"north-server-proof:"
+
+
+def server_proof(nonce: str, secret: str | None = None) -> str:
+    """Proof that whoever computed it holds this home's secret, without the secret leaving it.
+
+    The CLI sends a fresh nonce and checks the answer before it sends the secret
+    itself: a listener that is not this north cannot answer, and gets nothing.
+    """
+    key = (secret or settings.secret or load_secret()).encode("utf-8")
+    return hmac.new(key, _PROOF_CONTEXT + nonce.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def verify_secret(secret_to_verify: str) -> bool:
