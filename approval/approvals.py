@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, UserInteraction
-from approval.models import ApprovalDecision, Card, CardType
-from approval.policy import Action, Answer, ApprovalPolicy, Verdict
+from approval.models import ApprovalDecision, Card, CardType, DecidedBy
+from approval.policy import Action, Answer, ApprovalPolicy, Ruling, Verdict, may_replay_yes
 from approval.unattended import forbidden_reason
 from config.approval_mode import approve_option
 
@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from approval.effects import EffectLog
-    from approval.policy import Ruling
     from approval.rejections import RejectionLog
 
 # Why an irreversible action is refused the second time in one task (see approval/effects.py).
@@ -86,6 +85,10 @@ class Approvals:
         self._interaction = interaction
         self._effects = effects
         self._rejections = rejections
+        # The exact actions a person approved in each task, so the task does not ask again when it retries one:
+        # an approved `kasa off` that failed was asked about a second time by the agent that took over (#76, W4).
+        # Kept in memory: after a restart north asks again, the safe way to forget.
+        self._approved: dict[str, set[str]] = {}
 
     @classmethod
     def unbound(cls) -> Approvals:
@@ -107,6 +110,10 @@ class Approvals:
             return Decision(Verdict.REFUSE, _ALREADY_DONE)
         if (said_no := self.refused_paths(request.action.named_paths(), task_id)) is not None:
             return Decision(Verdict.REFUSE, said_no)
+        if self._approved_in_task(request, task_id):
+            ruling = Ruling(Verdict.ALLOW, "you approved this exact action earlier in this task", DecidedBy.REPLAY)
+            self._record(request, ruling, task_id)
+            return Decision(ruling.verdict, ruling.rule)
         ruling = await self._policy.rule(request.action)
         if request.requires_confirmation and ruling.verdict is not Verdict.REFUSE:
             return await self._ask(request, task_id)
@@ -132,6 +139,15 @@ class Approvals:
                 )
         return None
 
+    def _approved_in_task(self, request: Request, task_id: str | None) -> bool:
+        """Whether a person approved this exact action earlier in this task, and that yes may stand again."""
+        return (
+            bool(task_id)
+            and not request.requires_confirmation
+            and may_replay_yes(request.action)
+            and request.action.describe() in self._approved.get(task_id or "", set())
+        )
+
     def completed(self, request: Request, task_id: str | None) -> None:
         """Note that *request* ran successfully, so an irreversible one is never repeated in this task."""
         if self._effects is None or not task_id or not forbidden_reason(request.action):
@@ -148,6 +164,8 @@ class Approvals:
             return Decision(Verdict.REFUSE, _NOBODY_TO_ASK)
         card = await self._interaction.ask_person(self._card(request, task_id), event=CardEvent.APPROVAL)
         verdict = Verdict.ALLOW if card.status == ApprovalDecision.APPROVED else Verdict.REFUSE
+        if verdict is Verdict.ALLOW and task_id:
+            self._approved.setdefault(task_id, set()).add(request.action.describe())
         if card.status == ApprovalDecision.REJECTED and task_id and self._rejections is not None:
             self._rejections.record(task_id, request.action.named_paths(), request.action.summary)
         return Decision(verdict, "you decided", status=card.status)

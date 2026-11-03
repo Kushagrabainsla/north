@@ -597,8 +597,13 @@ class KasaTool(Tool):
             return None
         device = str(input.params.get("device", "")).strip() or "all discovered lights"
         return Request(
+            # Devices are matched by name whatever its case, so "Living room lights" is the same action.
             action=Action(
-                agent="kasa", kind=ActionKind.DEVICE, summary=f"{action} {device}", operation=action, args=device
+                agent="kasa",
+                kind=ActionKind.DEVICE,
+                summary=f"{action} {device}",
+                operation=action,
+                args=device.casefold(),
             ),
             title="Device Control - Approval Required",
             message=f"`{action}` on **{device}**",

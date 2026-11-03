@@ -164,6 +164,11 @@ class Action:
         return " ".join(parts)
 
 
+def may_replay_yes(action: Action) -> bool:
+    """Whether a yes to *action* may stand for the next identical one: never for a send, a spend or north's settings."""
+    return not (action.changes_north or forbidden_reason(action))
+
+
 @dataclass(frozen=True)
 class Ruling:
     """A verdict plus the rule that produced it, and the memory it used, if any."""
@@ -368,7 +373,7 @@ class ApprovalPolicy:
         if self.approval_memory is None:
             return None
         recalled = self.approval_memory.recall(action.agent, action.describe())
-        if recalled == "approved" and (action.changes_north or forbidden_reason(action)):
+        if recalled == "approved" and not may_replay_yes(action):
             return None
         if recalled == "approved":
             return Ruling(Verdict.ALLOW, "you approved this action before", DecidedBy.REPLAY)
