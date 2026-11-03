@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,13 @@ from PIL import Image
 from tools._path import resolve_path
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+
+
+def screen_capture_unavailable() -> str:
+    """Why there is no screen to capture on this machine, or "" when there may be one."""
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return "north is running with no display here (neither DISPLAY nor WAYLAND_DISPLAY is set)"
+    return ""
 
 
 class TakeScreenshotTool(Tool):
@@ -59,6 +68,8 @@ class TakeScreenshotTool(Tool):
         return f"Screenshot saved to {len(paths)} file(s): {', '.join(paths)} ({total} bytes total)."
 
     async def run(self, input: ToolInput) -> ToolOutput:
+        if why := screen_capture_unavailable():
+            return ToolOutput(success=False, error=f"Screen capture cannot work here: {why}.")
         path_str = input.params.get("path")
         if not path_str:
             path_str = f"screenshot_{int(time.time())}.png"

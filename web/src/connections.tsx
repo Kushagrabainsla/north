@@ -336,7 +336,7 @@ export function CodingAgents() {
       <span className={`status status-${agent.ready ? "completed" : "pending"}`}>{agent.ready ? "ready" : agent.installed ? "needs attention" : "not installed"}</span>
       {agent.detail && <small className="setup-tool-detail">{agent.detail}</small>}
     </div>)}</div>}
-    <p className="setup-copy muted">North hands coding to these agents in their own login. Ready means installed, recent enough and logged in; usage limits are only known when a run starts.</p>
+    <p className="setup-copy muted">North hands coding to these agents in their own login. Ready means installed, recent enough, logged in and able to run its sandbox here; usage limits are only known when a run starts.</p>
   </Panel>;
 }
 

@@ -5,10 +5,31 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from PIL import Image
 
 from tools.models import ToolInput
 from tools.universal.take_screenshot import TakeScreenshotTool
+
+
+@pytest.fixture(autouse=True)
+def a_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests capture a mocked screen: give the process a display, as a desktop session has."""
+    monkeypatch.setenv("DISPLAY", ":0")
+
+
+async def test_with_no_display_it_says_there_is_no_screen_instead_of_trying(monkeypatch, tmp_path: Path) -> None:
+    """Issue #76, W11: on a display-less host every capture failed "X connection failed: error 5"."""
+    from tools.universal.take_screenshot import screen_capture_unavailable
+
+    monkeypatch.setattr("tools.universal.take_screenshot.sys.platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    out = await TakeScreenshotTool().run(ToolInput(params={"path": "s.png", "workspace": str(tmp_path)}))
+
+    assert not out.success and "no display" in out.error
+    assert screen_capture_unavailable()
 
 
 def _mock_image():

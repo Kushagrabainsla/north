@@ -207,6 +207,8 @@ class ToolRegistry:
         # Tools you configured that are not here, and why, by source ("mcp:crm"). A server that failed to start
         # was only a warning in north.log: the agent searched for its tools and told you to restart north.
         self._unavailable: dict[str, str] = {}
+        # Tools kept out because they cannot work on this machine (see withhold); reload must not re-add them.
+        self._withheld: set[str] = set()
 
         if auto_register:
             self._auto_discover()
@@ -238,7 +240,7 @@ class ToolRegistry:
             if not self._directory_changed(dir_path):
                 continue
             for tool in _discover(dir_path, package).values():
-                if tool.name not in self._tools:
+                if tool.name not in self._tools and tool.name not in self._withheld:
                     self._tools[tool.name] = self._bind(tool)
                     logger.info("ToolRegistry.reload: picked up new global tool %r", tool.name)
         for directory in self._learned_directories():
@@ -309,6 +311,17 @@ class ToolRegistry:
     def note_unavailable(self, source: str, why: str) -> None:
         """Record that tools from *source* were configured but are not available, and why."""
         self._unavailable[source] = why
+
+    def withhold(self, name: str, why: str) -> None:
+        """Keep tool *name* out of the catalog because it cannot work here, and say why.
+
+        On a host with no display take_screenshot failed every call ("X connection failed"), yet agents
+        offered it as the way forward. Withheld, the model is not offered it, and find_tools and System
+        say why.
+        """
+        self._withheld.add(name)
+        self._tools.pop(name, None)
+        self.note_unavailable(name, why)
 
     def clear_unavailable(self, source: str) -> None:
         self._unavailable.pop(source, None)

@@ -20,14 +20,19 @@ def nothing_installed(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setattr(browser.Path, "is_file", lambda self: False)
 
 
-def test_a_real_binary_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def chrome_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(browser, "_find_chrome", lambda: "/usr/bin/google-chrome")
+
+
+def test_a_real_binary_is_available(monkeypatch: pytest.MonkeyPatch, chrome_installed) -> None:
     monkeypatch.setattr(browser, "_find_chrome_agent_binary", lambda: ["/usr/local/bin/chrome-agent"])
     state, detail = browser.browser_availability()
     assert state == "available"
     assert detail == "/usr/local/bin/chrome-agent"
 
 
-def test_the_npx_fallback_is_not_reported_as_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_npx_fallback_is_not_reported_as_installed(monkeypatch: pytest.MonkeyPatch, chrome_installed) -> None:
     """It works, but the first browse pays to download it - which is worth saying."""
     monkeypatch.setattr(browser, "_find_chrome_agent_binary", lambda: ["npx", "-y", "chrome-agent"])
     state, detail = browser.browser_availability()
@@ -46,3 +51,15 @@ def test_nothing_installed_says_how_to_fix_it(nothing_installed) -> None:
 def test_the_check_never_raises_on_a_bare_machine(nothing_installed) -> None:
     """It runs inside a status view, which must not fail because a tool is absent."""
     assert browser.browser_availability()[0] == "unavailable"
+
+
+def test_chrome_agent_without_a_chrome_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #76, W6: "available" on a machine with no Chrome; every call then failed to find one."""
+    monkeypatch.setattr(browser, "_find_chrome_agent_binary", lambda: ["/root/.cargo/bin/chrome-agent"])
+    monkeypatch.setattr(browser.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(browser.Path, "is_file", lambda self: False)
+
+    state, detail = browser.browser_availability()
+
+    assert state == "unavailable"
+    assert "no Chrome or Chromium was found" in detail and "google-chrome" in detail

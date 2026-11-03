@@ -42,9 +42,18 @@ def workspace(tmp_path: Path) -> Path:
 
 class TestProbe:
     async def test_an_installed_logged_in_claude_is_available(self, make_fake_claude) -> None:
-        availability = await ClaudeBackend(str(make_fake_claude())).probe()
+        availability = await ClaudeBackend(str(make_fake_claude()), sandbox_tools=()).probe()
 
         assert availability.available and availability.version == "2.1.286"
+
+    async def test_a_claude_whose_sandbox_cannot_run_here_says_what_to_install(self, make_fake_claude) -> None:
+        """Issue #76, M14: "READY" on Linux without bubblewrap and socat; the run then failed at once."""
+        backend = ClaudeBackend(str(make_fake_claude()), sandbox_tools=("bwrap-that-is-missing", "socat"))
+
+        availability = await backend.probe()
+
+        assert not availability.available and availability.version == "2.1.286"
+        assert availability.reason.startswith("Claude Code's sandbox needs bwrap-that-is-missing")
 
     async def test_a_claude_that_is_not_installed_says_so(self) -> None:
         availability = await ClaudeBackend("claude-that-does-not-exist").probe()

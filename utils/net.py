@@ -57,11 +57,20 @@ class UnsafeUrlError(ValueError):
     """The URL targets a private/internal network or is malformed."""
 
 
+class HostNotFoundError(UnsafeUrlError):
+    """The host's name does not resolve here: a network failure, not a refusal.
+
+    An UnsafeUrlError so every existing check still stops on it; its own type so a caller can say what
+    happened. The browser reported "Security policy blocked navigation: Could not resolve host ..." for
+    sites this machine simply could not look up.
+    """
+
+
 def _resolve_host_ips(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
-        raise UnsafeUrlError(f"Could not resolve host {host!r}: {exc}") from exc
+        raise HostNotFoundError(f"Could not resolve host {host!r}: {exc}") from exc
     ips = []
     for info in infos:
         try:
@@ -69,7 +78,7 @@ def _resolve_host_ips(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6A
         except ValueError:
             continue
     if not ips:
-        raise UnsafeUrlError(f"Host {host!r} resolved to no usable addresses.")
+        raise HostNotFoundError(f"Host {host!r} resolved to no usable addresses.")
     return ips
 
 

@@ -37,7 +37,7 @@ from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal.browser_describe import describe_browser_call
 from tools.universal.browser_taskwindow import TaskWindowBrowser
-from utils.net import UnsafeUrlError, validate_public_url
+from utils.net import HostNotFoundError, UnsafeUrlError, validate_public_url
 from utils.processes import stop_process_group
 
 if TYPE_CHECKING:
@@ -131,9 +131,32 @@ def browser_availability() -> tuple[str, str]:
     command = _find_chrome_agent_binary()
     if command is None:
         return "unavailable", BROWSER_INSTALL_HINT
+    # chrome-agent drives a Chrome it does not bring: System said "available" on a machine with none, and
+    # every call failed "Could not find Chrome or Chromium. Install Chrome and ensure it's on your PATH."
+    if _find_chrome() is None:
+        return "unavailable", (
+            f"chrome-agent is installed but no Chrome or Chromium was found (looked on PATH for "
+            f"{', '.join(_CHROME_NAMES)}); install Chrome or Chromium"
+        )
     if command[0].endswith("npx"):
         return "on demand", "via npx; downloaded on first use"
     return "available", command[0]
+
+
+# The names chrome-agent finds a browser by on PATH, and the macOS applications.
+_CHROME_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome")
+_CHROME_APPS = (
+    Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    Path("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+)
+
+
+def _find_chrome() -> str | None:
+    """A Chrome or Chromium for chrome-agent to drive, or None."""
+    for name in _CHROME_NAMES:
+        if found := shutil.which(name):
+            return found
+    return next((str(app) for app in _CHROME_APPS if app.is_file()), None)
 
 
 def _element_args(params: dict[str, Any]) -> list[str]:
@@ -402,6 +425,8 @@ def _unsafe_url_reason(action: str, params: dict[str, Any]) -> str:
         return ""
     try:
         validate_public_url(url)
+    except HostNotFoundError as exc:
+        return f"Network failure, not a security refusal: {exc}. This machine cannot look up that address."
     except UnsafeUrlError as exc:
         return f"Security policy blocked navigation: {exc}"
     return ""

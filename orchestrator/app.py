@@ -75,7 +75,7 @@ from orchestrator.constants import WATCHDOG_POLL_INTERVAL_SECONDS
 from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
-from orchestrator.nightly_check import nightly_check
+from orchestrator.nightly_check import nightly_check, registered_checkout
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.reconcile import recover_interrupted_tasks
@@ -234,6 +234,10 @@ def _build_tool_registry(
     # Every tool the registry holds gets `approvals`, so every call that changes
     # something is decided in one place - see Tool.execute.
     tool_registry = ToolRegistry(auto_register=True, learned_dir=learned_tools_dir, approvals=approvals)
+    from tools.universal.take_screenshot import screen_capture_unavailable
+
+    if why := screen_capture_unavailable():
+        tool_registry.withhold("take_screenshot", f"Screen capture is not available: {why}.")
     from tools.universal.browser import BrowserTool
     from tools.universal.browser_taskwindow import TaskWindowBrowser
 
@@ -319,10 +323,21 @@ def _build_skills(deps) -> tuple[SkillRegistry, SkillSelector]:
 def _build_flows() -> FlowRegistry:
     """Load built-in and user-created declarative flows."""
     builtin_dir = Path(__file__).parent.parent / "resources" / "builtin-flows"
-    return FlowRegistry(
+    flows = FlowRegistry(
         builtin_dir=builtin_dir,
         learned_dir=settings.north_home / "flows",
     )
+    # north's check of itself runs only in a north project folder that scripts/install_smoke_schedule.sh
+    # registered; on any other install it was listed ACTIVE and could only fail.
+    flows.require(
+        "nightly-check",
+        lambda: (
+            ""
+            if registered_checkout()
+            else "it runs only where scripts/install_smoke_schedule.sh registered a north project folder"
+        ),
+    )
+    return flows
 
 
 def _build_tool_index(deps) -> ToolIndex | None:

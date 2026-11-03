@@ -52,6 +52,10 @@ logger = logging.getLogger(__name__)
 _HOOK_SCRIPT = Path(__file__).with_name("hook.py")
 
 # `--permission-prompts none` arrived in this release; without it a denied call may wait for an answer.
+# The tools Claude Code's sandbox runs on under Linux (macOS has its own); none are needed elsewhere.
+_LINUX_SANDBOX_TOOLS: tuple[str, ...] = ("bwrap", "socat") if sys.platform.startswith("linux") else ()
+_PACKAGE = {"bwrap": "bubblewrap"}
+
 MINIMUM_VERSION = (2, 1, 259)
 
 _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
@@ -96,10 +100,13 @@ class ClaudeBackend(CodingBackend):
         *,
         protected_paths: Sequence[str] = (),
         environment: Mapping[str, str] | None = None,
+        sandbox_tools: Sequence[str] | None = None,
     ) -> None:
         self._command = command
         self._protected_paths = (*SECRET_PATHS, *protected_paths)
         self._environment = agent_environment(environment)
+        # What the vendor sandbox runs on here; every run requires it (failIfUnavailable).
+        self._sandbox_tools = tuple(_LINUX_SANDBOX_TOOLS if sandbox_tools is None else sandbox_tools)
 
     async def probe(self) -> Availability:
         if shutil.which(self._command, path=self._environment.get("PATH")) is None:
@@ -115,6 +122,17 @@ class ClaudeBackend(CodingBackend):
             return Availability(False, label, f"Claude Code {label} is too old; run `claude update` (needs {needed})")
         if not _logged_in(await self._capture("auth", "status")):
             return Availability(False, label, "Claude Code is not logged in; run `claude auth login`")
+        # Settings said "READY" on a Linux host without them, and the first run failed at once with
+        # "Sandbox required but unavailable: ... bubblewrap (bwrap) not installed, socat not installed".
+        path = self._environment.get("PATH")
+        if missing := [tool for tool in self._sandbox_tools if shutil.which(tool, path=path) is None]:
+            return Availability(
+                False,
+                label,
+                f"Claude Code's sandbox needs {' and '.join(missing)}, which "
+                f"{'is' if len(missing) == 1 else 'are'} not installed (on Debian or Ubuntu: "
+                f"`sudo apt-get install {' '.join(_PACKAGE.get(tool, tool) for tool in missing)}`)",
+            )
         return Availability(True, label)
 
     async def run(self, spec: RunSpec, on_event: EventSink) -> RunOutcome:

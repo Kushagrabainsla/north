@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -153,6 +154,8 @@ class FlowRegistry:
         if learned_dir is not None:
             self._sources.append((learned_dir, FlowSource.LEARNED))
         self._flows: dict[str, Flow] = {}
+        # What a flow needs on this machine, checked each time it is listed or looked up (see require).
+        self._requirements: dict[str, Callable[[], str]] = {}
         self._discover()
 
     def _discover(self) -> None:
@@ -174,16 +177,30 @@ class FlowRegistry:
     def reload(self) -> None:
         self._discover()
 
+    def require(self, name: str, missing: Callable[[], str]) -> None:
+        """Offer flow *name* only while *missing()* is "": it says what this machine lacks for it.
+
+        Checked on every lookup, so the flow appears once what it needs is there, with no restart. The
+        developer-only nightly-check was listed ACTIVE on every install, where it could only fail.
+        """
+        self._requirements[name] = missing
+
+    def _missing(self, name: str) -> str:
+        check = self._requirements.get(name)
+        return check() if check is not None else ""
+
     def get(self, name: str) -> Flow:
         if name not in self._flows:
             raise FlowNotFoundError(f"No flow registered with name: {name}")
+        if why := self._missing(name):
+            raise FlowNotFoundError(f"Flow {name!r} is not available here: {why}")
         return self._flows[name]
 
     def all(self) -> list[Flow]:
-        return list(self._flows.values())
+        return [flow for flow in self._flows.values() if not self._missing(flow.name)]
 
     def names(self) -> list[str]:
-        return list(self._flows)
+        return [flow.name for flow in self.all()]
 
     def remove_learned(self, name: str) -> bool:
         flow = self._flows.get(name)
