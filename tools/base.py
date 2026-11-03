@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tools._path import target_path
+from tools._schema import conform_params
 from tools.models import ToolInput, ToolOutput
 from utils.workspace_lock import workspace_lock
 
@@ -80,6 +81,12 @@ class Tool(ABC):
         layer, and only then run - with the approved `Request` on `input.approved`
         so `run()` acts on exactly what was approved.
         """
+        params, problems = conform_params(self.parameters_schema, input.params)
+        if problems:
+            takes = ", ".join(self.parameters_schema.get("properties") or {}) or "no parameters"
+            error = f"{self.name} was not called: {'; '.join(problems)}. It takes: {takes}."
+            return ToolOutput(success=False, error=error)
+        input = input.model_copy(update={"params": params})
         # A call that cannot run here raises no card: you would approve something that then cannot happen.
         if why := await self.unavailable(input):
             return ToolOutput(success=False, error=why)
