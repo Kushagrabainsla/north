@@ -1989,7 +1989,10 @@ def start(
         None,
         "--workspace",
         "-w",
-        help="Root directory agents can read/write. Defaults to the git root of the current directory.",
+        help=(
+            "Folder the terminal chat's tasks work in, and where the dashboard's folder picker opens; a dashboard "
+            "session works in the folder you pick there. Defaults to the git root of the current directory."
+        ),
     ),
 ) -> None:
     """Start north, then drop into interactive chat.
@@ -2056,7 +2059,10 @@ def web(
         None,
         "--workspace",
         "-w",
-        help="Root directory agents can read/write. Defaults to the current project root.",
+        help=(
+            "Where the dashboard's folder picker opens; a session works in the folder you pick there. "
+            "Defaults to the current project root."
+        ),
     ),
     docker: bool = typer.Option(False, "--docker", help="Start the server through Docker Compose."),
     no_open: bool = typer.Option(False, "--no-open", help="Start the server without opening a browser."),
