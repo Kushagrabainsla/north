@@ -5,6 +5,7 @@ All notable changes to north are documented here.
 ## [Unreleased]
 
 ### Added
+- **CODING_STYLE §1: lean code** (`docs/CODING_STYLE.md`), beside clean code, SOLID and DRY: the smallest change that removes a cause, nothing added before something needs it, and whatever a change leaves unused deleted with it.
 - **CODING_STYLE §7.5: each mechanism has one home** (`docs/CODING_STYLE.md`): asking you, recording what ran, reaching you, pricing, paths and dependency checks are each built in one module that the others use; a module hands that home the facts only it knows, and keeps no copy, shortcut or memory of its own.
 - **CODING_STYLE §7: what an approval decision covers** (`docs/CODING_STYLE.md`): exact replays only, no replay for sends, spends or north's own settings, a "no" that holds for the task, learned tools gated on every call, no repository edits by north's own tools, and a folderless task that asks instead of guessing.
 - **CODING_STYLE §23.8: fix the shared cause, not each symptom** (`docs/CODING_STYLE.md`): when several bugs share a cause, one change at that seam, with a test for each bug it covers.

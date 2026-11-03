@@ -46,6 +46,9 @@ The five object-oriented design principles that make code maintainable, extensib
 **DRY: Don't Repeat Yourself**
 Every piece of knowledge has a single, authoritative representation in the system. If you find yourself writing the same logic in two places, stop. Extract it. The duplication is telling you something is missing.
 
+**Lean**
+Write the least code that does the job well. Fix a cause with the smallest change that removes it, add no option, parameter, layer or abstraction that nothing needs yet, and delete in the same change whatever it leaves unused. Less code is less to read, to test and to keep right.
+
 **Plug and Play**
 Every layer of north can be swapped without touching other layers. The Orchestrator does not care which agents exist. Agents do not care which tools exist. Tools do not care which LLM is running. Interfaces enforce this boundary. Concrete implementations are wired once at startup.
 
