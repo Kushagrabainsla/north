@@ -27,6 +27,21 @@ export function isLocalEmbeddings(provider: any) {
   return !provider.env_key && provider.auth_kind !== "oauth_pkce";
 }
 
+// Trying a provider, not finding its key, is what "Ready" means: the local embedder read "Ready"
+// while its model failed to load on every refresh (issue #76, M6).
+const FAILING = new Set(["unavailable", "failing"]);
+
+export function providerFailing(provider: any): boolean {
+  return FAILING.has(provider.state);
+}
+
+export function providerStateLabel(provider: any, configured: boolean, accountHint?: string): string {
+  if (provider.state === "loading") return "Loading";
+  if (FAILING.has(provider.state)) return `Not working: ${provider.state_detail || "no reason given"}`;
+  if (!configured) return "Not configured";
+  return `Ready ${accountHint || provider.credential_hint || ""}`.trim();
+}
+
 export function ProviderConnections() {
   const overview = useResource<any>("/web/api/system", 8000);
   const [keys, setKeys] = useState<Record<string, string>>({});
@@ -181,16 +196,15 @@ export function ProviderConnections() {
               <div className="provider-controls">
                 <span
                   className={
-                    configured
+                    configured && !providerFailing(provider)
                       ? "provider-state configured"
                       : "provider-state"
                   }
+                  title={provider.state_detail || ""}
                 >
                   {waiting
                     ? "Waiting for browser login"
-                    : configured
-                      ? `Ready ${auth?.account_hint || provider.credential_hint}`
-                      : "Not configured"}
+                    : providerStateLabel(provider, configured, auth?.account_hint)}
                 </span>
                 {provider.env_key && (
                   <div className="provider-edit">

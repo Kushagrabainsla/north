@@ -596,6 +596,9 @@ class ModelDispatcher(InferenceRouter):
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         candidates = self._prefer_local(self._infrastructure_candidates(ModelCapability.EMBEDDING))
+        if not candidates and (why := self.embedding_state()[1]):
+            # Said with its reason: "No models available for this request" named no model and no cause.
+            raise AllModelsRateLimitedError(f"No embedding model is available: {why}")
 
         async def _call(provider: Provider, model_id: str) -> EmbedResponse:
             return await provider.embed(model_id, request)
@@ -619,6 +622,22 @@ class ModelDispatcher(InferenceRouter):
             if info.supports(ModelCapability.EMBEDDING):
                 return info.model_id
         return ""
+
+    def embedding_state(self) -> tuple[str, str]:
+        """Whether embeddings work, found by trying: ("ready", ""), ("loading", ""), or ("unavailable", why).
+
+        "Ready" used to mean only that the local provider exists, so it was shown beside a model that had
+        failed to load (403 Forbidden) on every refresh, while skill tests that need it failed.
+        """
+        for info, _provider in self._registry.values():
+            if info.supports(ModelCapability.EMBEDDING):
+                return "ready", ""
+        local = next((p for p in self._providers if p.name == LOCAL_EMBEDDINGS), None)
+        if local is not None and (why := getattr(local, "unavailable_reason", "")):
+            return "unavailable", str(why)
+        if not self._catalog_refreshed:
+            return "loading", ""
+        return "unavailable", "no provider serves an embedding model"
 
     def embedding_provider_name(self) -> str:
         """Who serves embeddings - the on-device model, or a provider over the network.

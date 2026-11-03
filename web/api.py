@@ -754,22 +754,38 @@ def _embeddings_overview() -> dict[str, Any]:
     router_ = current_services().inference_router
     model = getattr(router_, "embedding_model_id", lambda: "")()
     provider = getattr(router_, "embedding_provider_name", lambda: "")()
-    return {"model": model, "provider": provider, "local": provider == LOCAL_EMBEDDINGS}
+    # Whether they work, not only which model is meant: the model failing to load sat behind "Ready".
+    state, detail = getattr(router_, "embedding_state", lambda: ("unknown", ""))()
+    return {
+        "model": model,
+        "provider": provider,
+        "local": provider == LOCAL_EMBEDDINGS,
+        "state": state,
+        "detail": detail,
+    }
 
 
 @router.get("/system")
 async def system_overview() -> dict[str, Any]:
     settings = current_services().require("north_settings")
+    embeddings = _embeddings_overview()
     providers = []
     for definition in PROVIDER_DEFINITIONS:
         credential = definition.resolve_credential(settings)
+        configured = definition.is_configured(settings)
+        state, state_detail = ("configured" if configured else "not_configured"), ""
+        if definition.auth_kind is AuthKind.LOCAL:
+            state, state_detail = embeddings["state"], embeddings["detail"]
         providers.append(
             {
                 "id": definition.id,
                 "name": definition.display_name,
                 "description": definition.description,
                 "auth_kind": definition.auth_kind.value,
-                "configured": definition.is_configured(settings),
+                "configured": configured,
+                # What trying it found, where north has tried: "configured" says only that a key is saved.
+                "state": state,
+                "state_detail": state_detail,
                 "env_key": definition.env_key,
                 "setup_url": definition.setup_url,
                 "credential_hint": (
@@ -787,7 +803,7 @@ async def system_overview() -> dict[str, Any]:
     read = {item["path"] for item in completed if item.get("status") == "completed"}
     return {
         "providers": providers,
-        "embeddings": _embeddings_overview(),
+        "embeddings": embeddings,
         # Whether agents can drive a real browser. It depends on a binary north
         # cannot install for you, so the page says which of the three states it
         # is in rather than leaving the gap to be found mid-task.

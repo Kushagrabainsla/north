@@ -74,6 +74,13 @@ class InferenceRouter(ABC):
         """
         return ""
 
+    def embedding_state(self) -> tuple[str, str]:
+        """Whether embeddings work now: ("ready", ""), ("loading", "") or ("unavailable", why).
+
+        A router that cannot tell says ("unknown", ""), never "ready".
+        """
+        return "unknown", ""
+
     def part_chains(self, limit: int = 6) -> list[dict]:
         """The models this router would try for each part of a task, in order.
 

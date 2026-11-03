@@ -14,6 +14,9 @@ class _Selector:
         words = set(prompt.lower().replace("-", " ").split())
         return [skill for skill in candidates or [] if set(skill.name.split("-")) <= words]
 
+    async def unavailable(self) -> str:
+        return ""
+
 
 def _tested(name: str, **params) -> dict:
     """Params for a call that tests *name*: picked for a request naming it, not for an unrelated one."""

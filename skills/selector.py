@@ -49,6 +49,19 @@ class SkillSelector:
         # changed a skill and whether that caller remembered to invalidate us.
         self._embeddings: dict[str, tuple[str, list[float]]] | None = None
 
+    async def unavailable(self) -> str:
+        """Why skills cannot be selected right now, found by embedding a line; "" when they can.
+
+        select() returns [] when embeddings fail, which a selection test reads as every example missed.
+        """
+        if self._embed_fn is None:
+            return "no embedding model is configured"
+        try:
+            vectors = await self._embed_fn(["which skill fits this request"])
+        except Exception as exc:
+            return str(exc) or type(exc).__name__
+        return "" if vectors and vectors[0] else "the embedding model returned no vector"
+
     async def select(
         self, task_text: str, candidates: list[Skill] | None = None, *, min_similarity: float | None = None
     ) -> list[Skill]:

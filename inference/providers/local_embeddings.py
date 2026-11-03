@@ -66,6 +66,9 @@ class LocalEmbeddingProvider:
         self._model_id = model_id
         self._model: Any | None = None
         self._models: dict[str, ModelInfo] = {}
+        # Why the model could not be loaded, from the last attempt; "" once it loads or before it is tried.
+        # Without it "Local embeddings: Ready" stood beside a model that failed to load every three minutes.
+        self._unavailable = ""
         # One loader at a time: refresh() and a first embed() can race, and the
         # model is tens of megabytes to materialise.
         self._load_lock = asyncio.Lock()
@@ -79,6 +82,11 @@ class LocalEmbeddingProvider:
         having been materialised yet.
         """
         return self._model_id
+
+    @property
+    def unavailable_reason(self) -> str:
+        """Why the last attempt to load the model failed, or "" when it loaded or was not tried yet."""
+        return self._unavailable
 
     # ---- Provider protocol ----
 
@@ -98,7 +106,7 @@ class LocalEmbeddingProvider:
         del model_id  # this provider serves exactly one model
         model = await self._ensure_loaded()
         if model is None:
-            raise InferenceError("Local embedding model is unavailable")
+            raise InferenceError(f"Local embedding model is unavailable: {self._unavailable}")
         if not request.texts:
             return EmbedResponse(embeddings=[], model_used=self._model_id, cost_usd=0.0)
         # Encoding is CPU-bound, so it runs in a worker thread like every other
@@ -152,14 +160,13 @@ class LocalEmbeddingProvider:
         try:
             from inference.providers.onnx_encoder import OnnxTextEncoder
         except ImportError:
-            logger.info(
-                "onnxruntime is not installed - local embeddings are unavailable "
-                "(install north's dependencies to enable them)"
-            )
+            self._unavailable = "onnxruntime is not installed (install north's dependencies to enable it)"
+            logger.info("Local embeddings are unavailable: %s", self._unavailable)
             return None
         try:
             model = OnnxTextEncoder(self._model_id)
         except Exception as exc:
+            self._unavailable = f"could not load {self._model_id} ({exc})"
             logger.warning(
                 "Could not load the local embedding model %s (%s) - "
                 "semantic tool search, code search and memory recall will fall back to keywords",
@@ -167,5 +174,6 @@ class LocalEmbeddingProvider:
                 exc,
             )
             return None
+        self._unavailable = ""
         logger.info("Local embeddings ready: %s", self._model_id)
         return model

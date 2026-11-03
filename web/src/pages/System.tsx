@@ -193,6 +193,14 @@ export function SystemPage() {
             </div>
             <span className="pool-availability">
               {overview.data?.embeddings?.model || "–"}
+              {/* Whether they work: the model can be named and still fail to load. */}
+              {overview.data?.embeddings?.state === "unavailable" && (
+                <small className="row-hint">
+                  Not working: {overview.data.embeddings.detail}. Skills
+                  cannot be learned, and tool, code and memory search fall
+                  back to keywords.
+                </small>
+              )}
             </span>
           </div>
         </Panel>
