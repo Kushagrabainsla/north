@@ -36,7 +36,7 @@ from ledger.models import INFERENCE_CALL, LedgerSource
 from memory import ContextDocument
 from memory.extraction import learning_status
 from orchestrator.api_context import bind_request_services, current_services, merge
-from orchestrator.models import TaskRequest
+from orchestrator.models import Prompt, TaskRequest
 from tools.universal.browser import browser_availability
 from utils.time import epoch_to_local, localnow
 from web.artifacts import (
@@ -302,7 +302,7 @@ class ConversationUpdate(BaseModel):
 
 
 class TurnCreate(BaseModel):
-    prompt: str = Field(min_length=1, max_length=32_768)
+    prompt: Prompt
 
 
 def _conversation_payload(conversation) -> dict[str, Any]:

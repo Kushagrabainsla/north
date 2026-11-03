@@ -6,9 +6,9 @@ See docs/CODING_STYLE.md Section 9.7.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from ledger.models import LedgerSource
 from utils.edit_scope import EditAuthorizer
@@ -30,12 +30,24 @@ class ExecutionMode(StrEnum):
     HIERARCHICAL = "hierarchical"  # agents run in dependency order
 
 
+def _not_blank(prompt: str) -> str:
+    if not prompt.strip():
+        raise ValueError("a prompt needs words, not only spaces")
+    return prompt
+
+
+# What a task's prompt may be, for every way one arrives. A prompt of only spaces
+# passed the length check, and the planner and an agent ran (39k input tokens) to
+# say "The task came through empty" (issue #76, M21).
+Prompt = Annotated[str, Field(min_length=1, max_length=32_768), AfterValidator(_not_blank)]
+
+
 class TaskRequest(BaseModel):
     """Input payload to trigger a new task execution."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    prompt: str = Field(..., min_length=1, max_length=32_768)
+    prompt: Prompt
     source: LedgerSource = LedgerSource.PROMPT
     workspace: str = ""  # optional root directory for filesystem/shell tools
     context: str = ""  # optional pre-loaded context summary to inject into the agent's prompt
