@@ -634,6 +634,44 @@ tests/
   conftest.py        <- shared pytest fixtures
 ```
 
+### 7.5 Each Mechanism Has One Home
+
+A mechanism - asking you before an action, recording what ran, reaching you,
+pricing a model call, finding a path, checking that a dependency works - is
+built in one module, and every other module uses that module's interface for
+it. No other module keeps its own copy of it, its own shortcut around it, or its
+own memory of what it decided. When a caller needs the mechanism to behave
+differently, the change goes into its home, as an option or a fact the home
+accepts, never into a local workaround in the caller.
+
+A module still keeps the knowledge only it has, and hands it to the
+mechanism's home as facts. The coding-agent module knows whether Codex is
+installed; the approval layer decides what that means for a card. The browser
+knows which site a call lands on; the approval layer decides whether you are
+asked and remembers your answer.
+
+```python
+# wrong: a tool deciding when it asks, from its own memory of what you approved
+def mutates(self, params):
+    return not self._approved_in_task(params)  # the browser's own per-task site list
+
+# wrong: each tool taught on its own not to raise a card for a call it cannot run
+async def describe(self, input):
+    if await self._cannot_test(input.params):  # create_skill's own copy of the rule
+        return None
+
+# correct: the tool states facts; the approval layer decides, once, for every tool
+async def describe(self, input) -> Request: ...   # what the call does, where, on what
+async def unavailable(self, input) -> str: ...    # why it cannot run here, or ""
+```
+
+**Why:** in the issue #76 test the browser kept its own list of the sites you
+had approved and promised "won't ask again" while asking on every page (W7),
+and a tool that could not run raised a card anyway unless it had been taught
+not to: create_skill was taught (M6), coding_agent was not, so you approved
+asking a Codex that was not installed (M22). A mechanism with two homes drifts,
+and a fix made in one copy leaves the others broken.
+
 ---
 
 ## 8. Project Structure
