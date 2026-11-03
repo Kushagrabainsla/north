@@ -131,6 +131,11 @@ class Action:
     # folders it writes. What a "no" to it covers for the rest of the task. Not
     # part of the identity.
     paths: tuple[Path, ...] = ()
+    # What a person's yes to this action also covers for the rest of the task, as the
+    # tool words it: "read pages on linkedin.com in profile University". A later
+    # action with the same scope in that task is not asked about again. Not part of
+    # the identity; "" covers only the exact action.
+    scope: str = ""
     # The git repository a file edit by north's own tools lands in ("" for none).
     # Code changes there go to coding_agent, which works in an isolated copy and
     # runs the tests; north's own tools do not make them (CODING_STYLE §7).

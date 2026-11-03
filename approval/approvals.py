@@ -110,8 +110,8 @@ class Approvals:
             return Decision(Verdict.REFUSE, _ALREADY_DONE)
         if (said_no := self.refused_paths(request.action.named_paths(), task_id)) is not None:
             return Decision(Verdict.REFUSE, said_no)
-        if self._approved_in_task(request, task_id):
-            ruling = Ruling(Verdict.ALLOW, "you approved this exact action earlier in this task", DecidedBy.REPLAY)
+        if covered := self._approved_in_task(request, task_id):
+            ruling = Ruling(Verdict.ALLOW, f"you approved {covered} earlier in this task", DecidedBy.REPLAY)
             self._record(request, ruling, task_id)
             return Decision(ruling.verdict, ruling.rule)
         ruling = await self._policy.rule(request.action)
@@ -139,14 +139,19 @@ class Approvals:
                 )
         return None
 
-    def _approved_in_task(self, request: Request, task_id: str | None) -> bool:
-        """Whether a person approved this exact action earlier in this task, and that yes may stand again."""
-        return (
-            bool(task_id)
-            and not request.requires_confirmation
-            and may_replay_yes(request.action)
-            and request.action.describe() in self._approved.get(task_id or "", set())
-        )
+    def _approved_in_task(self, request: Request, task_id: str | None) -> str:
+        """What a person approved earlier in this task that covers this request, or "".
+
+        The exact action, or its scope: the yes to opening a site in a profile covers
+        reading that site there for the rest of the task. That memory was the browser's
+        own and failed, so every page asked again (issue #76, W7).
+        """
+        if not task_id or request.requires_confirmation or not may_replay_yes(request.action):
+            return ""
+        approved = self._approved.get(task_id, set())
+        if request.action.describe() in approved:
+            return "this exact action"
+        return f"this: {request.action.scope}" if request.action.scope in approved else ""
 
     def completed(self, request: Request, task_id: str | None) -> None:
         """Note that *request* ran successfully, so an irreversible one is never repeated in this task."""
@@ -165,7 +170,8 @@ class Approvals:
         card = await self._interaction.ask_person(self._card(request, task_id), event=CardEvent.APPROVAL)
         verdict = Verdict.ALLOW if card.status == ApprovalDecision.APPROVED else Verdict.REFUSE
         if verdict is Verdict.ALLOW and task_id:
-            self._approved.setdefault(task_id, set()).add(request.action.describe())
+            covers = (request.action.describe(), request.action.scope)
+            self._approved.setdefault(task_id, set()).update(key for key in covers if key)
         if card.status == ApprovalDecision.REJECTED and task_id and self._rejections is not None:
             self._rejections.record(task_id, request.action.named_paths(), request.action.summary)
         return Decision(verdict, "you decided", status=card.status)
