@@ -115,3 +115,15 @@ def test_shipped_policies_bind_the_right_agents() -> None:
     # Safety reaches every agent.
     for agent in ("general", "finance", "wellness"):
         assert "non-negotiable" in render_policies(policies, agent)
+
+
+def test_an_approval_card_is_raised_only_for_what_a_tool_will_then_do() -> None:
+    """Issue #76, A14: a "Delete old_safe.log ... Approve to delete it" card was approved and nothing was deleted.
+
+    The agent had no tool that could delete; the rule told it to raise the card before deleting anyway.
+    """
+    rules = render_policies(load_policies(_REAL_POLICIES_DIR), "general")
+
+    assert "Raise that card only for an action one of your tools will then carry out" in rules
+    assert "If no tool of yours can do the action, raise no card" in rules
+    assert "get approval through `request_approval`" in rules, "the card before a destructive change stays"
