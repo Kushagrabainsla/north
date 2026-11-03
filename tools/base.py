@@ -80,6 +80,9 @@ class Tool(ABC):
         layer, and only then run - with the approved `Request` on `input.approved`
         so `run()` acts on exactly what was approved.
         """
+        # A call that cannot run here raises no card: you would approve something that then cannot happen.
+        if why := await self.unavailable(input):
+            return ToolOutput(success=False, error=why)
         if not self.mutates(input.params):
             # A read changes nothing, but it can still go round a "no" given earlier in the task.
             if (said_no := self._approvals().refused_paths(self.reads(input), input.params.get("task_id"))) is not None:
@@ -111,6 +114,16 @@ class Tool(ABC):
             return await self.run(input)
         async with workspace_lock(str(input.params.get("workspace") or input.granted_workspace or "")):
             return await self.run(input)
+
+    async def unavailable(self, input: ToolInput) -> str:
+        """Why this call cannot run on this machine now, or "" when it can.
+
+        `execute` asks before anything else, so a call that cannot run raises no card, for every tool
+        (CODING_STYLE §7.5). A tool only states what it needs, such as a model that loads or an agent
+        that is installed: you approved asking a Codex that was not installed (issue #76, M22).
+        """
+        del input
+        return ""
 
     def reads(self, input: ToolInput) -> tuple[Path, ...]:
         """The paths this call reads, so a "no" given earlier in the task can cover them.

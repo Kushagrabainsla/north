@@ -26,7 +26,7 @@ async def test_with_no_display_it_says_there_is_no_screen_instead_of_trying(monk
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
-    out = await TakeScreenshotTool().run(ToolInput(params={"path": "s.png", "workspace": str(tmp_path)}))
+    out = await TakeScreenshotTool().execute(ToolInput(params={"path": "s.png", "workspace": str(tmp_path)}))
 
     assert not out.success and "no display" in out.error
     assert screen_capture_unavailable()

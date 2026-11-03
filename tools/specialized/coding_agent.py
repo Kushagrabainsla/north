@@ -86,6 +86,13 @@ class CodingAgentTool(Tool):
             "required": ["task"],
         }
 
+    async def unavailable(self, input: ToolInput) -> str:
+        call = self._prepare(input)
+        if isinstance(call, ToolOutput):
+            return ""  # what is wrong with the call itself, run() says
+        why = await self._runner.unavailable(call.backend)
+        return f"No coding agent can take this run here: {why}." if why else ""
+
     async def describe(self, input: ToolInput) -> Request | None:
         call = self._prepare(input)
         if isinstance(call, ToolOutput):

@@ -778,3 +778,12 @@ class TestBranchesLeftByEarlierRounds:
         other = await self._edit(runner, task_id="t2")
 
         assert other.earlier_branches == ()
+
+
+async def test_the_runner_says_why_no_agent_can_take_a_run(recorder: MemoryRecorder) -> None:
+    """What the coding_agent tool asks before any card (issue #76, M22)."""
+    runner = _runner(recorder, ScriptedBackend("claude"), ScriptedBackend("codex", available=False))
+
+    assert await runner.unavailable() == ""
+    assert await runner.unavailable("codex") == "codex: codex is missing"
+    assert "not a coding agent north can run" in await runner.unavailable("gemini")

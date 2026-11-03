@@ -51,6 +51,11 @@ class StubRunner:
         self._outcome = outcome or RunOutcome(ok=True, text="Add subtract() to calc.py.", session_id="s", turns=3)
         self._raises = raises
 
+    missing = ""  # why no coding agent can take a run; "" when one can
+
+    async def unavailable(self, wanted: str | None = None) -> str:
+        return self.missing
+
     async def run(self, **kwargs) -> RunReport:
         self.calls.append(kwargs)
         if self._raises:
@@ -470,3 +475,20 @@ class TestChangesThatCouldNotBeSaved:
         assert not result.success and result.error == problem
         assert result.data["failure"] == "copy_damaged"
         assert "no changes" not in result.error.lower()
+
+
+async def test_no_card_is_raised_for_a_run_no_coding_agent_can_take() -> None:
+    """Issue #76, M22: "Ask codex to read ..." was approved, then "Codex isn't available to north here"."""
+    import asyncio
+
+    from approval.store import ApprovalStore
+
+    runner = StubRunner()
+    runner.missing = "codex: `codex` is not installed"
+    store = ApprovalStore()
+
+    # Bounded: on the old code a card went up here and waited for an answer that never came.
+    result = await asyncio.wait_for(_tool(runner, store=store).execute(_input(backend="codex")), timeout=5)
+
+    assert not result.success and "`codex` is not installed" in result.error
+    assert store.all() == [] and runner.calls == []

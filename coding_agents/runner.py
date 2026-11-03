@@ -174,6 +174,14 @@ class CodingRunner:
                 self._kept.popitem(last=False)
         return tuple(tree.branch for tree in remaining)
 
+    async def unavailable(self, wanted: str | None = None) -> str:
+        """Why no coding agent, or not *wanted*, can take a run now; "" when one can."""
+        try:
+            await self._choose(wanted)
+        except BackendUnavailableError as exc:
+            return str(exc)
+        return ""
+
     async def _choose(self, wanted: str | None) -> tuple[CodingBackend, str]:
         """The backend asked for, or the first that can take a run; why none can, when none can."""
         if wanted is not None and wanted not in self._backends:

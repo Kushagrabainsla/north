@@ -67,9 +67,11 @@ class TakeScreenshotTool(Tool):
         total = data.get("size_bytes", 0)
         return f"Screenshot saved to {len(paths)} file(s): {', '.join(paths)} ({total} bytes total)."
 
+    async def unavailable(self, input: ToolInput) -> str:
+        why = screen_capture_unavailable()
+        return f"Screen capture cannot work here: {why}." if why else ""
+
     async def run(self, input: ToolInput) -> ToolOutput:
-        if why := screen_capture_unavailable():
-            return ToolOutput(success=False, error=f"Screen capture cannot work here: {why}.")
         path_str = input.params.get("path")
         if not path_str:
             path_str = f"screenshot_{int(time.time())}.png"

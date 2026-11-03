@@ -154,7 +154,7 @@ class CreateSkillTool(Tool):
         refused by `run` without changing anything. Asking you about it first produced four cards for four
         refused updates to a skill North had not written.
         """
-        if self._will_refuse(input.params) or await self._cannot_test(input.params):
+        if self._will_refuse(input.params):
             return None
         request = await super().describe(input)
         action = str(input.params.get("action") or "create").strip().lower()
@@ -172,17 +172,23 @@ class CreateSkillTool(Tool):
             return describe_user_edit(self._self_edit_policy, path, input, request)
         return request
 
-    async def _cannot_test(self, params: dict[str, Any]) -> str:
-        """Why the selection test this call needs cannot run now, or "".
+    async def unavailable(self, input: ToolInput) -> str:
+        """Why skills cannot be tested now, for a call that tests one; "" otherwise.
 
-        Every create, update and activate is tested by selecting the skill for its example requests, which
+        Every create, update and activate tests the skill by selecting it for its example requests, which
         needs embeddings. Without them each attempt failed "Skill selection tests failed" after you had
-        approved it: seven cards for one GitHub digest.
+        approved it: seven cards for one GitHub digest (issue #76, M6).
         """
-        action = str(params.get("action") or "create").strip().lower()
+        action = str(input.params.get("action") or "create").strip().lower()
         if action not in _TESTED_ACTIONS or self._skill_selector is None:
             return ""
-        return await self._skill_selector.unavailable()
+        if not (why := await self._skill_selector.unavailable()):
+            return ""
+        return (
+            "Skills cannot be learned right now: they are tested with the embedding model, which is not "
+            f"working ({why}). Nothing was changed. Tell the user skill learning is unavailable until it works "
+            "(the System page shows its state); trying again will fail the same way."
+        )
 
     def _will_refuse(self, params: dict[str, Any]) -> bool:
         action = str(params.get("action") or "create").strip().lower()
@@ -222,16 +228,6 @@ class CreateSkillTool(Tool):
             )
         if action == "read":
             return self._read(input.params)
-        if why := await self._cannot_test(input.params):
-            return ToolOutput(
-                success=False,
-                error=(
-                    "Skills cannot be learned right now: they are tested with the embedding model, which is not "
-                    f"working ({why}). "
-                    "Nothing was changed. Tell the user skill learning is unavailable until it works (the System "
-                    "page shows its state); trying again will fail the same way."
-                ),
-            )
         if action == "activate":
             return await self._activate(input.params)
         if action not in {"create", "update"}:
