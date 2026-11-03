@@ -243,6 +243,49 @@ _COMMAND_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")"})
 _REDIRECTIONS = frozenset({">", ">>", ">|", "&>", "&>>"})
 
 
+def _simple_commands(command: str) -> list[list[str]]:
+    """*command* as its simple commands' words: `cd x && rm -rf y` is [["cd", "x"], ["rm", "-rf", "y"]]."""
+    commands: list[list[str]] = [[]]
+    for token in _shell_tokens(command):
+        if token in _COMMAND_SEPARATORS:
+            commands.append([])
+        else:
+            commands[-1].append(token)
+    return [words for words in commands if words]
+
+
+def _is_root(target: str) -> bool:
+    """Whether *target*, as written, is /, a folder directly under it, or the home folder."""
+    home = str(Path.home())
+    for prefix in ("$HOME", "${HOME}", "~"):
+        if target == prefix or target.startswith(prefix + "/"):
+            target = home + target[len(prefix) :]
+    path = Path(target.removesuffix("/*").rstrip("/") or "/")
+    return path.is_absolute() and (path == Path(home) or path.parent == Path("/") or path == Path("/"))
+
+
+def deletes_a_root(command: str) -> bool:
+    """Whether *command* recursively deletes /, a folder directly under it, or the home folder.
+
+    One of the few shapes refused outright instead of asked about. It was found by
+    looking for the text "rm -rf /", so deleting one named folder by its absolute
+    path was refused unseen, while `rm -rf ~` and `rm -fr /` were not recognised
+    (issue #76, A12).
+    """
+    for words in _simple_commands(command):
+        if words[0] == "sudo":
+            words = words[1:]
+        if not words or Path(words[0]).name != "rm":
+            continue
+        flags = [word for word in words[1:] if word.startswith("-")]
+        recursive = any(
+            flag == "--recursive" or (not flag.startswith("--") and set(flag[1:]) & {"r", "R"}) for flag in flags
+        )
+        if recursive and any(_is_root(word) for word in words[1:] if not word.startswith("-")):
+            return True
+    return False
+
+
 def edited_paths(command: str, cwd: str | None) -> tuple[Path, ...]:
     """The files a shell command recognisably writes, resolved from *cwd*.
 

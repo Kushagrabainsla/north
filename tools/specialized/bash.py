@@ -15,7 +15,7 @@ from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from tools._path import edited_paths, git_repository, is_sensitive_path, named_paths
+from tools._path import deletes_a_root, edited_paths, git_repository, is_sensitive_path, named_paths
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import _os_sandbox
@@ -39,7 +39,6 @@ _MAX_OUTPUT_CHARS = 30_000
 # Do not rely on it to stop a determined attacker or a misbehaving model  -
 # any determined bypass (extra spaces, equivalent syntax) will get through.
 _OBVIOUS_DESTRUCTIVE_HINTS = [
-    "rm -rf /",
     ":(){ :|:& };:",
     "dd if=",
     "> /dev/sd",
@@ -187,7 +186,8 @@ class BashTool(Tool):
             read_only=read_only,
             mutating=not read_only,
             leaves_sandbox=bool(outside),
-            obviously_destructive=any(hint in command for hint in _OBVIOUS_DESTRUCTIVE_HINTS),
+            obviously_destructive=deletes_a_root(command)
+            or any(hint in command for hint in _OBVIOUS_DESTRUCTIVE_HINTS),
         )
 
     def format_output(self, data: dict[str, Any]) -> str:
