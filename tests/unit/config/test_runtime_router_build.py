@@ -32,6 +32,9 @@ class _FakeRouter:
     def __init__(self, providers=()):  # noqa: ANN001
         self._providers = list(providers)
 
+    async def refresh_catalog(self) -> None:
+        """The new router fills its catalog before it is swapped in."""
+
 
 @pytest.fixture
 def captured_build_router(monkeypatch):

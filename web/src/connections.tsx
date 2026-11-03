@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { api, post } from "./api";
+import { api, del, post } from "./api";
 import { ErrorNotice, Panel } from "./components";
 import { useResource } from "./hooks";
 
@@ -30,6 +30,13 @@ export function isLocalEmbeddings(provider: any) {
 // Trying a provider, not finding its key, is what "Ready" means: the local embedder read "Ready"
 // while its model failed to load on every refresh (issue #76, M6).
 const FAILING = new Set(["unavailable", "failing"]);
+
+/** What saving a key found by trying it: "saved and runtime refreshed" was said of keys the provider rejected. */
+export function savedKeyMessage(saved: { state?: string; state_detail?: string }): string {
+  if (saved.state === "ready") return "Key saved. The provider answered and its models are listed.";
+  if (saved.state === "failing") return `Key saved, but the provider did not accept it: ${saved.state_detail || "no reason given"}`;
+  return "Key saved. North is still checking it with the provider.";
+}
 
 export function providerFailing(provider: any): boolean {
   return FAILING.has(provider.state);
@@ -62,9 +69,19 @@ export function ProviderConnections() {
 
   const saveProvider = async (id: string) => {
     try {
-      await post(`/web/api/providers/${id}`, { api_key: keys[id] });
+      const saved = await post<{ state?: string; state_detail?: string }>(`/web/api/providers/${id}`, { api_key: keys[id] });
       setKeys((current) => ({ ...current, [id]: "" }));
-      setProviderMessage("Provider credentials saved and runtime refreshed.");
+      setProviderMessage(savedKeyMessage(saved));
+      await overview.reload();
+    } catch (error) {
+      setProviderMessage(String(error));
+    }
+  };
+
+  const removeProvider = async (id: string) => {
+    try {
+      await del(`/web/api/providers/${id}`);
+      setProviderMessage("Key removed.");
       await overview.reload();
     } catch (error) {
       setProviderMessage(String(error));
@@ -226,6 +243,12 @@ export function ProviderConnections() {
                     >
                       Save
                     </button>
+                    {/* A wrong key could be replaced but not removed, short of editing .env by hand. */}
+                    {provider.configured && (
+                      <button className="ghost-button" onClick={() => removeProvider(provider.id)}>
+                        Remove
+                      </button>
+                    )}
                   </div>
                 )}
                 {provider.auth_kind === "oauth_pkce" && (

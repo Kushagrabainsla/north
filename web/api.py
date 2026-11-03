@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import mimetypes
 import os
 import re
@@ -106,6 +107,7 @@ class _CodexCredentialsLike:  # pragma: no cover - documentation-only structural
 
 
 session_router = APIRouter(prefix="/web", tags=["web"], dependencies=[Depends(bind_request_services)])
+logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/web/api",
     tags=["web"],
@@ -776,6 +778,8 @@ async def system_overview() -> dict[str, Any]:
         state, state_detail = ("configured" if configured else "not_configured"), ""
         if definition.auth_kind is AuthKind.LOCAL:
             state, state_detail = embeddings["state"], embeddings["detail"]
+        elif configured:
+            state, state_detail = _provider_state(definition.id)
         providers.append(
             {
                 "id": definition.id,
@@ -1066,11 +1070,25 @@ def _provider_definition(provider_id: str) -> ProviderDefinition:
     return definition
 
 
-async def _refresh_inference_runtime(app: FastAPI) -> None:
-    """Rebuild the live router after provider credentials change.
+# How long a key save waits for the providers to answer before it returns; the old router keeps serving
+# until the new one has its catalog, however long that takes.
+_PROVIDER_CHECK_SECONDS = 20.0
 
-    Takes the app so the rebuilt router replaces the one this app's routes read
-    (`merge`), alongside swapping it into the live dependency container.
+
+def _provider_state(provider_id: str, router_: Any = None) -> tuple[str, str]:
+    """What *router_* (default: the live one) found when it last tried *provider_id*; "configured" if it cannot say."""
+    router_ = router_ if router_ is not None else current_services().inference_router
+    state, detail = getattr(router_, "provider_state", lambda _name: ("unknown", ""))(provider_id)
+    return ("configured", "") if state == "unknown" else (state, detail)
+
+
+async def _refresh_inference_runtime(app: FastAPI) -> Any:
+    """Rebuild the live router after provider credentials change, and swap it in once it has its catalog.
+
+    Swapped in at once, the new router had no models until the next pool refresh: for up to three
+    minutes /health said "starting", Settings "No models are reachable", and north status counted 0.
+    Takes the app so the rebuilt router replaces the one this app's routes read (`merge`), alongside
+    swapping it into the live dependency container.
     """
     from config.runtime import get_runtime
     from config.settings import reload_settings
@@ -1079,11 +1097,22 @@ async def _refresh_inference_runtime(app: FastAPI) -> None:
     reload_settings()
     deps = get_runtime()
     if deps is None:
-        return
+        return None
     new_router = rebuild_runtime_router(deps)
-    deps.inference_router = new_router
-    deps.cost_tracker.set_inner(new_router)
-    merge(app, inference_router=new_router)
+
+    def swap(_: object = None) -> None:
+        deps.inference_router = new_router
+        deps.cost_tracker.set_inner(new_router)
+        merge(app, inference_router=new_router)
+
+    refreshing = asyncio.ensure_future(new_router.refresh_catalog())
+    done, _ = await asyncio.wait({refreshing}, timeout=_PROVIDER_CHECK_SECONDS)
+    if refreshing in done:
+        swap()
+        return new_router  # this request's services still hold the old one
+    logger.info("Providers are still answering; the new keys take effect when they have")
+    refreshing.add_done_callback(swap)
+    return None
 
 
 def _provider_auth_payload(definition: ProviderDefinition) -> dict[str, Any]:
@@ -1186,6 +1215,17 @@ async def logout_provider(provider_id: str, request: Request) -> dict[str, Any]:
     return _provider_auth_payload(definition)
 
 
+def _remove_env_key(home: Path, env_key: str) -> None:
+    """Drop `env_key` from <NORTH_HOME>/.env, keeping its other lines and its private permissions."""
+    env_path = home / ".env"
+    if not env_path.exists():
+        return
+    prefix = f"{env_key}="
+    lines = [line for line in env_path.read_text(encoding="utf-8").splitlines() if not line.startswith(prefix)]
+    env_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    env_path.chmod(0o600)
+
+
 def _write_env_key(home: Path, env_key: str, value: str) -> None:
     """Upsert `env_key=value` in ~/.north/.env with private permissions.
 
@@ -1214,8 +1254,29 @@ async def update_provider(provider_id: str, body: ProviderCredentialUpdate, requ
     home = current_services().require("north_home")
     await asyncio.to_thread(_write_env_key, home, definition.env_key, body.api_key.strip())
     os.environ[definition.env_key] = body.api_key.strip()
+    refreshed = await _refresh_inference_runtime(request.app)
+    # What trying the key found: a key Gemini rejected was answered "saved and runtime refreshed", "Ready".
+    state, detail = _provider_state(definition.id, refreshed) if refreshed is not None else ("checking", "")
+    return {
+        "id": definition.id,
+        "configured": True,
+        "credential_hint": body.api_key[:4] + "…" + body.api_key[-4:],
+        "state": state,
+        "state_detail": detail,
+    }
+
+
+@router.delete("/providers/{provider_id}")
+async def remove_provider(provider_id: str, request: Request) -> dict[str, Any]:
+    """Forget a provider's API key: a wrong one could be replaced but not removed, except by editing .env."""
+    definition = _provider_definition(provider_id)
+    if not definition.env_key:
+        raise HTTPException(status_code=400, detail="This provider uses browser authentication; log out instead")
+    home = current_services().require("north_home")
+    await asyncio.to_thread(_remove_env_key, home, definition.env_key)
+    os.environ.pop(definition.env_key, None)
     await _refresh_inference_runtime(request.app)
-    return {"id": definition.id, "configured": True, "credential_hint": body.api_key[:4] + "…" + body.api_key[-4:]}
+    return {"id": definition.id, "configured": False, "state": "not_configured", "state_detail": ""}
 
 
 class TelegramUpdate(BaseModel):

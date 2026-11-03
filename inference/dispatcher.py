@@ -230,6 +230,9 @@ class ModelDispatcher(InferenceRouter):
         # until the first refresh_catalog() returns an empty registry means "not
         # loaded yet" rather than "no models available".
         self._catalog_refreshed: bool = False
+        # Why each provider's last catalog refresh failed. A key Gemini rejected (400) showed "Ready" because
+        # only north.log knew; this is what trying the key found.
+        self._provider_errors: dict[str, str] = {}
         self._build_registry()
         self._cooldowns.load()
         self._rate_limit_status.load()
@@ -639,6 +642,19 @@ class ModelDispatcher(InferenceRouter):
             return "loading", ""
         return "unavailable", "no provider serves an embedding model"
 
+    def provider_state(self, name: str) -> tuple[str, str]:
+        """What trying *name* found: ("ready", ""), ("checking", ""), ("failing", why) or ("unknown", "")."""
+        if name in self._provider_errors:
+            return "failing", self._provider_errors[name]
+        provider = next((p for p in self._providers if p.name == name), None)
+        if provider is None:
+            return "unknown", ""
+        if provider.get_models():
+            return "ready", ""
+        if not self._catalog_refreshed:
+            return "checking", ""
+        return "failing", "it listed no models"
+
     def embedding_provider_name(self) -> str:
         """Who serves embeddings - the on-device model, or a provider over the network.
 
@@ -744,11 +760,14 @@ class ModelDispatcher(InferenceRouter):
         )
         for provider, res in zip(self._providers, results, strict=False):
             if isinstance(res, Exception):
+                self._provider_errors[provider.name] = str(res) or type(res).__name__
                 logger.warning(
                     "Pool refresh failed for provider %s: %s (retaining existing catalog)",
                     provider.name,
                     res,
                 )
+            else:
+                self._provider_errors.pop(provider.name, None)
         self._build_registry()
         # The first refresh has now finished, whether or not any provider
         # answered. An empty catalogue from here on is a real fault, not a
@@ -803,6 +822,7 @@ class ModelDispatcher(InferenceRouter):
                 except Exception:
                     logger.warning("Failed to close provider %s on rebuild", provider.name, exc_info=True)
         self._providers = providers
+        self._provider_errors.clear()  # what the old keys' refreshes found says nothing about the new ones
         self._build_registry()
         if self._availability is not None:
             # A new key is exactly the action a FORBIDDEN provider was waiting for,

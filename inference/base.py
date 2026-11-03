@@ -81,6 +81,11 @@ class InferenceRouter(ABC):
         """
         return "unknown", ""
 
+    def provider_state(self, name: str) -> tuple[str, str]:
+        """What trying provider *name* found: ("ready", ""), ("checking", ""), ("failing", why) or unknown."""
+        del name
+        return "unknown", ""
+
     def part_chains(self, limit: int = 6) -> list[dict]:
         """The models this router would try for each part of a task, in order.
 
