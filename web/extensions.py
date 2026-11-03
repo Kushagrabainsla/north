@@ -398,6 +398,13 @@ def _forget_authorship(directory: Path) -> None:
     SelfEditPolicy(directory.parent, home / "mutations").forget(directory)
 
 
+def _tool_source(tool: Any) -> str:
+    """Where a tool comes from. An MCP server's tools were labelled "built-in"."""
+    if server := getattr(tool, "server_name", None):
+        return f"MCP: {server}"
+    return "learned" if is_learned_tool(tool) else "built-in"
+
+
 @router.get("/tools")
 async def list_tools() -> list[dict[str, Any]]:
     registry = current_services().require("tool_registry")
@@ -408,7 +415,7 @@ async def list_tools() -> list[dict[str, Any]]:
         tool.name: {
             "name": tool.name,
             "description": tool.description,
-            "source": "learned" if is_learned_tool(tool) else "built-in",
+            "source": _tool_source(tool),
             "status": "active",
             "mutating": tool.is_mutating,
         }

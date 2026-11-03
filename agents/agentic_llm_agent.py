@@ -1034,7 +1034,14 @@ class AgenticLLMAgent(LLMAgent):
                 names.append(name)
             if len(names) >= limit:
                 break
+        # Configured tools that are not here: without this the agent could only guess why ("confirm that
+        # you've restarted North") about an MCP server whose command did not exist.
+        unavailable = sorted(registry.unavailable().values()) if hasattr(registry, "unavailable") else []
         if not names:
+            if unavailable:
+                return json.dumps(
+                    {"success": False, "error": f"No tools matched {query!r}.", "not_available": unavailable}
+                )
             return _failed_json(f"No tools matched {query!r}.")
 
         newly_loaded: list[str] = []
@@ -1049,6 +1056,7 @@ class AgenticLLMAgent(LLMAgent):
                 "matches": matches,
                 "loaded": newly_loaded,
                 "message": "Loaded tools will be callable on the next turn.",
+                **({"not_available": unavailable} if unavailable else {}),
             }
         )
 

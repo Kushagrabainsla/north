@@ -743,6 +743,20 @@ def _bootstrap_overview(home: Path) -> tuple[list, list[str], bool]:
     return progress, candidates, marker.exists()
 
 
+def _mcp_servers() -> list[dict[str, Any]]:
+    registry = current_services().tool_registry
+    counts: dict[str, int] = {}
+    for tool in registry.available_tools(auto_reload=False) if registry is not None else []:
+        if server := getattr(tool, "server_name", None):
+            counts[server] = counts.get(server, 0) + 1
+    return [{"name": name, "tools": count} for name, count in sorted(counts.items())]
+
+
+def _tool_registry_notes() -> dict[str, str]:
+    registry = current_services().tool_registry
+    return registry.unavailable() if registry is not None and hasattr(registry, "unavailable") else {}
+
+
 def _embeddings_overview() -> dict[str, Any]:
     """Which model turns text into vectors, and whether it runs on this machine.
 
@@ -808,6 +822,10 @@ async def system_overview() -> dict[str, Any]:
     return {
         "providers": providers,
         "embeddings": embeddings,
+        # MCP servers that started, with how many tools each offers, and configured tools that are not
+        # working, with why: a server that failed to start was only a warning in north.log.
+        "mcp_servers": _mcp_servers(),
+        "not_working": sorted(_tool_registry_notes().values()),
         # Whether agents can drive a real browser. It depends on a binary north
         # cannot install for you, so the page says which of the three states it
         # is in rather than leaving the gap to be found mid-task.

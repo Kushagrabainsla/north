@@ -179,6 +179,20 @@ export function SystemPage() {
               )}
             </span>
           </div>
+          {/* MCP servers you configured: the ones that started, and below, anything configured that is not
+            working. A server whose command did not exist was only a warning in north.log. */}
+          {(overview.data?.mcp_servers || []).map((server: { name: string; tools: number }) => (
+            <div className="list-row" key={`mcp-${server.name}`}>
+              <b>MCP: {server.name}</b>
+              <span>{server.tools} tool{server.tools === 1 ? "" : "s"}</span>
+            </div>
+          ))}
+          {(overview.data?.not_working || []).map((why: string) => (
+            <div className="list-row" key={why}>
+              <b>Not working</b>
+              <span className="row-hint">{why}</span>
+            </div>
+          ))}
           {/* The one model north runs itself. Worth naming: every stored vector is
             stamped with it, so "which embeddings am I on?" decides which memories
             can still be compared with which. */}

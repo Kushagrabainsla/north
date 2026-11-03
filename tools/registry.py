@@ -204,6 +204,9 @@ class ToolRegistry:
         self._learned_dir = learned_dir
         self._last_reload: float = 0.0  # monotonic timestamp of last filesystem scan
         self._dir_mtimes: dict[Path, float] = {}
+        # Tools you configured that are not here, and why, by source ("mcp:crm"). A server that failed to start
+        # was only a warning in north.log: the agent searched for its tools and told you to restart north.
+        self._unavailable: dict[str, str] = {}
 
         if auto_register:
             self._auto_discover()
@@ -302,6 +305,17 @@ class ToolRegistry:
     def all_tools(self) -> list[Tool]:
         """Return every tool in the global catalog."""
         return list(self._tools.values())
+
+    def note_unavailable(self, source: str, why: str) -> None:
+        """Record that tools from *source* were configured but are not available, and why."""
+        self._unavailable[source] = why
+
+    def clear_unavailable(self, source: str) -> None:
+        self._unavailable.pop(source, None)
+
+    def unavailable(self) -> dict[str, str]:
+        """Configured tool sources that are not working, each with why, by source."""
+        return dict(self._unavailable)
 
     def available_tools(self, *, auto_reload: bool = True) -> list[Tool]:
         """Return every currently available tool in the global catalog.

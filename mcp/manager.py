@@ -18,6 +18,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How a server that failed to start is named among the registry's unavailable sources.
+UNAVAILABLE_PREFIX = "mcp:"
+
+
+def _why(exc: BaseException, config: McpServerConfig) -> str:
+    """Why a server did not start, in words the user and the agent can act on."""
+    causes = [exc, exc.__cause__]
+    if any(isinstance(cause, FileNotFoundError) for cause in causes):
+        return f"its command {config.command!r} was not found"
+    if any(isinstance(cause, TimeoutError) for cause in causes):
+        return "it did not answer in time"
+    return str(exc) or type(exc).__name__
+
 
 class McpManager:
     """Discovers MCP server configurations and manages their client instances."""
@@ -78,13 +91,19 @@ class McpManager:
         except asyncio.CancelledError:
             await client.close()  # north is stopping while this server starts
             raise
-        except Exception:
+        except Exception as exc:
             logger.warning("Failed to start MCP server %r; stopping it", name, exc_info=True)
             await client.close()
+            if registry is not None:
+                registry.note_unavailable(
+                    f"{UNAVAILABLE_PREFIX}{name}",
+                    f"MCP server '{name}' is configured in mcp.json but failed to start: {_why(exc, config)}",
+                )
             return
         self._clients[name] = client
         logger.info("Started MCP server %r with %d tools", name, len(client.tools))
         if registry is not None:
+            registry.clear_unavailable(f"{UNAVAILABLE_PREFIX}{name}")
             for tool_def in client.tools:
                 registry.register(McpTool(name, client, tool_def))
 
