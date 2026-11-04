@@ -294,3 +294,17 @@ async def test_a_task_is_traced_back_to_its_session_title(tmp_path) -> None:
 
     assert await store.titles_for_tasks(["task_1", "task_2"]) == {"task_1": (conversation.id, "Trip planning")}
     assert await store.titles_for_tasks([]) == {}
+
+
+async def test_a_secret_in_the_first_message_does_not_title_the_session(tmp_path) -> None:
+    """Issue #76, M20: the title, shown in the sidebar and every list, carried a Wi-Fi password."""
+    store = ConversationStore(tmp_path / "web.db")
+    conversation = await store.create()
+
+    await store.add_turn(
+        conversation.id, "can u remember my wifi password for me, its Tr0ub4dor-CANARY-5521. also my bank pin is 4417"
+    )
+
+    updated = await store.get(conversation.id)
+    assert updated is not None
+    assert updated.title == "can u remember my wifi password…"

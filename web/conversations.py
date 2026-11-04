@@ -9,6 +9,7 @@ from pathlib import Path
 
 from utils.db import open_db_connection
 from utils.ids import generate_id
+from utils.secrets import redact, until_secret
 from utils.time import format_timestamp, utcnow
 
 _SCHEMA = """
@@ -40,6 +41,15 @@ CREATE INDEX IF NOT EXISTS idx_web_conversations_updated
 CREATE INDEX IF NOT EXISTS idx_web_turns_conversation
     ON web_turns(conversation_id, position);
 """
+
+
+def _title_from(prompt: str) -> str:
+    """A session's title from its first message: its first words, and none after one that names a secret.
+
+    "can u remember my wifi password for me, its Tr0ub4dor-CANARY-5521. also" titled a
+    session, in the sidebar and every list of sessions (issue #76, M20).
+    """
+    return until_secret(" ".join(redact(prompt).split()))[:72]
 
 
 @dataclass(frozen=True)
@@ -266,7 +276,7 @@ class ConversationStore:
             )
             title = row["title"]
             if title in {"New chat", "New session"}:
-                title = " ".join(prompt.strip().split())[:72] or title
+                title = _title_from(prompt) or title
             goal = row["goal"]
             goal_status = row["goal_status"]
             if not goal or goal_status == "achieved":

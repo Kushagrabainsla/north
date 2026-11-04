@@ -106,6 +106,21 @@ _SECRET_FIELD_NAMES = re.compile(
 )
 
 
+# A word in prose that names a secret: what follows it may be one, whatever it looks like.
+_SECRET_WORD_RE = re.compile(
+    r"(?i)\b(?:password|passwd|passcode|pwd|pin|secret|token|api[ _-]?key|credential|private[ _-]?key|ssn|cvv)s?\b"
+)
+
+
+def until_secret(text: str) -> str:
+    """*text* up to the first word that names a secret, marked as cut; all of it when none does.
+
+    For where only the start of a message is shown, such as a session's title.
+    """
+    match = _SECRET_WORD_RE.search(text)
+    return f"{text[: match.end()]}…" if match and match.end() < len(text) else text
+
+
 def contains_secret(text: str) -> bool:
     """Whether *text* looks like it carries a credential or a card number."""
     return bool(SECRET_RE.search(text) or TOKEN_RE.search(text) or CC_RE.search(text))
