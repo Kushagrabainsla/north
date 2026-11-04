@@ -348,6 +348,17 @@ class ToolRegistry:
     def all_tool_names(self) -> set[str]:
         return set(self._tools)
 
+    async def end_task(self, task_id: str) -> None:
+        """Tell every tool that *task_id* has ended, so each closes what it opened for it.
+
+        Repeating it is harmless: a tool closes only what it still holds for the task.
+        """
+        for tool in self._tools.values():
+            try:
+                await tool.end_task(task_id)
+            except Exception:
+                logger.warning("%s could not close what task %s opened", tool.name, task_id, exc_info=True)
+
     async def aclose(self) -> None:
         """Call aclose() on every registered tool that defines it."""
         for tool in self._tools.values():

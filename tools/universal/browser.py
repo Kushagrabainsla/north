@@ -69,6 +69,11 @@ def _site(url: str) -> str:
     return (urlparse(url).hostname or "").lower().removeprefix("www.")
 
 
+def _task_page(task_id: object) -> str:
+    """The page a task works in, in a browser that tasks share."""
+    return f"task-{str(task_id or 'default')}"
+
+
 def _profile_ask(label: str, action: str, params: dict[str, Any]) -> str:
     """What the card asks: opening a site covers reading it for the rest of the task, so it says so."""
     url = str(params.get("url") or "") if action in _NAVIGATING_ACTIONS else ""
@@ -777,8 +782,10 @@ class BrowserTool(Tool):
         self._binary_cmd = binary_cmd
         self._north_settings = north_settings
         self._existing_browser = existing_browser
-        # Browsers chrome-agent started for north (isolated profiles, plain sessions), closed by aclose.
+        # Browsers chrome-agent started for north (isolated profiles, plain sessions), closed by aclose,
+        # and the task pages open in them, each closed when its task ends.
         self._started_browsers: set[str] = set()
+        self._opened_pages: set[tuple[str, str]] = set()
         self._verified_bindings: dict[tuple[str, str], tuple[str, str]] = {}
         # The site open in each (task, profile) tab: a fact the approval scope of a read names.
         self._open_sites: dict[tuple[str, str], str] = {}
@@ -968,7 +975,7 @@ class BrowserTool(Tool):
                                 resolved, [], self._existing_browser.description_runner(profile, resolved)
                             )
                         else:
-                            resolved["page"] = f"task-{str(params.get('task_id') or 'default')}"
+                            resolved["page"] = _task_page(params.get("task_id"))
                             request = await describe_browser_call(
                                 resolved,
                                 self._prefix({**resolved, "connect": endpoint}, profile.browser_name),
@@ -1080,14 +1087,44 @@ class BrowserTool(Tool):
         return output
 
     async def _chrome_agent(self, command: list[str], timeout: int) -> _CommandResult:
-        """Run chrome-agent, remembering the browser the command starts so north can close it."""
+        """Run chrome-agent, remembering the browser and page the command opens so north can close them."""
         if "--browser" in command:
             name = command[command.index("--browser") + 1]
-            if command[-1] == "close" and "--page" not in command:
+            page = command[command.index("--page") + 1] if "--page" in command else ""
+            closing = command[-1] == "close"
+            if closing and not page:
                 self._started_browsers.discard(name)
+                self._opened_pages = {opened for opened in self._opened_pages if opened[0] != name}
             else:
                 self._started_browsers.add(name)
+            if closing and page:
+                self._opened_pages.discard((name, page))
+            elif page:
+                self._opened_pages.add((name, page))
         return await _run_chrome_agent(command, timeout)
+
+    async def _close(self, *target: str) -> None:
+        """Close a browser or page north opened; one that will not close is logged, not raised."""
+        try:
+            await _run_chrome_agent([*self._get_cmd(), "--json", *target, "close"], 15)
+        except (_ChromeAgentError, RuntimeError):
+            logger.warning("could not close %s, which north opened", " ".join(target), exc_info=True)
+
+    async def end_task(self, task_id: str) -> None:
+        """Close what *task_id* opened through chrome-agent: its page in each North-managed profile, its own browser.
+
+        They stayed open until north stopped, a tab for every task, one holding a URL
+        with a secret in it (issue #76, W1). What a task left in your existing Chrome
+        stays there, as its drafts do.
+        """
+        page = _task_page(task_id)
+        pages = sorted(opened for opened in self._opened_pages if opened[1] == page)
+        self._opened_pages.difference_update(pages)
+        for browser, _ in pages:
+            await self._close("--browser", browser, "--page", page)
+        if task_id in self._started_browsers:  # a plain session's browser is named after its task
+            self._started_browsers.discard(task_id)
+            await self._close("--browser", task_id)
 
     async def aclose(self) -> None:
         """Close every browser north started; disconnect existing Chrome without closing the user's browser.
@@ -1098,11 +1135,9 @@ class BrowserTool(Tool):
         port and a tab for every task, one holding a URL with a secret in it.
         """
         for name in sorted(self._started_browsers):
-            try:
-                await _run_chrome_agent([*self._get_cmd(), "--json", "--browser", name, "close"], 15)
-            except (_ChromeAgentError, RuntimeError):
-                logger.warning("could not close the browser %s north started", name, exc_info=True)
+            await self._close("--browser", name)
         self._started_browsers.clear()
+        self._opened_pages.clear()
         if self._existing_browser is not None:
             await self._existing_browser.aclose()
 
@@ -1157,7 +1192,7 @@ class BrowserTool(Tool):
         session_id = params.get("task_id", "") or params.get("session_id", "default")
         if profile is not None:
             session_id = profile.browser_name
-            params["page"] = f"task-{str(input.params.get('task_id') or 'default')}"
+            params["page"] = _task_page(input.params.get("task_id"))
         try:
             command = self._get_cmd() + self._build_args(action, params, session_id)
         except (RuntimeError, ValueError) as exc:

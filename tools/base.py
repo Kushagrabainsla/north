@@ -132,6 +132,13 @@ class Tool(ABC):
         del input
         return ""
 
+    async def end_task(self, task_id: str) -> None:
+        """Close what this tool opened for *task_id*, once that task has ended, however it ended.
+
+        `ToolRegistry.end_task` calls it on every tool; one that holds nothing per task does nothing.
+        """
+        del task_id
+
     def reads(self, input: ToolInput) -> tuple[Path, ...]:
         """The paths this call reads, so a "no" given earlier in the task can cover them.
 

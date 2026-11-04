@@ -463,7 +463,20 @@ class Orchestrator:
         self._inbox.close(task_id)
         self._requests.pop(task_id, None)
         self._release_pending_cards(task_id)
+        self._close_what_its_tools_opened(task_id)
         return True
+
+    def _close_what_its_tools_opened(self, task_id: str) -> None:
+        """Have each tool close what it opened for the task, in the background; the task cannot use it now.
+
+        Its browser tab stayed open until north stopped, a tab for every task (issue #76, W1).
+        """
+        if self._tool_registry is None:
+            return
+        try:
+            spawn(self._tool_registry.end_task(task_id), name=f"end_task:{task_id}")
+        except Exception:  # the rest of the task's cleanup must still run
+            logger.warning("Could not close what task %s opened", task_id, exc_info=True)
 
     async def cancel_all_tasks(self) -> int:
         """Cancel every in-flight task. Returns the count cancelled.
@@ -985,6 +998,7 @@ class Orchestrator:
         is_resumable = stored_task is not None and stored_task.status in {"queued", "paused"}
         if is_resumable:
             return
+        self._close_what_its_tools_opened(task_id)
         self._inbox.close(task_id)
         self._requests.pop(task_id, None)
         # Reap this task's tracked cost exactly once, regardless of exit path.

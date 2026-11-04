@@ -215,3 +215,7 @@ class ToolDispatchRegistryPort(Protocol):
     def get(self, name: str) -> ToolRunnerPort:
         """Return the runnable tool registered under ``name`` (raises if absent)."""
         ...
+
+    async def end_task(self, task_id: str) -> None:
+        """Have every tool close what it opened for *task_id*, which has ended."""
+        ...
