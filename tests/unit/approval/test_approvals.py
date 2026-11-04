@@ -49,6 +49,7 @@ async def test_a_model_cannot_switch_the_approval_mode_unasked() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("chrome_installed")
 async def test_a_browser_click_asks_before_it_happens() -> None:
     store = rejecting_store()
     tool = bind_approvals(BrowserTool(binary_cmd=["false"]), store=store)

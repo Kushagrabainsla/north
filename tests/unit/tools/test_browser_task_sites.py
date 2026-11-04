@@ -29,6 +29,8 @@ from tests.conftest import bind_approvals
 from tools.models import ToolInput, ToolOutput
 from tools.universal.browser import BrowserTool, _CommandResult
 
+pytestmark = pytest.mark.usefixtures("chrome_installed")
+
 TASK = "task_linkedin"
 
 

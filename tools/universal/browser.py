@@ -151,11 +151,8 @@ def browser_availability() -> tuple[str, str]:
         return "unavailable", BROWSER_INSTALL_HINT
     # chrome-agent drives a Chrome it does not bring: System said "available" on a machine with none, and
     # every call failed "Could not find Chrome or Chromium. Install Chrome and ensure it's on your PATH."
-    if _find_chrome() is None:
-        return "unavailable", (
-            f"chrome-agent is installed but no Chrome or Chromium was found (looked on PATH for "
-            f"{', '.join(_CHROME_NAMES)}); install Chrome or Chromium"
-        )
+    if why := browser_unavailable():
+        return "unavailable", f"chrome-agent is installed but {why}; install Chrome or Chromium"
     if command[0].endswith("npx"):
         return "on demand", "via npx; downloaded on first use"
     return "available", command[0]
@@ -167,6 +164,17 @@ _CHROME_APPS = (
     Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
     Path("/Applications/Chromium.app/Contents/MacOS/Chromium"),
 )
+
+
+def browser_unavailable() -> str:
+    """Why no browser can be driven on this machine, or "" when one can: there is no Chrome or Chromium.
+
+    A North-managed profile, a plain session and your existing Chrome all need one; with none, agents
+    still offered "I can open it in one of your browser profiles".
+    """
+    if _find_chrome() is None:
+        return f"no Chrome or Chromium was found (looked on PATH for {', '.join(_CHROME_NAMES)})"
+    return ""
 
 
 def _find_chrome() -> str | None:
@@ -897,6 +905,10 @@ class BrowserTool(Tool):
                 "login_verified": False,
             },
         )
+
+    async def unavailable(self, input: ToolInput) -> str:
+        why = browser_unavailable()
+        return f"The browser cannot work here: {why}." if why else ""
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
         """Classify writes and any use of a signed-in profile per call; True means the approval layer decides.

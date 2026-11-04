@@ -12,6 +12,8 @@ from tests.conftest import approval_policy
 from tools.models import ToolInput, ToolOutput
 from tools.universal.browser import BrowserTool, _CommandResult
 
+pytestmark = pytest.mark.usefixtures("chrome_installed")
+
 
 @pytest.fixture
 def settings(tmp_path):

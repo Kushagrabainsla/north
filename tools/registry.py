@@ -28,6 +28,8 @@ from tools.exceptions import ToolNotFoundError
 from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from approval.approvals import Approvals, Request
 
 logger = logging.getLogger(__name__)
@@ -207,8 +209,8 @@ class ToolRegistry:
         # Tools you configured that are not here, and why, by source ("mcp:crm"). A server that failed to start
         # was only a warning in north.log: the agent searched for its tools and told you to restart north.
         self._unavailable: dict[str, str] = {}
-        # Tools kept out because they cannot work on this machine (see withhold); reload must not re-add them.
-        self._withheld: set[str] = set()
+        # What a tool needs from this machine, by name: offered only while that is here (see require).
+        self._requirements: dict[str, Callable[[], str]] = {}
 
         if auto_register:
             self._auto_discover()
@@ -240,7 +242,7 @@ class ToolRegistry:
             if not self._directory_changed(dir_path):
                 continue
             for tool in _discover(dir_path, package).values():
-                if tool.name not in self._tools and tool.name not in self._withheld:
+                if tool.name not in self._tools:
                     self._tools[tool.name] = self._bind(tool)
                     logger.info("ToolRegistry.reload: picked up new global tool %r", tool.name)
         for directory in self._learned_directories():
@@ -305,30 +307,38 @@ class ToolRegistry:
         return self._tools[name]
 
     def all_tools(self) -> list[Tool]:
-        """Return every tool in the global catalog."""
-        return list(self._tools.values())
+        """Every tool in the global catalog that can work on this machine now."""
+        return [tool for tool in self._tools.values() if not self._missing(tool.name)]
 
     def note_unavailable(self, source: str, why: str) -> None:
         """Record that tools from *source* were configured but are not available, and why."""
         self._unavailable[source] = why
 
-    def withhold(self, name: str, why: str) -> None:
-        """Keep tool *name* out of the catalog because it cannot work here, and say why.
+    def require(self, name: str, missing: Callable[[], str]) -> None:
+        """Offer tool *name* only while *missing()* is "": it says what this machine lacks for the tool.
 
-        On a host with no display take_screenshot failed every call ("X connection failed"), yet agents
-        offered it as the way forward. Withheld, the model is not offered it, and find_tools and System
-        say why.
+        On a host with no display take_screenshot failed every call ("X connection failed"), and with no
+        Chrome every browser call failed, yet agents offered both as the way forward (issue #76, W11).
+        Checked whenever the catalog is read, so the tool appears once what it needs is there, with no
+        restart. It stays registered: `get` finds it, and its own `unavailable()` answers a direct call.
         """
-        self._withheld.add(name)
-        self._tools.pop(name, None)
-        self.note_unavailable(name, why)
+        self._requirements[name] = missing
+
+    def _missing(self, name: str) -> str:
+        check = self._requirements.get(name)
+        return check() if check is not None else ""
 
     def clear_unavailable(self, source: str) -> None:
         self._unavailable.pop(source, None)
 
     def unavailable(self) -> dict[str, str]:
-        """Configured tool sources that are not working, each with why, by source."""
-        return dict(self._unavailable)
+        """Tool sources that are not working, each with why, by source: configured ones and required ones."""
+        lacking = {
+            name: f"{name} cannot work on this machine: {why}"
+            for name in self._requirements
+            if (why := self._missing(name))
+        }
+        return {**self._unavailable, **lacking}
 
     def available_tools(self, *, auto_reload: bool = True) -> list[Tool]:
         """Return every currently available tool in the global catalog.
@@ -346,7 +356,7 @@ class ToolRegistry:
         return self.all_tools()
 
     def all_tool_names(self) -> set[str]:
-        return set(self._tools)
+        return {tool.name for tool in self.all_tools()}
 
     async def end_task(self, task_id: str) -> None:
         """Tell every tool that *task_id* has ended, so each closes what it opened for it.

@@ -95,6 +95,7 @@ async def test_connect_prepares_only_existing_profiles_through_the_bridge(servic
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("chrome_installed")
 async def test_preflight_uses_real_central_approval_and_returns_without_blocking_dashboard(services):
     store = ApprovalStore()
     policy = approval_policy()

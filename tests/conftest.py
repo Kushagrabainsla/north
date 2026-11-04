@@ -79,6 +79,12 @@ def _isolated_north_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
+def chrome_installed(monkeypatch):
+    """A Chrome on this machine for the browser tool, which is otherwise not offered and refuses calls."""
+    monkeypatch.setattr("tools.universal.browser._find_chrome", lambda: "/usr/bin/google-chrome")
+
+
+@pytest.fixture
 def move_north_home(monkeypatch):
     """Move north's home for one test: NORTH_HOME and `settings.north_home` together.
 

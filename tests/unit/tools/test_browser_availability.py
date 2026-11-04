@@ -20,11 +20,6 @@ def nothing_installed(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setattr(browser.Path, "is_file", lambda self: False)
 
 
-@pytest.fixture
-def chrome_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(browser, "_find_chrome", lambda: "/usr/bin/google-chrome")
-
-
 def test_a_real_binary_is_available(monkeypatch: pytest.MonkeyPatch, chrome_installed) -> None:
     monkeypatch.setattr(browser, "_find_chrome_agent_binary", lambda: ["/usr/local/bin/chrome-agent"])
     state, detail = browser.browser_availability()

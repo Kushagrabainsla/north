@@ -234,17 +234,14 @@ def _build_tool_registry(
     # Every tool the registry holds gets `approvals`, so every call that changes
     # something is decided in one place - see Tool.execute.
     tool_registry = ToolRegistry(auto_register=True, learned_dir=learned_tools_dir, approvals=approvals)
+    from tools.universal.browser import BrowserTool, browser_unavailable
     from tools.universal.take_photo import camera_unavailable
     from tools.universal.take_screenshot import screen_capture_unavailable
 
-    # Not offered where it cannot work: agents kept offering both on a host with neither (issue #76, W11).
-    for name, capture, why in (
-        ("take_screenshot", "Screen capture", screen_capture_unavailable()),
-        ("take_photo", "Camera capture", camera_unavailable()),
-    ):
-        if why:
-            tool_registry.withhold(name, f"{capture} is not available: {why}.")
-    from tools.universal.browser import BrowserTool
+    # Offered only where they can work: agents kept offering all three on a host with none (issue #76, W11).
+    tool_registry.require("take_screenshot", screen_capture_unavailable)
+    tool_registry.require("take_photo", camera_unavailable)
+    tool_registry.require("browser", browser_unavailable)
     from tools.universal.browser_taskwindow import TaskWindowBrowser
 
     tool_registry.register(
