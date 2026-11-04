@@ -42,7 +42,7 @@ from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
 from agents.tool_results import is_delegation_failure as _is_delegation_failure
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent
-from approval.models import ApprovalDecision, Card, CardField, CardType, DecidedBy
+from approval.models import Card, CardField, CardType, DecidedBy
 from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import AllModelsRateLimitedError, ContextTooLargeError, is_model_unavailable_error
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
@@ -964,16 +964,8 @@ class AgenticLLMAgent(LLMAgent):
                 result_str = json.dumps({"left_for_user": True, "card_id": card.id, "decision": card.status})
             return call, result_str, True, []
         if call.name == "request_approval":
-            card = await self._request_approval_card(payload, params)
-            result_str = json.dumps(
-                {
-                    "decision": card.status,
-                    "decided_by": _answered_by(card),
-                    "response": card.response,
-                    "card_id": card.id,
-                }
-            )
-            return call, result_str, not _is_rejection(card.status), []
+            result_str = await self._ask_ahead(payload, params, tool_map)
+            return call, result_str, bool(json.loads(result_str).get("approved")), []
         if call.name == "ask_user":
             result_str = await self._ask_user(payload, params)
             success = json.loads(result_str).get("success", False)
@@ -983,12 +975,7 @@ class AgenticLLMAgent(LLMAgent):
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
         # Every tool call that changes something is put to the approval layer
-        # by Tool.execute - no special case here. Default the workspace but respect an explicit model-supplied value  -
-        # same semantics as the orchestrator's direct-tool path.
-        if payload.workspace and "workspace" not in params:
-            params["workspace"] = payload.workspace
-        if payload.task_id and "task_id" not in params:
-            params["task_id"] = payload.task_id
+        # by Tool.execute - no special case here.
         result_str, images = await self._call_tool(tool_map, call.name, params, payload)
         return call, result_str, _extract_success(result_str), images
 
@@ -1321,23 +1308,47 @@ class AgenticLLMAgent(LLMAgent):
         )
         return await interaction.request_decision(card, event=event)
 
-    async def _request_approval_card(self, payload: AgentPayload, params: dict[str, Any]) -> Card:
-        """Surface an approval and return its decision plus any reviewed field values."""
-        raw_fields = params.get("fields") or []
-        if not isinstance(raw_fields, list) or len(raw_fields) > 100:
-            raise ValueError("request_approval fields must be a list of at most 100 items")
-        fields = [CardField.model_validate(item) for item in raw_fields]
-        card = await self._surface_card(
-            payload,
-            card_type=CardType.APPROVAL,
-            title=str(params.get("title") or f"{self.name.title()} - Approval Required")[:160],
-            body=str(params.get("message", "Action requires your approval.")),
-            options=list(params.get("options", list(APPROVAL_DEFAULT_OPTIONS))),
-            event=CardEvent.APPROVAL,
-            fields=fields,
-            context=str(params.get("context") or "")[:50_000],
+    async def _ask_ahead(self, payload: AgentPayload, params: dict[str, Any], tool_map: dict[str, Tool]) -> str:
+        """`request_approval`: ask once, through the approval layer, about the exact calls one thing takes.
+
+        The card was the agent's own, beside the approval layer, and the tool then asked again: an approved
+        "Delete old_safe.log" was followed by bash asking (issue #76, A14; CODING_STYLE §7.3).
+        """
+        calls = params.get("calls")
+        if not isinstance(calls, list) or not calls or not all(isinstance(call, dict) for call in calls):
+            return _failed_json(
+                "Name in `calls` each tool call this approval is for, as you will make it. A single call needs no "
+                "request_approval: make it, and north asks if your mode requires it. For a question, use ask_user."
+            )
+        named = []
+        for call in calls:
+            name = str(call.get("tool") or "")
+            if name not in tool_map:
+                return _failed_json(f"{name or 'A call'} is not one of your tools: {sorted(tool_map)}.")
+            named.append((tool_map[name], _tool_input(payload, dict(call.get("params") or {}))))
+        decision = await self._deps.tool_registry.ask_ahead(
+            named,
+            task_id=payload.task_id,
+            title=str(params.get("title") or "Approve what north is about to do")[:160],
+            message=str(params.get("message") or ""),
         )
-        return card
+        decided_by = _ANSWERED_BY.get(decision.decided_by, "north; the user has not seen this card")
+        if not decision.allowed:
+            return json.dumps(
+                {
+                    "approved": False,
+                    "decided_by": decided_by,
+                    "why": decision.reason,
+                    "next": "Do not make these calls.",
+                }
+            )
+        return json.dumps(
+            {
+                "approved": True,
+                "decided_by": decided_by,
+                "next": "Make exactly these calls now: each runs once without asking again; any other call asks.",
+            }
+        )
 
     async def _hand_over_card(self, payload: AgentPayload, params: dict[str, Any]) -> Card | None:
         """Leave finished work for the user without waiting: `request_approval` with ``wait: false``.
@@ -1418,12 +1429,7 @@ class AgenticLLMAgent(LLMAgent):
     ) -> tuple[str, list[tuple[str, str]]]:
         if tool_name not in tool_map:
             return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}"), []
-        # Authority travels beside the model's params, never inside them.
-        tool_input = ToolInput(
-            params=params,
-            edit_scope=payload.edit_scope,
-            granted_workspace=payload.granted_workspace or None,
-        )
+        tool_input = _tool_input(payload, params)
         try:
             result = await tool_map[tool_name].execute(tool_input)
             images: list[tuple[str, str]] = []
@@ -1461,6 +1467,18 @@ _ANSWERED_BY: dict[str, str] = {
     DecidedBy.YOLO: "north in yolo mode, which says yes to everything; the user has not seen this card",
     DecidedBy.NORTH: "north's fixed rules; the user has not seen this card",
 }
+
+
+def _tool_input(payload: AgentPayload, params: dict[str, Any]) -> ToolInput:
+    """A tool call's input as this run makes it: the task's folder and id unless the call names its own.
+
+    Authority (the folders it may write) travels beside the model's params, never inside them.
+    """
+    if payload.workspace and "workspace" not in params:
+        params["workspace"] = payload.workspace
+    if payload.task_id and "task_id" not in params:
+        params["task_id"] = payload.task_id
+    return ToolInput(params=params, edit_scope=payload.edit_scope, granted_workspace=payload.granted_workspace or None)
 
 
 def _answered_by(card: Card) -> str:
@@ -1610,15 +1628,6 @@ class _TokenRelay:
 def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
     """Build a failed tool-call result from an exception raised during execution."""
     return call, _failed_json(str(exc)), False, []
-
-
-# Decisions that mean the action was not approved (a user reject, a model "reject",
-# or a timeout treated as rejection).
-_REJECTION_DECISIONS = frozenset({"reject", ApprovalDecision.REJECTED.value, ApprovalDecision.TIMEOUT_REJECTED.value})
-
-
-def _is_rejection(decision: str) -> bool:
-    return decision.lower() in _REJECTION_DECISIONS
 
 
 def _sync_hot_loaded_tools(

@@ -81,21 +81,14 @@ class Tool(ABC):
         layer, and only then run - with the approved `Request` on `input.approved`
         so `run()` acts on exactly what was approved.
         """
-        params, problems = conform_params(self.parameters_schema, input.params)
-        if problems:
-            takes = ", ".join(self.parameters_schema.get("properties") or {}) or "no parameters"
-            error = f"{self.name} was not called: {'; '.join(problems)}. It takes: {takes}."
+        input, error, request = await self.prepare(input)
+        if error:
             return ToolOutput(success=False, error=error)
-        input = input.model_copy(update={"params": params})
-        # A call that cannot run here raises no card: you would approve something that then cannot happen.
-        if why := await self.unavailable(input):
-            return ToolOutput(success=False, error=why)
         if not self.mutates(input.params):
             # A read changes nothing, but it can still go round a "no" given earlier in the task.
             if (said_no := self._approvals().refused_paths(self.reads(input), input.params.get("task_id"))) is not None:
                 return ToolOutput(success=False, failure_kind="refused", error=f"Blocked: {said_no}.")
             return await self.run(input)
-        request = await self.describe(input)
         if request is None:
             return await self._change(input)
         approvals = self._approvals()
@@ -107,6 +100,22 @@ class Tool(ABC):
         if output.success:
             approvals.completed(request, task_id)
         return output
+
+    async def prepare(self, input: ToolInput) -> tuple[ToolInput, str, Request | None]:
+        """This call as `execute` acts on it: its inputs as declared, why it cannot run ("" when it can),
+        and what it asks the approval layer (None for a call that changes nothing).
+
+        Shared with `ToolRegistry.ask_ahead`, so a call decided ahead is the very call that then runs.
+        """
+        params, problems = conform_params(self.parameters_schema, input.params)
+        if problems:
+            takes = ", ".join(self.parameters_schema.get("properties") or {}) or "no parameters"
+            return input, f"{self.name} was not called: {'; '.join(problems)}. It takes: {takes}.", None
+        input = input.model_copy(update={"params": params})
+        # A call that cannot run here raises no card: you would approve something that then cannot happen.
+        if why := await self.unavailable(input):
+            return input, why, None
+        return input, "", await self.describe(input) if self.mutates(input.params) else None
 
     async def _change(self, input: ToolInput) -> ToolOutput:
         """`run()`, under the lock of the folder it changes, so two changes to one tree never interleave.

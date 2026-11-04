@@ -953,7 +953,7 @@ loop (max iterations, configurable, default 40):
 
 **Tool schemas:** every `Tool` subclass declares a `parameters_schema` class variable (JSON Schema object).  The base class `schema()` method wraps it in the OpenAI function definition format.  Tools without an explicit schema use `{type: object, additionalProperties: true}` as a safe default.
 
-**`request_approval` tool:** a synthetic tool injected into every agent's tool list.  When called, it routes through the shared `UserInteraction` mediator (Section 9), which creates an Approval card, emits `approval_required` via SSE, fires the notifier, and blocks until the user responds.  The model's decision to call this tool is treated like any other tool call.
+**`request_approval` tool:** a synthetic tool injected into every agent's tool list, for one thing that takes several calls (fill a form and submit it).  The agent names each call exactly as it will make it; `ToolRegistry.ask_ahead` prepares each as `Tool.execute` would and `Approvals.decide_ahead` decides them together, on one card when the mode asks, so those exact calls then run once each without another card.  A single call needs no `request_approval`: the tool asks.  With `wait: false` it instead leaves finished work for the user and carries on.  One card per requirement (CODING_STYLE §7.3).
 
 ### 7.7 The If-Unsure-Ask Rule
 

@@ -155,7 +155,8 @@ def test_job_application_skills_split_drafting_from_submission() -> None:
     assert queue.execution is not None
     assert queue.execution.approval == "before_step"
     assert "request_approval" in queue.body
-    assert "returned `response` values" in queue.body
+    assert "`calls` listing every fill and the final submit click" in queue.body  # one card (CODING_STYLE §7.3)
+    assert "Raise no other card for this application" in queue.body
 
 
 def test_smart_home_control_is_a_skill_on_the_general_agent():

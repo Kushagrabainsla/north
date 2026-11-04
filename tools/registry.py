@@ -28,9 +28,9 @@ from tools.exceptions import ToolNotFoundError
 from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
-    from approval.approvals import Approvals, Request
+    from approval.approvals import Approvals, Decision, Request
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +357,29 @@ class ToolRegistry:
 
     def all_tool_names(self) -> set[str]:
         return {tool.name for tool in self.all_tools()}
+
+    async def ask_ahead(
+        self, calls: Sequence[tuple[Tool, ToolInput]], *, task_id: str | None, title: str, message: str
+    ) -> Decision:
+        """Decide on one card the calls an agent will make for one thing; each then runs without asking again.
+
+        Each call is prepared as `Tool.execute` prepares it, so what is decided is the very call that runs.
+        An agent's own card came on top of the tool's, so one delete asked twice (issue #76, A14).
+        """
+        from approval.approvals import Approvals, Decision
+        from approval.policy import Verdict
+
+        requests = []
+        for tool, input in calls:
+            _, error, request = await tool.prepare(input)
+            if error:
+                return Decision(Verdict.REFUSE, error)
+            if request is not None:
+                requests.append(request)
+        if not requests:
+            return Decision(Verdict.ALLOW, "none of these calls changes anything, so none asks")
+        approvals = self._approvals or Approvals.unbound()
+        return await approvals.decide_ahead(requests, task_id=task_id, title=title, message=message)
 
     async def end_task(self, task_id: str) -> None:
         """Tell every tool that *task_id* has ended, so each closes what it opened for it.

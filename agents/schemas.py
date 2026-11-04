@@ -139,14 +139,27 @@ REQUEST_APPROVAL_SCHEMA: dict = {
     "function": {
         "name": "request_approval",
         "description": (
-            "Request explicit user approval before taking an irreversible action "
-            "(send email, submit form, delete data, etc.). Approving the card runs nothing by itself: "
-            "you then carry out the action with one of your tools, which may ask again. If no tool of "
-            "yours can do the action, raise no card: tell the user you cannot do it."
+            "Ask the user once about one thing you are about to do that takes several tool calls (fill a form "
+            "and submit it), before making any of them. Name in `calls` every call, exactly as you will make "
+            "it: north asks once, or not at all if the user's approval mode allows them, and those exact calls "
+            "then run without another card; a call that differs asks again. A single call needs no "
+            "request_approval: make it, and north asks when the mode requires it. Never raise a card for an "
+            "action no tool of yours will carry out: tell the user you cannot do it. With wait false it "
+            "instead leaves finished work for the user to look at (a drafted application) and carries on: "
+            "give `fields` and `item_keys` then, not `calls`."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "calls": {
+                    "type": "array",
+                    "description": "Each tool call this approval is for, in order, exactly as you will make it.",
+                    "items": {
+                        "type": "object",
+                        "properties": {"tool": {"type": "string"}, "params": {"type": "object"}},
+                        "required": ["tool", "params"],
+                    },
+                },
                 "message": {
                     "type": "string",
                     "description": "Describe exactly what you plan to do and why.",
@@ -155,15 +168,10 @@ REQUEST_APPROVAL_SCHEMA: dict = {
                     "type": "string",
                     "description": "Short title naming the exact item and action under review.",
                 },
-                "options": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Choices shown to the user (default ['Approve','Reject']).",
-                },
                 "fields": {
                     "type": "array",
                     "description": (
-                        "Structured work the user should review. Each field has name, label, type "
+                        "With wait false: the finished work the user should look at. Each field has name, label, type "
                         "(text, textarea, number, boolean, select, or link), value, editable, and optional options."
                     ),
                     "items": {
@@ -184,7 +192,7 @@ REQUEST_APPROVAL_SCHEMA: dict = {
                 },
                 "context": {
                     "type": "string",
-                    "description": "Read-only source material the user needs to judge the proposed fields.",
+                    "description": "With wait false: read-only source material the user needs to judge the fields.",
                 },
                 "item_keys": {
                     "type": "array",
