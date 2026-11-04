@@ -66,6 +66,8 @@ _REPO_CONTENT_TOOLS = frozenset({"read_file", "search_files", "search_code"})
 # The installed coding agent read the repository itself: that is the inspection, whatever north's own tools saw.
 _CODING_AGENT = "coding_agent"
 _WEB_EVIDENCE_TOOLS = frozenset({"web_search", "fetch_url"})
+# What an MCP server's tool reaches north cannot tell, a device among them, so any of them counts where one may.
+_ANY_MCP_TOOL = "mcp__*"
 
 # A claim to have authored a capability needs the mutating action itself. What
 # the task asked for is not checked: an answer may rightly decline, ask first, or
@@ -151,6 +153,18 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
         ),
         frozenset({"web_search", "fetch_url"}),
     ),
+    (
+        # "The kitchen light is still on", when every call to it had failed or been
+        # rejected and nothing had read it (issue #76, W14). Only a stated state is
+        # matched, so "if the light is still on, ..." and "whether it is on" are not.
+        "a device's state",
+        re.compile(
+            r"\b(?:lights?|lamps?|bulbs?|fans?|plugs?|outlets?|heaters?|thermostats?|tvs?)\s+"
+            r"(?:is|are|remains?|stays?)\s+(?:still\s+|now\s+|currently\s+)?(?:on|off)(?=\s*(?:[.!\n]|$|and\b))",
+            re.IGNORECASE,
+        ),
+        frozenset({"kasa", "bash", _ANY_MCP_TOOL}),
+    ),
 )
 
 
@@ -222,6 +236,8 @@ def verify_claims(
     if not output:
         return []
     succeeded = set(successful_tools)
+    if any(name.startswith("mcp__") for name in succeeded):
+        succeeded.add(_ANY_MCP_TOOL)
     # A source-backed retrospective reports old experiments; it does not claim
     # this run executed them. Fresh execution and all mutation claims still gate.
     historical = is_activity_summary(task) and bool(succeeded & (_REPO_CONTENT_TOOLS | {"git"}))

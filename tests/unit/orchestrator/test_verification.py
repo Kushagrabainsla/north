@@ -332,3 +332,38 @@ def test_claimed_relative_file_path_in_workspace_ok(tmp_path) -> None:
     output = "Report saved to docs/report.md"
     violations = verify_claims(output, ["write_file"], workspace=str(tmp_path))
     assert violations == []
+
+
+# Issue #76, W14: "The kitchen light is still on" (task_d3076ddbaec7), "The bedroom
+# fan is still on" (task_f1ade0cd0995), "The porch light is still on" on Sonnet,
+# when the only kasa calls had been rejected and nothing had read any device.
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The kitchen light is still on. The kasa command was cancelled at the approval step.",
+        "The porch light is still on. Kasa discovery found no devices on this network",
+        "Living room lights are now off and the fan is on.",
+    ],
+)
+def test_a_device_s_state_stated_with_nothing_that_read_it_is_flagged(answer: str) -> None:
+    (violation,) = verify_claims(answer, [])
+
+    assert "a device's state" in violation
+
+
+@pytest.mark.parametrize("evidence", ["kasa", "bash", "mcp__home__get_state"])
+def test_a_device_s_state_read_by_a_device_tool_is_not_flagged(evidence: str) -> None:
+    assert verify_claims("The bedroom fan is still on.", [evidence]) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "If the light is still on, unplug it.",
+        "I couldn't reach any Kasa device, so I don't know whether the kitchen light is on.",
+        "The light isn't on.",
+        "The switch is on line 40.",
+    ],
+)
+def test_a_device_state_not_stated_is_not_flagged(answer: str) -> None:
+    assert verify_claims(answer, []) == []
