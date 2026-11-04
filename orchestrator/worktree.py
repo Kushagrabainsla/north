@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from utils.filesystem import CACHE_DIRS
 from utils.processes import stop_process_group
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,15 @@ def _slug(label: str) -> str:
 
 
 _MAX_UNTRACKED_BYTES = 5_000_000
+
+# Pathspecs leaving out the caches an agent's runs write, which are never its change. A folder north had
+# set up with `git init` has no .gitignore, and the `__pycache__` of a test run was applied to it (#76, M24).
+_LEAVING_CACHES = tuple(f":(exclude,glob)**/{name}/**" for name in sorted(CACHE_DIRS))
+
+
+async def _stage_agent_work(path: str) -> None:
+    """Stage everything the agent changed in the copy at *path*, but not the caches its runs left there."""
+    await _run_git(["add", "-A", "--", ".", *_LEAVING_CACHES], path)
 
 
 def _copy_untracked(base: Path, copy: Path, name: str) -> None:
@@ -266,7 +276,7 @@ class GitWorktreeManager:
 
         Hooks are skipped: the worktree belongs to an agent, and a hook it planted must not run.
         """
-        await _run_git(["add", "-A"], wt.path)
+        await _stage_agent_work(wt.path)
         # `--quiet` exits 1 when there are staged changes to commit, 0 when clean.
         code, _, _ = await _run_git(["diff", "--cached", "--quiet"], wt.path)
         if code != 1:
@@ -368,7 +378,7 @@ class GitWorktreeManager:
         preferred). Uncommitted work is included via a staged snapshot count.
         Returns 0 when nothing changed or the diff cannot be read.
         """
-        await _run_git(["add", "-A"], wt.path)
+        await _stage_agent_work(wt.path)
         code, out, _ = await _run_git(["diff", "--cached", "--numstat", wt.base_sha], wt.path)
         if code != 0:
             return 0

@@ -422,3 +422,24 @@ async def test_an_earlier_rounds_branch_is_deleted_once_the_same_change_is_appli
     assert await manager.drop_branch_if_in_place(first.branch, first.base_sha) is True
 
     assert first.branch not in _branches(repo)
+
+
+async def test_the_caches_an_agent_s_runs_leave_are_not_applied(manager: GitWorktreeManager, repo: Path) -> None:
+    """Issue #76, M24: in a folder north had just set up with `git init` (no .gitignore),
+    the apply card listed `__pycache__/stats...` and `git status` showed `?? __pycache__/`.
+    """
+    wt = await manager.create("coder")
+    wt_path = Path(wt.path)
+    (wt_path / "stats.py").write_text("def average(xs):\n    return sum(xs) / len(xs)\n")
+    for cache in ("__pycache__/stats.cpython-313.pyc", "tests/__pycache__/t.pyc", ".pytest_cache/v/lastfailed"):
+        (wt_path / cache).parent.mkdir(parents=True, exist_ok=True)
+        (wt_path / cache).write_bytes(b"\x00cache")
+
+    await manager.commit_changes(wt)
+    changed = [change.path for change in await manager.changes(wt)]
+    result = await manager.integrate(wt)
+
+    assert changed == ["stats.py"]
+    assert result.applied and (repo / "stats.py").is_file()
+    assert not (repo / "__pycache__").exists() and not (repo / "tests").exists()
+    assert not (repo / ".pytest_cache").exists()

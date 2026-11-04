@@ -10,8 +10,9 @@ their test seams) keep working unchanged. See docs/CODING_STYLE.md Section 16.1.
 
 from __future__ import annotations
 
+# The caches a run of a tool leaves behind: Python's bytecode, and test and lint caches. Never anyone's source.
+CACHE_DIRS: frozenset[str] = frozenset({"__pycache__", ".ruff_cache", ".pytest_cache"})
+
 # Directories never worth walking for a coding task. Shared by the file-walking
 # tools (search_files, glob) so the exclusion list cannot drift.
-PRUNED_DIRS: frozenset[str] = frozenset(
-    {".git", "node_modules", "__pycache__", ".venv", "venv", ".ruff_cache", ".pytest_cache", "build", "dist"}
-)
+PRUNED_DIRS: frozenset[str] = CACHE_DIRS | {".git", "node_modules", ".venv", "venv", "build", "dist"}
