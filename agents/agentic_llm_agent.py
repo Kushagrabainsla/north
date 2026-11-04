@@ -130,6 +130,19 @@ def _tool_schemas(
     return [tool_map[name].schema() for name in sorted(tool_map)] + internal
 
 
+# What a run has done, as far as checking its answer goes. Cost and tokens are not carried: a stopped run's
+# model calls are already in the ledger.
+_EVIDENCE = (
+    "tools_used",
+    "successful_tools",
+    "successful_tool_calls",
+    "successful_tool_actions",
+    "tool_call_count",
+    "stopped_change",
+    "left_for_user",
+)
+
+
 @dataclass
 class _RunTally:
     """What one agent run has spent and used, and the answer it ends up returning."""
@@ -151,6 +164,16 @@ class _RunTally:
     stopped_change: str | None = None
     # Whether the run left a card for the user to decide.
     left_for_user: bool = False
+
+    def evidence(self) -> dict[str, Any]:
+        """What the run did that its answer is checked against, saved with its progress."""
+        return {name: getattr(self, name) for name in _EVIDENCE}
+
+    def restore(self, evidence: dict[str, Any]) -> None:
+        """Carry on from saved *evidence*: a run that continues is checked against all of its work."""
+        for name in _EVIDENCE:
+            if name in evidence:
+                setattr(self, name, evidence[name])
 
     def add(self, response: ToolCallResponse) -> None:
         self.cost_usd += response.cost_usd
@@ -538,13 +561,17 @@ class AgenticLLMAgent(LLMAgent):
         tally = _RunTally()
         soft_budget_noted = False
         messages_read = 0
+        first_step = 0
+        if saved := await self._saved_progress(payload):
+            messages, messages_read, first_step = saved["messages"], saved["messages_read"], saved["step"]
+            tally.restore(saved["evidence"])
 
         known_registry_tools = (
             set(self._deps.tool_registry.all_tool_names()) if getattr(self._deps, "tool_registry", None) else set()
         )
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
-        for iteration in range(self._deps.agent_max_iterations):
+        for iteration in range(first_step, self._deps.agent_max_iterations):
             await self._heartbeat(payload)
             messages_read = await self._read_your_messages(payload, messages, messages_read)
             if not soft_budget_noted:
@@ -631,12 +658,38 @@ class AgenticLLMAgent(LLMAgent):
                     tally.note_success(name, call.params)
                 mutating = self._is_mutating_call(call, tool_map)
                 tally.note_outcome(name, call.params, mutating=mutating, success=success)
+            await self._save_progress(payload, messages, messages_read, iteration + 1, tally)
 
         return tally.answer(
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
             outcome="blocked",
         )
+
+    async def _save_progress(
+        self, payload: AgentPayload, messages: list[dict], messages_read: int, step: int, tally: _RunTally
+    ) -> None:
+        """Save where the conversation has got to, after each step, so a stopped run continues from here.
+
+        Resume started the agent over and redid the glob and every read it had made (issue #76, M19).
+        A delegated run is not saved: its parent asks again, and that run starts afresh.
+        """
+        store = self._deps.agent_run_store
+        if store is None or payload.parent_run_id is not None:
+            return
+        state = {"messages": messages, "messages_read": messages_read, "step": step, "evidence": tally.evidence()}
+        await store.save_checkpoint(payload.run_id, state)
+
+    async def _saved_progress(self, payload: AgentPayload) -> dict[str, Any] | None:
+        """Where this run had got to when it was stopped, if it is continuing (see `Agent.run`)."""
+        store = self._deps.agent_run_store
+        if store is None or payload.parent_run_id is not None:
+            return None
+        saved = await store.checkpoint(payload.run_id)
+        if saved and self._deps.stream_manager is not None and payload.task_id:
+            resumed = {"agent": self.name, "step": saved["step"]}
+            await self._deps.stream_manager.emit(payload.task_id, "resumed", resumed)
+        return saved
 
     async def _heartbeat(self, payload: AgentPayload) -> None:
         """Tell the stuck-task watchdog the task is still working: every step is progress.

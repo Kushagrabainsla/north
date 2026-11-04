@@ -91,6 +91,11 @@ _HANDOFF_ARTIFACT_MAX_CHARS: int = 6000
 DIRECT_TOOL_AGENT = "tool_executor"
 
 
+def _direct_call(plan: ExecutionPlan) -> str:
+    """The plan's direct call, as the agent that takes over is told it."""
+    return f"`{plan.direct_tool}` was called with {json.dumps(plan.direct_tool_params, default=str)}"
+
+
 def _task_folder(task_id: str, chosen: str) -> str:
     """The folder a task works and writes in: the one chosen for it, else its own (CODING_STYLE §16.1.1).
 
@@ -1028,25 +1033,29 @@ class Orchestrator:
     async def _stage_plan(
         self, task_id: str, prompt: str, context: str = ""
     ) -> tuple[IntentClassification, ExecutionPlan]:
-        """Stages 1+3: Classify intent and build execution plan in one LLM call."""
-        await self._stream_manager.emit(task_id, "classifying", {"prompt": prompt})
+        """Stages 1+3: Classify intent and build execution plan in one LLM call; a task that resumes keeps its plan."""
+        if (saved := await self._saved_plan(task_id)) is not None:
+            classification, plan = saved
+        else:
+            await self._stream_manager.emit(task_id, "classifying", {"prompt": prompt})
 
-        classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id, context=context)
+            classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id, context=context)
 
-        await self._journal.record(
-            task_id,
-            f"classified_as_{'consequential' if classification.is_consequential else 'trivial'}",
-            output=classification.reasoning,
-            # Stamp the domain so the episode consolidator can tag each task's
-            # episode without re-deriving it (used for per-agent gating).
-            agent_output={"domain": classification.domain},
-            event="classified",
-            payload={
-                "is_consequential": classification.is_consequential,
-                "domain": classification.domain,
-                "reasoning": classification.reasoning,
-            },
-        )
+            await self._journal.record(
+                task_id,
+                f"classified_as_{'consequential' if classification.is_consequential else 'trivial'}",
+                output=classification.reasoning,
+                # Stamp the domain so the episode consolidator can tag each task's
+                # episode without re-deriving it (used for per-agent gating).
+                agent_output={"domain": classification.domain},
+                event="classified",
+                payload={
+                    "is_consequential": classification.is_consequential,
+                    "domain": classification.domain,
+                    "reasoning": classification.reasoning,
+                },
+            )
+            await self._save_plan(task_id, classification, plan)
         await self._stream_manager.emit(
             task_id,
             "routed",
@@ -1058,6 +1067,21 @@ class Orchestrator:
         )
         await self._task_context_store.initialize_task(task_id, plan.agents)
         return classification, plan
+
+    async def _saved_plan(self, task_id: str) -> tuple[IntentClassification, ExecutionPlan] | None:
+        """The plan a task made before it was paused or cut off: it resumes with it (CODING_STYLE §15.5)."""
+        if self._running_task_store is None:
+            return None
+        stored = await self._running_task_store.get(task_id)
+        if stored is None or not stored.plan:
+            return None
+        saved = json.loads(stored.plan)
+        return IntentClassification.model_validate(saved["classification"]), ExecutionPlan.model_validate(saved["plan"])
+
+    async def _save_plan(self, task_id: str, classification: IntentClassification, plan: ExecutionPlan) -> None:
+        if self._running_task_store is not None:
+            saved = {"classification": classification.model_dump(mode="json"), "plan": plan.model_dump(mode="json")}
+            await self._running_task_store.save_plan(task_id, json.dumps(saved))
 
     async def _run_forced_agent(self, task_id: str, request: TaskRequest) -> None:
         """Run a single named agent directly, bypassing classification and the planner.
@@ -1456,8 +1480,9 @@ class Orchestrator:
         """
         await self._stream_manager.emit(task_id, "executing", {"agents": []})
         run = AgentPayload(task_id=task_id, prompt=prompt, workspace=workspace)
-        with bind_execution(ExecutionIdentity(run.run_id)):
-            failed = await self._call_tool_directly(run, plan, edit_scope)
+        if (failed := await self._answered_before(task_id, plan)) is None:
+            with bind_execution(ExecutionIdentity(run.run_id)):
+                failed = await self._call_tool_directly(run, plan, edit_scope)
         # A direct call that failed, other than by your refusal, goes to the agent,
         # which reads the error and tries again. Shown the error itself, the
         # planner's "screen=Alienware" ended the task, though a step that read the
@@ -1476,7 +1501,7 @@ class Orchestrator:
             await self._agent_run_store.start(run, DIRECT_TOOL_AGENT)
         started = time.monotonic()
         await self._stream_manager.emit(task_id, "tool_called", {"tool": name, "params": plan.direct_tool_params})
-        sent = f"`{name}` was called with {json.dumps(plan.direct_tool_params, default=str)}"
+        sent = _direct_call(plan)
         try:
             if self._tool_registry is None:
                 raise ToolNotFoundError("No tool registry available.")
@@ -1517,6 +1542,18 @@ class Orchestrator:
             run, name, output, success=result.success, duration_ms=int((time.monotonic() - started) * 1000)
         )
         return None
+
+    async def _answered_before(self, task_id: str, plan: ExecutionPlan) -> str | None:
+        """What the plan's direct call answered before the task was paused or cut off, if the agent took over.
+
+        A task that resumes does not make the call again (CODING_STYLE §15.5): the agent it fell back to
+        continues where it stopped.
+        """
+        if self._agent_run_store is None:
+            return None
+        runs = await self._agent_run_store.list_for_task(task_id)
+        fell_back = [run for run in runs if run.agent == DIRECT_TOOL_AGENT and run.status == "failed"]
+        return f"{_direct_call(plan)} and answered: {fell_back[-1].error}" if fell_back else None
 
     async def _end_direct_run(
         self,

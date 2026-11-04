@@ -39,6 +39,7 @@ _TOKEN_CHUNK_MAX_CHARS = 8_000
 _DURABLE_EVENTS = frozenset(
     {
         "agent_started",
+        "resumed",  # a run that carried on where a pause or a restart stopped it (CODING_STYLE §15.5)
         "agent_completed",
         "agent_failed",
         "tool_called",

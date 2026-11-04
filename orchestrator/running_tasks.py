@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS running_tasks (
     status           TEXT NOT NULL DEFAULT 'running',
     domain           TEXT NOT NULL DEFAULT 'general',
     description      TEXT NOT NULL DEFAULT '',
-    forced_agent     TEXT NOT NULL DEFAULT ''
+    forced_agent     TEXT NOT NULL DEFAULT '',
+    plan             TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -55,6 +56,8 @@ _MIGRATION_ADD_DESCRIPTION = "ALTER TABLE running_tasks ADD COLUMN description T
 # The agent a task was told to run (a schedule's agent): without it a task that ran
 # again went through the planner and could land on an agent that writes nothing.
 _MIGRATION_ADD_FORCED_AGENT = "ALTER TABLE running_tasks ADD COLUMN forced_agent TEXT NOT NULL DEFAULT ''"
+# The task's plan, so a task that resumes carries on with it instead of planning again (CODING_STYLE §15.5).
+_MIGRATION_ADD_PLAN = "ALTER TABLE running_tasks ADD COLUMN plan TEXT NOT NULL DEFAULT ''"
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,7 @@ class RunningTask:
     status: str = "running"  # "running" | "paused" | "queued" | "retrying"
     domain: str = "general"
     description: str = ""
+    plan: str = ""  # JSON of the task's classification and plan, once it has one
 
 
 class RunningTaskStore:
@@ -91,6 +95,8 @@ class RunningTaskStore:
                 conn.execute(_MIGRATION_ADD_DESCRIPTION)
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(_MIGRATION_ADD_FORCED_AGENT)
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(_MIGRATION_ADD_PLAN)
 
     async def mark_running(
         self, task_id: str, request: TaskRequest, *, attempt: int = 0, domain: str = "general"
@@ -131,6 +137,14 @@ class RunningTaskStore:
                     request.forced_agent or "",
                 ),
             )
+
+    async def save_plan(self, task_id: str, plan: str) -> None:
+        """Keep the task's plan with it, for as long as it can resume."""
+        await asyncio.to_thread(self._save_plan_sync, task_id, plan)
+
+    def _save_plan_sync(self, task_id: str, plan: str) -> None:
+        with open_db_connection(self._db_path) as conn:
+            conn.execute("UPDATE running_tasks SET plan=? WHERE task_id=?", (plan, task_id))
 
     async def heartbeat(self, task_id: str) -> None:
         """Advance a task's heartbeat to now. No-op if the task is not registered."""
@@ -355,4 +369,5 @@ class RunningTaskStore:
             status=str(row["status"]),
             domain=domain,
             description=description,
+            plan=str(row["plan"] or ""),
         )

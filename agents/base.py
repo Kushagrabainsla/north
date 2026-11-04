@@ -94,8 +94,16 @@ class Agent(ABC):
 
     async def run(self, payload: AgentPayload) -> AgentResult:
         """Template method. Do not override. Implement `_execute()` instead."""
-        identity = ExecutionIdentity(payload.run_id, payload.parent_run_id, payload.attempt)
         store = self._deps.agent_run_store
+        # A task that resumes continues this step's run where it stopped (CODING_STYLE §15.5).
+        stopped = (
+            await store.continuable_run(payload.task_id, self.name, payload.prompt)
+            if store is not None and payload.parent_run_id is None
+            else None
+        )
+        if stopped is not None:
+            payload = payload.model_copy(update={"run_id": stopped})
+        identity = ExecutionIdentity(payload.run_id, payload.parent_run_id, payload.attempt)
         if store is not None:
             await store.start(payload, self.name)
         started = time.monotonic()

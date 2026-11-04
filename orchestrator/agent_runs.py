@@ -8,6 +8,7 @@ and retries, plus a compact stream of significant events.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -51,9 +52,16 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     tokens_out      INTEGER NOT NULL DEFAULT 0,
     cost_usd        REAL NOT NULL DEFAULT 0,
     skills          TEXT NOT NULL DEFAULT '[]',
-    provider_state  TEXT NOT NULL DEFAULT '{}'
+    provider_state  TEXT NOT NULL DEFAULT '{}',
+    checkpoint      TEXT
 )
 """
+
+# Where an agent's conversation had got to, saved after each step, so a run stopped from outside
+# (a pause, a restart) continues from there instead of starting over (CODING_STYLE §15.5).
+_MIGRATION_ADD_CHECKPOINT = "ALTER TABLE agent_runs ADD COLUMN checkpoint TEXT"
+# A run stopped from outside, which a task that resumes continues: paused (cancelled) or cut off by a restart.
+_CONTINUABLE = ("cancelled", "interrupted")
 
 _EVENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_run_events (
@@ -122,6 +130,8 @@ class AgentRunStore:
             conn.execute(_SCHEMA)
             conn.execute(_EVENT_SCHEMA)
             conn.execute(_SKILL_USAGE_SCHEMA)
+            with contextlib.suppress(sqlite3.OperationalError):  # already there
+                conn.execute(_MIGRATION_ADD_CHECKPOINT)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, started_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_run_events_run ON agent_run_events(run_id, id)")
@@ -139,7 +149,7 @@ class AgentRunStore:
                     (run_id, task_id, parent_run_id, agent, attempt, status, prompt,
                      workspace, delegation_depth, started_at)
                 VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET status='running', error=NULL
+                ON CONFLICT(run_id) DO UPDATE SET status='running', error=NULL, completed_at=NULL
                 """,
                 (
                     payload.run_id,
@@ -153,6 +163,39 @@ class AgentRunStore:
                     now,
                 ),
             )
+
+    async def continuable_run(self, task_id: str, agent: str, prompt: str) -> str | None:
+        """The run of *agent* on this step of the task that was stopped from outside with work saved, if any.
+
+        Resume started the agent over and redid every read it had made (issue #76, M19). A run
+        that failed or finished is never continued, nor a delegated one: its parent asks again.
+        """
+        return await asyncio.to_thread(self._continuable_run_sync, task_id, agent, prompt)
+
+    def _continuable_run_sync(self, task_id: str, agent: str, prompt: str) -> str | None:
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT run_id, status, checkpoint FROM agent_runs WHERE task_id=? AND agent=? AND prompt=? "
+                "AND parent_run_id IS NULL ORDER BY started_at DESC LIMIT 1",
+                (task_id, agent, prompt),
+            ).fetchone()
+        return row["run_id"] if row and row["status"] in _CONTINUABLE and row["checkpoint"] else None
+
+    async def save_checkpoint(self, run_id: str, state: dict[str, Any]) -> None:
+        await asyncio.to_thread(self._save_checkpoint_sync, run_id, json.dumps(state, default=str))
+
+    def _save_checkpoint_sync(self, run_id: str, state: str) -> None:
+        with open_db_connection(self._db_path) as conn:
+            conn.execute("UPDATE agent_runs SET checkpoint=? WHERE run_id=?", (state, run_id))
+
+    async def checkpoint(self, run_id: str) -> dict[str, Any] | None:
+        """Where *run_id* had got to when it last saved, or None."""
+        return await asyncio.to_thread(self._checkpoint_sync, run_id)
+
+    def _checkpoint_sync(self, run_id: str) -> dict[str, Any] | None:
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute("SELECT checkpoint FROM agent_runs WHERE run_id=?", (run_id,)).fetchone()
+        return json.loads(row["checkpoint"]) if row and row["checkpoint"] else None
 
     async def complete(self, run_id: str, result: Any) -> None:
         await asyncio.to_thread(self._complete_sync, run_id, result)
