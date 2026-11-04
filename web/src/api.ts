@@ -1,5 +1,20 @@
 let csrf = "";
 
+type FieldError = { loc?: (string | number)[]; msg?: string };
+
+// What the server said was wrong, in words. A request that does not fit gets FastAPI's list of field
+// errors, and shown as it came, a 46,000-character prompt read "[object Object]" (issue #76, M11).
+export function errorText(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail) return detail;
+  if (!Array.isArray(detail) || !detail.length) return fallback;
+  return (detail as FieldError[])
+    .map(({ loc = [], msg = "" }) => {
+      const field = loc.filter((part) => part !== "body").join(".");
+      return field ? `${field}: ${msg}` : msg;
+    })
+    .join("; ");
+}
+
 // `north web` opens the dashboard with a one-time `?pair=` token that signs this
 // browser in; after that a cookie remembers it, across server restarts too.
 export async function bootstrapSession(): Promise<void> {
@@ -13,7 +28,7 @@ export async function bootstrapSession(): Promise<void> {
   if (pair) window.history.replaceState(null, "", window.location.pathname + window.location.hash);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || "North could not establish a local browser session.");
+    throw new Error(errorText(body.detail, "North could not establish a local browser session."));
   }
   csrf = (await response.json()).csrf;
 }
@@ -39,7 +54,7 @@ export async function api<T>(path: string, options: RequestInit = {}, renewed = 
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed (${response.status})`);
+    throw new Error(errorText(body.detail, `Request failed (${response.status})`));
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

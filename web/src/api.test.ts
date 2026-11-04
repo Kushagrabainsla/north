@@ -54,3 +54,16 @@ describe("a session the server forgot", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("a request the server refuses", () => {
+  it("says what was wrong with it in words, not [object Object]", async () => {
+    // Issue #76, M11: a prompt over 32,768 characters got FastAPI's list of field errors back.
+    vi.stubGlobal("fetch", vi.fn(async () => json(422, {
+      detail: [{ type: "string_too_long", loc: ["body", "prompt"], msg: "String should have at most 32768 characters", input: "x" }],
+    })));
+
+    await expect(post("/web/api/conversations/c1/turns", { prompt: "x" })).rejects.toThrow(
+      "prompt: String should have at most 32768 characters",
+    );
+  });
+});

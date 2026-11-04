@@ -4,7 +4,7 @@
 // yet) or hides a search that just has no results.
 
 import { describe, expect, it } from "vitest";
-import { attachmentText, joinedTurn, replyText, sessionsEmptyMessage, turnStatus, workingText } from "./Chat";
+import { attachmentText, dictationProblem, joinedTurn, replyText, sessionsEmptyMessage, turnStatus, workingText } from "./Chat";
 import type { Turn } from "../types";
 
 describe("what can be attached to a message", () => {
@@ -79,5 +79,14 @@ describe("a paused task that still has a card", () => {
     expect(workingText("waiting_for_approval", true)).toBe("North is waiting for you");
     expect(turnStatus("completed", false, "waiting_for_user")).toBe("waiting_for_user");
     expect(turnStatus("completed", false)).toBe("response_ready");
+  });
+});
+
+describe("dictation that cannot start", () => {
+  it("says why, instead of leaving the button as it was", () => {
+    // Issue #76, W12: with no usable microphone or speech service, nothing at all happened.
+    expect(dictationProblem("audio-capture")).toBe("No microphone was found.");
+    expect(dictationProblem("not-allowed")).toContain("not allowed to use the microphone");
+    expect(dictationProblem("bad-grammar")).toBe("Dictation stopped: bad-grammar.");
   });
 });

@@ -21,6 +21,18 @@ const SIGNALS: Record<string, (data: any) => Omit<Signal, "event" | "timestamp">
   north_star_check_failed: d => ({ tone: "warn", text: "Goal alignment could not be evaluated", details: d.reason ? [d.reason] : [] }),
 };
 
+// What stopped dictation, in words. With no onerror, a browser with no microphone, no permission or no
+// speech service left the button as it was and said nothing (issue #76, W12).
+const DICTATION_PROBLEMS: Record<string, string> = {
+  "not-allowed": "This browser is not allowed to use the microphone. Allow it in the site's settings, then try again.",
+  "service-not-allowed": "This browser's speech service is not available here.",
+  "audio-capture": "No microphone was found.",
+  network: "The browser's speech service could not be reached.",
+  "no-speech": "No speech was heard.",
+};
+
+export const dictationProblem = (error: string) => DICTATION_PROBLEMS[error] || `Dictation stopped: ${error}.`;
+
 /** What a turn is in, for its badge and its working line. A card wins over a running
  *  task, since answering it is what moves things; a paused task stays paused, card or not:
  *  shown as "waiting for approval", the pause was invisible until the API was asked. */
@@ -433,6 +445,10 @@ export function Chat() {
     recognition.onstart = () => setRecording(true);
     recognition.onend = () => setRecording(false);
     recognition.onresult = (event: any) => updatePrompt(`${prompt}${prompt ? " " : ""}${event.results[0][0].transcript}`);
+    recognition.onerror = (event: any) => {
+      setRecording(false);
+      if (event.error !== "aborted") void dialog.alert(dictationProblem(event.error), { title: "Dictation stopped" });
+    };
     recognition.start();
   };
   const appendFiles = async (files: File[]) => {
