@@ -131,13 +131,11 @@ class TakePhotoTool(Tool):
     def format_output(self, data: dict[str, Any]) -> str:
         return f"Photo saved to `{data.get('path', '?')}` ({data.get('size_bytes', 0)} bytes)."
 
-    async def run(self, input: ToolInput) -> ToolOutput:
-        if sys.platform != "darwin":
-            return ToolOutput(
-                success=False,
-                error=f"Camera capture is only supported on macOS, but current OS is {sys.platform}.",
-            )
+    async def unavailable(self, input: ToolInput) -> str:
+        why = camera_unavailable()
+        return f"Camera capture cannot work here: {why}." if why else ""
 
+    async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")
         if not path_str:
             path_str = f"photo_{int(time.time())}.jpg"
@@ -147,6 +145,13 @@ class TakePhotoTool(Tool):
             return ToolOutput(success=False, error="Path escapes workspace root or points to blocked directory.")
 
         return await asyncio.to_thread(_photo_sync, resolved)
+
+
+def camera_unavailable() -> str:
+    """Why north cannot take a photo on this machine, or "" when it may: the helper is macOS's own."""
+    if sys.platform != "darwin":
+        return f"the camera helper works only on macOS, and this is {sys.platform}"
+    return ""
 
 
 def _ensure_binary() -> Path:

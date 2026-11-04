@@ -89,10 +89,12 @@ async def test_photo_camera_fails(tmp_path: Path) -> None:
     assert "No camera" in out.error
 
 
-async def test_photo_non_macos() -> None:
-    """On non-macOS platforms, the tool returns a clean error."""
-    tool = TakePhotoTool()
+async def test_off_macos_it_says_there_is_no_camera_instead_of_trying() -> None:
+    """Issue #76, W11: on Linux agents offered "I can take a photo with your camera", which cannot work there."""
+    from tools.universal.take_photo import camera_unavailable
+
     with patch.object(sys, "platform", "linux"):
-        out = await tool.run(ToolInput(params={"path": "photo.jpg"}))
-    assert not out.success
-    assert "macOS" in out.error
+        out = await TakePhotoTool().execute(ToolInput(params={"path": "photo.jpg"}))
+        assert camera_unavailable()
+
+    assert not out.success and "works only on macOS" in out.error

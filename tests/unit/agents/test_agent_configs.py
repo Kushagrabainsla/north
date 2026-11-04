@@ -109,3 +109,15 @@ def test_the_general_prompt_does_not_deny_the_bash_tool_it_is_given() -> None:
 
     assert "do NOT have a `bash` tool" not in prompt
     assert "coding_agent" in prompt
+
+
+def test_the_general_prompt_offers_only_what_north_can_take_or_do() -> None:
+    """It said the agent always had `take_screenshot` and to ignore turns that said capture failed, and replies
+    offered "paste a screenshot into the chat" above a composer that takes only text files, and a photo with a camera
+    north cannot use off macOS (issue #76, W11)."""
+    prompt = (AGENTS_DIR / "general" / "prompts" / "system.md").read_text(encoding="utf-8")
+
+    assert "ignore the past limitation" not in prompt
+    assert "When `take_screenshot` is among your tools" in prompt
+    assert "never ask them to paste, attach or upload a screenshot or an image" in prompt
+    assert "when `take_photo` is among your tools" in prompt
