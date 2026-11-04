@@ -218,13 +218,18 @@ export function Markdown({ children }: { children: string }) {
   return <div className="markdown">{blocks}</div>;
 }
 
+// A link's destination may hold parentheses one deep, as Wikipedia's do: "Mercury_(planet)" was cut at
+// its first ")", which then trailed the label (issue #76, P10). React refuses a javascript: destination.
+const LINK = String.raw`\[[^\]]+\]\((?:[^()]|\([^()]*\))+\)`;
+const INLINE = new RegExp(String.raw`(\*\*[^*]+\*\*|\`[^\`]+\`|${LINK}|\*[^*]+\*)`, "g");
+
 function renderInline(value: string): ReactNode[] {
-  const parts = value.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/g);
+  const parts = value.split(INLINE);
   return parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
     if (part.startsWith("*") && part.endsWith("*")) return <em key={index}>{part.slice(1, -1)}</em>;
     if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
-    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    const link = part.match(/^\[([^\]]+)\]\((.+)\)$/);
     if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
     return <span key={index}>{part.split("\n").map((line, i) => <span key={i}>{line}{i < part.split("\n").length - 1 && <br/>}</span>)}</span>;
   });

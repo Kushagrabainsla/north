@@ -70,7 +70,9 @@ export function summarise(entries: LedgerEntry[]): TaskSummary[] {
     id,
     // The ledger arrives newest first, so the prompt is at the far end.
     prompt: [...rows].reverse().find(row => row.action === "task_received")?.input || id,
-    agents: [...new Set(rows.map(row => row.agent).filter(Boolean))] as string[],
+    // Only an agent's own rows name an agent: model calls ("agent", "planning"), cards ("kasa") and your
+    // messages ("user") listed as agents beside "general" (issue #76, P16).
+    agents: [...new Set(rows.filter(row => row.source === "agent").map(row => row.agent).filter(Boolean))] as string[],
     status: taskStatus(rows),
     latest: rows[0].timestamp,
     entries: rows,

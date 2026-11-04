@@ -29,6 +29,18 @@ describe("grouping the ledger back into tasks", () => {
     expect(task.prompt).toBe("Book the flight");
   });
 
+  it("lists as agents only the agents that worked on the task", () => {
+    const [task] = summarise([
+      entry({ task_id: "t1", source: "agent", agent: "general", action: "agent_completed" }),
+      entry({ task_id: "t1", source: "inference_router", agent: "agent", action: "inference_call" }),
+      entry({ task_id: "t1", source: "approval", agent: "kasa", action: "approval_responded: approved" }),
+      entry({ task_id: "t1", source: "prompt", agent: "user", action: "user_message" }),
+      entry({ task_id: "t1", source: "inference_router", agent: "planning", action: "inference_call" }),
+    ]);
+
+    expect(task.agents).toEqual(["general"]);
+  });
+
   it("falls back to the id when no prompt was recorded", () => {
     expect(summarise([entry({ task_id: "t1", action: "agent_started" })])[0].prompt).toBe("t1");
   });
