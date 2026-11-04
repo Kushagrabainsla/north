@@ -466,8 +466,9 @@ Two consequences worth keeping:
 - A tool north wrote for itself goes through the gate on every call; its own code cannot mark it harmless.
 - North's own tools do not edit files inside a git repository: `write_file` there, and shell commands that recognisably edit files there (`sed -i`, redirection or `tee` into a file), are refused and pointed at `coding_agent`, which works in an isolated copy and runs the tests.
 - A task with no chosen folder is told so, and asks which folder the user means instead of guessing a path or calling its own folder theirs.
+- **One card per requirement.** Whatever an agent needs from you to do one thing (delete a file, submit one application) is asked on one card, by the approval layer. An agent never asks on a card of its own and then has the tool ask again: it calls the tool, which asks; or, when the thing takes several calls, it asks once naming each exact call, and those calls then run without another card. A call that differs from what you approved is another requirement and asks.
 
-**Why:** the issue #76 test found each broken: replays covered other files, repositories and commands; north switched itself to yolo; a rejected read was done with another tool; a learned tool printed north's secret; the general agent edited a repository with `sed`; an agent guessed a repository path.
+**Why:** the issue #76 test found each broken: replays covered other files, repositories and commands; north switched itself to yolo; a rejected read was done with another tool; a learned tool printed north's secret; the general agent edited a repository with `sed`; an agent guessed a repository path; an approved "Delete old_safe.log" card was followed by bash asking again, and one delete took three cards (A14).
 **How to apply:** tools report these as facts on their `Action` (paths, repository, content); `ApprovalPolicy` and `Approvals` enforce them, never the tool.
 
 **One layer per concern.** Approvals, execution, memory, capabilities, inference and channels each have one layer with one entry point; nothing outside it re-implements or bypasses it.
@@ -1290,6 +1291,12 @@ class AgentResult(BaseModel):
 A message you send while a task works on your request goes into that running task, on every surface (dashboard, TUI, Telegram, `/steer`): never dropped, never a separate task started beside it. The agents working on the task read it before their next step and before they answer; one that arrives after they answered is still answered in that task. Each message is written to the ledger, so a task that starts over (a restart, a model outage) still knows what you said.
 **Why:** a second message started a parallel task that knew nothing of the first, and `/steer` said "steering sent" while nothing read it.
 **How to apply:** route a message for a conversation with a running task to `Orchestrator.send_message`, not `submit_task`; a new task starts only when nothing is running there.
+
+### 15.5 A Paused or Interrupted Task Resumes Where It Stopped
+
+Resuming a task you paused, or one a restart cut off, continues from the step it had reached: its plan, its agent's conversation so far and the tool results it already had. It does not start over, and nothing it finished is done again.
+**Why:** issue #76, M19: Resume started the agent over (a second `agent_started`) and redid the glob and every read it had already made.
+**How to apply:** the agent loop saves its conversation after each step as its run's checkpoint; resuming a task loads the checkpoint of its unfinished run and continues it. Only a task with no checkpoint starts over.
 
 ---
 

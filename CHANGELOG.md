@@ -5,6 +5,7 @@ All notable changes to north are documented here.
 ## [Unreleased]
 
 ### Added
+- **CODING_STYLE: one approval card per requirement, and a paused task resumes where it stopped** (`docs/CODING_STYLE.md` §7.3, §15.5). Whatever an agent needs to do one thing is asked once, by the approval layer; a task you paused, or one a restart cut off, continues from the step it had reached instead of starting over.
 - **CODING_STYLE §1: lean code** (`docs/CODING_STYLE.md`), beside clean code, SOLID and DRY: the smallest change that removes a cause, nothing added before something needs it, and whatever a change leaves unused deleted with it.
 - **CODING_STYLE §7.5: each mechanism has one home** (`docs/CODING_STYLE.md`): asking you, recording what ran, reaching you, pricing, paths and dependency checks are each built in one module that the others use; a module hands that home the facts only it knows, and keeps no copy, shortcut or memory of its own.
 - **CODING_STYLE §7: what an approval decision covers** (`docs/CODING_STYLE.md`): exact replays only, no replay for sends, spends or north's own settings, a "no" that holds for the task, learned tools gated on every call, no repository edits by north's own tools, and a folderless task that asks instead of guessing.
