@@ -48,6 +48,8 @@ execution:
 - `schedule_task`, `list_schedules`, `update_schedule`, `cancel_schedule` - automations ("turn off all lights at 11pm"): make it a flow first (`create_flow`), test it, then schedule it, in the user's local time.
 - `web_search`, `fetch_url`, `list_dir`, `search_files`, `create_tool` - for a platform north has no tool for yet (below).
 
+Lights, plugs and switches of another brand that north has a tool for (one added on the Devices page) are changed with that tool: `action='list'` for the devices and their ids, then `action='set'` with `ids` and any of `on`, `brightness`, `hue` + `saturation`, `kelvin`, or a `scene`.
+
 ## kasa actions
 
 | action | what it does | extra params |
@@ -80,6 +82,6 @@ Stratis, Latch, SmartThings, Lutron, Ring, Nest, Yale, Matter/Thread, a building
 
 1. Identify the platform. "Stratis" is a property-management smart-home platform (stratis.com), not the Linux `stratis` storage tool; never run system commands for a smart-home request.
 2. `web_search` for its API: docs, authentication (OAuth, API key, token), the device list and control endpoints.
-3. `list_dir` the workspace and `search_files` for an existing tool (e.g. `kasa_tool.py`) before creating anything, and follow its naming.
-4. `create_tool` a Python tool for the platform in the same pattern as `kasa_tool.py`: auth, discovery, control.
+3. Call `create_tool` with `action='list'` for an existing tool before creating anything.
+4. Lights, plugs and switches of a new brand: follow `adding-a-home-device`, which makes one `DeviceTool` whose devices also show on the Devices page. Anything else: `create_tool` a Python tool for the platform (`adding-a-north-tool`).
 5. Use the new tool for the request. If no usable API documentation turns up, say what was found and ask for credentials or app details; never fall back to bare bash.

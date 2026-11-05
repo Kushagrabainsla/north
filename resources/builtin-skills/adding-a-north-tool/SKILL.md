@@ -12,6 +12,7 @@ domains: [general, engineering]
 - Call `create_tool` with `action='list'`. If a tool already owns the action, use it, or `read` and `update` it. A new phrasing or workflow is not a reason for another tool.
 - A one-off job is done with `bash` or `write_file`, not a tool. A procedure (steps and judgement) is a skill; an ordered, repeatable process is a flow.
 - Build one tool for the user's task, not one per API endpoint: `get_weather` that answers the question, not `geocode` plus `forecast`.
+- Lights, plugs or switches of a brand north does not control yet: follow `adding-a-home-device` instead, so its devices also show on the Devices page.
 
 ## Ask once, before writing
 Work out what you can yourself (which public service, its URL, its response format). Then, if anything only the user can decide is still open (which account, which device, what counts as done, whether it may change or send anything), ask it all in **one** `ask_user` call, one item of `questions` each. Do not ask what you can find out, and do not ask again for what the user already said.

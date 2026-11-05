@@ -38,6 +38,7 @@ from memory import ContextDocument
 from memory.extraction import learning_status
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import Prompt, TaskRequest
+from tools.home import Home
 from tools.universal.browser import browser_availability
 from utils.time import epoch_to_local, localnow
 from web.artifacts import (
@@ -205,6 +206,7 @@ def configure(
         flow_store=flow_store,
         flow_runner=flow_runner,
         tool_registry=tool_registry,
+        home=Home(tool_registry) if tool_registry is not None else None,
         conversation_store=ConversationStore(north_home / "web.db"),
         web_runtime=WebRuntime(),
         codex_credentials_factory=codex_credentials_factory or _default_codex_credentials_factory,

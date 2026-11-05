@@ -1,9 +1,11 @@
-"""The dashboard's Lights page: your Kasa devices, controlled by you (CODING_STYLE §7.3).
+"""The dashboard's Devices page: your lights, plugs and switches of every brand, controlled by you (§7.3).
 
 A control you use here acts as you: it does what you set at once, with no approval
-card, and reaches the device through `KasaDevices`, the one home the kasa tool also
-uses (§7.5). north.log notes each change. Which lights are yours, as opposed to a
-friend's on the same network, is kept in north's settings.
+card, and reaches the device through `tools.home.Home`, the one home for devices of
+every brand (§7.5): Kasa, which north ships, and each brand north wrote a tool for when
+you added a device. north.log notes each change. Which lights are yours, as opposed to
+a friend's on the same network, is kept in north's settings. The TP-Link logins here
+are Kasa's own.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from config.env_file import remove_env_key, unstorable, write_env_key
 from orchestrator.api_context import current_services
-from tools.specialized.kasa_devices import SCENES, KasaDevices, LightChange
+from tools.home import SCENES, Home, LightChange, change_of
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["web"])
@@ -39,21 +41,11 @@ class LightsApply(BaseModel):
 
     @model_validator(mode="after")
     def _one_change(self) -> LightsApply:
-        values = (self.on, self.brightness, self.hue, self.saturation, self.kelvin)
-        if self.scene is not None and any(value is not None for value in values):
-            raise ValueError("a scene is applied on its own")
-        if self.scene is None and all(value is None for value in values):
-            raise ValueError("nothing to change")
-        if self.scene is not None and self.scene not in SCENES:
-            raise ValueError(f"unknown scene; known: {', '.join(sorted(SCENES))}")
-        if (self.hue is None) != (self.saturation is None):
-            raise ValueError("a colour needs both hue and saturation")
+        self.change()  # raises ValueError for a change that asks for nothing or makes no sense
         return self
 
     def change(self) -> LightChange:
-        if self.scene is not None:
-            return SCENES[self.scene]
-        return LightChange(self.on, self.brightness, self.hue, self.saturation, self.kelvin)
+        return change_of(self.on, self.brightness, self.hue, self.saturation, self.kelvin, self.scene)
 
 
 class LiveStart(BaseModel):
@@ -107,14 +99,14 @@ class MineUpdate(BaseModel):
 
 @router.get("/lights")
 async def list_lights(look_again: bool = False) -> dict[str, Any]:
-    """Your devices, what each can do and its state, and which are yours."""
-    devices = _devices()
+    """Your devices of every brand, what each can do and its state, and which are yours."""
+    home = _home()
     mine = set(_settings().my_lights)
-    found = await devices.devices(look_again=look_again)
+    found = await home.devices(look_again=look_again)
     return {
         "lights": [device | {"mine": device["id"] in mine} for device in found],
-        "problem": devices.problem,
-        "locked": devices.locked,
+        "problem": home.problem,
+        "locked": home.locked,
         "scenes": sorted(SCENES),
     }
 
@@ -122,9 +114,9 @@ async def list_lights(look_again: bool = False) -> dict[str, Any]:
 @router.post("/lights/apply")
 async def apply_lights(body: LightsApply) -> dict[str, Any]:
     """Change the lights you chose, together; each one that will not answer is named with why."""
-    devices = _devices()
+    home = _home()
     change = body.change()
-    outcomes = await asyncio.gather(*(devices.apply(i, change) for i in body.ids), return_exceptions=True)
+    outcomes = await asyncio.gather(*(home.apply(i, change) for i in body.ids), return_exceptions=True)
     mine = set(_settings().my_lights)
     lights, errors = [], []
     for device_id, outcome in zip(body.ids, outcomes, strict=True):
@@ -141,7 +133,7 @@ async def apply_lights(body: LightsApply) -> dict[str, Any]:
 @router.post("/lights/live/start")
 async def start_music_sync(body: LiveStart) -> dict[str, list[str]]:
     """Note how the chosen lights are now, so stopping puts them back, and let them follow the music."""
-    return {"following": await _devices().live.start(body.ids)}
+    return {"following": await _home().live.start(body.ids)}
 
 
 @router.post("/lights/live", status_code=202)
@@ -158,7 +150,7 @@ async def music_frames(body: LiveFrames) -> dict[str, int]:
         for f in body.frames
     }
     try:
-        _devices().live.frame(frames, beat=body.beat)
+        _home().live.frame(frames, beat=body.beat)
     except LookupError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return {"frames": len(frames)}
@@ -167,7 +159,7 @@ async def music_frames(body: LiveFrames) -> dict[str, int]:
 @router.post("/lights/live/stop")
 async def stop_music_sync() -> dict[str, bool]:
     """Stop following the music and put the lights back as they were."""
-    await _devices().live.stop()
+    await _home().live.stop()
     return {"stopped": True}
 
 
@@ -194,10 +186,10 @@ async def save_kasa_account(slot: str, body: KasaAccountUpdate) -> dict[str, Any
         await asyncio.to_thread(write_env_key, home, key, value)
         os.environ[key] = value
     _reload_settings()
-    devices = _devices()
-    found = await devices.devices(look_again=True)
+    home = _home()
+    found = [device for device in await home.devices(look_again=True) if device["source"] == "kasa"]
     logger.info("Lights: a TP-Link login was saved for %s; %d device(s) answer", slot, len(found))
-    return {"accounts": _accounts(), "answering": len(found), "locked": devices.locked, "problem": devices.problem}
+    return {"accounts": _accounts(), "answering": len(found), "locked": home.locked, "problem": home.problem}
 
 
 @router.delete("/lights/accounts/{slot}")
@@ -235,7 +227,7 @@ def _reload_settings() -> None:
     reload_settings()
 
 
-@router.put("/lights/{device_id}/mine")
+@router.put("/lights/{device_id:path}/mine")
 async def mark_mine(device_id: str, body: MineUpdate) -> dict[str, list[str]]:
     """Mark a light as yours, or not: "My lights" controls only these."""
     settings = _settings()
@@ -247,13 +239,11 @@ async def mark_mine(device_id: str, body: MineUpdate) -> dict[str, list[str]]:
     return {"mine": settings.my_lights}
 
 
-def _devices() -> KasaDevices:
-    from tools.exceptions import ToolNotFoundError
-
-    try:
-        return current_services().require("tool_registry").get("kasa").devices
-    except ToolNotFoundError:
-        raise HTTPException(status_code=503, detail="The Kasa tool is not available here.") from None
+def _home() -> Home:
+    home = current_services().home
+    if home is None:
+        raise HTTPException(status_code=503, detail="Home devices are not available here.")
+    return home
 
 
 def _settings():

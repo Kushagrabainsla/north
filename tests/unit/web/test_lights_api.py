@@ -1,4 +1,4 @@
-"""The Lights page's routes: your Kasa devices, controlled by you, with no approval card (CODING_STYLE §7.3).
+"""The Devices page's routes: your devices of every brand, controlled by you, with no approval card (§7.3).
 
 The user has two bulbs of their own and two of a friend's on the same network, and
 wants to control only theirs, or all of them.
@@ -16,6 +16,7 @@ from config.strategy import NorthSettings
 from orchestrator.api_context import ApiServices, bind_services
 from tests.conftest import approvals
 from tests.unit.tools.kasa_fakes import FakeBulb, FakeNetwork
+from tools.home import Home
 from tools.registry import ToolRegistry
 from tools.specialized.kasa_devices import KasaDevices
 from tools.specialized.kasa_tool import KasaTool
@@ -35,7 +36,11 @@ def home(tmp_path):
     registry.register(KasaTool(KasaDevices(discover=network.discover, open_device=network.open)))
     settings = NorthSettings(tmp_path / "settings.json")
     services = ApiServices(
-        north_settings=settings, web_runtime=WebRuntime(), north_home=tmp_path, tool_registry=registry
+        north_settings=settings,
+        web_runtime=WebRuntime(),
+        north_home=tmp_path,
+        tool_registry=registry,
+        home=Home(registry),
     )
     return services, bulbs, store
 
@@ -199,3 +204,27 @@ async def test_a_password_the_file_cannot_hold_is_refused_before_anything_is_sav
         await lights.save_kasa_account("yours", lights.KasaAccountUpdate(email="me@example.com", password="x${HOME}"))
 
     assert refused.value.status_code == 422 and not (services.north_home / ".env").exists()
+
+
+async def test_a_brand_added_through_north_shows_here_and_is_yours_to_mark_and_change(home) -> None:
+    """Only Kasa bulbs could show here; a Hue lamp north wrote a tool for now sits beside them."""
+    from fastapi.routing import APIRoute
+
+    from tests.unit.tools.test_home import _Hue
+
+    services, _, store = home
+    hue = _Hue()
+    services.tool_registry.register(hue)
+    with bind_services(services):
+        found = await lights.list_lights()
+        await lights.mark_mine("hue_lights/3", lights.MineUpdate(mine=True))
+        changed = await lights.apply_lights(lights.LightsApply(ids=["hue_lights/3"], scene="focus"))
+        mine = {light["id"] for light in (await lights.list_lights())["lights"] if light["mine"]}
+
+    assert {"Hall lamp", "Kettle plug"} <= {light["name"] for light in found["lights"]}
+    assert mine == {"hue_lights/3"}
+    [lamp] = changed["lights"]
+    assert (lamp["source"], lamp["brightness"], lamp["kelvin"]) == ("hue_lights", 90, 5000)
+    assert store.all() == []  # yours to change, with no card
+    [route] = [r for r in lights.router.routes if isinstance(r, APIRoute) and r.path.endswith("/mine")]
+    assert route.matches({"type": "http", "path": "/lights/hue_lights/3/mine", "method": "PUT"})[0].name == "FULL"

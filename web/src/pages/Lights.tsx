@@ -1,25 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, post } from "../api";
 import { Empty, ErrorNotice, Loading, PageHeader } from "../components";
 import { useResource } from "../hooks";
-import { inScope, kelvinToRgb, latestWins, swatch, type Light, type LightChange, type LightsOverview, type Scope } from "../lights";
+import { addDeviceRequest, brandOf, inScope, kelvinToRgb, latestWins, swatch, type Light, type LightChange, type LightsOverview, type Scope } from "../lights";
 import { sliceMs, type Levels } from "../listen";
 import listenWorklet from "../listen.worklet.ts?worker&url";
 import { hear, listening, spread, type Frame, type Mode } from "../music";
+import type { Conversation } from "../types";
 
 type Applied = { lights: Light[]; errors: { id: string; error: string }[] };
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-// Your Kasa lights, controlled by you: what you set happens at once, with no approval
-// card (CODING_STYLE §7.3). "My lights" acts only on the lights you marked as yours.
+// Your lights, plugs and switches of every brand, controlled by you: what you set happens at
+// once, with no approval card (CODING_STYLE §7.3). "My devices" acts only on the ones you
+// marked as yours. A brand north does not control yet is added by asking north, which writes
+// what it needs; its devices then show here like the Kasa ones.
 export function Lights() {
   const overview = useResource<LightsOverview>("/web/api/lights");
   const [lights, setLights] = useState<Light[]>([]);
   const [scope, setScope] = useState<Scope | null>(null);
   const [notice, setNotice] = useState("");
   const [looking, setLooking] = useState(false);
+  const [adding, setAdding] = useState(false);
   useEffect(() => { if (overview.data) setLights(overview.data.lights); }, [overview.data]);
 
   const chosen: Scope = scope ?? (lights.some((light) => light.mine) ? "mine" : "all");
@@ -57,25 +61,29 @@ export function Lights() {
   const locked = overview.data?.locked ?? [];
   // The Wi-Fi hint only when nothing was found: bulbs that refuse the login were found.
   const empty = lights.length
-    ? "None of these lights is marked as yours yet: switch to All lights and press ☆ Mine on yours."
+    ? "None of these devices is marked as yours yet: switch to All devices and press ☆ Mine on yours."
     : locked.length
-      ? "No light answers yet: they need their TP-Link login."
-      : `${overview.data?.problem || "No Kasa devices were found."} North finds bulbs on the network of the computer it runs on: make sure that computer and your bulbs are on the same Wi-Fi, then press Look again.`;
+      ? "No device answers yet: the Kasa ones need their TP-Link login."
+      : `${overview.data?.problem || "No devices were found."} North finds Kasa bulbs on the network of the computer it runs on: make sure that computer and your bulbs are on the same Wi-Fi, then press Look again. Another brand: press Add a device.`;
 
   return <div className="page lights-page">
     <PageHeader
       eyebrow="Home"
-      title="Lights"
-      subtitle="Your Kasa lights. What you set here happens at once, with no approval card."
-      actions={<button className="ghost-button" onClick={lookAgain} disabled={looking}>{looking ? "Looking…" : "Look again"}</button>}
+      title="Devices"
+      subtitle="Your lights, plugs and switches, of any brand. What you set here happens at once, with no approval card."
+      actions={<>
+        <button className="ghost-button" onClick={() => setAdding(!adding)} aria-expanded={adding}>Add a device</button>
+        <button className="ghost-button" onClick={lookAgain} disabled={looking}>{looking ? "Looking…" : "Look again"}</button>
+      </>}
     />
+    {adding && <AddDevice onCancel={() => setAdding(false)}/>}
     {overview.loading ? <Loading/> : overview.error ? <ErrorNotice message={overview.error}/> : <>
       <section className="lights-bar">
-        <div className="session-tabs" role="tablist" aria-label="Which lights">
-          <button type="button" role="tab" aria-selected={chosen === "mine"} className={`session-tab ${chosen === "mine" ? "active" : ""}`} onClick={() => setScope("mine")}>My lights ({mineCount})</button>
-          <button type="button" role="tab" aria-selected={chosen === "all"} className={`session-tab ${chosen === "all" ? "active" : ""}`} onClick={() => setScope("all")}>All lights ({lights.length})</button>
+        <div className="session-tabs" role="tablist" aria-label="Which devices">
+          <button type="button" role="tab" aria-selected={chosen === "mine"} className={`session-tab ${chosen === "mine" ? "active" : ""}`} onClick={() => setScope("mine")}>My devices ({mineCount})</button>
+          <button type="button" role="tab" aria-selected={chosen === "all"} className={`session-tab ${chosen === "all" ? "active" : ""}`} onClick={() => setScope("all")}>All devices ({lights.length})</button>
         </div>
-        <div className="lights-group" aria-label={chosen === "mine" ? "Your lights together" : "All lights together"}>
+        <div className="lights-group" aria-label={chosen === "mine" ? "Your devices together" : "All devices together"}>
           <button type="button" disabled={!shown.length} onClick={() => applyToShown({ on: true })}>All on</button>
           <button type="button" disabled={!shown.length} onClick={() => applyToShown({ on: false })}>All off</button>
           {(overview.data?.scenes ?? []).map((scene) => <button type="button" key={scene} className="lights-scene" disabled={!shown.length} onClick={() => applyToShown({ scene })}>{scene}</button>)}
@@ -92,6 +100,35 @@ export function Lights() {
         : <Empty>{empty}</Empty>}
     </>}
   </div>;
+}
+
+// Adding a brand north does not control yet: you say what it is, and north writes what it needs
+// in a session you can follow, asking you for anything only you know (its address, a login).
+function AddDevice({ onCancel }: { onCancel: () => void }) {
+  const navigate = useNavigate();
+  const [what, setWhat] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const ask = async () => {
+    setSending(true); setError("");
+    try {
+      const session = await post<Conversation>("/web/api/conversations", { title: `Add ${what.trim()}`.slice(0, 80) });
+      await post(`/web/api/conversations/${session.id}/turns`, { prompt: addDeviceRequest(what) });
+      navigate(`/sessions/${session.id}`);
+    } catch (err) {
+      setError(message(err));
+      setSending(false);
+    }
+  };
+  return <section className="panel setup-form add-device" aria-label="Add a device">
+    <p className="setup-copy muted">Say what it is: its brand and model, and where it is if you know (its address, or the app you use for it). North works out how to control it, asks you for anything only you know, and once it works the device shows up here beside your other lights, with the same controls and music sync.</p>
+    <textarea value={what} rows={2} placeholder="A Philips Hue bridge at 192.168.1.20" onChange={(event) => setWhat(event.target.value)}/>
+    {error && <ErrorNotice message={error}/>}
+    <div className="setup-actions">
+      <button className="primary-button" type="button" disabled={!what.trim() || sending} onClick={ask}>{sending ? "Asking North…" : "Ask North to add it"}</button>
+      <button className="ghost-button" type="button" onClick={onCancel}>Cancel</button>
+    </div>
+  </section>;
 }
 
 function LightCard({ light, onChanged, onError, onMine }: {
@@ -123,7 +160,7 @@ function LightCard({ light, onChanged, onError, onMine }: {
   return <article className={`light-card ${draft.on ? "is-on" : ""}`}>
     <header>
       <span className="light-swatch" style={{ background: swatch(draft) }} aria-hidden="true"/>
-      <div className="light-name"><b>{light.name}</b><small>{light.model} · {light.host}</small></div>
+      <div className="light-name"><b>{light.name}</b><small>{brandOf(light)}</small></div>
       <button type="button" className={`light-mine ${light.mine ? "active" : ""}`} aria-pressed={light.mine} onClick={() => onMine(light, !light.mine)} title={light.mine ? "Yours: My lights includes it" : "Mark as yours"}>{light.mine ? "★" : "☆"} Mine</button>
       <button type="button" className="light-power" aria-pressed={draft.on} disabled={off} onClick={() => set({ on: !draft.on })}>{draft.on ? "On" : "Off"}</button>
     </header>

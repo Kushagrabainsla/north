@@ -78,10 +78,34 @@ def _tools(tree: ast.Module) -> list[ast.ClassDef]:
 
 
 def _is_tool(node: ast.ClassDef) -> bool:
-    return any(
-        (isinstance(base, ast.Name) and base.id == "Tool") or (isinstance(base, ast.Attribute) and base.attr == "Tool")
-        for base in node.bases
-    )
+    return _base(node) in {"Tool", "DeviceTool"}
+
+
+def _base(node: ast.ClassDef) -> str:
+    """The tool base class *node* names: Tool, DeviceTool, or "" for neither."""
+    for base in node.bases:
+        name = base.id if isinstance(base, ast.Name) else base.attr if isinstance(base, ast.Attribute) else ""
+        if name in {"Tool", "DeviceTool"}:
+            return name
+    return ""
+
+
+def _device_tool(tool: ast.ClassDef, methods: dict[str, ast.FunctionDef | ast.AsyncFunctionDef]) -> list[str]:
+    """A brand of home device writes `find` and `change`; DeviceTool gives it `run` and says which calls change."""
+    problems = [
+        f"{tool.name} has no {name}: add `{signature}`."
+        for name, signature in (
+            ("find", "async def find(self) -> list[Device]"),
+            ("change", "async def change(self, device_id: str, change: LightChange) -> Device"),
+        )
+        if not isinstance(methods.get(name), ast.AsyncFunctionDef)
+    ]
+    if "run" in methods:
+        problems.append(f"{tool.name} defines run: a DeviceTool's run comes from DeviceTool; write find and change.")
+    for method in methods.values():
+        if isinstance(method, ast.AsyncFunctionDef):
+            problems += _blocking(method)
+    return problems
 
 
 def _imports(tree: ast.Module) -> list[str]:
@@ -101,6 +125,8 @@ def _imports(tree: ast.Module) -> list[str]:
 def _tool_class(tool: ast.ClassDef) -> list[str]:
     problems: list[str] = []
     methods = {node.name: node for node in tool.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if _base(tool) == "DeviceTool":
+        return list(dict.fromkeys(_device_tool(tool, methods)))
     run = methods.get("run")
     if run is None:
         return [f"{tool.name} has no run method: add `async def run(self, input: ToolInput) -> ToolOutput`."]

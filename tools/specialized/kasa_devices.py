@@ -1,9 +1,10 @@
 """Your Kasa devices, found once and kept connected: the one place north reaches them (CODING_STYLE §7.5).
 
-The kasa tool (what north does for you from chat) and the dashboard's Lights page (what
-you do yourself) both come here. Every command used to find the whole network again,
-connect, act and disconnect, 2-5 s each: fine for "make the bedroom warm", too slow for
-a slider and far too slow to follow music.
+The kasa tool (what north does for you from chat) and the dashboard's Devices page (what
+you do yourself, through `tools/home.py`, which also streams music sync) both come here.
+Every command used to find the whole network again, connect, act and disconnect, 2-5 s
+each: fine for "make the bedroom warm", too slow for a slider and far too slow to follow
+music.
 
 Discovery still runs `kasa --json discover` in a subprocess, because UDP broadcast
 discovery conflicts with the server's own event loop on macOS. It runs when the devices
@@ -21,43 +22,17 @@ import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any
 
-from utils.tasks import spawn
+from tools.home import LightChange
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 12.0
-# The longest fade between two streamed changes: past this a bulb that slow follows nothing anyway.
-_LONGEST_FADE_MS = 1000
 # How long a found set of devices is trusted before discovery runs again: a bulb that
 # moved to another address, or one plugged in since, is found within this.
 _STALE_SECONDS = 300.0
-
-
-@dataclass(frozen=True)
-class LightChange:
-    """What to change on a device; None leaves that part as it is."""
-
-    on: bool | None = None
-    brightness: int | None = None  # 1-100
-    hue: int | None = None  # 0-360
-    saturation: int | None = None  # 0-100
-    kelvin: int | None = None
-    transition_ms: int | None = None  # a fade, honoured by bulbs on the older protocol
-
-
-# Presets for a mood, shared by the kasa tool and the Lights page.
-SCENES: dict[str, LightChange] = {
-    "moody": LightChange(brightness=30, kelvin=2700),
-    "cozy": LightChange(brightness=35, kelvin=2700),
-    "movie": LightChange(brightness=15, kelvin=2500),
-    "focus": LightChange(brightness=90, kelvin=5000),
-    "romantic": LightChange(brightness=25, hue=330, saturation=75),
-    "party": LightChange(brightness=70, hue=300, saturation=100),
-    "sunset": LightChange(brightness=40, kelvin=2500),
-}
 
 
 class KasaDevices:
@@ -76,10 +51,6 @@ class KasaDevices:
         self._problem = ""
         self._locked: list[str] = []  # devices found that refused every TP-Link login north has
         self._finding = asyncio.Lock()
-        # The newest change waiting for each device that is being streamed to, and its sender.
-        self._latest: dict[str, tuple[LightChange, bool]] = {}  # and whether it is a beat
-        self._senders: dict[str, asyncio.Task[None]] = {}
-        self.live = LiveLights(self)
 
     @property
     def problem(self) -> str:
@@ -129,49 +100,8 @@ class KasaDevices:
             raise RuntimeError(f"{state['name']} did not confirm the change")
         return state
 
-    def stream(self, device_id: str, change: LightChange, *, beat: bool = False) -> None:
-        """Send *change* as soon as the device can take it, replacing any change it has not reached yet.
-
-        For a light following music: a bulb that takes 200 ms per request gets the newest frame
-        each time, so it never falls further and further behind what is playing. A *beat* is the
-        exception: the frames after it (the flash fading) do not replace it while it waits, or a
-        slow bulb would show the fading and never the flash.
-        """
-        waiting = self._latest.get(device_id)
-        if beat or waiting is None or not waiting[1]:
-            self._latest[device_id] = (change, beat)
-        if device_id not in self._senders:
-            self._senders[device_id] = spawn(self._send_newest(device_id), name=f"kasa-stream:{device_id}")
-
-    def stop_streams(self) -> None:
-        """Drop the changes not sent yet; a request already on its way still lands."""
-        self._latest.clear()
-
-    async def _send_newest(self, device_id: str) -> None:
-        previous: float | None = None
-        try:
-            while (waiting := self._latest.pop(device_id, None)) is not None:
-                change, beat = waiting
-                # Fade for as long as this bulb takes between changes, so it is still moving when the next
-                # one comes. With a 120 ms fade, a bulb that took longer between changes jumped, held, and
-                # jumped again: the user's KL125 and KL135 bulbs flickered. A beat keeps the quick rise
-                # it asked for: stretched to the bulb's pace, the flash would blur into the fading.
-                started = time.monotonic()
-                if previous is not None and not beat:
-                    taken = int((started - previous) * 1000)
-                    change = replace(change, transition_ms=min(max(change.transition_ms or 0, taken), _LONGEST_FADE_MS))
-                previous = started
-                try:
-                    await self.apply(device_id, change, confirm=False)
-                except Exception:  # noqa: BLE001 - one frame lost is no failure; a silent bulb is not hammered
-                    logger.debug("kasa: a streamed change to %s failed", device_id, exc_info=True)
-                    await asyncio.sleep(0.5)
-        finally:
-            self._senders.pop(device_id, None)
-
     async def aclose(self) -> None:
         """Release every connection: a KLAP device holds an HTTP session until it is closed."""
-        await self.live.stop()
         await close_devices(self._devices.values())
         self._devices.clear()
         self._found_at = None
@@ -220,81 +150,8 @@ class KasaDevices:
         return dev
 
 
-class LiveLights:
-    """Lights following something live, such as music, then put back as they were.
-
-    Started from the dashboard, which sends frames from the music it hears; north only sends
-    them on. If frames stop arriving (the tab was closed) the lights are put back by themselves.
-    """
-
-    def __init__(self, devices: KasaDevices, idle_seconds: float = 5.0) -> None:
-        self._devices = devices
-        self._idle_seconds = idle_seconds
-        self._before: dict[str, LightChange] = {}  # how each light was when it started following
-        self._last_frame = 0.0
-        self._watch: asyncio.Task[None] | None = None
-
-    @property
-    def following(self) -> list[str]:
-        return list(self._before)
-
-    async def start(self, device_ids: list[str]) -> list[str]:
-        """Note how *device_ids* are now, so stopping puts them back; returns the ones found."""
-        await self.stop()
-        found = {d["id"]: d for d in await self._devices.devices() if not d.get("unreachable")}
-        self._before = {i: _as_change(found[i]) for i in device_ids if i in found}
-        self._last_frame = time.monotonic()
-        self._watch = spawn(self._stop_when_idle(), name="kasa-live-watch")
-        logger.info("Lights: music sync started on %s", list(self._before))
-        return self.following
-
-    def frame(self, changes: dict[str, LightChange], *, beat: bool = False) -> None:
-        """Send each following light its newest change; any other light is left alone.
-
-        *beat* marks the frames of a beat, which the frames after them do not overtake.
-        """
-        if not self._before:
-            raise LookupError("No lights are following anything: start first.")
-        self._last_frame = time.monotonic()
-        for device_id, change in changes.items():
-            if device_id in self._before:
-                self._devices.stream(device_id, change, beat=beat)
-
-    async def stop(self) -> None:
-        """Stop following, and put every light back as it was."""
-        if self._watch is not None and self._watch is not asyncio.current_task():
-            self._watch.cancel()
-        self._watch = None
-        before, self._before = self._before, {}
-        if not before:
-            return
-        self._devices.stop_streams()
-        await asyncio.gather(
-            *(self._devices.apply(i, change, confirm=False) for i, change in before.items()), return_exceptions=True
-        )
-        logger.info("Lights: music sync stopped; %s put back", list(before))
-
-    async def _stop_when_idle(self) -> None:
-        while self._before:
-            await asyncio.sleep(min(1.0, self._idle_seconds / 2))
-            if time.monotonic() - self._last_frame > self._idle_seconds:
-                logger.info("Lights: no music frames for %.0f s; putting the lights back", self._idle_seconds)
-                await self.stop()
-
-
-def _as_change(state: dict[str, Any]) -> LightChange:
-    """The change that brings a device back to *state*."""
-    if not state["on"]:
-        return LightChange(on=False)
-    if state.get("hue") is not None:
-        return LightChange(
-            on=True, brightness=state.get("brightness"), hue=state["hue"], saturation=state["saturation"]
-        )
-    return LightChange(on=True, brightness=state.get("brightness"), kelvin=state.get("kelvin"))
-
-
 def describe(device_id: str, dev: Any, name: str | None = None) -> dict[str, Any]:
-    """A device as the tool and the Lights page show it: what it is, what it can do, its state."""
+    """A device as the tool and the Devices page show it: what it is, what it can do, its state."""
     entry: dict[str, Any] = {
         "id": device_id,
         "name": getattr(dev, "alias", None) or name or getattr(dev, "host", device_id),

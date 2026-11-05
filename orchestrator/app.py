@@ -62,6 +62,7 @@ from orchestrator.api import coding_ask_router, coding_gate_router, health_route
 from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
 from orchestrator.api_context import merge as merge_services
+from orchestrator.api_context import services_of
 from orchestrator.background import BackgroundLoops
 from orchestrator.coding_ask import ApprovalsAsker
 from orchestrator.coding_briefing import MemoryBriefing
@@ -1301,6 +1302,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
     finally:
         remove_run_file()
+        # Lights following music go back as they were while their connections are still open.
+        if (home := services_of(app).home) is not None:
+            await home.aclose()
         await _shutdown(deps, callback_server, background_tasks, tool_registry)
 
 

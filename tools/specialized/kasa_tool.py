@@ -2,7 +2,7 @@
 
 The tool reads what you asked for (an action, a colour or warmth by name, a device by
 name) and puts it to the approval layer. Reaching the devices is `KasaDevices`' job, the
-one home it shares with the dashboard's Lights page (CODING_STYLE §7.5).
+one home it shares with the dashboard's Devices page (CODING_STYLE §7.5).
 """
 
 from __future__ import annotations
@@ -13,8 +13,9 @@ from typing import Any
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from tools.base import Tool
+from tools.home import SCENES, LightChange
 from tools.models import ToolInput, ToolOutput
-from tools.specialized.kasa_devices import SCENES, KasaDevices, LightChange
+from tools.specialized.kasa_devices import KasaDevices
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +226,7 @@ class KasaTool(Tool):
     }
 
     def __init__(self, devices: KasaDevices | None = None) -> None:
-        # Shared with the dashboard's Lights page, which reaches it through this tool in the registry.
+        # Shared with the dashboard's Devices page, which reaches it through this tool in the registry.
         self.devices = devices or KasaDevices()
 
     async def aclose(self) -> None:

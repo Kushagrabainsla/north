@@ -88,6 +88,8 @@ class ApiServices:
     flow_store: Any | None = None
     flow_runner: Any | None = None
     tool_registry: Any | None = None
+    # tools.home.Home: every home device of every brand, for the Devices page and music sync.
+    home: Any | None = None
     north_home: Any | None = None
     # Mutable per-app runtime state for the web layer (in-flight logins,
     # the bootstrap task). Held here so it is per-app like the wiring.

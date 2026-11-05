@@ -53,7 +53,7 @@ const primaryNav: [string, string, LucideIcon, boolean?][] = [
   ["/artifacts", "Artifacts", FileText],
   ["/approvals", "Approvals", ShieldAlert],
   ["/memory", "Memory", Brain], ["/agents", "Agents", Bot],
-  ["/lights", "Lights", Lightbulb],
+  ["/lights", "Devices", Lightbulb],
 ];
 
 const systemNav: [string, string, LucideIcon][] = [

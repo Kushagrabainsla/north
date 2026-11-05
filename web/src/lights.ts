@@ -1,4 +1,4 @@
-// What the Lights page needs beyond drawing: which lights a choice covers, the colour a
+// What the Devices page needs beyond drawing: which lights a choice covers, the colour a
 // card shows, and a sender that never lets requests pile up behind a slider.
 
 export interface Light {
@@ -15,6 +15,8 @@ export interface Light {
   saturation?: number;
   mine: boolean;
   unreachable?: string;
+  // The brand it comes through: "kasa", or the tool north wrote for it ("hue_lights").
+  source: string;
 }
 
 export interface LightsOverview {
@@ -34,6 +36,16 @@ export interface LightChange {
   kelvin?: number;
   scene?: string;
 }
+
+/** The line under a device's name: its model and address for Kasa, the brand for any other. */
+export function brandOf(light: Light): string {
+  if (light.source === "kasa" || !light.source) return [light.model, light.host].filter(Boolean).join(" · ");
+  return light.source.replaceAll("_", " ");
+}
+
+/** What north is asked when you add a device: your words, and where it should end up. */
+export const addDeviceRequest = (what: string) =>
+  `Add this to my Devices page, so I can control it there and from chat: ${what.trim()}`;
 
 /** The lights a choice covers: yours, or every one on the network (a friend's too). */
 export const inScope = (lights: Light[], scope: Scope) => (scope === "mine" ? lights.filter((light) => light.mine) : lights);

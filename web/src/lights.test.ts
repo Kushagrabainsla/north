@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { inScope, kelvinToRgb, latestWins, swatch, type Light } from "./lights";
+import { addDeviceRequest, brandOf, inScope, kelvinToRgb, latestWins, swatch, type Light } from "./lights";
 
 const light = (over: Partial<Light>): Light => ({
   id: "a", name: "Desk lamp", host: "10.0.0.36", model: "KL130", on: true, kind: "light",
-  can: { dim: true, color: true, white: [2500, 6500] }, mine: false, ...over,
+  can: { dim: true, color: true, white: [2500, 6500] }, mine: false, source: "kasa", ...over,
 });
 
 describe("which lights a choice covers", () => {
@@ -68,5 +68,18 @@ describe("music sync's frames", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(sent).toEqual(["fade 1", "beat"]);
+  });
+});
+
+describe("a device of any brand", () => {
+  it("shows a Kasa bulb's model and address, and another brand by name", () => {
+    expect(brandOf(light({}))).toBe("KL130 · 10.0.0.36");
+    expect(brandOf(light({ id: "hue_lights/3", source: "hue_lights", host: "", model: "" }))).toBe("hue lights");
+  });
+
+  it("asks north to add a device in the user's own words, naming where it should show", () => {
+    expect(addDeviceRequest("  A Philips Hue bridge at 192.168.1.20 ")).toBe(
+      "Add this to my Devices page, so I can control it there and from chat: A Philips Hue bridge at 192.168.1.20",
+    );
   });
 });

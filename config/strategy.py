@@ -82,7 +82,7 @@ class NorthSettings:
         self._timezone_configured = False
         self._browser_profiles: list = []
         self._setup_progress: dict = {"status": "not_started", "step": 0}
-        # The devices you marked as yours on the Lights page, by device id: the rest may be a friend's.
+        # The devices you marked as yours on the Devices page, by device id: the rest may be a friend's.
         self._my_lights: list[str] = []
         self._load()
 
