@@ -1,0 +1,54 @@
+import { describe, expect, it } from "vitest";
+import { inScope, kelvinToRgb, latestWins, swatch, type Light } from "./lights";
+
+const light = (over: Partial<Light>): Light => ({
+  id: "a", name: "Desk lamp", host: "10.0.0.36", model: "KL130", on: true, kind: "light",
+  can: { dim: true, color: true, white: [2500, 6500] }, mine: false, ...over,
+});
+
+describe("which lights a choice covers", () => {
+  it("is only yours for My lights, and every one, a friend's too, for All lights", () => {
+    const lights = [light({ id: "mine", mine: true }), light({ id: "friend's" })];
+
+    expect(inScope(lights, "mine").map((l) => l.id)).toEqual(["mine"]);
+    expect(inScope(lights, "all").map((l) => l.id)).toEqual(["mine", "friend's"]);
+  });
+});
+
+describe("the colour a card shows", () => {
+  it("follows what the light reports: off, a colour, or a white", () => {
+    expect(swatch(light({ on: false, hue: 120 }))).toBe("transparent");
+    expect(swatch(light({ hue: 240, saturation: 80 }))).toBe("hsl(240 80% 55%)");
+    expect(swatch(light({ kelvin: 6500 }))).toBe("rgb(255 254 250)");
+  });
+
+  it("is warmer the lower the temperature", () => {
+    const [, warmGreen, warmBlue] = kelvinToRgb(2700);
+    const [, coolGreen, coolBlue] = kelvinToRgb(6500);
+    expect(warmBlue).toBeLessThan(coolBlue);
+    expect(warmGreen).toBeLessThan(coolGreen);
+  });
+});
+
+describe("a slider dragged across its range", () => {
+  it("sends one request at a time, then only the newest value", async () => {
+    const sent: number[] = [];
+    const settled: number[] = [];
+    let release = () => {};
+    const send = (value: number) => {
+      sent.push(value);
+      return new Promise<number>((resolve) => { release = () => resolve(value); });
+    };
+    const push = latestWins(send, (result) => settled.push(result), () => {});
+
+    for (const value of [10, 20, 30, 40]) push(value);
+    expect(sent).toEqual([10]);  // one in flight; 20 and 30 were overtaken
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sent).toEqual([10, 40]);
+    expect(settled).toEqual([10, 40]);
+  });
+});

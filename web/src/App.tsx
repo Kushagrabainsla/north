@@ -10,6 +10,7 @@ import { SettingsPage } from "./pages/Settings";
 import { Skills } from "./pages/Skills";
 import { SystemPage } from "./pages/System";
 import { Tools } from "./pages/Tools";
+import { Lights } from "./pages/Lights";
 import { Flows } from "./pages/Flows";
 import { Tasks } from "./pages/Tasks";
 import { DialogProvider } from "./dialog";
@@ -42,6 +43,7 @@ export function App() {
     <Route path="/skills" element={<Skills/>}/>
     <Route path="/flows" element={<Flows/>}/>
     <Route path="/tools" element={<Tools/>}/>
+    <Route path="/lights" element={<Lights/>}/>
     {/* Tasks and Activity were one thing described in two places. Merged, with
         the event stream a tab inside the task list rather than a page beside
         it. The old paths redirect: they are in muscle memory and in bookmarks,

@@ -95,6 +95,8 @@ class NorthSettings:
         self._timezone_configured = False
         self._browser_profiles: list = []
         self._setup_progress: dict = {"status": "not_started", "step": 0}
+        # The devices you marked as yours on the Lights page, by device id: the rest may be a friend's.
+        self._my_lights: list[str] = []
         self._load()
 
     def _load(self) -> None:
@@ -137,6 +139,8 @@ class NorthSettings:
                         self._browser_profiles.append(profile)
                 except ValueError:
                     logger.warning("Ignoring invalid saved browser profile")
+            raw_lights = data.get("my_lights", [])
+            self._my_lights = [str(i) for i in raw_lights[:_MAX_MY_LIGHTS]] if isinstance(raw_lights, list) else []
             try:
                 self._setup_progress = SetupProgress.model_validate(data.get("setup", {})).model_dump()
             except ValueError:
@@ -231,6 +235,16 @@ class NorthSettings:
         self._save()
 
     @property
+    def my_lights(self) -> list[str]:
+        return list(self._my_lights)
+
+    def set_my_lights(self, device_ids: list[str]) -> None:
+        if len(device_ids) > _MAX_MY_LIGHTS:
+            raise ValueError(f"At most {_MAX_MY_LIGHTS} lights can be marked as yours.")
+        self._my_lights = list(dict.fromkeys(str(i) for i in device_ids))
+        self._save()
+
+    @property
     def setup_progress(self) -> dict:
         return dict(self._setup_progress)
 
@@ -250,6 +264,7 @@ class NorthSettings:
                 "timezone_configured": self._timezone_configured,
                 "browser_profiles": [profile.model_dump() for profile in self._browser_profiles],
                 "setup": self._setup_progress,
+                "my_lights": self._my_lights,
             }
             routing: dict[str, object] = {"mode": self._routing_mode.value}
             if self._routing_model:
@@ -260,6 +275,9 @@ class NorthSettings:
             self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning("Failed to persist settings to %s: %s", self._path, exc)
+
+
+_MAX_MY_LIGHTS = 64
 
 
 def _is_known_timezone(name: str) -> bool:

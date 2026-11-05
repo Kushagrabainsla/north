@@ -49,6 +49,7 @@ from web.artifacts import (
 from web.browser_keys import BROWSER_KEY_COOKIE, BROWSER_KEY_MAX_AGE_SECONDS, known_browser, remember_browser
 
 from . import extensions as _extensions
+from . import lights as _lights
 from .conversations import ConversationStore, Turn
 
 # Compatibility exports for callers that historically imported skill routes
@@ -115,6 +116,7 @@ router = APIRouter(
     dependencies=[Depends(bind_request_services), Depends(verify_api_access)],
 )
 router.include_router(extensions_router)
+router.include_router(_lights.router)
 
 
 @dataclass

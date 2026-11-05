@@ -1778,3 +1778,35 @@ button:not(:disabled):active { transform: translateY(1px); }
 .artifact-run h3 a { color: var(--text); text-decoration: none; font-family: inherit; }.artifact-run h3 a:hover { color: var(--accent); }.artifact-owner-kind { color: var(--accent); text-transform: uppercase; letter-spacing: .12em; font-size: 9px; }
 /* A notice's message is what it says, so it wraps instead of being cut to one line. */
 .notice-row small { white-space: pre-wrap !important; }
+
+/* Lights: a card per Kasa device, its controls only what it can do. */
+.lights-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 0 26px 14px; }
+.lights-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.lights-group button { border: 1px solid var(--line); background: var(--surface-2); border-radius: 7px; padding: 6px 11px; font-size: 10px; cursor: pointer; }
+.lights-group button:hover:not(:disabled) { border-color: #46505b; }
+.lights-scene { text-transform: capitalize; }
+.lights-notice { margin: 0 26px 12px; color: var(--amber); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.light-card .lights-notice { margin: 0; }
+.lights-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); gap: 12px; padding: 0 26px 26px; }
+.light-card { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); }
+.light-card.is-on { border-color: var(--line); }
+.light-card header { display: flex; align-items: center; gap: 10px; }
+.light-swatch { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); }
+.light-name { flex: 1; min-width: 0; }
+.light-name b, .light-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.light-name b { font-size: 12px; }
+.light-name small { color: var(--faint); font-size: 9px; margin-top: 3px; }
+.light-mine, .light-power { flex: 0 0 auto; border: 1px solid var(--line); background: var(--surface-2); border-radius: 7px; padding: 5px 9px; font-size: 10px; cursor: pointer; color: var(--muted); }
+.light-mine.active { color: var(--amber); }
+.light-power[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.light-modes { align-self: start; justify-self: start; }
+.light-slider { display: grid; gap: 6px; font-size: 10px; color: var(--muted); }
+.light-slider span { display: flex; justify-content: space-between; }
+.light-slider em { font-style: normal; color: var(--text); }
+/* Drawn by hand: the browser's own slider hides the track, and with it the colour and warmth gradients. */
+.light-slider input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; margin: 4px 0; border-radius: 4px; background: linear-gradient(90deg, #3f3f46, #e4e4e7); cursor: pointer; }
+.light-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--text); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--line); }
+.light-slider input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 2px solid var(--bg); }
+.light-slider input[type=range]:disabled { cursor: not-allowed; opacity: .4; }
+.light-slider input[type=range].light-hue { background: linear-gradient(90deg, hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%), hsl(180 100% 50%), hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%)); }
+@media (max-width: 680px) { .lights-bar, .lights-notice { margin-left: 16px; margin-right: 16px; } .lights-grid { padding: 0 16px 16px; } }
