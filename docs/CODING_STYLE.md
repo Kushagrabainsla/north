@@ -212,6 +212,8 @@ Every piece of logic exists in exactly one place. SQLite connection setup with W
 
 **One home per concept in the dashboard.** Each thing (a setting, a connection, a kind of record) lives on exactly one page; another page links to it or reuses the same component, never a copy. Onboarding walks through those same components. **Why:** scattered, repeated controls drift apart and confuse. **How to apply:** before adding a panel, find the concept's home; move rather than duplicate.
 
+**The dashboard speaks plain words.** A label, mode or button names what it does for you in everyday words, not the technique behind it: "Beat" (the lights jump with each beat) rather than "Pulse", "Mood" rather than "Spectrum". A choice says in one short line what picking it will do. **Why:** the dashboard is for the person using north, who should not need to know how a feature works to choose it. **How to apply:** before naming a control, say what it does to someone who has never seen north, and use those words.
+
 **The README covers north, install and commands only.** Setup steps for a connection (Telegram, browser profiles, providers) live in dashboard onboarding, not the README. Every command row matches the CLI's real behavior and options. **Why:** setup docs in two places drift. **How to apply:** when a command or option changes, check its README row against `--help` and the code.
 
 ### 5.2 Shared Utilities Live in utils/
