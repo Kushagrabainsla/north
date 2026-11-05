@@ -111,3 +111,29 @@ def test_a_change_that_makes_no_sense_is_refused(body: dict) -> None:
 
 async def _refuses(state):
     raise OSError("unplugged")
+
+
+async def test_music_sync_follows_the_frames_then_puts_the_lights_back(home) -> None:
+    import asyncio
+
+    services, bulbs, store = home
+    desk = bulbs["Desk lamp"]
+    desk.is_on, desk.light.brightness, desk.light.color_temp = True, 40, 2700
+    with bind_services(services):
+        found = await lights.list_lights()
+        [desk_id] = _ids(found, ["Desk lamp"])
+        with pytest.raises(HTTPException) as not_started:
+            await lights.music_frames(
+                lights.LiveFrames(frames=[lights.LiveFrame(id=desk_id, hue=1, saturation=1, brightness=1)])
+            )
+        following = await lights.start_music_sync(lights.LiveStart(ids=[desk_id]))
+        await lights.music_frames(
+            lights.LiveFrames(frames=[lights.LiveFrame(id=desk_id, hue=200, saturation=90, brightness=80)])
+        )
+        await asyncio.sleep(0.05)
+        during = desk.light.hsv.hue
+        await lights.stop_music_sync()
+
+    assert not_started.value.status_code == 409 and following == {"following": [desk_id]}
+    assert during == 200 and (desk.is_on, desk.light.brightness, desk.light.color_temp) == (True, 40, 2700)
+    assert store.all() == []

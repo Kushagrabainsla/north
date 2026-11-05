@@ -1810,3 +1810,14 @@ button:not(:disabled):active { transform: translateY(1px); }
 .light-slider input[type=range]:disabled { cursor: not-allowed; opacity: .4; }
 .light-slider input[type=range].light-hue { background: linear-gradient(90deg, hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%), hsl(180 100% 50%), hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%)); }
 @media (max-width: 680px) { .lights-bar, .lights-notice { margin-left: 16px; margin-right: 16px; } .lights-grid { padding: 0 16px 16px; } }
+/* Music sync: one row above the lights, wrapping on a phone. */
+.music-sync { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin: 0 26px 14px; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); }
+.music-sync-text { flex: 1 1 260px; min-width: 0; }
+.music-sync-text b { display: block; font-size: 12px; }
+.music-sync-text small { display: block; margin-top: 4px; color: var(--faint); font-size: 9px; line-height: 1.5; }
+.music-sensitivity { flex: 0 1 160px; }
+.music-meter { flex: 0 0 80px; height: 8px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--line); overflow: hidden; }
+.music-meter span { display: block; height: 100%; background: var(--accent); transition: width .1s linear; }
+.music-start { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.music-note { flex-basis: 100%; margin: 0; }
+@media (max-width: 680px) { .music-sync { margin-left: 16px; margin-right: 16px; } }

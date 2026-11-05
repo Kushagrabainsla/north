@@ -54,6 +54,31 @@ class LightsApply(BaseModel):
         return LightChange(self.on, self.brightness, self.hue, self.saturation, self.kelvin)
 
 
+class LiveStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[str] = Field(min_length=1, max_length=64)
+
+
+class LiveFrame(BaseModel):
+    """One light's colour and brightness for this moment of the music."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    hue: int = Field(ge=0, le=360)
+    saturation: int = Field(ge=0, le=100)
+    brightness: int = Field(ge=1, le=100)
+
+
+class LiveFrames(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    frames: list[LiveFrame] = Field(min_length=1, max_length=64)
+    # A fade as long as the time between frames, so a bulb glides from one to the next.
+    transition_ms: int = Field(120, ge=0, le=2000)
+
+
 class MineUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -90,6 +115,39 @@ async def apply_lights(body: LightsApply) -> dict[str, Any]:
     if errors and not lights:
         raise HTTPException(status_code=502, detail="; ".join(f"{e['id']}: {e['error']}" for e in errors))
     return {"lights": lights, "errors": errors}
+
+
+@router.post("/lights/live/start")
+async def start_music_sync(body: LiveStart) -> dict[str, list[str]]:
+    """Note how the chosen lights are now, so stopping puts them back, and let them follow the music."""
+    return {"following": await _devices().live.start(body.ids)}
+
+
+@router.post("/lights/live", status_code=202)
+async def music_frames(body: LiveFrames) -> dict[str, int]:
+    """The dashboard heard the music and chose these colours: send each light its newest one.
+
+    Only colours arrive here; the sound stays in the browser. Each frame is sent on at once and
+    replaces any a bulb has not reached yet, so a slow bulb never falls behind the music.
+    """
+    frames = {
+        f.id: LightChange(
+            on=True, brightness=f.brightness, hue=f.hue, saturation=f.saturation, transition_ms=body.transition_ms
+        )
+        for f in body.frames
+    }
+    try:
+        _devices().live.frame(frames)
+    except LookupError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return {"frames": len(frames)}
+
+
+@router.post("/lights/live/stop")
+async def stop_music_sync() -> dict[str, bool]:
+    """Stop following the music and put the lights back as they were."""
+    await _devices().live.stop()
+    return {"stopped": True}
 
 
 @router.put("/lights/{device_id}/mine")

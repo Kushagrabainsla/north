@@ -6,6 +6,7 @@ too slow for a slider on the dashboard and far too slow to follow music.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -222,3 +223,71 @@ async def test_every_connection_is_released_when_north_stops() -> None:
     await devices.aclose()
 
     assert all(bulb.closed for bulb in bulbs)
+
+
+async def _settle(seconds: float = 0.05) -> None:
+    await asyncio.sleep(seconds)
+
+
+async def test_a_slow_bulb_gets_the_newest_frame_and_never_falls_behind() -> None:
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    devices = _devices(FakeNetwork(lamp))
+    [entry] = await devices.devices()
+    quick = lamp.light.set_state
+
+    async def slow(state):
+        await asyncio.sleep(0.05)
+        return await quick(state)
+
+    lamp.light.set_state = slow
+    await devices.live.start([entry["id"]])
+    for hue in (10, 20, 30, 40, 50):
+        devices.live.frame({entry["id"]: LightChange(on=True, hue=hue, saturation=100, brightness=60)})
+        if hue == 10:
+            await _settle(0.01)  # the first is on its way; the rest arrive while the bulb is busy
+    await _settle(0.2)
+
+    assert [state.hue for state in lamp.light.sent] == [10, 50]  # 20, 30 and 40 were overtaken
+
+
+async def test_stopping_puts_every_light_back_as_it_was() -> None:
+    lit, dark = FakeBulb("10.0.0.36", "Desk lamp"), FakeBulb("10.0.0.47", "Bed lamp")
+    lit.is_on, lit.light.brightness, lit.light.color_temp = True, 40, 2700
+    devices = _devices(FakeNetwork(lit, dark))
+    ids = [d["id"] for d in await devices.devices()]
+
+    await devices.live.start(ids)
+    devices.live.frame({i: LightChange(on=True, hue=200, saturation=100, brightness=90) for i in ids})
+    await _settle()
+    await devices.live.stop()
+
+    assert (lit.is_on, lit.light.brightness, lit.light.color_temp) == (True, 40, 2700)
+    assert dark.is_on is False and devices.live.following == []
+
+
+async def test_lights_are_put_back_by_themselves_when_frames_stop_coming() -> None:
+    """The tab was closed, or the computer slept: nobody pressed Stop."""
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    devices = _devices(FakeNetwork(lamp))
+    devices.live = kasa_devices.LiveLights(devices, idle_seconds=0.1)
+    [entry] = await devices.devices()
+
+    await devices.live.start([entry["id"]])
+    devices.live.frame({entry["id"]: LightChange(on=True, hue=200, saturation=100, brightness=90)})
+    await _settle(0.4)
+
+    assert devices.live.following == [] and lamp.is_on is False
+
+
+async def test_only_the_lights_you_chose_follow_the_music() -> None:
+    mine, friends = FakeBulb("10.0.0.36", "Desk lamp"), FakeBulb("10.0.0.47", "Sofa light")
+    devices = _devices(FakeNetwork(mine, friends))
+    found = {d["name"]: d["id"] for d in await devices.devices()}
+
+    with pytest.raises(LookupError):  # nothing was started
+        devices.live.frame({found["Desk lamp"]: LightChange(on=True, hue=1, saturation=1, brightness=1)})
+    await devices.live.start([found["Desk lamp"]])
+    devices.live.frame({i: LightChange(on=True, hue=120, saturation=100, brightness=80) for i in found.values()})
+    await _settle()
+
+    assert mine.light.sent and friends.light.sent == []
