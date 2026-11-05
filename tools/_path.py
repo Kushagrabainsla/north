@@ -380,39 +380,6 @@ def named_paths(command: str, cwd: str | None) -> tuple[Path, ...]:
     return tuple(found)
 
 
-def references_sensitive_path(command: str) -> bool:
-    """True when any path-like token in *command* points into a blocked directory.
-
-    Shared by tools that pass raw command strings to a shell (e.g. BashTool's
-    instant-safe fast path) and therefore never go through resolve_path().
-
-    A parent-directory escape (any ``..`` segment) can read arbitrarily far above
-    the working directory, and the fast path cannot prove where it lands, so any
-    such token is treated as sensitive. Absolute and ``~`` tokens are checked
-    against the blocklist directly; other relative paths are resolved against the
-    current working directory before the same blocklist applies.
-    """
-    for token in command.split():
-        candidate = token.strip("'\"")
-        if not candidate or candidate.startswith("-"):
-            continue  # empty fragment or a flag, not a path
-        if ".." in Path(candidate).parts:
-            return True  # parent-directory escape - never fast-path it
-        if candidate.startswith(("/", "~")):
-            base = Path(candidate).expanduser()
-        elif "/" in candidate:
-            base = Path.cwd() / candidate
-        else:
-            continue  # bare word (e.g. a grep pattern), not a path
-        try:
-            resolved = str(base.resolve())
-        except (OSError, ValueError):
-            return True  # unresolvable path-like token - treat as sensitive
-        if _is_blocked_path(resolved):
-            return True
-    return False
-
-
 def resolve_path(path_str: str, workspace: str | None, *, contained: bool = True) -> Path | None:
     """Resolve *path_str*, optionally scoped to *workspace*.
 

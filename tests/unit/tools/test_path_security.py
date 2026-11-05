@@ -15,7 +15,6 @@ from tools._path import (
     handoff_dir_for,
     is_sensitive_path,
     prune_handoff_dirs,
-    references_sensitive_path,
     resolve_path,
 )
 
@@ -100,7 +99,6 @@ class TestPersonalDataCarveOut:
         for name in (".env", "settings.json", "ledger.db", "mcp.json"):
             assert resolve_path(str(home / name), None) is None, name
             assert is_sensitive_path(home / name) is True, name
-        assert references_sensitive_path(f"cat {home}/.env") is True
         # Its own writable parts stay open.
         assert resolve_path(str(home / "notes" / "t1" / "plan.md"), None) is not None
         assert resolve_path(str(home / "tasks" / "t1" / "spec.md"), None) is not None
@@ -111,29 +109,6 @@ class TestPersonalDataCarveOut:
         assert is_sensitive_path(tmp_path / "notes" / "plan.md") is False
         # Sibling secret stays sensitive even though it bears the .north parent.
         assert is_sensitive_path(tmp_path / "secret.key") is True
-
-
-class TestReferencesSensitivePath:
-    def test_detects_north_env(self) -> None:
-        assert references_sensitive_path("cat ~/.north/.env") is True
-
-    def test_detects_ssh(self) -> None:
-        assert references_sensitive_path("cat ~/.ssh/id_rsa") is True
-
-    def test_detects_etc(self) -> None:
-        assert references_sensitive_path("grep root /etc/passwd") is True
-
-    def test_allows_plain_paths(self) -> None:
-        assert references_sensitive_path("cat README.md") is False
-
-    def test_detects_relative_traversal(self) -> None:
-        # The instant-safe fast path must not let a relative parent escape read
-        # secrets outside the workspace without an approval card (CL1/A1).
-        assert references_sensitive_path("cat ../../.ssh/id_rsa") is True
-        assert references_sensitive_path("cat ../secret.txt") is True
-
-    def test_allows_relative_subpath(self) -> None:
-        assert references_sensitive_path("cat src/app.py") is False
 
 
 class TestIsSensitivePath:

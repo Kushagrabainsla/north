@@ -16,9 +16,3 @@ def set_runtime(deps: Any) -> None:
 def get_runtime() -> Any | None:
     """Return the live dependency container, or ``None`` before startup."""
     return _runtime
-
-
-def clear_runtime() -> None:
-    """Drop the live dependency reference during shutdown."""
-    global _runtime
-    _runtime = None

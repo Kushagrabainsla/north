@@ -23,7 +23,7 @@ from orchestrator.models import TaskRequest
 webhook_router = APIRouter(
     prefix="/orchestrator",
     tags=["webhooks"],
-    # No verify_request_secret dependency - we validate manually below to give
+    # No verify_api_access dependency - we validate manually below to give
     # a clear 401 rather than the generic 403 from the cookie-based mechanism.
     # The services are still bound: without it every submission was a 500, and
     # Telegram, which submits through here, silently stopped working.

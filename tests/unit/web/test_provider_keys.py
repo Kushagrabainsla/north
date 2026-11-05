@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI
 
-from config.runtime import clear_runtime, set_runtime
+from config.runtime import set_runtime
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher
 from orchestrator.api_context import ApiServices, attach, bind_services, services_of
@@ -98,7 +98,7 @@ async def test_saving_a_key_swaps_in_a_router_only_once_it_has_its_models(
         await asyncio.sleep(0.01)
         assert deps.inference_router is new and services_of(app).inference_router is new
     finally:
-        clear_runtime()
+        set_runtime(None)
 
 
 async def test_saving_a_key_says_what_trying_it_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

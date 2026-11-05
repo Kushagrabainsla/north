@@ -1,6 +1,6 @@
 """Tool layer for north. See README Section 7."""
 
-from tools.base import AuthenticatedTool, CacheableTool, Tool
+from tools.base import Tool
 from tools.confidence import (
     DEFAULT_CONFIDENCE,
     EMA_ALPHA,
@@ -11,7 +11,6 @@ from tools.confidence import (
     ConfidenceTracker,
 )
 from tools.exceptions import (
-    ToolAuthError,
     ToolError,
     ToolExecutionError,
     ToolNotFoundError,
@@ -20,9 +19,7 @@ from tools.models import ConfidenceScore, ToolInput, ToolOutput
 from tools.registry import ToolRegistry
 
 __all__ = [
-    "AuthenticatedTool",
     "EMA_ALPHA",
-    "CacheableTool",
     "ConfidenceScore",
     "ConfidenceTracker",
     "DEFAULT_CONFIDENCE",
@@ -31,7 +28,6 @@ __all__ = [
     "MIN_CONFIDENCE",
     "RELIABLE_TOOLS",
     "Tool",
-    "ToolAuthError",
     "ToolError",
     "ToolExecutionError",
     "ToolInput",

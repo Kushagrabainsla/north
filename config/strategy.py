@@ -35,24 +35,11 @@ class RoutingMode(StrEnum):
     MANUAL = "manual"
 
 
-# `power` is the user-facing name for the model-selection dial.
-PowerMode = StrategyMode
-
-
 _DESCRIPTIONS = {
     StrategyMode.ECO: "Cheapest model first. Saves cost; quality may vary on hard tasks.",
     StrategyMode.CRUISE: "Best fit per task. Balances cost and quality automatically.",
     StrategyMode.SPORT: "Most capable model first. Best quality; higher cost.",
 }
-
-_ROUTING_DESCRIPTIONS = {
-    RoutingMode.AUTO: "North picks the model for each part of a task.",
-    RoutingMode.MANUAL: "One model answers everything. Power has no effect.",
-}
-
-
-def describe_routing(mode: RoutingMode) -> str:
-    return _ROUTING_DESCRIPTIONS[mode]
 
 
 def describe(mode: StrategyMode) -> str:
@@ -189,10 +176,6 @@ class NorthSettings:
     def timezone(self) -> str:
         """The IANA zone North uses for local dates, times, and new schedules."""
         return self._timezone
-
-    def set_routing_parts(self, parts: dict[str, object]) -> None:
-        self._routing_parts = parts if isinstance(parts, dict) else {}
-        self._save()
 
     def set_routing(self, mode: RoutingMode | None = None, model: str | None = None) -> None:
         """Change who picks the model, the model itself, or both."""

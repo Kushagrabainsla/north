@@ -145,7 +145,7 @@ async def test_creates_and_reloads_skill_based_flow(tmp_path):
     )
 
     assert out.success, out.error
-    assert registry.get("job-application-review").step_names() == ["review", "final-check"]
+    assert [step.name for step in registry.get("job-application-review").steps] == ["review", "final-check"]
     assert registry.get("job-application-review").steps[0].skill == "review-item"
     assert out.data["steps"] == 2
     assert registry.get("job-application-review").status == "active", "tested and switched on in the same call"

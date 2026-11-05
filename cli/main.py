@@ -78,7 +78,7 @@ from cli.constants import (
 from cli.dictation import parse_hotkey as _parse_hotkey
 from cli.dictation import wav_bytes as _wav_bytes
 from cli.formatting import _reconstruct_task_output, wordmark
-from cli.provider_env import any_provider_configured, parse_provider_selection, provider_is_configured
+from cli.provider_env import any_provider_configured, parse_provider_selection
 from cli.provider_env import load_env_keys as _load_env_keys
 from cli.provider_env import save_provider_key as _save_provider_key
 from cli.provider_env import update_env_file as _update_env_file
@@ -99,14 +99,6 @@ _console = Console(force_terminal=sys.stdout.isatty())
 # server that died on boot printed a TypeError about the error reporter instead
 # of saying the server had died.
 _err_console = Console(stderr=True, force_terminal=sys.stderr.isatty())
-
-
-def _provider_is_configured(provider: _Provider, env_keys: dict[str, str]) -> bool:
-    from inference.registry import get_provider_definition
-
-    return provider_is_configured(
-        provider, env_keys, lambda provider_id: get_provider_definition(provider_id).is_configured()
-    )
 
 
 def _any_provider_configured(env_file: Path) -> bool:

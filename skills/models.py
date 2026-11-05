@@ -81,10 +81,6 @@ class Skill:
     # Advisory skills omit this. Flows may reference only executable skills.
     execution: SkillExecution | None = None
 
-    def metadata_line(self) -> str:
-        """One-line ``name: description`` used in the compact fallback listing."""
-        return f"- {self.name}: {self.description}"
-
     def available_to(self, domain: str) -> bool:
         """True when this skill may be injected into an agent of ``domain``."""
         return self.status == "active" and domain in self.domains

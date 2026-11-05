@@ -60,9 +60,6 @@ class Flow:
     def available_to(self, domain: str) -> bool:
         return self.status == "active" and domain in self.domains
 
-    def step_names(self) -> list[str]:
-        return [step.name for step in self.steps]
-
 
 def flow_fingerprint(
     flow: Flow,

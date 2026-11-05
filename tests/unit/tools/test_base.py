@@ -1,10 +1,10 @@
-"""Tests for the Tool ABC hierarchy (Tool, AuthenticatedTool, CacheableTool)."""
+"""Tests for the Tool ABC."""
 
 from __future__ import annotations
 
 import pytest
 
-from tools import AuthenticatedTool, CacheableTool, Tool, ToolInput, ToolOutput
+from tools import Tool, ToolInput, ToolOutput
 
 
 class _NoopTool(Tool):
@@ -22,30 +22,6 @@ def test_tool_cannot_be_instantiated_without_run() -> None:
 
     with pytest.raises(TypeError):
         _Incomplete()  # type: ignore[abstract]
-
-
-def test_authenticated_tool_requires_validate_credentials() -> None:
-    class _IncompleteAuth(AuthenticatedTool):
-        name = "broken_auth"
-        description = "missing validate_credentials"
-
-        async def run(self, input: ToolInput) -> ToolOutput:
-            return ToolOutput(success=True)
-
-    with pytest.raises(TypeError):
-        _IncompleteAuth()  # type: ignore[abstract]
-
-
-def test_cacheable_tool_requires_get_and_set_cached() -> None:
-    class _IncompleteCache(CacheableTool):
-        name = "broken_cache"
-        description = "missing cache methods"
-
-        async def run(self, input: ToolInput) -> ToolOutput:
-            return ToolOutput(success=True)
-
-    with pytest.raises(TypeError):
-        _IncompleteCache()  # type: ignore[abstract]
 
 
 async def test_concrete_tool_runs_and_returns_output() -> None:

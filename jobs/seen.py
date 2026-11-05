@@ -7,8 +7,8 @@ queue becomes annoying enough to turn off.
 Matching on the raw URL does not work. The same job posting arrives with
 different tracking parameters, behind a redirect, and cross-posted to several
 boards - three URLs, one thing you already said no to. So the key is normalized
-first, and a second natural key (company, role) catches the cross-posting the
-URL never will.
+first, and a second key that names the thing itself, such as company and role,
+catches the cross-posting the URL never will.
 
 Lives in jobs.db because a proposed item shares a lifecycle with the job that
 follows it, and ~/.north already holds fifteen SQLite files.
@@ -53,15 +53,6 @@ def normalize_key(raw: str) -> str:
         path = parts.path.rstrip("/")
         return urlunsplit(("", host, path, "&".join(sorted(kept)), ""))
     return _WHITESPACE.sub(" ", text)
-
-
-def natural_key(*parts: str) -> str:
-    """A key from what the thing *is* rather than where it was found.
-
-    (company, role) catches the same posting on three job boards, which no
-    amount of URL normalising can.
-    """
-    return "|".join(_WHITESPACE.sub(" ", p.strip().lower()) for p in parts if p and p.strip())
 
 
 class SeenStore:

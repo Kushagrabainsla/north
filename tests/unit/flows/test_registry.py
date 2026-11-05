@@ -38,7 +38,7 @@ steps:
     flow = registry.get("review")
     assert registry.names() == ["review"]
     assert flow.source is FlowSource.BUILTIN
-    assert flow.step_names() == ["inspect", "approve"]
+    assert [step.name for step in flow.steps] == ["inspect", "approve"]
     assert flow.steps[1].skill == "review-guidelines"
     assert flow.status == "active"
 

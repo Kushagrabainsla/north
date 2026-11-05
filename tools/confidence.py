@@ -280,27 +280,3 @@ class ConfidenceTracker:
                 "last_updated = excluded.last_updated",
                 [(*row, now) for row in items],
             )
-
-    async def inherit_from(self, new_agent: str, source_agent: str) -> None:
-        """Copy `source_agent`'s tool rows to `new_agent` as a starting prior.
-
-        Idempotent: existing rows on `new_agent` are preserved (`INSERT OR IGNORE`).
-        See README 7.5 ("similar_to" inheritance).
-        """
-        await asyncio.to_thread(self._inherit_from_sync, new_agent, source_agent)
-
-    def _inherit_from_sync(self, new_agent: str, source_agent: str) -> None:
-        now = datetime.now(UTC).isoformat()
-        with open_db_connection(self._db_path) as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO tool_confidence "
-                "(agent, tool, confidence, uses_total, uses_helpful, consecutive_failures, last_updated) "
-                "SELECT ?, tool, confidence, 0, 0, 0, ? "
-                "FROM tool_confidence WHERE agent = ?",
-                (new_agent, now, source_agent),
-            )
-
-    async def record_task_outcome(self, agent: str, tools_used: list[str], was_successful: bool) -> None:
-        """Closed-loop learning: update confidence for tools used in a task based on overall task outcome."""
-        for tool in set(tools_used):
-            await self.record_use(agent, tool, was_successful)

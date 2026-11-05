@@ -169,21 +169,6 @@ def verify_secret(secret_to_verify: str) -> bool:
     return secrets.compare_digest(secret_to_verify, refreshed_secret)
 
 
-async def verify_request_secret(
-    x_north_secret: str | None = Header(default=None),
-) -> None:
-    """FastAPI dependency: require the shared-secret header.
-
-    Used by the CLI and external clients; the header carries the master secret.
-
-    Raises:
-        HTTPException: 403 if the header is missing or does not match.
-    """
-    if x_north_secret and verify_secret(x_north_secret):
-        return
-    raise HTTPException(status_code=403, detail="Invalid secret.")
-
-
 async def verify_api_access(
     request: Request,
     x_north_secret: str | None = Header(default=None),

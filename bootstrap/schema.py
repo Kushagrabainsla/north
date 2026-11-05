@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -40,14 +39,6 @@ class FactTopic(StrEnum):
     OTHER = "other"
 
 
-class FactStatus(StrEnum):
-    """Status of a stored fact."""
-
-    ACTIVE = "active"
-    SUPERSEDED = "superseded"
-    UNCERTAIN = "uncertain"
-
-
 class FactItem(BaseModel):
     """A single extracted fact about the user."""
 
@@ -81,30 +72,6 @@ class FactItem(BaseModel):
         max_length=500,
         description="Short quote from the source supporting this fact.",
     )
-
-
-class ExtractedFacts(BaseModel):
-    """Structured output for bootstrap fact extraction."""
-
-    facts: list[FactItem] = Field(
-        default_factory=list,
-        max_length=10,
-        description="List of extracted facts (max 5 per file, but schema allows up to 10 for safety).",
-    )
-
-
-@dataclass
-class FactCandidate:
-    """A candidate fact before validation and persistence."""
-
-    content: str
-    subject: FactSubject
-    topic: FactTopic
-    confidence: float
-    source_path: str
-    source_hash: str
-    source_mtime: float
-    evidence: str | None = None
 
 
 class UserProfile(BaseModel):
@@ -205,8 +172,6 @@ def _object_nodes(node: object):
 
 
 # JSON Schema for OpenAI-compatible structured output (response_format)
-EXTRACTED_FACTS_JSON_SCHEMA = _as_strict(ExtractedFacts.model_json_schema(), "extracted_facts")
-USER_PROFILE_JSON_SCHEMA = _as_strict(UserProfile.model_json_schema(), "user_profile")
 UNIFIED_EXTRACTION_JSON_SCHEMA = _as_strict(
     UnifiedBootstrapExtraction.model_json_schema(), "unified_bootstrap_extraction"
 )

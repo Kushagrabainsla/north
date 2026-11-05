@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from agents.models import AgentResult
 from config.approval_mode import ApprovalMode
-from config.runtime import clear_runtime, set_runtime
+from config.runtime import set_runtime
 from config.strategy import NorthSettings
 from flows import FlowRunStore
 from orchestrator.agent_runs import AgentRunStore
@@ -36,7 +36,7 @@ async def test_a_mode_change_made_in_chat_is_the_mode_the_server_runs_in(tmp_pat
         tool = bind_approvals(NorthConfigTool(), ApprovalMode.ASK, store=approving_store())
         out = await tool.execute(ToolInput(params={"action": "autonomy", "value": "autonomous"}))
     finally:
-        clear_runtime()
+        set_runtime(None)
 
     assert out.success, out.error
     assert live.autonomy is ApprovalMode.AUTONOMOUS

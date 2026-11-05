@@ -118,9 +118,6 @@ class Settings(BaseSettings):
     # normal logs cannot - which prompt tokens a provider served from cache, for
     # one - and those were unreachable while this was hardcoded to INFO.
     log_level: str = Field(default="INFO")
-    confidence_increase_per_helpful_use: float = Field(default=0.05, ge=0.0, le=1.0)
-    confidence_decrease_per_unhelpful_use: float = Field(default=0.03, ge=0.0, le=1.0)
-    confidence_auto_approve_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
     inference_pool_refresh_interval_hours: int = Field(default=6, ge=1)
     inference_pool_refresh_interval_seconds: int = Field(default=180, ge=10)
     # Tool-call rounds one agent may take before it is cut off. This is a runaway
@@ -267,10 +264,6 @@ class Settings(BaseSettings):
         value = read_secret_file(secret_file)
         self._secret_cache = value
         return value
-
-    @property
-    def is_development(self) -> bool:
-        return self.north_env == "development"
 
     @property
     def is_test(self) -> bool:

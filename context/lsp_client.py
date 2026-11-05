@@ -17,15 +17,12 @@ so callers can fall back to the regex tools. Verified against pyright-langserver
 
 from __future__ import annotations
 
-import ast
 import contextlib
 import json
 import logging
-import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -58,17 +55,6 @@ class LspUnavailable(Exception):
 
 class LspError(Exception):
     """The language server returned an error or malformed response."""
-
-
-class RenameScopeRefused(LspError):
-    """A rename was refused because a changed file lies outside the task's edit scope.
-
-    Raised *before any bytes are written*: the full set of files the WorkspaceEdit
-    would touch is authorized up front, and a single refusal aborts the whole
-    rename atomically. Subclasses :class:`LspError` so existing callers that only
-    catch ``LspError`` still fail closed, while a caller that wants to surface the
-    scope refusal distinctly (e.g. as a ``refused`` tool failure) can catch this.
-    """
 
 
 def server_command_for(suffix: str) -> list[str] | None:
@@ -168,31 +154,6 @@ class _Connection:
                 self._proc.kill()
 
 
-def _name_position(text: str, symbol: str) -> tuple[int, int] | None:
-    """0-based (line, character) of *symbol*'s definition name, via Python AST."""
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return None
-    lines = text.splitlines()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef | ast.ClassDef) and node.name == symbol:
-            line_idx = node.lineno - 1
-            if 0 <= line_idx < len(lines):
-                line_text = lines[line_idx]
-                match = re.search(r"\b" + re.escape(symbol) + r"\b", line_text[node.col_offset :])
-                if match:
-                    return line_idx, node.col_offset + match.start()
-            if isinstance(node, ast.ClassDef):
-                kw = "class "
-            elif isinstance(node, ast.AsyncFunctionDef):
-                kw = "async def "
-            else:
-                kw = "def "
-            return node.lineno - 1, node.col_offset + len(kw)
-    return None
-
-
 def _open(conn: _Connection, root: Path, target: Path, text: str) -> None:
     conn.request(
         "initialize",
@@ -289,85 +250,3 @@ def goto_definition(root: Path, target: Path, line: int, char: int) -> list[tupl
         start = rng.get("start", {"line": 0, "character": 0})
         out.append((rel, start["line"] + 1, start["character"] + 1))
     return out
-
-
-def _apply_workspace_edit(
-    root: Path,
-    edit: dict[str, Any],
-    authorize: Callable[[Path], str | None] | None = None,
-) -> tuple[int, int, list[str]]:
-    """Apply an LSP WorkspaceEdit (documentChanges or changes) to disk, within *root*.
-
-    When *authorize* is supplied, the complete set of in-workspace files this edit
-    would write is authorized *before the first write*; any refusal raises
-    :class:`RenameScopeRefused` and leaves every file untouched. This makes a
-    multi-file rename all-or-nothing with respect to the task's edit scope - a
-    partial write that mutated only the authorized files would corrupt the rename.
-    ``None`` preserves the prior behavior of writing every in-workspace edit.
-    """
-    per_file: dict[Path, list[dict[str, Any]]] = {}
-    if edit.get("documentChanges"):
-        for dc in edit["documentChanges"]:
-            if "textDocument" not in dc or "edits" not in dc:
-                continue  # skip create/rename/delete file operations
-            per_file.setdefault(_path_from_uri(dc["textDocument"]["uri"]), []).extend(dc["edits"])
-    elif edit.get("changes"):
-        for uri, edits in edit["changes"].items():
-            per_file.setdefault(_path_from_uri(uri), []).extend(edits)
-
-    root_resolved = root.resolve()
-    # Only files that are in-workspace and exist are ever written below; authorize
-    # exactly that set up front so the verdict matches what would be mutated.
-    writable: list[tuple[Path, Path, list[dict[str, Any]]]] = []
-    for path, edits in per_file.items():
-        resolved = path.resolve()
-        try:
-            rel = resolved.relative_to(root_resolved)  # never edit outside the workspace
-        except ValueError:
-            continue
-        if not resolved.exists():
-            continue
-        writable.append((resolved, rel, edits))
-
-    if authorize is not None:
-        for resolved, rel, _edits in writable:
-            refusal = authorize(resolved)
-            if refusal is not None:
-                # Abort atomically: not a single byte has been written yet, so the
-                # rename either applies in full within scope or not at all.
-                raise RenameScopeRefused(f"rename blocked: editing {rel} is not permitted - {refusal}")
-
-    changed: list[str] = []
-    total_edits = 0
-    for resolved, rel, edits in writable:
-        new_text = _apply_edits(resolved.read_text(encoding="utf-8", errors="replace"), edits)
-        resolved.write_text(new_text, encoding="utf-8")
-        changed.append(str(rel))
-        total_edits += len(edits)
-    return len(changed), total_edits, sorted(changed)
-
-
-def _apply_edits(text: str, edits: list[dict[str, Any]]) -> str:
-    """Apply LSP TextEdits to *text*. Edits are applied last-to-first so offsets stay valid."""
-    lines = text.splitlines(keepends=True)
-    line_starts = [0]
-    for ln in lines:
-        line_starts.append(line_starts[-1] + len(ln))
-
-    def offset(pos: dict[str, int]) -> int:
-        line = min(pos["line"], len(line_starts) - 1)
-        return line_starts[line] + pos["character"]
-
-    resolved = sorted(
-        ((offset(e["range"]["start"]), offset(e["range"]["end"]), e["newText"]) for e in edits),
-        key=lambda x: x[0],
-        reverse=True,
-    )
-    for start, end, new in resolved:
-        text = text[:start] + new + text[end:]
-    return text
-
-
-def python_symbol_position(text: str, symbol: str) -> tuple[int, int] | None:
-    """Public helper: 0-based (line, char) of a Python symbol's definition name."""
-    return _name_position(text, symbol)

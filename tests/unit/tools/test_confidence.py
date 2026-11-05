@@ -109,31 +109,6 @@ async def test_scores_for_agent_returns_empty_when_unseen(
     assert await tracker.scores_for_agent("never_seen_agent") == []
 
 
-async def test_inherit_from_copies_source_scores_to_new_agent(
-    tracker: ConfidenceTracker,
-) -> None:
-    await tracker.record_use("health", "web_search", was_helpful=True)
-    await tracker.record_use("health", "nutrition_api", was_helpful=True)
-
-    await tracker.inherit_from("wellness", "health")
-
-    inherited = dict(await tracker.scores_for_agent("wellness"))
-    source = dict(await tracker.scores_for_agent("health"))
-    assert inherited == source
-
-
-async def test_inherit_from_is_idempotent_and_preserves_existing_rows(
-    tracker: ConfidenceTracker,
-) -> None:
-    await tracker.record_use("health", "web_search", was_helpful=True)
-    expected_wellness = _ema(DEFAULT_CONFIDENCE, 0.0)
-    await tracker.record_use("wellness", "web_search", was_helpful=False)
-
-    await tracker.inherit_from("wellness", "health")
-
-    assert await tracker.get_score("wellness", "web_search") == pytest.approx(expected_wellness)
-
-
 async def test_persistence_across_tracker_instances(tmp_path: Path) -> None:
     """Scores must persist across processes - write with one instance, read with another."""
     db = tmp_path / "tools.db"

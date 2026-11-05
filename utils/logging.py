@@ -42,11 +42,6 @@ def bind_task_id(task_id: str) -> None:
     _task_id_var.set(task_id)
 
 
-def current_task_id() -> str:
-    """Return the task_id bound to the current async context, or empty string."""
-    return _task_id_var.get()
-
-
 # ---------------------------------------------------------------------------
 # JSON formatter
 # ---------------------------------------------------------------------------

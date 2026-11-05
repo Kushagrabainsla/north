@@ -145,7 +145,7 @@ outcome = 1.0 if was_helpful else 0.0
 new_confidence = clamp(alpha * outcome + (1 - alpha) * current_confidence, 0.0, 1.0)
 ```
 
-**Persistence:** scores live in `~/.north/tools.db`. The read-modify-write runs in one atomic transaction (`BEGIN IMMEDIATE`) so two concurrent updates for the same (agent, tool) cannot clobber each other. On startup, reliable filesystem/shell tools are seeded at 0.80 via `seed_defaults()`. New agent pairs start at 0.50. A new agent can declare `similar_to: health` in `config.yaml` to inherit the health agent's confidence rows as its prior.
+**Persistence:** scores live in `~/.north/tools.db`. The read-modify-write runs in one atomic transaction (`BEGIN IMMEDIATE`) so two concurrent updates for the same (agent, tool) cannot clobber each other. On startup, reliable filesystem/shell tools are seeded at 0.80 via `seed_defaults()`. New agent pairs start at 0.50.
 
 **Effect on the agent loop:** when a tool index is available, the agent injects the top-k tools that are semantically relevant to the task, then sorts them by confidence descending. It falls back to the full tool list when the index is unavailable.
 

@@ -5,7 +5,6 @@ application.agents -> application.approval
 application.agents -> integrations.tools
 application.approval -> integrations.gateways
 application.approval -> integrations.tools
-application.jobs -> application.approval
 application.orchestration -> application.agents
 application.orchestration -> application.approval
 application.orchestration -> application.jobs

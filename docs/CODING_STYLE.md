@@ -516,7 +516,6 @@ memory/
 context/
   __init__.py
   repo_instructions.py <- loads AGENTS.md / CLAUDE.md / .cursorrules for a workspace
-  task_snapshot.py   <- per-task context snapshot
 
 inference/
   __init__.py
@@ -995,13 +994,16 @@ async def submit_task(request: TaskRequest):
 ### 12.3 Auth Dependency on Every Route
 
 ```python
-# utils/security.py: defined once
-async def verify_request_secret(x_north_secret: str = Header(...)) -> None:
-    if not verify_secret(x_north_secret):
-        raise HTTPException(status_code=403, detail="Invalid secret.")
+# config/security.py: defined once - the CLI's master-secret header or a local web session
+async def verify_api_access(request: Request, x_north_secret: str | None = Header(default=None), ...) -> None:
+    if x_north_secret and verify_secret(x_north_secret):
+        return
+    if validate_web_session(request, x_north_csrf):
+        return
+    raise HTTPException(status_code=403, detail="Invalid credentials.")
 
 # applied to every route via a router-level dependency
-api_router = APIRouter(dependencies=[Depends(verify_request_secret)])
+api_router = APIRouter(dependencies=[Depends(verify_api_access)])
 
 @api_router.post("/orchestrator/task", response_model=TaskResponse)
 async def submit_task(request: TaskRequest) -> TaskResponse:

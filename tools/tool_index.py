@@ -105,10 +105,6 @@ class ToolIndex:
         self._cache = None
         return len(rows)
 
-    async def remove_tool(self, name: str) -> None:
-        await asyncio.to_thread(self._delete_sync, name)
-        self._cache = None
-
     async def search_tools(self, query: str, top_k: int = SEMANTIC_TOP_K) -> list[str]:
         """Return up to top_k names from fused dense and BM25 rankings.
 

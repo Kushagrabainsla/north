@@ -8,7 +8,6 @@ values and return strings or Rich renderables. Kept out of `cli/main.py` and
 from __future__ import annotations
 
 import base64
-import re
 import subprocess
 import sys
 
@@ -85,33 +84,6 @@ def _strip_markup(s: str) -> str:
     """Remove Textual console-markup tags so a segment's display width can be
     measured. Only well-formed [tag] / [/tag] spans are removed."""
     return _MARKUP_RE.sub("", s)
-
-
-def _to_prose(md: str) -> str:
-    """Flatten markdown to clean terminal prose: drop ``` fences, heading hashes,
-    and bold/italic/inline-code markers, while preserving code-block *content*
-    and list structure verbatim.
-
-    NOTE: not for the chat view - assistant messages render through a real
-    markdown engine (RichMarkdown / the streaming Markdown widget) so tables and
-    lists survive. This flattener has no table support and is kept only for
-    plain-text sinks (exports, logs) where there is no renderer to defer to."""
-    out: list[str] = []
-    in_code = False
-    for line in md.split("\n"):
-        if line.lstrip().startswith("```"):
-            in_code = not in_code  # drop the fence marker line itself
-            continue
-        if in_code:
-            out.append(line)  # preserve code lines exactly
-            continue
-        line = re.sub(r"^\s*#{1,6}\s*", "", line)  # heading hashes
-        line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)  # **bold**
-        line = re.sub(r"__(.+?)__", r"\1", line)  # __bold__
-        line = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\1", line)  # *italic*
-        line = re.sub(r"`([^`]+)`", r"\1", line)  # `inline code`
-        out.append(line)
-    return "\n".join(out)
 
 
 def _fmt_tokens(n: int) -> str:

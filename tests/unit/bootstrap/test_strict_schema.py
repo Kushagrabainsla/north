@@ -12,17 +12,11 @@ from __future__ import annotations
 import pytest
 
 from bootstrap.schema import (
-    EXTRACTED_FACTS_JSON_SCHEMA,
     UNIFIED_EXTRACTION_JSON_SCHEMA,
-    USER_PROFILE_JSON_SCHEMA,
     _as_strict,
 )
 
-ALL_SCHEMAS = (
-    EXTRACTED_FACTS_JSON_SCHEMA,
-    USER_PROFILE_JSON_SCHEMA,
-    UNIFIED_EXTRACTION_JSON_SCHEMA,
-)
+ALL_SCHEMAS = (UNIFIED_EXTRACTION_JSON_SCHEMA,)
 
 
 def _object_nodes(node):

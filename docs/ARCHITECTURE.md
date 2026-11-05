@@ -916,7 +916,7 @@ CREATE TABLE tool_confidence (
 
 On Orchestrator startup, all confidence scores are loaded from `tools.db` into memory. Every tool use updates the in-memory score and writes the update to `tools.db` in a single atomic transaction (`BEGIN IMMEDIATE`) so two concurrent updates for the same (agent, tool) cannot clobber each other. Every confidence update is also logged to the Ledger with `source: system`.
 
-**New agent inheritance:** when a new agent declares `similar_to: health` in `config.yaml`, the Orchestrator copies confidence rows from the `health` agent in `tools.db` as the new agent's starting prior. Unseen tools use the global default confidence.
+**New agents:** a new agent starts every tool at the global default confidence.
 
 ### 7.6 The AgenticLLMAgent ReAct Loop (Function Calling)
 

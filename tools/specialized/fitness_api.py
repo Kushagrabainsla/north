@@ -378,11 +378,3 @@ class FitnessApiTool(Tool):
                 return {"error": "hip_cm required for female body fat calculation"}
             bf = 495 / (1.29579 - 0.35004 * math.log10(waist + hip - neck) + 0.22100 * math.log10(height)) - 450
         return {"body_fat_percent": round(bf, 1), "method": "US Navy", "sex": sex}
-
-
-def _strip_html(text: str) -> str:
-    """Crude HTML tag stripper for wger descriptions."""
-    import re
-
-    clean = re.sub(r"<[^>]+>", "", text)
-    return clean.strip()[:500]

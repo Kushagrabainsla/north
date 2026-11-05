@@ -164,10 +164,6 @@ _NOISE_KEYWORDS = frozenset(
     }
 )
 
-# Backward compatibility alias
-_BOOST_FILENAMES = _TIER1_KEYWORDS | _TIER2_KEYWORDS
-_DEPRIORITIZE_FILENAMES = _NOISE_KEYWORDS
-
 _SKIP_DIRS = frozenset(
     {
         ".git",
@@ -272,14 +268,6 @@ def _account_full_name() -> str:
 def _tokenize_stem(stem: str) -> set[str]:
     """Tokenize a filename stem into normalized words on punctuation and digit boundaries."""
     return {t for t in re.split(r"[-_\s.0-9]+", stem.lower()) if t}
-
-
-def _normalize_stem_cluster(stem: str) -> str:
-    """Normalize a filename stem to a cluster key by stripping versions and dates."""
-    s = stem.lower()
-    s = re.sub(r"[-_](?:v\d+|\d{4}|final|latest|copy|draft)\b", "", s)
-    s = re.sub(r"[-_\s\d]+$", "", s)
-    return s.strip("-_ ") or stem.lower()
 
 
 def _is_projects_dir(path: Path, home: Path) -> bool:
@@ -720,18 +708,6 @@ async def _extract_unified(
         profile_md = ""
 
     return candidates, profile_md
-
-
-async def _extract_facts(path: Path, router: InferenceRouter) -> list[dict]:
-    """Read path, prompt LLM for facts, return list of FactCandidates."""
-    cands, _ = await _extract_unified(path, router)
-    return cands
-
-
-async def _extract_profile(path: Path, router: InferenceRouter) -> tuple[list[dict], str]:
-    """Extract a structured user profile from path."""
-    cands, md = await _extract_unified(path, router)
-    return cands, md
 
 
 def _synthesize_profile(profile_sections: list[str]) -> str:

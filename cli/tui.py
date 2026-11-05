@@ -1370,10 +1370,6 @@ class NorthApp(App[None]):
         """The card your next typed text answers: the newest still waiting."""
         return next(reversed(self._pending_cards.values()), None)
 
-    @property
-    def _pending_card_id(self) -> str | None:
-        return next(reversed(self._pending_cards), None)
-
     def _forget_cards_of(self, task_id: str) -> None:
         """A task that ended asks nothing more: its cards were released with it."""
         for card_id in [card_id for card_id, card in self._pending_cards.items() if card.get("task_id") == task_id]:

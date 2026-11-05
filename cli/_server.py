@@ -239,17 +239,3 @@ def _start_server_process(
         proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
     (settings.north_home / "north.pid").write_text(str(proc.pid), encoding="utf-8")
     return proc
-
-
-def _git_describe(root: Path) -> str | None:
-    try:
-        r = subprocess.run(
-            ["git", "log", "-1", "--pretty=format:%h %s"],
-            capture_output=True,
-            text=True,
-            cwd=root,
-            timeout=5,
-        )
-        return r.stdout.strip() if r.returncode == 0 else None
-    except Exception:
-        return None

@@ -764,13 +764,6 @@ class FactStore:
             )
         return out
 
-    async def supersede_fact(self, fact_id: str, replaced_by: str | None = None) -> bool:
-        """Retire one fact by id. The row is kept; it just stops being recalled."""
-        changed = await asyncio.to_thread(self._mark_superseded_sync, [fact_id], replaced_by)
-        if changed:
-            self.invalidate_cache()
-        return changed > 0
-
     async def backfill_embeddings(self, batch_size: int = 128) -> int:
         """Embed every fact that has no vector. Returns how many were embedded.
 

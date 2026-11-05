@@ -12,7 +12,7 @@ import bootstrap.onboarding as onboarding
 from bootstrap.onboarding import (
     _clean_fact,
     _discover_files,
-    _extract_facts,
+    _extract_unified,
     _load_progress,
     _read_text,
     _save_progress,
@@ -201,7 +201,7 @@ def test_clean_fact_drops_non_user_facts() -> None:
     assert _clean_fact("Participant check-in: 4-screen conversational flow") is None
 
 
-# --- _extract_facts --------------------------------------------------------
+# --- _extract_unified --------------------------------------------------------
 
 
 async def test_extract_facts_cleans_dict_payload(tmp_path: Path) -> None:
@@ -216,7 +216,7 @@ async def test_extract_facts_cleans_dict_payload(tmp_path: Path) -> None:
             ]
         }
     )
-    result = await _extract_facts(path, router)
+    result = (await _extract_unified(path, router))[0]
     assert len(result) == 3
     assert result[0]["content"] == "User A"
     assert result[1]["content"] == "User B"
@@ -243,7 +243,7 @@ async def test_extract_facts_strips_markdown_fences(tmp_path: Path) -> None:
             ]
         }
     )
-    result = await _extract_facts(path, router)
+    result = (await _extract_unified(path, router))[0]
     assert len(result) == 2
     assert result[0]["content"] == "User fact one"
     assert result[1]["content"] == "User fact two"
@@ -257,14 +257,14 @@ async def test_extract_facts_non_json_returns_empty(tmp_path: Path) -> None:
         def _render(self) -> str:
             return "not json at all"
 
-    assert await _extract_facts(path, _GarbageRouter({"facts": []})) == []
+    assert (await _extract_unified(path, _GarbageRouter({"facts": []})))[0] == []
 
 
 async def test_extract_facts_empty_file_returns_empty(tmp_path: Path) -> None:
     path = tmp_path / "empty.txt"
     path.write_text("   ", encoding="utf-8")
     router = _FakeRouter(["should never be called"])
-    assert await _extract_facts(path, router) == []
+    assert (await _extract_unified(path, router))[0] == []
 
 
 # --- _read_text ------------------------------------------------------------
@@ -567,8 +567,7 @@ def test_denylist_skips_lab_and_key_files() -> None:
 
 
 async def test_extract_profile_parses_sections(tmp_path: Path) -> None:
-    """_extract_profile returns domain-grouped facts + a markdown summary."""
-    from bootstrap.onboarding import _extract_profile
+    """Extraction returns domain-grouped facts + a markdown summary."""
 
     payload = {
         "education": ["The user is a student at San Jose State University"],
@@ -583,7 +582,7 @@ async def test_extract_profile_parses_sections(tmp_path: Path) -> None:
     router = _FakeRouter(payload=payload)
     src = tmp_path / "resume.md"
     src.write_text("Kushagra Bainsla")
-    facts, md = await _extract_profile(src, router)
+    facts, md = await _extract_unified(src, router)
     contents = {f["content"] for f in facts}
     assert "The user is a student at San Jose State University" in contents
     assert "The user maintains the north agent framework" in contents

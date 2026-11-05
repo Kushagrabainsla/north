@@ -34,11 +34,6 @@ _REPO_MAP_CACHE: dict[tuple[str, int, int], tuple[float, str]] = {}
 _REPO_MAP_CACHE_TTL: float = 60.0  # seconds
 
 
-def clear_repo_map_cache() -> None:
-    """Clear in-memory repo map cache."""
-    _REPO_MAP_CACHE.clear()
-
-
 def build_repo_map(workspace: str, *, max_files: int = 40, max_chars: int = 4000) -> str:
     """Return a compact map of *workspace* (files + key symbols), within budgets."""
     if not workspace:

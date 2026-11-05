@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from jobs.seen import SeenStore, natural_key, normalize_key
+from jobs.seen import SeenStore, normalize_key
 
 
 @pytest.fixture
@@ -52,21 +52,6 @@ def test_a_meaningful_query_parameter_is_kept(store) -> None:
     """Stripping everything would collapse two genuinely different pages."""
     store.remember("job_applications", "https://acme.com/jobs?id=1")
     assert not store.seen("job_applications", "https://acme.com/jobs?id=2")
-
-
-def test_the_same_role_cross_posted_elsewhere_is_recognised(store) -> None:
-    """No amount of URL normalising catches this; the natural key does."""
-    store.remember(
-        "job_applications",
-        "https://linkedin.com/jobs/999",
-        natural_key("Acme", "Staff Engineer"),
-    )
-
-    assert store.seen(
-        "job_applications",
-        "https://greenhouse.io/acme/staff-eng",
-        natural_key("acme", "staff engineer"),
-    )
 
 
 def test_a_wrong_dedupe_can_be_undone(store) -> None:

@@ -215,23 +215,3 @@ def _refused(decision: Decision, request: Request) -> ToolOutput:
         blocked = f"Blocked: {decision.reason}. This was refused outright and never shown to the user."
         return ToolOutput(success=False, failure_kind="refused", error=f"{blocked} {request.refused_hint}".strip())
     return ToolOutput(success=False, failure_kind="refused", error=request.declined)
-
-
-class AuthenticatedTool(Tool, ABC):
-    """A tool that requires verifying credentials before use."""
-
-    @abstractmethod
-    async def validate_credentials(self) -> bool:
-        """Return True if stored credentials are valid for this tool."""
-
-
-class CacheableTool(Tool, ABC):
-    """A tool whose results can be cached by key."""
-
-    @abstractmethod
-    async def get_cached(self, key: str) -> ToolOutput | None:
-        """Return a previously cached result for `key`, or None on miss."""
-
-    @abstractmethod
-    async def set_cached(self, key: str, result: ToolOutput) -> None:
-        """Store `result` under `key`."""

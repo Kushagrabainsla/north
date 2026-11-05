@@ -22,7 +22,3 @@ class ToolNotFoundError(ToolError, ToolNotFoundContract):
 
 class ToolExecutionError(ToolError):
     """Raised when a tool's `run()` raises or returns failure."""
-
-
-class ToolAuthError(ToolError):
-    """Raised when an `AuthenticatedTool`'s credentials are invalid."""

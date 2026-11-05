@@ -223,7 +223,7 @@ async def test_approval_diff_syntax_highlighted():
         )
         await pilot.pause()
         assert app._approval_pending is not None
-        assert app._pending_card_id == "c1"
+        assert next(reversed(app._pending_cards)) == "c1"
 
 
 async def test_slash_jobs_and_context_and_help():
