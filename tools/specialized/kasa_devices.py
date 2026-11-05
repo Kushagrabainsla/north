@@ -77,7 +77,7 @@ class KasaDevices:
         self._locked: list[str] = []  # devices found that refused every TP-Link login north has
         self._finding = asyncio.Lock()
         # The newest change waiting for each device that is being streamed to, and its sender.
-        self._latest: dict[str, LightChange] = {}
+        self._latest: dict[str, tuple[LightChange, bool]] = {}  # and whether it is a beat
         self._senders: dict[str, asyncio.Task[None]] = {}
         self.live = LiveLights(self)
 
@@ -129,13 +129,17 @@ class KasaDevices:
             raise RuntimeError(f"{state['name']} did not confirm the change")
         return state
 
-    def stream(self, device_id: str, change: LightChange) -> None:
+    def stream(self, device_id: str, change: LightChange, *, beat: bool = False) -> None:
         """Send *change* as soon as the device can take it, replacing any change it has not reached yet.
 
         For a light following music: a bulb that takes 200 ms per request gets the newest frame
-        each time, so it never falls further and further behind what is playing.
+        each time, so it never falls further and further behind what is playing. A *beat* is the
+        exception: the frames after it (the flash fading) do not replace it while it waits, or a
+        slow bulb would show the fading and never the flash.
         """
-        self._latest[device_id] = change
+        waiting = self._latest.get(device_id)
+        if beat or waiting is None or not waiting[1]:
+            self._latest[device_id] = (change, beat)
         if device_id not in self._senders:
             self._senders[device_id] = spawn(self._send_newest(device_id), name=f"kasa-stream:{device_id}")
 
@@ -146,12 +150,14 @@ class KasaDevices:
     async def _send_newest(self, device_id: str) -> None:
         previous: float | None = None
         try:
-            while (change := self._latest.pop(device_id, None)) is not None:
+            while (waiting := self._latest.pop(device_id, None)) is not None:
+                change, beat = waiting
                 # Fade for as long as this bulb takes between changes, so it is still moving when the next
                 # one comes. With a 120 ms fade, a bulb that took longer between changes jumped, held, and
-                # jumped again: the user's KL125 and KL135 bulbs flickered.
+                # jumped again: the user's KL125 and KL135 bulbs flickered. A beat keeps the quick rise
+                # it asked for: stretched to the bulb's pace, the flash would blur into the fading.
                 started = time.monotonic()
-                if previous is not None:
+                if previous is not None and not beat:
                     taken = int((started - previous) * 1000)
                     change = replace(change, transition_ms=min(max(change.transition_ms or 0, taken), _LONGEST_FADE_MS))
                 previous = started
@@ -242,14 +248,17 @@ class LiveLights:
         logger.info("Lights: music sync started on %s", list(self._before))
         return self.following
 
-    def frame(self, changes: dict[str, LightChange]) -> None:
-        """Send each following light its newest change; any other light is left alone."""
+    def frame(self, changes: dict[str, LightChange], *, beat: bool = False) -> None:
+        """Send each following light its newest change; any other light is left alone.
+
+        *beat* marks the frames of a beat, which the frames after them do not overtake.
+        """
         if not self._before:
             raise LookupError("No lights are following anything: start first.")
         self._last_frame = time.monotonic()
         for device_id, change in changes.items():
             if device_id in self._before:
-                self._devices.stream(device_id, change)
+                self._devices.stream(device_id, change, beat=beat)
 
     async def stop(self) -> None:
         """Stop following, and put every light back as it was."""

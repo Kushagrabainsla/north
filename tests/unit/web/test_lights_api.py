@@ -127,8 +127,8 @@ async def test_music_sync_follows_the_frames_then_puts_the_lights_back(home) -> 
                 lights.LiveFrames(frames=[lights.LiveFrame(id=desk_id, hue=1, saturation=1, brightness=1)])
             )
         following = await lights.start_music_sync(lights.LiveStart(ids=[desk_id]))
-        await lights.music_frames(
-            lights.LiveFrames(frames=[lights.LiveFrame(id=desk_id, hue=200, saturation=90, brightness=80)])
+        await lights.music_frames(  # a beat's frame, which the ones after it do not overtake
+            lights.LiveFrames(frames=[lights.LiveFrame(id=desk_id, hue=200, saturation=90, brightness=80)], beat=True)
         )
         await asyncio.sleep(0.05)
         during = desk.light.hsv.hue

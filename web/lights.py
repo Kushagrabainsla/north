@@ -79,6 +79,8 @@ class LiveFrames(BaseModel):
     frames: list[LiveFrame] = Field(min_length=1, max_length=64)
     # A fade as long as the time between frames, so a bulb glides from one to the next.
     transition_ms: int = Field(120, ge=0, le=2000)
+    # The frames of a beat: the ones after them do not overtake them on a slow bulb.
+    beat: bool = False
 
 
 class KasaAccountUpdate(BaseModel):
@@ -156,7 +158,7 @@ async def music_frames(body: LiveFrames) -> dict[str, int]:
         for f in body.frames
     }
     try:
-        _devices().live.frame(frames)
+        _devices().live.frame(frames, beat=body.beat)
     except LookupError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return {"frames": len(frames)}

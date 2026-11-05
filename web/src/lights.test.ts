@@ -52,3 +52,21 @@ describe("a slider dragged across its range", () => {
     expect(settled).toEqual([10, 40]);
   });
 });
+
+describe("music sync's frames", () => {
+  it("keep a waiting beat: the frames fading after it do not overtake it", async () => {
+    const sent: string[] = [];
+    let release = () => {};
+    const send = (value: string) => {
+      sent.push(value);
+      return new Promise<void>((resolve) => { release = resolve; });
+    };
+    const push = latestWins(send, () => {}, () => {}, (value) => value.startsWith("beat"));
+
+    for (const value of ["fade 1", "beat", "fade 2", "fade 3"]) push(value);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sent).toEqual(["fade 1", "beat"]);
+  });
+});

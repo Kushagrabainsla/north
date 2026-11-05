@@ -60,9 +60,13 @@ export function swatch(light: Light): string {
 /**
  * A sender with one request in flight: while one is on its way, a newer value replaces any
  * waiting one, and is sent when it returns. A slider dragged across its range sends its last
- * position, not a queue of every position it passed through.
+ * position, not a queue of every position it passed through. A waiting value that *keeps* says
+ * must arrive (a beat) is replaced only by another such value, never by the ordinary ones after it.
  */
-export function latestWins<T, R>(send: (value: T) => Promise<R>, settled: (result: R) => void, failed: (error: unknown) => void) {
+export function latestWins<T, R>(
+  send: (value: T) => Promise<R>, settled: (result: R) => void, failed: (error: unknown) => void,
+  keeps: (value: T) => boolean = () => false,
+) {
   let busy = false;
   let waiting: { value: T } | null = null;
   const run = async (value: T) => {
@@ -79,7 +83,7 @@ export function latestWins<T, R>(send: (value: T) => Promise<R>, settled: (resul
     }
   };
   return (value: T) => {
-    if (busy) waiting = { value };
-    else void run(value);
+    if (!busy) void run(value);
+    else if (!waiting || !keeps(waiting.value) || keeps(value)) waiting = { value };
   };
 }

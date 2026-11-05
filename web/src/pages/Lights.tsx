@@ -4,7 +4,9 @@ import { api, post } from "../api";
 import { Empty, ErrorNotice, Loading, PageHeader } from "../components";
 import { useResource } from "../hooks";
 import { inScope, kelvinToRgb, latestWins, swatch, type Light, type LightChange, type LightsOverview, type Scope } from "../lights";
-import { listening, nextFrame, spread, type Frame, type Mode } from "../music";
+import { sliceMs, type Levels } from "../listen";
+import listenWorklet from "../listen.worklet.ts?worker&url";
+import { hear, listening, spread, type Frame, type Mode } from "../music";
 
 type Applied = { lights: Light[]; errors: { id: string; error: string }[] };
 
@@ -153,18 +155,31 @@ function LightCard({ light, onChanged, onError, onMine }: {
   </article>;
 }
 
-const FRAME_MS = 125;
+// The lights get a frame at most this often, and at once on a beat; a beat rises over BEAT_FADE_MS.
+const SEND_EVERY_MS = 100;
+const BEAT_FADE_MS = 60;
+
+const MODES: { mode: Mode; name: string; does: string }[] = [
+  { mode: "beat", name: "Beat", does: "The lights flash and change colour with every beat." },
+  { mode: "mood", name: "Mood", does: "Colours drift with the feel of the song: warm for deep, bass-heavy songs, cool for bright ones." },
+];
+
+const strengthWord = (strength: number) => (strength < 0.35 ? "Gentle" : strength > 0.7 ? "Strong" : "Medium");
+
+type LiveSend = { frames: (Frame & { id: string })[]; beat: boolean };
 
 // Listens through this device's microphone and sends the lights a colour for each moment of the
-// music. The sound stays in the browser: only colours go to north, which sends them on.
+// music. The sound stays in the browser: only colours go to north, which sends them on. The
+// listening runs on the audio thread, which keeps time by the sound itself.
 function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope; onStopped: () => void }) {
-  const [mode, setMode] = useState<Mode>("pulse");
-  const [sensitivity, setSensitivity] = useState(2.5);
+  const [mode, setMode] = useState<Mode>("beat");
+  const [strength, setStrength] = useState(0.6);
   const [running, setRunning] = useState(false);
   const [level, setLevel] = useState(0);
+  const [beats, setBeats] = useState(0);
   const [note, setNote] = useState("");
-  const settings = useRef({ mode, sensitivity });
-  settings.current = { mode, sensitivity };
+  const settings = useRef({ mode, strength });
+  settings.current = { mode, strength };
   const session = useRef<{ stop: () => Promise<void> } | null>(null);
   const colourful = lights.filter((light) => light.can.color && !light.unreachable);
 
@@ -200,17 +215,16 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
       return;
     }
     const context = new AudioContext();
-    const analyser = context.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.5;
-    context.createMediaStreamSource(stream).connect(analyser);
     const release = async () => {
-      window.clearInterval(timer);
       stream.getTracks().forEach((track) => track.stop());
       await context.close().catch(() => undefined);
     };
+    let listener: AudioWorkletNode;
     let following: string[] = [];
     try {
+      await context.audioWorklet.addModule(listenWorklet);
+      listener = new AudioWorkletNode(context, "north-listen", { numberOfInputs: 1, numberOfOutputs: 0 });
+      context.createMediaStreamSource(stream).connect(listener);
       following = (await post<{ following: string[] }>("/web/api/lights/live/start", { ids: colourful.map((light) => light.id) })).following;
     } catch (error) {
       await release();
@@ -218,37 +232,51 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
       return;
     }
     const send = latestWins(
-      (frames: (Frame & { id: string })[]) => post("/web/api/lights/live", { frames, transition_ms: FRAME_MS }),
+      ({ frames, beat }: LiveSend) => post("/web/api/lights/live", { frames, beat, transition_ms: beat ? BEAT_FADE_MS : SEND_EVERY_MS }),
       () => undefined,
       (error) => { setNote(message(error)); void stop(); },
+      ({ beat }) => beat,
     );
-    const spectrum = new Uint8Array(analyser.frequencyBinCount);
+    const ms = sliceMs(context.sampleRate);
     let state = listening();
-    const timer = window.setInterval(() => {
-      analyser.getByteFrequencyData(spectrum);
-      const out = nextFrame(state, spectrum, context.sampleRate, settings.current.mode, settings.current.sensitivity, performance.now());
+    let clock = 0;
+    let sentAt = -Infinity;
+    listener.port.onmessage = ({ data }: MessageEvent<Levels>) => {
+      const out = hear(state, data, ms, settings.current.mode, settings.current.strength);
       state = out.state;
-      setLevel(out.frame.brightness);
-      send(spread(out.frame, following));
-    }, FRAME_MS);
-    session.current = { stop: async () => { await release(); await post("/web/api/lights/live/stop", {}).catch(() => undefined); } };
+      clock += ms;
+      if (out.beat) setBeats((count) => count + 1);
+      if (out.beat || clock - sentAt >= SEND_EVERY_MS) {
+        sentAt = clock;
+        setLevel(out.frame.brightness);
+        send({ frames: spread(out.frame, following), beat: out.beat });
+      }
+    };
+    session.current = { stop: async () => { listener.port.onmessage = null; await release(); await post("/web/api/lights/live/stop", {}).catch(() => undefined); } };
     setRunning(true);
   };
 
+  const chosen = MODES.find((entry) => entry.mode === mode) ?? MODES[0];
   return <section className="music-sync" aria-label="Music sync">
     <div className="music-sync-text">
       <b>Music sync</b>
       <small>Listens through this device's microphone. The sound stays in your browser; only colours go to your lights. Follows {scope === "mine" ? "your" : "all"} {colourful.length} colour light{colourful.length === 1 ? "" : "s"}, and puts them back when you stop.</small>
     </div>
-    <div className="session-tabs" role="tablist" aria-label="Music sync mode">
-      <button type="button" role="tab" aria-selected={mode === "pulse"} className={`session-tab ${mode === "pulse" ? "active" : ""}`} onClick={() => setMode("pulse")} title="Brightness follows the beat">Pulse</button>
-      <button type="button" role="tab" aria-selected={mode === "spectrum"} className={`session-tab ${mode === "spectrum" ? "active" : ""}`} onClick={() => setMode("spectrum")} title="Colour follows the pitch">Spectrum</button>
+    <div className="music-sync-mode">
+      <div className="session-tabs" role="tablist" aria-label="How the lights follow the music">
+        {MODES.map((entry) => <button key={entry.mode} type="button" role="tab" aria-selected={mode === entry.mode} className={`session-tab ${mode === entry.mode ? "active" : ""}`} onClick={() => setMode(entry.mode)}>{entry.name}</button>)}
+      </div>
+      <small>{chosen.does}</small>
     </div>
-    <label className="light-slider music-sensitivity">
-      <span>Sensitivity <em>{sensitivity}×</em></span>
-      <input type="range" min={1} max={6} step={0.5} value={sensitivity} onChange={(e) => setSensitivity(Number(e.target.value))}/>
+    <label className="light-slider music-strength">
+      <span>Strength <em>{strengthWord(strength)}</em></span>
+      <input type="range" min={0} max={1} step={0.05} value={strength} onChange={(e) => setStrength(Number(e.target.value))}/>
+      <span className="music-strength-ends" aria-hidden="true"><small>Gentle</small><small>Strong</small></span>
     </label>
-    <span className="music-meter" aria-hidden="true"><span style={{ width: `${level}%` }}/></span>
+    <span className="music-heard" aria-live="off">
+      <span key={beats} className={`music-beat ${running && beats ? "on" : ""}`} title="Lights up on each beat it hears"/>
+      <span className="music-meter" aria-hidden="true"><span style={{ width: `${level}%` }}/></span>
+    </span>
     <button type="button" className={`light-power ${running ? "" : "music-start"}`} aria-pressed={running} onClick={() => (running ? void stop() : void start())}>{running ? "Stop" : "Start"}</button>
     {note && <p className="lights-notice music-note" role="status">{note}</p>}
   </section>;

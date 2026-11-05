@@ -290,6 +290,53 @@ async def test_a_slow_bulb_gets_the_newest_frame_and_never_falls_behind() -> Non
     assert [state.hue for state in lamp.light.sent] == [10, 50]  # 20, 30 and 40 were overtaken
 
 
+async def test_a_beat_is_not_overtaken_by_the_fading_after_it() -> None:
+    """On a slow bulb the newest frame wins; a beat's flash must still reach it, or the lights miss the beat."""
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    devices = _devices(FakeNetwork(lamp))
+    [entry] = await devices.devices()
+    quick = lamp.light.set_state
+
+    async def slow(state):
+        await asyncio.sleep(0.05)
+        return await quick(state)
+
+    lamp.light.set_state = slow
+    await devices.live.start([entry["id"]])
+    devices.live.frame({entry["id"]: LightChange(on=True, hue=10, saturation=100, brightness=30)})
+    await _settle(0.01)  # on its way; what follows arrives while the bulb is busy
+    devices.live.frame({entry["id"]: LightChange(on=True, hue=20, saturation=100, brightness=95)}, beat=True)
+    for hue in (30, 40):  # the flash fading
+        devices.live.frame({entry["id"]: LightChange(on=True, hue=hue, saturation=100, brightness=60)})
+    await _settle(0.2)
+
+    assert [state.hue for state in lamp.light.sent] == [10, 20]
+
+
+async def test_a_beat_keeps_its_quick_rise_on_a_slow_bulb() -> None:
+    """Stretched to the bulb's pace, a beat's rise blurred into the fading and no flash showed."""
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    devices = _devices(FakeNetwork(lamp))
+    [entry] = await devices.devices()
+    fades: list[int | None] = []
+    apply = devices.apply
+
+    async def slow(device_id: str, change: LightChange, *, confirm: bool = True) -> dict:
+        fades.append(change.transition_ms)
+        await asyncio.sleep(0.08)
+        return await apply(device_id, change, confirm=confirm)
+
+    devices.apply = slow  # type: ignore[method-assign]
+    await devices.live.start([entry["id"]])
+    devices.live.frame({entry["id"]: LightChange(on=True, hue=10, saturation=100, brightness=30, transition_ms=20)})
+    await _settle(0.03)
+    beat = LightChange(on=True, hue=20, saturation=100, brightness=95, transition_ms=60)
+    devices.live.frame({entry["id"]: beat}, beat=True)
+    await _settle(0.25)
+
+    assert fades == [20, 60]
+
+
 async def test_a_slow_bulb_fades_for_as_long_as_it_takes_between_frames() -> None:
     """A short fade on a bulb that took longer between changes jumped, held, and jumped: a flicker."""
     lamp = FakeBulb("10.0.0.36", "Desk lamp")
