@@ -1309,8 +1309,8 @@ that cannot continue until you decide. It behaves as above - the caller awaits
 the event, and the card dies with its task.
 
 **Non-blocking** is prepared work. north has finished; the task ends, the card
-stays, and you decide whenever. Raised with `UserInteraction.hand_over()`
-alongside `request_work_approval()`, which still waits.
+stays, and you decide whenever. Raised with `UserInteraction.hand_over()`;
+`request_decision()` is the one that waits.
 
 Three things follow from a card outliving its task:
 

@@ -64,10 +64,6 @@ class CardOutcome:
         """
         return self.decision == "rejected"
 
-    @property
-    def unanswered(self) -> bool:
-        return self.decision == "timeout_rejected"
-
 
 # Returns nothing: the handler decides what the next step is and starts it. The
 # registry deliberately cannot see a Job, so nothing here depends on jobs/.
@@ -105,16 +101,9 @@ class CardContinuations:
         self._handlers[source] = handler
         self._descriptions[source] = describes
 
-    def unregister(self, source: str) -> None:
-        self._handlers.pop(source, None)
-        self._descriptions.pop(source, None)
-
     def description_for(self, source: str) -> str:
         """What deciding this card will cause, or "" if nothing is registered."""
         return self._descriptions.get(source, "")
-
-    def registered_for(self, source: str) -> bool:
-        return source in self._handlers
 
     def dispatch(self, outcome: CardOutcome) -> asyncio.Task | None:
         """Start the next step for *outcome*, if its source registered one.

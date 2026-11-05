@@ -7,9 +7,8 @@ a matching action comes up again, north can replay the user's own prior decision
 instead of asking - so the more you use it, the less it interrupts you.
 
 Persisted in the one ``decisions`` table (#32), which this class writes: every
-decision of yours is one row, with the card it came from and your reason, so
-`DecisionLog` learns from the same rows the replay reads. Cached in memory for
-fast lookups on the approval hot path. Only *your* decisions are replayed; a
+decision of yours is one row, with the card it came from and your reason. Cached
+in memory for fast lookups on the approval hot path. Only *your* decisions are replayed; a
 decision north took for you is derived, not new signal.
 """
 

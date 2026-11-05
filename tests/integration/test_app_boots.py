@@ -30,7 +30,6 @@ WIRED_COMPONENTS = (
     "approval_store",
     "unattended_rules",
     "card_continuations",
-    "decision_log",
     "approval_memory",
     "cron_store",
     "agent_registry",

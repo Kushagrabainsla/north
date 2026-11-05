@@ -10,10 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from approval.approval_memory import ApprovalMemory
-from approval.decisions import DecisionLog
 from approval.models import ApprovalDecision, Card, CardField, CardType
 
 
@@ -47,9 +44,9 @@ def _prepared_work() -> Card:
     )
 
 
-def test_one_decision_is_one_row_that_replay_and_flows_both_read(tmp_path: Path) -> None:
+def test_one_decision_is_one_row_that_replay_reads(tmp_path: Path) -> None:
     db = tmp_path / "approval_memory.db"
-    memory, log = ApprovalMemory(db), DecisionLog(db)
+    memory = ApprovalMemory(db)
     card = _prepared_work()
 
     memory.record(card.agent, card.action_key, ApprovalDecision.REJECTED, card=card, reason="wrong city")
@@ -62,8 +59,6 @@ def test_one_decision_is_one_row_that_replay_and_flows_both_read(tmp_path: Path)
         "you",
     )
     assert memory.recall(card.agent, card.action_key) == "rejected"
-    assert log.rejection_reasons("job_applications") == ["wrong city"]
-    assert log.stats("job_applications").rejected == 1
 
 
 def test_your_latest_answer_replays_and_count_is_how_often_you_answered(tmp_path: Path) -> None:
@@ -90,7 +85,7 @@ def test_an_answered_question_is_recorded_but_never_replayed(tmp_path: Path) -> 
 
 def test_forgetting_stops_the_replay_but_keeps_what_you_decided(tmp_path: Path) -> None:
     db = tmp_path / "approval_memory.db"
-    memory, log = ApprovalMemory(db), DecisionLog(db)
+    memory = ApprovalMemory(db)
     card = _prepared_work()
     memory.record(card.agent, card.action_key, "approved", card=card)
     [learned] = memory.all_decisions()
@@ -99,7 +94,7 @@ def test_forgetting_stops_the_replay_but_keeps_what_you_decided(tmp_path: Path) 
 
     assert memory.recall(card.agent, card.action_key) is None
     assert ApprovalMemory(db).recall(card.agent, card.action_key) is None
-    assert log.stats("job_applications").approved == 1, "flows still learn from it"
+    assert [row["decision"] for row in _rows(db)] == ["approved"], "what you decided is kept"
 
 
 def _old_database(db: Path) -> None:
@@ -122,8 +117,7 @@ def _old_database(db: Path) -> None:
     conn.close()
 
 
-@pytest.mark.parametrize("opened_first", [ApprovalMemory, DecisionLog])
-def test_the_old_tables_move_into_the_new_one_whichever_opens_first(tmp_path: Path, opened_first) -> None:
+def test_the_old_tables_move_into_the_new_one(tmp_path: Path) -> None:
     db = tmp_path / "approval_memory.db"
     _old_database(db)
     memory_key = "bash shell_command cmd=pytest"
@@ -138,11 +132,14 @@ def test_the_old_tables_move_into_the_new_one_whichever_opens_first(tmp_path: Pa
     conn.commit()
     conn.close()
 
-    opened_first(db)
+    ApprovalMemory(db)
 
     assert {"approval_decisions", "card_decisions"}.isdisjoint(_tables(db))
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT decision FROM decisions WHERE agent = 'bash'").fetchall() == [("approved",)]
     # Moved, but keyed by the old normalized identity: it no longer replays, north asks again.
     assert ApprovalMemory(db).recall("bash", memory_key) is None
-    assert DecisionLog(db).rejection_reasons("job_applications") == ["too junior"]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT reason FROM decisions WHERE card_source = 'job_applications'").fetchall() == [
+            ("too junior",)
+        ]

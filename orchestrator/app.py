@@ -27,7 +27,6 @@ from approval.approvals import Approvals
 from approval.batching import BatchingNotifier
 from approval.callback_server import app as callback_app
 from approval.decider import MemoryDecider
-from approval.decisions import DecisionLog
 from approval.effects import EffectLog
 from approval.interaction import UserInteraction
 from approval.policy import ApprovalPolicy
@@ -577,7 +576,6 @@ def _configure_routers(
         approval_memory=approval_memory,
         unattended_rules=deps.unattended_rules,
         card_continuations=deps.card_continuations,
-        decision_log=deps.decision_log,
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
         flow_registry=flow_registry,
@@ -1046,9 +1044,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # answer "what may north do without asking me", and it saves a 16th SQLite
     # file in ~/.north. Shipped rules are seeded here on first run.
     unattended_rules = UnattendedRuleStore(settings.north_home / "approval_memory.db")
-    # How prepared work was decided, and why. The signal a flow improves on.
-    decision_log = DecisionLog(settings.north_home / "approval_memory.db")
-    deps.decision_log = decision_log
     deps.unattended_rules = unattended_rules
     # The one decision point every tool, agent and the orchestrator share.
     # Reads the mode at decision time, so a runtime change via the settings

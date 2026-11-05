@@ -346,13 +346,6 @@ class ApprovalStore:
         """
         return {c.task_id for c in self._cards.values() if c.status == _PENDING and c.blocking and c.task_id}
 
-    def waiting_for_you(self) -> list[Card]:
-        """Pending cards nothing is blocked on - prepared work, oldest first."""
-        return sorted(
-            (c for c in self._cards.values() if c.status == _PENDING and not c.blocking),
-            key=lambda c: c.created_at,
-        )
-
     def decided_for_task(self, task_id: str) -> list[Card]:
         """What you approved, rejected or answered in *task_id*, oldest first."""
         decided = [

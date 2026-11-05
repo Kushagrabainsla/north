@@ -118,7 +118,7 @@ async def test_an_expired_card_is_not_a_refusal(wiring) -> None:
     store.resolve(card.id, ApprovalDecision.TIMEOUT_REJECTED)
     await continuations.drain()
 
-    assert started[0].unanswered
+    assert started[0].decision == ApprovalDecision.TIMEOUT_REJECTED
     assert not started[0].rejected
 
 

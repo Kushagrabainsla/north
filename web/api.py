@@ -169,7 +169,6 @@ def configure(
     approval_memory=None,
     unattended_rules=None,
     card_continuations=None,
-    decision_log=None,
     codex_credentials_factory: CodexCredentialsFactory | None = None,
     telegram_bot_name=None,
 ) -> None:
@@ -200,7 +199,6 @@ def configure(
         approval_memory=approval_memory,
         unattended_rules=unattended_rules,
         card_continuations=card_continuations,
-        decision_log=decision_log,
         inference_router=inference_router,
         skill_registry=skill_registry,
         flow_registry=flow_registry,
@@ -902,51 +900,6 @@ async def forget_memory_approval(fingerprint: str) -> None:
     memory = current_services().require("approval_memory")
     if not memory.forget(fingerprint):
         raise HTTPException(status_code=404, detail="No learned decision with that fingerprint")
-
-
-@router.get("/flows/stats")
-async def flow_stats() -> list[dict[str, Any]]:
-    """How each card source is doing at proposing things you want.
-
-    A flow whose output you reject 90% of the time is wasting your attention,
-    and nothing would otherwise notice. Worst approve-rate first, since that is
-    the one worth acting on.
-
-    `approve_rate` counts only cards you *answered*: an expiry means nobody was
-    there, and folding it in would make a flow look bad for being scheduled at a
-    time you were asleep.
-    """
-    log = current_services().decision_log
-    if log is None:
-        return []
-    stats = []
-    for record in log.all_stats():
-        item = record.as_dict()
-        item["rejection_reasons"] = log.rejection_reasons(record.source, limit=20)
-        item["most_edited_fields"] = [
-            {"field": name, "count": count} for name, count in log.most_edited_fields(record.source)
-        ]
-        stats.append(item)
-    return stats
-
-
-@router.get("/flows/filtered")
-async def filtered_candidates(source: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    """What north dropped before it ever became a card.
-
-    Auto-rejection is only acceptable if you can check what it threw away - and
-    this is also how you find out the filter is wrong.
-    """
-    log = current_services().decision_log
-    return [] if log is None else log.filtered(source, limit)
-
-
-@router.delete("/flows/filtered/{candidate_id}", status_code=204)
-async def unfilter_candidate(candidate_id: str) -> None:
-    """Undo one auto-rejection, so the same item can be offered again."""
-    log = current_services().require("decision_log")
-    if not log.unfilter(candidate_id):
-        raise HTTPException(status_code=404, detail="No filtered candidate with that id")
 
 
 class UnattendedRuleCreate(BaseModel):

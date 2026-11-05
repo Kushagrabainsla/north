@@ -98,8 +98,6 @@ class Dependencies:
     # Which next step belongs to which card source. Resolving a card dispatches
     # through this; registering is how a flow says what its approval leads to.
     card_continuations: Any | None = field(default=None)
-    # How prepared work was decided, and why - the training signal for a flow.
-    decision_log: Any | None = field(default=None)
     # What you send a task while it works, read by the orchestrator and the agents it runs.
     task_inbox: TaskInbox = field(default_factory=TaskInbox)
 

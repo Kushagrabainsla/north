@@ -185,17 +185,6 @@ def test_a_card_with_a_source_outlives_its_task_even_if_blocking() -> None:
     assert store.cancel_for_task("task-1") == []
 
 
-def test_waiting_for_you_lists_prepared_work_oldest_first() -> None:
-    store = ApprovalStore()
-    first, second = work_card(), work_card()
-    store.add(first)
-    store.add(second)
-    blocked = card(blocking=True)
-    store.add(blocked)
-
-    assert [c.id for c in store.waiting_for_you()] == [first.id, second.id]
-
-
 # ── One notification for a batch ─────────────────────────────────────────────
 
 

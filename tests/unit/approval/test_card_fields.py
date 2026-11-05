@@ -12,7 +12,7 @@ import asyncio
 
 import pytest
 
-from approval.interaction import UserInteraction
+from approval.interaction import CardEvent, UserInteraction
 from approval.models import ApprovalDecision, Card, CardField, CardFieldType, CardType
 from approval.store import ApprovalStore
 
@@ -185,7 +185,7 @@ def test_an_already_resolved_card_cannot_be_rewritten() -> None:
 
 
 @pytest.mark.asyncio
-async def test_request_work_approval_returns_the_decided_values() -> None:
+async def test_a_decided_work_card_returns_the_values_you_left() -> None:
     store = ApprovalStore()
     interaction = UserInteraction(store)
 
@@ -194,13 +194,8 @@ async def test_request_work_approval_returns_the_decided_values() -> None:
         store.resolve(card_id, ApprovalDecision.APPROVED, values={"cover_letter": "Edited."})
 
     task = asyncio.create_task(
-        interaction.request_work_approval(
-            task_id="task-1",
-            agent="job",
-            title="Application ready",
-            message="Submit?",
-            fields=_application_fields(),
-            context="the original posting",
+        interaction.request_decision(
+            _card(fields=_application_fields(), context="the original posting"), event=CardEvent.APPROVAL
         )
     )
     await asyncio.sleep(0)
@@ -227,14 +222,7 @@ async def test_fields_and_context_reach_the_stream() -> None:
 
     payload = await _first_emitted(
         stream,
-        interaction.request_work_approval(
-            task_id="task-1",
-            agent="job",
-            title="Application ready",
-            message="Submit?",
-            fields=_application_fields(),
-            context="posting",
-        ),
+        interaction.request_decision(_card(fields=_application_fields(), context="posting"), event=CardEvent.APPROVAL),
     )
     assert [f["name"] for f in payload["fields"]] == ["company", "url", "cover_letter", "salary"]
     assert payload["context"] == "posting"

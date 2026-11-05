@@ -79,21 +79,6 @@ class UserInteraction:
         self._ledger = ledger
         self._notices = notices
 
-    async def request_approval(
-        self,
-        *,
-        task_id: str | None,
-        agent: str,
-        title: str,
-        message: str,
-        options: tuple[str, ...] | list[str] = APPROVAL_DEFAULT_OPTIONS,
-    ) -> bool:
-        """Surface an APPROVAL card and block; return True only if approved."""
-        status = await self.request_approval_status(
-            task_id=task_id, agent=agent, title=title, message=message, options=options
-        )
-        return status == ApprovalDecision.APPROVED
-
     async def request_approval_status(
         self,
         *,
@@ -105,34 +90,11 @@ class UserInteraction:
     ) -> ApprovalDecision:
         """Surface an APPROVAL card and block; return how it actually resolved.
 
-        Callers that only need yes/no should use ``request_approval``. This exists
-        for the ones that must tell "a person said no" apart from "the task ended
-        while the card waited".
+        Tells "a person said no" apart from "the task ended while the card waited".
         """
         card = self._build(CardType.APPROVAL, task_id, agent, title, message, list(options))
         resolved = await self.request_decision(card, event=CardEvent.APPROVAL)
         return resolved.status
-
-    async def request_work_approval(
-        self,
-        *,
-        task_id: str | None,
-        agent: str,
-        title: str,
-        message: str,
-        fields: list[CardField],
-        context: str = "",
-        options: tuple[str, ...] | list[str] = APPROVAL_DEFAULT_OPTIONS,
-    ) -> Card:
-        """Hand over filled-in work for a decision; return the resolved card.
-
-        The resolved card carries ``response`` - the field values as the user
-        left them, including any edits. Returning the card rather than a bool is
-        the whole point: the caller needs what was decided, not only that
-        something was.
-        """
-        card = self._build(CardType.APPROVAL, task_id, agent, title, message, list(options), fields, context)
-        return await self.request_decision(card, event=CardEvent.APPROVAL)
 
     async def hand_over(
         self,
@@ -148,10 +110,10 @@ class UserInteraction:
     ) -> Card:
         """Leave finished work for the user and return at once, without waiting.
 
-        The counterpart to `request_work_approval`. That one blocks because the
-        caller needs the answer to continue; this one is for work that is already
-        done - north searched, drafted, and has nothing left to do until you look.
-        The task ends, the card stays, and you decide whenever.
+        Unlike `request_decision`, which blocks because the caller needs the answer
+        to continue, this is for work that is already done - north searched, drafted,
+        and has nothing left to do until you look. The task ends, the card stays, and
+        you decide whenever.
 
         Returns the card as surfaced (already resolved if the policy ruled on it),
         so the caller can record which card it left behind. `source` is what keeps
@@ -193,22 +155,6 @@ class UserInteraction:
         for card in self._store.pending():
             if card.task_id == task_id and card.source == source:
                 self._store.resolve(card.id, ApprovalDecision.TASK_ENDED)
-
-    async def ask_user(
-        self,
-        *,
-        task_id: str | None,
-        agent: str,
-        title: str,
-        question: str,
-        options: list[str],
-    ) -> Card:
-        """Surface a QUESTION card and block; return the resolved card.
-
-        The user's answer (a chosen option or free text) is on ``chosen_option``.
-        """
-        card = self._build(CardType.QUESTION, task_id, agent, title, question, list(options))
-        return await self.request_decision(card, event=CardEvent.QUESTION)
 
     async def inform(self, *, task_id: str | None, agent: str, title: str, message: str) -> None:
         """Surface an INFORMATION card. Never blocks.

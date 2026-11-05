@@ -76,8 +76,6 @@ class ApiServices:
     # What each card source leads to once decided. The approvals page reads it
     # to say what approving will cause, before you approve.
     card_continuations: Any | None = None
-    # Approve/reject history per card source, and what it filtered.
-    decision_log: Any | None = None
     # The coding-agent gate: the tokens of the runs in flight, and the gate their hooks ask.
     coding_sessions: Any | None = None
     coding_gate: Any | None = None
