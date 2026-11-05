@@ -58,7 +58,8 @@ class CreateAgentTool(Tool):
     name = "create_agent"
     is_mutating = True
     description = (
-        "Creates a new north agent from a natural-language description. "
+        "Creates a new north agent. North runs one general agent and grows through skills, tools and flows; "
+        "use the authoring-a-north-agent skill first, which says when an agent is right (rarely). "
         "action='list': show all registered agents. "
         "action='read': return an agent's config and system prompt. "
         "action='create': write agent files and hot-load - the new agent is available immediately. "
@@ -87,7 +88,7 @@ class CreateAgentTool(Tool):
             },
             "domain": {
                 "type": "string",
-                "description": "Agent domain: general, wellness, engineering, news, home, etc. Default: general.",
+                "description": "Agent domain. Default: general.",
             },
             "accepts": {
                 "type": "array",

@@ -6,24 +6,117 @@ domains: [general, engineering]
 ---
 # Adding a tool to north
 
-> A tool is one executable action. Reuse first, create only for a real capability gap, and never report success until the tool is loaded and tested.
+> A tool is one action north can take, written as one Python file. Reuse first; create only for a real gap; the job is done when the tool is live and the user's request works with it, not when the file exists.
 
-## Use this when
-- north needs a new capability, or you must extend/create a `Tool` under `tools/`.
+## Decide first
+- Call `create_tool` with `action='list'`. If a tool already owns the action, use it, or `read` and `update` it. A new phrasing or workflow is not a reason for another tool.
+- A one-off job is done with `bash` or `write_file`, not a tool. A procedure (steps and judgement) is a skill; an ordered, repeatable process is a flow.
+- Build one tool for the user's task, not one per API endpoint: `get_weather` that answers the question, not `geocode` plus `forecast`.
 
-## Do NOT use for
-- Something an existing tool already does, or a one-off that `write_file`/`bash` handles directly.
+## Ask once, before writing
+Work out what you can yourself (which public service, its URL, its response format). Then, if anything only the user can decide is still open (which account, which device, what counts as done, whether it may change or send anything), ask it all in **one** `ask_user` call, as a short numbered list. Do not ask what you can find out, and do not ask again for what the user already said.
 
-## Procedure
-1. Search the live tool catalog and existing MCP capabilities. Extend an existing tool when it already owns the action. A different prompt or workflow is not a reason for another tool.
-2. State the capability gap in one sentence, then define concrete inputs, outputs, dependencies, failure modes, and whether each action reads or changes local or external state.
-3. Ask only for missing authority or choices that change the contract. Never infer credentials, account scope, browser profile, external recipients, or permission to make consequential changes.
-4. For browser work, ask whether to attach to the user's existing browser through CDP or use an isolated browser. Explain that the existing browser can expose its sessions, cookies, tabs, and extensions, then verify the chosen environment before building around it.
-5. Create a `Tool` subclass with a unique snake_case `name`, retrieval-focused `description`, strict `parameters_schema`, and recoverable `ToolOutput` failures. Mutation classification must reflect the requested action, not merely the tool class.
-6. Keep final actions such as submit, send, purchase, publish, delete, or deploy behind an enforceable approval boundary. A sentence in a description is not a safety control.
-7. Add tests for success, invalid input, unavailable dependencies, refused authority, and the consequential-action boundary. A representative `create_tool` test call executes real code, so choose the smallest safe input and keep external mutation behind approval.
-8. Use `create_tool` to create or update the tool only after the contract and code are complete, with `test_params`: the smallest safe representative input. The user is asked once; the tool is then checked, called once with `test_params` (anything that call does still asks), and is live if the call succeeds. A failing version stays a draft and the live tool is unchanged. A draft that already exists goes live with `action=activate` and `test_params`.
+North has no place yet to keep a key or password for a custom tool. Prefer a service that needs none (Open-Meteo for weather, for example). If a key is unavoidable, stop and tell the user what is needed; never put a key in the code and never ask for one in chat.
+
+## What north expects from the file
+North checks most of these itself before the test call, and a draft that misses one comes back with the exact fix to make.
+
+1. One class that subclasses `Tool` (from `tools.base`), takes no constructor arguments, and sets:
+   - `name`: snake_case, specific (`get_weather`, not `weather_tool` or `helper`).
+   - `description`: what it does, when to use it, and when not to. Write it for someone who has never seen the service: name the inputs, units and limits.
+   - `parameters_schema`: a JSON object schema. Unambiguous names (`city`, not `q`; `user_id`, not `user`), a description for each, an `enum` for a fixed set of choices, and `required` listing only what has no sensible default.
+2. `async def run(self, input: ToolInput) -> ToolOutput`. The call's arguments are the dict `input.params`; nothing else carries them.
+3. Return, never raise: `ToolOutput(success=True, data={...})`, or `ToolOutput(success=False, error="...")` with an error that says what to change, ideally with a valid example (`"Unknown city 'Pariss'. Pass a city name such as 'Paris' or 'Paris, Texas'."`). Use `failure_kind="not_found"` when the thing asked for does not exist.
+4. Say when a call changes something. A tool that writes files, sends, posts, buys, deletes or switches a device sets `is_mutating = True`, so north asks before it runs. A tool where only some calls change things overrides `mutates(params)` instead (below). A tool that only reads sets neither.
+5. Never freeze north: it is `async`. Use `httpx.AsyncClient(timeout=...)` for the web, `await asyncio.sleep` to wait, and `await asyncio.to_thread(fn, ...)` for a blocking library call. `requests` is not installed.
+6. Only the standard library and what north already installs: `httpx`, `bs4` (BeautifulSoup), `pydantic`, `yaml`, `numpy`, `psutil`, `PIL`, `pypdf`, `docx`. North cannot install packages for a custom tool.
+7. Files the tool keeps live under `settings.north_home / "tool-data" / "<tool name>"` (`from config.settings import settings`). Never write a fixed path to north's home or a user folder (`/Users/...`) into the code: north's home can be anywhere. Never read `os.environ`.
+8. Return what a person or the next step needs, by name, not raw API payloads: `"city": "Paris"`, not `"geo_id": 2988507`. Keep it small; cut long lists and say how many were left out. `format_output(data)` turns `data` into one or two readable lines.
+
+A tool whose calls are mixed says which ones change things:
+
+```python
+    def mutates(self, params: dict | None = None) -> bool:
+        return (params or {}).get("action") != "status"  # reading the status changes nothing
+```
+
+## A complete example
+
+```python
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+
+from tools.base import Tool
+from tools.models import ToolInput, ToolOutput
+
+_GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
+_FORECAST = "https://api.open-meteo.com/v1/forecast"
+
+
+class GetWeatherTool(Tool):
+    name = "get_weather"
+    description = (
+        "Current weather and today's high and low for a city, from Open-Meteo (no account needed). "
+        "Use for questions like 'what is the weather in Pune'. Not for forecasts beyond today."
+    )
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "city": {"type": "string", "description": "City name, optionally with country: 'Pune' or 'Paris, France'."},
+            "units": {"type": "string", "enum": ["celsius", "fahrenheit"], "description": "Default celsius."},
+        },
+        "required": ["city"],
+    }
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        return f"{data['city']}: {data['now']}{data['unit']} now, {data['low']}-{data['high']}{data['unit']} today"
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        city = str(input.params.get("city") or "").strip()
+        units = input.params.get("units") or "celsius"
+        if not city:
+            return ToolOutput(success=False, error="Pass a city name, such as 'Pune'.")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                found = (await client.get(_GEOCODE, params={"name": city, "count": 1})).json().get("results")
+                if not found:
+                    return ToolOutput(
+                        success=False, failure_kind="not_found",
+                        error=f"No city called {city!r}. Check the spelling or add the country: 'Paris, France'.",
+                    )
+                place = found[0]
+                response = await client.get(_FORECAST, params={
+                    "latitude": place["latitude"], "longitude": place["longitude"], "current": "temperature_2m",
+                    "daily": "temperature_2m_max,temperature_2m_min", "forecast_days": 1, "temperature_unit": units,
+                })
+                response.raise_for_status()
+                weather = response.json()
+        except httpx.HTTPError as exc:
+            return ToolOutput(success=False, error=f"Open-Meteo did not answer ({exc}). Try again in a minute.")
+        return ToolOutput(success=True, data={
+            "city": f"{place['name']}, {place.get('country', '')}".strip(", "),
+            "unit": "°C" if units == "celsius" else "°F",
+            "now": weather["current"]["temperature_2m"],
+            "high": weather["daily"]["temperature_2m_max"][0],
+            "low": weather["daily"]["temperature_2m_min"][0],
+        })
+```
+
+## Create it and prove it
+1. Call `create_tool` with `action='create'`, the tool's `name`, the full file as `content`, and `test_params`: the smallest real input that shows it works (`{"city": "Pune"}`). The user is asked once. North then checks the file, makes that one real call (anything it changes still asks), and switches the tool on if it succeeds.
+2. If it comes back as a draft, read the error, fix exactly that, and send the whole corrected file again (`create` replaces your own draft; `update` changes a live tool). A failing version never replaces the live one. If the test failed because a service could not be reached, say so instead of rewriting working code.
+3. Then use the tool for the user's original request and report the real result.
+
+## Common mistakes
+- Guessing how arguments arrive (`input.parameters`, `input.get(...)`): it is always `input.params`.
+- `raise ValueError(...)` for a bad input: return `ToolOutput(success=False, error=...)` that says how to fix it.
+- `requests.get(...)` or `time.sleep(...)`: both freeze north; use `httpx.AsyncClient` and `await asyncio.sleep`.
+- A tool that sends, writes or switches something without `is_mutating = True`: north would run it without asking.
+- Returning a whole API response: pick the fields that answer the question.
+- A test call that changes something real when a reading call would prove the same.
 
 ## Done when
-- The active tool is discovered in the live registry, its schema is valid, its permissions are truthful, representative success and failure tests pass, and the original user outcome can now use it.
-- Say "tool draft created" when its test failed. Creating the file is never the user's completed outcome.
+- `create_tool` reports the tool live, the user's request was answered with it, and you said what it returned. If its test failed, say "tool draft created" and why; creating the file is never the user's outcome.

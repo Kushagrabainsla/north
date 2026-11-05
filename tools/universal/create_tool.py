@@ -17,6 +17,7 @@ from approval.policy import Action, ActionKind
 from policies.self_edit import SelfEditPolicy
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.universal._draft_checks import draft_problems
 
 if TYPE_CHECKING:
     from tools.registry import ToolRegistry
@@ -67,18 +68,22 @@ class CreateToolTool(Tool):
             "content": {
                 "type": "string",
                 "description": (
-                    "Full Python source for the tool file. MUST define a subclass of Tool (from tools.base) "
-                    "with name, description, parameters_schema, format_output, and async def run. Example:\n"
+                    "Full Python source for the tool file: one Tool subclass (from tools.base) with name, "
+                    "description, parameters_schema and `async def run(self, input)`, which reads the call's "
+                    "arguments from the dict `input.params` and returns ToolOutput (never raises). Set "
+                    "`is_mutating = True` if it changes anything. The adding-a-north-tool skill has the full "
+                    "contract and a complete example. Smallest shape:\n"
                     "from tools.base import Tool\n"
                     "from tools.models import ToolInput, ToolOutput\n"
                     "class MyTool(Tool):\n"
                     "    name = 'my_tool'\n"
                     "    description = '...'\n"
-                    "    parameters_schema = {'type': 'object', 'properties': {}}\n"
-                    "    def format_output(self, data: dict) -> str:\n"
-                    "        return 'success'\n"
+                    "    parameters_schema = {'type': 'object', 'properties': {'city': {'type': 'string'}}}\n"
                     "    async def run(self, input: ToolInput) -> ToolOutput:\n"
-                    "        return ToolOutput(success=True, data={})"
+                    "        city = input.params.get('city')\n"
+                    "        if not city:\n"
+                    "            return ToolOutput(success=False, error=\"Pass a city, such as 'Pune'.\")\n"
+                    "        return ToolOutput(success=True, data={'city': city})"
                 ),
             },
             "tool_type": {
@@ -156,6 +161,7 @@ class CreateToolTool(Tool):
         return str(data)
 
     async def run(self, input: ToolInput) -> ToolOutput:
+        input = input.model_copy(update={"params": _named(input.params)})
         action = (input.params.get("action") or "create").strip()
 
         if action == "list":
@@ -198,7 +204,7 @@ class CreateToolTool(Tool):
     async def describe(self, input: ToolInput) -> Request:
         """Show the proposed code. Model-authored code may be imported or hot-loaded,
         so every lifecycle step that executes or publishes it is put to the user."""
-        params = input.params
+        params = _named(input.params)
         action = (params.get("action") or "create").strip()
         name = params.get("name", "unknown")
         tool_type = params.get("tool_type", "specialized")
@@ -255,7 +261,8 @@ class CreateToolTool(Tool):
 
         file_path = target_dir / f"{tool_name}.py"
         registered = bool(self._registry is not None and tool_name in self._registry.all_tool_names())
-        if file_path.exists() or _find_active_tool_path(tool_name, self._tools_dir) is not None or registered:
+        # A draft that failed its test is not a tool yet: creating it again replaces the draft.
+        if _find_active_tool_path(tool_name, self._tools_dir) is not None or registered:
             return ToolOutput(
                 success=False,
                 error=(
@@ -283,7 +290,7 @@ class CreateToolTool(Tool):
         mutation = None
         if self._self_edit_policy is not None:
             try:
-                mutation = self._self_edit_policy.begin(file_path, "create")
+                mutation = self._self_edit_policy.begin(file_path, "update" if file_path.exists() else "create")
             except PermissionError as exc:
                 return ToolOutput(success=False, error=str(exc))
         file_path.write_text(content, encoding="utf-8")
@@ -366,6 +373,13 @@ class CreateToolTool(Tool):
         path = _find_candidate_path(name, self._tools_dir)
         if path is None:
             return ToolOutput(success=False, error=f"No candidate exists for tool '{name}'.")
+        if problems := draft_problems(path.read_text(encoding="utf-8")):
+            listed = "\n".join(f"{index}. {problem}" for index, problem in enumerate(problems, 1))
+            return ToolOutput(
+                success=False,
+                error=f"The draft needs these fixes before its test call:\n{listed}\n"
+                "Fix them and call create_tool again with action='update' and the full file.",
+            )
         try:
             instance = _load_tool_file(path, expected_name=name)
             _validate_tool_contract(instance)
@@ -459,6 +473,18 @@ class CreateToolTool(Tool):
             success=True,
             data={"action": "activate", "name": name, "path": str(target), "status": "active"},
         )
+
+
+def _named(params: dict[str, Any]) -> dict[str, Any]:
+    """*params* with the tool's name taken from its code when the call left it out.
+
+    The name is in the code too, and a model writing a tool forgot it in both the old
+    and the new guide's trial runs: a failed round trip for nothing.
+    """
+    if str(params.get("name") or "").strip():
+        return params
+    named = _NAME_RE.search(str(params.get("content") or ""))
+    return {**params, "name": named.group(1)} if named else params
 
 
 # ── Code safety ──────────────────────────────────────────────────────────────

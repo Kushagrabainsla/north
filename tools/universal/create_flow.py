@@ -46,7 +46,8 @@ class CreateFlowTool(Tool):
     starts_runs = True  # its runs' steps take the workspace lock; see `Tool.starts_runs`
     description = (
         "Create, update, inspect or activate a reusable declarative flow. Before creating one, use the "
-        "authoring-a-north-flow skill, resolve missing setup choices with ask_user including explicit manual-only, "
+        "authoring-a-north-flow skill, resolve missing setup choices with ask_user in one question, including "
+        "explicit manual-only, "
         "one-time, or recurring timing (never assume), reuse capabilities, take the timezone only from North "
         "settings (never ask for it or declare a timezone input), and provide an executable skill, instructions, "
         "inputs, and approval mode for every step. create, update and activate are each asked about once; the flow "
