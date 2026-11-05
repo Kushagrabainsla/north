@@ -74,14 +74,6 @@ export const draftOf = (entry: ScheduleFields): Draft => ({
   date: todayISO(),
 });
 
-// The rule as the API takes it. Only "custom" needs the day list.
-export const daysField = (draft: Draft) =>
-  draft.repeat === "custom"
-    ? draft.days
-    : draft.repeat === "once"
-      ? "daily"
-      : draft.repeat;
-
 function DayPicker({
   days,
   onChange,

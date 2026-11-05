@@ -37,10 +37,6 @@ const TASK_ACTION_STATUS: Record<string, string> = {
   task_retrying: "retrying",
   task_paused: "paused",
 };
-const TERMINAL = new Set(["completed", "failed", "cancelled", "needs_attention"]);
-
-export const isTerminal = (entry: LedgerEntry) =>
-  Boolean(entry.action && TERMINAL.has(TASK_ACTION_STATUS[entry.action]));
 
 export const taskStatus = (rows: LedgerEntry[]) => {
   const lifecycle = rows.find(row => row.action && TASK_ACTION_STATUS[row.action]);

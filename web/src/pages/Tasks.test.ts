@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { turnStatus } from "./Chat";
-import { isTerminal, summarise, taskStatus } from "./Tasks";
+import { summarise, taskStatus } from "./Tasks";
 import type { LedgerEntry } from "../types";
 
 let counter = 0;
@@ -93,22 +93,6 @@ describe("grouping the ledger back into tasks", () => {
     // north's own events - startup, cron ticks, recovery sweeps. They are not
     // runs, which is why the page keeps a second view for them.
     expect(summarise([entry({ action: "startup_recovery_sweep" }), entry({ task_id: "", action: "boot" })])).toEqual([]);
-  });
-});
-
-describe("what counts as the end of a task", () => {
-  it("recognises every terminal action", () => {
-    for (const action of ["task_completed", "task_completed_with_failures", "task_failed", "task_cancelled", "task_needs_attention"]) {
-      expect(isTerminal(entry({ action }))).toBe(true);
-    }
-  });
-
-  it("does not mistake an agent finishing for the task finishing", () => {
-    // One agent of several completing is not the run ending, and treating it as
-    // such would report a task done while it was still working.
-    expect(isTerminal(entry({ action: "agent_completed" }))).toBe(false);
-    expect(isTerminal(entry({ action: "task_received" }))).toBe(false);
-    expect(isTerminal(entry({}))).toBe(false);
   });
 });
 
