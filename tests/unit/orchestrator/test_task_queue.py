@@ -84,8 +84,8 @@ async def test_running_task_store_queue_lifecycle(running_task_store: RunningTas
     assert queued[0].attempt == 1
     assert queued[0].status == "queued"
 
-    # Transition from queued to running
-    resumed_ok = await running_task_store.mark_running_from_queued("t1")
+    # Claimed again: its recovery attempt is running
+    resumed_ok = await running_task_store.mark_retrying_from_queued("t1")
     assert resumed_ok is True
 
     queued_after = await running_task_store.list_queued()
@@ -93,7 +93,7 @@ async def test_running_task_store_queue_lifecycle(running_task_store: RunningTas
 
     running_after = await running_task_store.list_all()
     assert len(running_after) == 1
-    assert running_after[0].status == "running"
+    assert running_after[0].status == "retrying"
 
 
 # ------------------------------------------------ Orchestrator Queueing on Model Scarcity

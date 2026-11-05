@@ -10,8 +10,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from inference.exceptions import is_model_unavailable_error
-from ledger import LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
-from orchestrator.exceptions import DeclaredArtifactMissingError, OrchestratorError
+from orchestrator.exceptions import DeclaredArtifactMissingError
 from orchestrator.task_context import TaskContextStore
 
 if TYPE_CHECKING:
@@ -80,27 +79,21 @@ def classify_error(exc: Exception) -> str:
 
 
 class FailureHandler:
-    """Manages agent retries, back-off cooldowns, and task context reconstruction."""
+    """Manages agent retries and back-off cooldowns."""
 
     def __init__(
         self,
-        ledger_writer: LedgerWriter,
         task_context_store: TaskContextStore,
         stream_manager: EventStreamManager | None = None,
         max_retries: int = 3,
         base_cooldown_seconds: float = 2.0,
     ) -> None:
-        self._ledger_writer = ledger_writer
         self._task_context_store = task_context_store
         self._stream_manager = stream_manager
         self.max_retries = max_retries
         self.base_cooldown_seconds = base_cooldown_seconds
         # Maps (task_id, agent_name) -> retry attempt count (1-indexed)
         self._retry_counts: dict[tuple[str, str], int] = {}
-
-    def get_retry_count(self, task_id: str, agent_name: str) -> int:
-        """Returns the number of retries attempted for an agent in a task."""
-        return self._retry_counts.get((task_id, agent_name), 0)
 
     def increment_retry_count(self, task_id: str, agent_name: str) -> int:
         """Increments and returns the new retry count."""
@@ -203,44 +196,3 @@ class FailureHandler:
 
         await asyncio.sleep(cooldown)
         return True
-
-    async def reconstruct_context(self, task_id: str, agents: list[str]) -> None:
-        """Reconstructs the Task Context Object from completed agent entries in the Ledger."""
-        # Initialize task context state back to fresh/pending
-        await self._task_context_store.initialize_task(task_id, agents)
-
-        # Query all ledger entries for this task
-        filters = LedgerFilters(task_id=task_id, limit=500)
-        try:
-            entries = await self._ledger_writer.query(filters)
-        except Exception as e:
-            raise OrchestratorError(f"Failed to query ledger for reconstruction: {e}") from e
-
-        # Apply completed runs chronologically
-        entries.sort(key=lambda e: e.timestamp)
-        for entry in entries:
-            if entry.source == LedgerSource.AGENT and entry.status == LedgerStatus.COMPLETED and entry.agent:
-                # Mark agent status as completed in context
-                await self._task_context_store.update_agent_status(task_id, entry.agent, "completed")
-                # Write back all output keys the agent completed
-                await self._task_context_store.write(
-                    task_id=task_id,
-                    agent=entry.agent,
-                    key="result",
-                    value=entry.agent_output if entry.agent_output is not None else {},
-                    status="completed",
-                )
-                await self._task_context_store.write(
-                    task_id=task_id,
-                    agent=entry.agent,
-                    key="output",
-                    value=entry.output if entry.output is not None else "",
-                    status="completed",
-                )
-
-        if self._stream_manager:
-            await self._stream_manager.emit(
-                task_id=task_id,
-                event="context_reconstructed",
-                data={"agents": agents},
-            )

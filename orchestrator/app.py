@@ -492,7 +492,6 @@ def _build_orchestrator(
         ),
         task_context_store=deps.task_context_store,
         failure_handler=FailureHandler(
-            ledger_writer=deps.ledger,
             task_context_store=deps.task_context_store,
             stream_manager=deps.stream_manager,
         ),
@@ -924,19 +923,6 @@ def _launch_background_tasks(
     return tasks
 
 
-async def _start_mcp_servers(tool_registry: ToolRegistry) -> McpManager:
-    """Start the MCP servers the user configured and offer their tools like any other.
-
-    Only `~/.north/mcp.json`, the user's own file: an `mcp.json` inside a workspace (a cloned repository)
-    is not loaded, because starting a server runs whatever command that file names. The manager existed
-    for months but nothing started it, so a configured server was never loaded. A server that fails to
-    start is logged, stopped and skipped; it does not stop north.
-    """
-    manager = McpManager(workspace_root=None)
-    await _serve_mcp(manager, tool_registry)
-    return manager
-
-
 async def _serve_mcp(manager: McpManager, tool_registry: ToolRegistry, tool_index: ToolIndex | None = None) -> None:
     """Start *manager*'s servers and offer their tools; indexed for retrieval once they are registered.
 
@@ -1108,7 +1094,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     tool_registry.register(create_skill_tool)
     tool_registry.register(UseFlowTool(flow_registry))
-    # Started once north is serving (below); closed at shutdown either way.
+    # Started once north is serving (below); closed at shutdown either way. Only the user's own
+    # ~/.north/mcp.json (workspace_root=None): an mcp.json inside a cloned repository is not
+    # loaded, because starting a server runs whatever command that file names.
     deps.mcp_manager = McpManager(workspace_root=None)
     flow_store = FlowRunStore(settings.north_home / "flow_runs.db")
     if cut_off := flow_store.pause_interrupted():

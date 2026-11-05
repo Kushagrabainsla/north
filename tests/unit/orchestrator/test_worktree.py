@@ -97,22 +97,6 @@ async def test_integrate_applies_new_and_modified(manager: GitWorktreeManager, r
     assert wt.branch not in _branches(repo)
 
 
-async def test_diff_line_count_counts_added_and_deleted(manager: GitWorktreeManager) -> None:
-    wt = await manager.create("coder")
-    wt_path = Path(wt.path)
-    (wt_path / "new.py").write_text("a\nb\nc\n")  # 3 insertions
-    (wt_path / "README.md").write_text("line1\nX\nline3\n")  # 1 del + 1 add on line 2
-    count = await manager.diff_line_count(wt)
-    assert count == 5  # 3 (new file) + 2 (one line changed = -1 +1)
-    await manager.remove(wt, keep_branch=False)
-
-
-async def test_diff_line_count_zero_when_unchanged(manager: GitWorktreeManager) -> None:
-    wt = await manager.create("coder")
-    assert await manager.diff_line_count(wt) == 0
-    await manager.remove(wt, keep_branch=False)
-
-
 async def test_integrate_noop_when_no_changes(manager: GitWorktreeManager, repo: Path) -> None:
     wt = await manager.create("coder")
 

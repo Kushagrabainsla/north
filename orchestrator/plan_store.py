@@ -43,9 +43,6 @@ class PlanStore:
         self._plans[task_id] = steps
         return steps
 
-    def get_plan(self, task_id: str) -> list[PlanStep]:
-        return self._plans.get(task_id, [])
-
     def render(self, task_id: str) -> str:
         """Render the plan as a checklist, or '' when there is none."""
         steps = self._plans.get(task_id)

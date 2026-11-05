@@ -17,7 +17,7 @@ from pathlib import Path
 import psutil
 
 from mcp.manager import McpManager
-from orchestrator.app import _start_mcp_servers
+from orchestrator.app import _serve_mcp
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from tools.universal.browser import BrowserTool
@@ -40,7 +40,8 @@ async def test_an_mcp_server_gets_a_narrow_environment_and_its_own_block(tmp_pat
     server = {"command": sys.executable, "args": [FAKE], "env": {"FAKE_MCP_ENV_DUMP": str(dump), "MY_TOKEN": "t"}}
     _config(home, {"files": server})
 
-    manager = await _start_mcp_servers(ToolRegistry(auto_register=False))
+    manager = McpManager(workspace_root=None)  # started as north's lifespan starts them
+    await _serve_mcp(manager, ToolRegistry(auto_register=False))
     try:
         names = set(json.loads(dump.read_text()))
     finally:

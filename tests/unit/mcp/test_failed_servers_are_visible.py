@@ -13,8 +13,9 @@ import json
 import sys
 from pathlib import Path
 
+from mcp.manager import McpManager
 from orchestrator.api_context import ApiServices, bind_services
-from orchestrator.app import _start_mcp_servers
+from orchestrator.app import _serve_mcp
 from tests.unit.agents.test_react_loop import _load_agent
 from tools.registry import ToolRegistry
 
@@ -37,7 +38,8 @@ async def _started(tmp_path: Path, move_north_home) -> ToolRegistry:
         },
     )
     registry = ToolRegistry(auto_register=False)
-    manager = await _start_mcp_servers(registry)
+    manager = McpManager(workspace_root=None)  # started as north's lifespan starts them
+    await _serve_mcp(manager, registry)
     await manager.close_all()
     return registry
 

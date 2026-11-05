@@ -201,19 +201,6 @@ class RunningTaskStore:
             )
             return cur.rowcount > 0
 
-    async def mark_running_from_queued(self, task_id: str) -> bool:
-        """Transition a queued task back to running."""
-        return await asyncio.to_thread(self._mark_running_from_queued_sync, task_id)
-
-    def _mark_running_from_queued_sync(self, task_id: str) -> bool:
-        now = datetime.now(UTC).isoformat()
-        with open_db_connection(self._db_path) as conn:
-            cur = conn.execute(
-                "UPDATE running_tasks SET status = 'running', heartbeat_at = ? WHERE task_id = ? AND status = 'queued'",
-                (now, task_id),
-            )
-            return cur.rowcount > 0
-
     async def mark_retrying_from_queued(self, task_id: str) -> bool:
         """Claim a queued task and expose that its recovery attempt is running."""
         return await asyncio.to_thread(self._mark_retrying_from_queued_sync, task_id)
@@ -238,23 +225,6 @@ class RunningTaskStore:
             return list(
                 conn.execute("SELECT * FROM running_tasks WHERE status = 'queued' ORDER BY started_at ASC").fetchall()
             )
-
-    async def is_queued(self, task_id: str) -> bool:
-        """Return True if *task_id* is in the 'queued' state.
-
-        Uses a targeted SELECT instead of fetching all queued rows.  This
-        eliminates the O(n) full-table scan that ``list_queued()`` + linear
-        search was doing for single-task checks.
-        """
-        return await asyncio.to_thread(self._is_queued_sync, task_id)
-
-    def _is_queued_sync(self, task_id: str) -> bool:
-        with open_db_connection(self._db_path) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM running_tasks WHERE task_id = ? AND status = 'queued' LIMIT 1",
-                (task_id,),
-            ).fetchone()
-            return row is not None
 
     async def get(self, task_id: str) -> RunningTask | None:
         """Fetch a single task by ID using an index-backed point query."""
@@ -285,17 +255,6 @@ class RunningTaskStore:
             conn.execute(
                 "UPDATE running_tasks SET domain = ? WHERE task_id = ?",
                 (domain, task_id),
-            )
-
-    async def update_description(self, task_id: str, description: str) -> None:
-        """Update the human-readable description for a running task."""
-        await asyncio.to_thread(self._update_description_sync, task_id, description)
-
-    def _update_description_sync(self, task_id: str, description: str) -> None:
-        with open_db_connection(self._db_path) as conn:
-            conn.execute(
-                "UPDATE running_tasks SET description = ? WHERE task_id = ?",
-                (description, task_id),
             )
 
     async def list_active(self, exclude_task_id: str | None = None) -> list[dict]:

@@ -9,7 +9,8 @@ import json
 import sys
 from pathlib import Path
 
-from orchestrator.app import _start_mcp_servers
+from mcp.manager import McpManager
+from orchestrator.app import _serve_mcp
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
 
@@ -31,7 +32,8 @@ async def test_a_configured_server_s_tools_are_offered_and_answer(tmp_path, move
     )
     registry = ToolRegistry(auto_register=False)
 
-    manager = await _start_mcp_servers(registry)
+    manager = McpManager(workspace_root=None)  # started as north's lifespan starts them
+    await _serve_mcp(manager, registry)
     try:
         tool = next(t for t in registry.all_tools() if "search_gmail_messages" in t.name)
         out = await tool.execute(ToolInput(params={"query": "from:jobalerts-noreply@linkedin.com"}))
@@ -50,7 +52,8 @@ async def test_a_project_s_own_mcp_json_is_never_started(monkeypatch, tmp_path, 
     _config(tmp_path / "mcp.json", {"evil2": {"command": sys.executable, "args": [FAKE]}})
     registry = ToolRegistry(auto_register=False)
 
-    manager = await _start_mcp_servers(registry)
+    manager = McpManager(workspace_root=None)  # started as north's lifespan starts them
+    await _serve_mcp(manager, registry)
     await manager.close_all()
 
     assert not [t for t in registry.all_tools() if "search_gmail_messages" in t.name]
@@ -65,7 +68,8 @@ async def test_a_server_that_cannot_start_is_skipped(tmp_path, move_north_home) 
     )
     registry = ToolRegistry(auto_register=False)
 
-    manager = await _start_mcp_servers(registry)
+    manager = McpManager(workspace_root=None)  # started as north's lifespan starts them
+    await _serve_mcp(manager, registry)
     await manager.close_all()
 
     assert [t for t in registry.all_tools() if "search_gmail_messages" in t.name]

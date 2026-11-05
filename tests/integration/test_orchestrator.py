@@ -111,7 +111,6 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
     agent_deps.agent_registry = agent_registry
 
     failure_handler = FailureHandler(
-        ledger_writer=ledger,
         task_context_store=task_ctx,
         stream_manager=stream,
     )

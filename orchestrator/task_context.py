@@ -140,15 +140,6 @@ class TaskContextStore:
 
         return await asyncio.to_thread(_run)
 
-    async def delete_task(self, task_id: str) -> None:
-        """Delete all rows belonging to a task_id."""
-
-        def _run() -> None:
-            with open_db_connection(self._db_path) as conn:
-                conn.execute("DELETE FROM task_state WHERE task_id = ?", (task_id,))
-
-        await asyncio.to_thread(_run)
-
     async def cleanup_stale_tasks(
         self,
         active_task_ids: frozenset[str],

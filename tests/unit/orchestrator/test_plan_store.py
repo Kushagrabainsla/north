@@ -36,8 +36,8 @@ def test_set_plan_replaces_prior_plan():
 
 def test_invalid_status_defaults_to_pending():
     store = PlanStore()
-    store.set_plan("t1", [{"content": "step", "status": "bogus"}])
-    assert store.get_plan("t1")[0].status == "pending"
+    [step] = store.set_plan("t1", [{"content": "step", "status": "bogus"}])
+    assert step.status == "pending"
 
 
 def test_step_alias_and_blank_filtering():
@@ -53,7 +53,6 @@ def test_step_alias_and_blank_filtering():
 def test_missing_task_is_empty():
     store = PlanStore()
     assert store.render("nope") == ""
-    assert store.get_plan("nope") == []
     assert store.progress("nope") == (0, 0)
 
 

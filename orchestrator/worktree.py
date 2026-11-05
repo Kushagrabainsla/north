@@ -370,23 +370,3 @@ class GitWorktreeManager:
             return False
         code, actual, _ = await _run_git(["hash-object", "--", path], self._base)
         return code == 0 and actual.strip() == wanted.strip()
-
-    async def diff_line_count(self, wt: Worktree) -> int:
-        """Total changed lines (insertions + deletions) in *wt* vs its base commit.
-
-        Used as a best-of-N selection signal (a smaller, more surgical diff is
-        preferred). Uncommitted work is included via a staged snapshot count.
-        Returns 0 when nothing changed or the diff cannot be read.
-        """
-        await _stage_agent_work(wt.path)
-        code, out, _ = await _run_git(["diff", "--cached", "--numstat", wt.base_sha], wt.path)
-        if code != 0:
-            return 0
-        total = 0
-        for line in out.splitlines():
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                added = int(parts[0]) if parts[0].isdigit() else 0
-                deleted = int(parts[1]) if parts[1].isdigit() else 0
-                total += added + deleted
-        return total

@@ -11,8 +11,6 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-VERIFY_COMMAND_TIMEOUT: int = 300
-
 _AUTO_VERIFY_RULES: tuple[tuple[str, str | None, str], ...] = (
     ("pytest.ini", None, "pytest -q"),
     ("pyproject.toml", "[tool.pytest", "pytest -q"),
