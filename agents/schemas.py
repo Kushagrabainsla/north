@@ -129,7 +129,11 @@ ASK_USER_SCHEMA: dict = {
                             "options": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Suggested answers; the user can always type their own.",
+                                "description": (
+                                    "Suggested answers, each complete as it stands: ask for a detail such as a "
+                                    "path as its own question, not as an option that says 'tell me'. The user "
+                                    "can always type their own."
+                                ),
                             },
                         },
                         "required": ["question"],

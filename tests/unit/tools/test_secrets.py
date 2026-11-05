@@ -226,3 +226,16 @@ async def test_the_panel_refuses_a_bad_name_and_says_when_there_is_nothing_to_re
 
     assert bad.value.status_code == 400 and "lowercase" in bad.value.detail
     assert gone.value.status_code == 404
+
+
+async def test_listing_tools_names_the_saved_secrets_and_never_a_value(saved, tmp_path) -> None:
+    """In a real run the model had no way to know which secrets were saved before it wrote a tool."""
+    tool = CreateToolTool(tool_registry=None, tools_dir=tmp_path / "learned" / "tools")
+
+    out = await tool.execute(ToolInput(params={"action": "list"}))
+
+    assert out.data["secrets"] == [{"name": "openweather", "note": "weather for get_forecast"}]
+    assert "Saved secrets (by name; a tool reads one with secret(name)): openweather - weather for get_forecast" in (
+        tool.format_output(out.data)
+    )
+    assert KEY not in str(out.model_dump())

@@ -16,7 +16,7 @@ domains: [general, engineering]
 ## Ask once, before writing
 Work out what you can yourself (which public service, its URL, its response format). Then, if anything only the user can decide is still open (which account, which device, what counts as done, whether it may change or send anything), ask it all in **one** `ask_user` call, one item of `questions` each. Do not ask what you can find out, and do not ask again for what the user already said.
 
-Prefer a service that needs no key (Open-Meteo for weather, for example). When a key or password is unavoidable, it is one of the user's secrets: choose a short name (`openweather`), and in the same `ask_user` call ask the user to add it on the dashboard, under Settings, Secrets, with that name (`requires_user_action=true`, its own call, if nothing else is open). You only ever see a secret's name: never ask for its value in chat and never write it into the code.
+Prefer a service that needs no key (Open-Meteo for weather, for example). When a key or password is unavoidable, it is one of the user's secrets. `create_tool` `action='list'` names the secrets already saved; use one that fits. Otherwise choose a short name (`openweather`), and in the same `ask_user` call ask the user to add it on the dashboard, under Settings, Secrets, with that name (`requires_user_action=true`, its own call, if nothing else is open). You only ever see a secret's name: never ask for its value in chat and never write it into the code.
 
 ## What north expects from the file
 North checks most of these itself before the test call, and a draft that misses one comes back with the exact fix to make.

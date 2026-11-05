@@ -174,3 +174,10 @@ def test_the_model_and_the_guides_are_told_to_ask_together() -> None:
     assert "questions" in schema["parameters"]["properties"]
     assert "ask them together" in schema["description"]
     assert "each as an item of `questions`" in flow_guide
+
+
+def test_options_are_complete_answers_and_a_detail_is_its_own_question() -> None:
+    """In a real run Haiku offered "A folder of files on this computer (tell me the path)": picked, it gave no path."""
+    item = ASK_USER_SCHEMA["function"]["parameters"]["properties"]["questions"]["items"]
+
+    assert "not as an option that says 'tell me'" in item["properties"]["options"]["description"]

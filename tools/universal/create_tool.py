@@ -149,11 +149,10 @@ class CreateToolTool(Tool):
 
         if action == "list":
             rows = data.get("tools", [])
-            if not rows:
-                return "No tools found."
-            return "\n".join(
-                f"[{r['type']} · {r.get('status', 'active')}] {r['name']} - {r['description']}" for r in rows
-            )
+            listed = [f"[{r['type']} · {r.get('status', 'active')}] {r['name']} - {r['description']}" for r in rows]
+            saved = [f"{s['name']}" + (f" - {s['note']}" if s.get("note") else "") for s in data.get("secrets", [])]
+            secrets = "Saved secrets (by name; a tool reads one with secret(name)): " + ("; ".join(saved) or "none")
+            return "\n".join([*(listed or ["No tools found."]), "", secrets])
 
         if action == "read":
             return data.get("content", "(empty)")
@@ -554,10 +553,10 @@ def _list_tools(learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
                 "description": desc_m.group(1) if desc_m else "(no description)",
                 "path": str(path),
             }
-    return ToolOutput(
-        success=True,
-        data={"action": "list", "tools": sorted(rows_by_name.values(), key=lambda row: row["name"])},
-    )
+    # The user's secrets by name and note, never value: a tool that needs a key uses one, or asks for a new one.
+    secrets = [{"name": saved.name, "note": saved.note} for saved in secret_store.store().saved()]
+    tools = sorted(rows_by_name.values(), key=lambda row: row["name"])
+    return ToolOutput(success=True, data={"action": "list", "tools": tools, "secrets": secrets})
 
 
 def _read_tool(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
