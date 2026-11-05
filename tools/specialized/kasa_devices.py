@@ -29,6 +29,8 @@ from utils.tasks import spawn
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 12.0
+# The longest fade between two streamed changes: past this a bulb that slow follows nothing anyway.
+_LONGEST_FADE_MS = 1000
 # How long a found set of devices is trusted before discovery runs again: a bulb that
 # moved to another address, or one plugged in since, is found within this.
 _STALE_SECONDS = 300.0
@@ -142,8 +144,17 @@ class KasaDevices:
         self._latest.clear()
 
     async def _send_newest(self, device_id: str) -> None:
+        previous: float | None = None
         try:
             while (change := self._latest.pop(device_id, None)) is not None:
+                # Fade for as long as this bulb takes between changes, so it is still moving when the next
+                # one comes. With a 120 ms fade, a bulb that took longer between changes jumped, held, and
+                # jumped again: the user's KL125 and KL135 bulbs flickered.
+                started = time.monotonic()
+                if previous is not None:
+                    taken = int((started - previous) * 1000)
+                    change = replace(change, transition_ms=min(max(change.transition_ms or 0, taken), _LONGEST_FADE_MS))
+                previous = started
                 try:
                     await self.apply(device_id, change, confirm=False)
                 except Exception:  # noqa: BLE001 - one frame lost is no failure; a silent bulb is not hammered

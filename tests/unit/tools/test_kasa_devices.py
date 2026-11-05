@@ -290,6 +290,32 @@ async def test_a_slow_bulb_gets_the_newest_frame_and_never_falls_behind() -> Non
     assert [state.hue for state in lamp.light.sent] == [10, 50]  # 20, 30 and 40 were overtaken
 
 
+async def test_a_slow_bulb_fades_for_as_long_as_it_takes_between_frames() -> None:
+    """A short fade on a bulb that took longer between changes jumped, held, and jumped: a flicker."""
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    devices = _devices(FakeNetwork(lamp))
+    [entry] = await devices.devices()
+    fades: list[int | None] = []
+    apply = devices.apply
+
+    async def slow(device_id: str, change: LightChange, *, confirm: bool = True) -> dict:
+        fades.append(change.transition_ms)
+        await asyncio.sleep(0.08)
+        return await apply(device_id, change, confirm=confirm)
+
+    devices.apply = slow  # type: ignore[method-assign]
+    await devices.live.start([entry["id"]])
+    for hue in (10, 20, 30):
+        devices.live.frame(
+            {entry["id"]: LightChange(on=True, hue=hue, saturation=100, brightness=60, transition_ms=20)}
+        )
+        await _settle(0.03)
+    await _settle(0.2)
+
+    assert fades[0] == 20  # nothing to go by yet: the fade asked for
+    assert len(fades) == 2 and 70 <= (fades[1] or 0) <= kasa_devices._LONGEST_FADE_MS
+
+
 async def test_stopping_puts_every_light_back_as_it_was() -> None:
     lit, dark = FakeBulb("10.0.0.36", "Desk lamp"), FakeBulb("10.0.0.47", "Bed lamp")
     lit.is_on, lit.light.brightness, lit.light.color_temp = True, 40, 2700

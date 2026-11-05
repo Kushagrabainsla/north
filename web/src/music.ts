@@ -17,16 +17,22 @@ export interface Listening {
   high: number;
   low: number;
   lastBeat: number; // ms
+  swell: number; // what is left of the last beat's lift, fading over a few frames
   hue: number;
+  hueTarget: number; // where the colour is gliding to: a beat moves this, never the colour itself
   brightness: number;
 }
 
-// Brightness never drops below this, nor moves more than STEP between frames: lights that
-// follow music must never strobe.
+// Brightness never drops below FLOOR, and moves at most STEP between frames, the colour at most
+// HUE_STEP degrees: even a sudden change in the music becomes a quick glide, never a flicker.
+// (35 points a frame, a beat straight to full and a 37° colour jump flickered on real KL125 bulbs.)
 export const FLOOR = 10;
-export const STEP = 35;
+export const STEP = 15;
+export const HUE_STEP = 12;
 
-export const listening = (): Listening => ({ envelope: 0, average: 0, high: 0, low: 1, lastBeat: -Infinity, hue: 30, brightness: FLOOR });
+export const listening = (): Listening => ({
+  envelope: 0, average: 0, high: 0, low: 1, lastBeat: -Infinity, swell: 0, hue: 30, hueTarget: 30, brightness: FLOOR,
+});
 
 const clamp = (value: number, low = 0, high = 1) => Math.max(low, Math.min(high, value));
 
@@ -52,8 +58,11 @@ export function centroid(spectrum: Uint8Array, sampleRate: number): number {
   return total ? weighted / total : 0;
 }
 
-/** The hue *from* moves toward *to* by *share*, the short way round the colour wheel. */
-const towards = (from: number, to: number, share: number) => (from + (((to - from + 540) % 360) - 180) * share + 360) % 360;
+/** The hue *from* moves toward *to* by *share*, at most HUE_STEP degrees, the short way round the colour wheel. */
+function towards(from: number, to: number, share: number): number {
+  const step = clamp((((to - from + 540) % 360) - 180) * share, -HUE_STEP, HUE_STEP);
+  return (from + step + 360) % 360;
+}
 
 /**
  * The next frame for the lights, and what to remember for the one after.
@@ -71,18 +80,20 @@ export function nextFrame(
   const loud = clamp(((raw - low) / Math.max(high - low, 0.08)) * (sensitivity / 2.5));
   const beat = bass > 0.15 && bass > state.average * 1.35 && now - state.lastBeat > 280;
   const average = state.average * 0.95 + bass * 0.05;
-  const envelope = state.envelope + (loud - state.envelope) * (loud > state.envelope ? 0.7 : 0.25);
+  const envelope = state.envelope + (loud - state.envelope) * (loud > state.envelope ? 0.45 : 0.12);
+  const swell = beat ? 1 : state.swell * 0.6;
 
-  let hue = state.hue;
-  if (mode === "pulse") hue = (hue + (beat ? 37 : 0.6)) % 360;
+  let hueTarget = state.hueTarget;
+  if (mode === "pulse") hueTarget = (hueTarget + (beat ? 30 : 0.4)) % 360;
   else {
     const where = clamp((Math.log(Math.max(centroid(spectrum, sampleRate), 100)) - Math.log(100)) / (Math.log(4000) - Math.log(100)));
-    hue = towards(hue, where * 280, 0.3);
+    hueTarget = where * 280;
   }
-  const wanted = mode === "pulse" && beat ? 100 : FLOOR + (100 - FLOOR) * envelope;
-  const brightness = clamp(wanted, state.brightness - STEP, state.brightness + STEP);
+  const hue = towards(state.hue, hueTarget, mode === "pulse" ? 0.25 : 0.15);
+  const lift = mode === "pulse" ? clamp(envelope * 0.7 + swell * 0.4) : envelope;
+  const brightness = clamp(FLOOR + (100 - FLOOR) * lift, state.brightness - STEP, state.brightness + STEP);
   return {
-    state: { envelope, average, high, low, lastBeat: beat ? now : state.lastBeat, hue, brightness },
+    state: { envelope, average, high, low, lastBeat: beat ? now : state.lastBeat, swell, hue, hueTarget, brightness },
     frame: { hue: Math.round(hue), saturation: 100, brightness: Math.round(clamp(brightness, FLOOR, 100)) },
     beat,
   };
