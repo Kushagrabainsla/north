@@ -20,6 +20,7 @@ from approval.models import CardType, DecidedBy, MemoryKind
 from approval.unattended_rules import KINDS as RULE_KINDS
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
 from config.approval_mode import ApprovalMode
+from config.env_file import remove_env_key, write_env_key
 from config.security import (
     WEB_SESSION_COOKIE,
     consume_pairing,
@@ -1235,44 +1236,13 @@ async def logout_provider(provider_id: str, request: Request) -> dict[str, Any]:
     return _provider_auth_payload(definition)
 
 
-def _remove_env_key(home: Path, env_key: str) -> None:
-    """Drop `env_key` from <NORTH_HOME>/.env, keeping its other lines and its private permissions."""
-    env_path = home / ".env"
-    if not env_path.exists():
-        return
-    prefix = f"{env_key}="
-    lines = [line for line in env_path.read_text(encoding="utf-8").splitlines() if not line.startswith(prefix)]
-    env_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-    env_path.chmod(0o600)
-
-
-def _write_env_key(home: Path, env_key: str, value: str) -> None:
-    """Upsert `env_key=value` in ~/.north/.env with private permissions.
-
-    Blocking - call via to_thread so a request handler never stalls the loop.
-    """
-    home.mkdir(parents=True, exist_ok=True)
-    env_path = home / ".env"
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    prefix = f"{env_key}="
-    replacement = f"{env_key}={value}"
-    for index, line in enumerate(lines):
-        if line.startswith(prefix):
-            lines[index] = replacement
-            break
-    else:
-        lines.append(replacement)
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    env_path.chmod(0o600)
-
-
 @router.post("/providers/{provider_id}")
 async def update_provider(provider_id: str, body: ProviderCredentialUpdate, request: Request) -> dict[str, Any]:
     definition = _provider_definition(provider_id)
     if not definition.env_key:
         raise HTTPException(status_code=400, detail="This provider uses browser authentication; use the CLI login flow")
     home = current_services().require("north_home")
-    await asyncio.to_thread(_write_env_key, home, definition.env_key, body.api_key.strip())
+    await asyncio.to_thread(write_env_key, home, definition.env_key, body.api_key.strip())
     os.environ[definition.env_key] = body.api_key.strip()
     refreshed = await _refresh_inference_runtime(request.app)
     # What trying the key found: a key Gemini rejected was answered "saved and runtime refreshed", "Ready".
@@ -1293,7 +1263,7 @@ async def remove_provider(provider_id: str, request: Request) -> dict[str, Any]:
     if not definition.env_key:
         raise HTTPException(status_code=400, detail="This provider uses browser authentication; log out instead")
     home = current_services().require("north_home")
-    await asyncio.to_thread(_remove_env_key, home, definition.env_key)
+    await asyncio.to_thread(remove_env_key, home, definition.env_key)
     os.environ.pop(definition.env_key, None)
     await _refresh_inference_runtime(request.app)
     return {"id": definition.id, "configured": False, "state": "not_configured", "state_detail": ""}
@@ -1328,7 +1298,7 @@ async def _save_telegram(home: Path, values: dict[str, str]) -> None:
     from config.settings import reload_settings
 
     for key, value in values.items():
-        await asyncio.to_thread(_write_env_key, home, key, value)
+        await asyncio.to_thread(write_env_key, home, key, value)
         os.environ[key] = value
     reload_settings()
 

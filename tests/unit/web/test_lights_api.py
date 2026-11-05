@@ -137,3 +137,65 @@ async def test_music_sync_follows_the_frames_then_puts_the_lights_back(home) -> 
     assert not_started.value.status_code == 409 and following == {"following": [desk_id]}
     assert during == 200 and (desk.is_on, desk.light.brightness, desk.light.color_temp) == (True, 40, 2700)
     assert store.all() == []
+
+
+async def test_a_tp_link_login_saved_here_unlocks_the_bulbs_set_up_with_it(home, monkeypatch, tmp_path) -> None:
+    """The user had no login set: all four bulbs refused, and the only fix was editing north's .env."""
+    import os
+    from pathlib import Path
+
+    from kasa.exceptions import AuthenticationError
+
+    from tools.specialized import kasa_devices
+
+    services, bulbs, _ = home
+    for key in (
+        "NORTH_KASA_USERNAME",
+        "NORTH_KASA_PASSWORD",
+        "NORTH_KASA_SECOND_USERNAME",
+        "NORTH_KASA_SECOND_PASSWORD",
+    ):
+        monkeypatch.setenv(key, "")  # restored afterwards, whatever the routes write
+    north_home = Path(os.environ["NORTH_HOME"])
+    owners = dict.fromkeys(MINE, ("me@example.com", "p@ss w#rd")) | dict.fromkeys(
+        FRIENDS, ("friend@example.com", "theirs")
+    )
+    network = services.tool_registry.get("kasa").devices
+    opened = network._open
+
+    async def needs_its_owners_login(host):
+        bulb = next(b for b in bulbs.values() if b.host == host)
+        if owners[bulb.alias] not in kasa_devices.accounts():
+            raise AuthenticationError("Device response did not match our challenge")
+        return await opened(host)
+
+    network._open = needs_its_owners_login
+    services = services.replace(north_home=north_home)
+    with bind_services(services):
+        before = await lights.list_lights()
+        mine = await lights.save_kasa_account(
+            "yours", lights.KasaAccountUpdate(email="me@example.com", password="p@ss w#rd")
+        )
+        both = await lights.save_kasa_account(
+            "second", lights.KasaAccountUpdate(email="friend@example.com", password="theirs")
+        )
+        listed = await lights.kasa_accounts()
+        for slot in ("yours", "second"):
+            await lights.remove_kasa_account(slot)
+
+    assert before["lights"] == [] and len(before["locked"]) == 4
+    assert mine["answering"] == 2 and len(mine["locked"]) == 2 and both["answering"] == 4 and both["locked"] == []
+    assert listed["accounts"] == [
+        {"slot": "yours", "email": "me@example.com", "saved": True},
+        {"slot": "second", "email": "friend@example.com", "saved": True},
+    ]
+    assert "p@ss" not in str(listed) and "theirs" not in str(both)  # a password is never sent back
+    assert "NORTH_KASA" not in (north_home / ".env").read_text()
+
+
+async def test_a_password_the_file_cannot_hold_is_refused_before_anything_is_saved(home) -> None:
+    services, _, _ = home
+    with bind_services(services), pytest.raises(HTTPException) as refused:
+        await lights.save_kasa_account("yours", lights.KasaAccountUpdate(email="me@example.com", password="x${HOME}"))
+
+    assert refused.value.status_code == 422 and not (services.north_home / ".env").exists()

@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from config.env_file import remove_env_key, unstorable, write_env_key
 from orchestrator.api_context import current_services
 from tools.specialized.kasa_devices import SCENES, KasaDevices, LightChange
 
@@ -79,6 +81,22 @@ class LiveFrames(BaseModel):
     transition_ms: int = Field(120, ge=0, le=2000)
 
 
+class KasaAccountUpdate(BaseModel):
+    """A TP-Link login: the Kasa app account some of the bulbs were set up with."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
+
+
+# Where each login is kept in north's .env: your account, and a second one (a friend's bulbs).
+_ACCOUNT_KEYS = {
+    "yours": ("NORTH_KASA_USERNAME", "NORTH_KASA_PASSWORD"),
+    "second": ("NORTH_KASA_SECOND_USERNAME", "NORTH_KASA_SECOND_PASSWORD"),
+}
+
+
 class MineUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -94,6 +112,7 @@ async def list_lights(look_again: bool = False) -> dict[str, Any]:
     return {
         "lights": [device | {"mine": device["id"] in mine} for device in found],
         "problem": devices.problem,
+        "locked": devices.locked,
         "scenes": sorted(SCENES),
     }
 
@@ -148,6 +167,70 @@ async def stop_music_sync() -> dict[str, bool]:
     """Stop following the music and put the lights back as they were."""
     await _devices().live.stop()
     return {"stopped": True}
+
+
+@router.get("/lights/accounts")
+async def kasa_accounts() -> dict[str, Any]:
+    """The TP-Link logins north has for your bulbs, by email; a password is never sent back."""
+    return {"accounts": _accounts()}
+
+
+@router.put("/lights/accounts/{slot}")
+async def save_kasa_account(slot: str, body: KasaAccountUpdate) -> dict[str, Any]:
+    """Keep a TP-Link login in north's .env, then try it on the bulbs at once.
+
+    Bulbs set up with the Kasa app answer only that account, and the login could only be
+    set by editing north's .env by hand.
+    """
+    keys = _account_keys(slot)
+    values = (body.email.strip(), body.password)
+    for value in values:
+        if why := unstorable(value):
+            raise HTTPException(status_code=422, detail=f"North cannot keep this login exactly: {why}.")
+    home = current_services().require("north_home")
+    for key, value in zip(keys, values, strict=True):
+        await asyncio.to_thread(write_env_key, home, key, value)
+        os.environ[key] = value
+    _reload_settings()
+    devices = _devices()
+    found = await devices.devices(look_again=True)
+    logger.info("Lights: a TP-Link login was saved for %s; %d device(s) answer", slot, len(found))
+    return {"accounts": _accounts(), "answering": len(found), "locked": devices.locked, "problem": devices.problem}
+
+
+@router.delete("/lights/accounts/{slot}")
+async def remove_kasa_account(slot: str) -> dict[str, Any]:
+    """Forget a TP-Link login; bulbs already connected keep working until north restarts."""
+    home = current_services().require("north_home")
+    for key in _account_keys(slot):
+        await asyncio.to_thread(remove_env_key, home, key)
+        os.environ.pop(key, None)
+    _reload_settings()
+    return {"accounts": _accounts()}
+
+
+def _account_keys(slot: str) -> tuple[str, str]:
+    if slot not in _ACCOUNT_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown account; it is yours or second.")
+    return _ACCOUNT_KEYS[slot]
+
+
+def _accounts() -> list[dict[str, Any]]:
+    from config.settings import settings
+
+    pairs = {
+        "yours": (settings.kasa_username, settings.kasa_password),
+        "second": (settings.kasa_second_username, settings.kasa_second_password),
+    }
+    return [
+        {"slot": slot, "email": email, "saved": bool(email and password)} for slot, (email, password) in pairs.items()
+    ]
+
+
+def _reload_settings() -> None:
+    from config.settings import reload_settings
+
+    reload_settings()
 
 
 @router.put("/lights/{device_id}/mine")

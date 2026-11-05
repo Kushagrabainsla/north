@@ -183,6 +183,9 @@ class Settings(BaseSettings):
     # can see the bulbs and do nothing with them. Older devices need neither.
     kasa_username: str = ""
     kasa_password: str = ""
+    # A second TP-Link account, for bulbs set up with someone else's Kasa app (a friend's, say).
+    kasa_second_username: str = ""
+    kasa_second_password: str = ""
 
     # A task whose heartbeat has not advanced for this long is considered stuck and
     # is cancelled/failed by the watchdog; the same age caps how old an interrupted

@@ -20,6 +20,7 @@ export interface Light {
 export interface LightsOverview {
   lights: Light[];
   problem: string;
+  locked: string[]; // found, but refusing every TP-Link login north has
   scenes: string[];
 }
 

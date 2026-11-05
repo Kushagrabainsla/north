@@ -201,18 +201,58 @@ async def test_done_is_what_the_device_reports() -> None:
         await devices.apply(entry["id"], LightChange(brightness=70))
 
 
-async def test_a_device_that_will_not_connect_is_named_with_why(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bulbs_that_refuse_the_login_are_named_once_with_where_to_add_it(monkeypatch) -> None:
+    """Four bulbs each repeated python-kasa's long error, then a hint to check the Wi-Fi, though all were found."""
+    from kasa.exceptions import AuthenticationError
+
     from config.settings import settings
 
-    monkeypatch.setattr(settings, "kasa_username", "", raising=False)
-    monkeypatch.setattr(settings, "kasa_password", "", raising=False)
-    network = FakeNetwork(FakeBulb("10.0.0.36", "Desk lamp"))
-    network.refuse["10.0.0.36"] = type("AuthenticationError", (Exception,), {})("refused")
+    for field in ("kasa_username", "kasa_password", "kasa_second_username", "kasa_second_password"):
+        monkeypatch.setattr(settings, field, "", raising=False)
+    network = FakeNetwork(FakeBulb("10.0.0.36", "KL125(US)"), FakeBulb("10.0.0.47", "KL125(US) "))
+    for host in network.bulbs:
+        network.refuse[host] = AuthenticationError("Device response did not match our challenge")
     devices = _devices(network)
 
     assert await devices.devices() == []
-    assert "Desk lamp (10.0.0.36): AuthenticationError" in devices.problem
-    assert "NORTH_KASA_USERNAME" in devices.problem
+    assert devices.locked == ["KL125(US) (10.0.0.36)", "KL125(US)  (10.0.0.47)"]
+    assert devices.problem.startswith("2 bulbs need the TP-Link login they were set up with in the Kasa app")
+    assert devices.problem.count("challenge") == 0 and "Settings > Connections > Kasa lights" in devices.problem
+
+
+async def test_a_bulb_that_will_not_answer_for_another_reason_is_named_with_why() -> None:
+    network = FakeNetwork(FakeBulb("10.0.0.36", "Desk lamp"))
+    network.refuse["10.0.0.36"] = TimeoutError("timed out")
+    devices = _devices(network)
+
+    assert await devices.devices() == [] and devices.locked == []
+    assert devices.problem == "Not answering: Desk lamp (10.0.0.36): TimeoutError: timed out"
+
+
+async def test_each_login_is_tried_until_a_bulb_accepts_one(monkeypatch) -> None:
+    """A bulb answers only the account it was set up with: yours, or a friend's."""
+    from kasa import Discover
+    from kasa.exceptions import AuthenticationError
+
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "kasa_username", "me@example.com", raising=False)
+    monkeypatch.setattr(settings, "kasa_password", "mine", raising=False)
+    monkeypatch.setattr(settings, "kasa_second_username", "friend@example.com", raising=False)
+    monkeypatch.setattr(settings, "kasa_second_password", "theirs", raising=False)
+    tried: list[str] = []
+
+    async def discover_single(host, *, timeout, username, password):
+        tried.append(username)
+        if username != "friend@example.com":
+            raise AuthenticationError("Device response did not match our challenge")
+        return FakeBulb(host, "Sofa light")
+
+    monkeypatch.setattr(Discover, "discover_single", discover_single)
+
+    bulb = await kasa_devices.open_device_at("10.0.0.161")
+
+    assert tried == ["me@example.com", "friend@example.com"] and bulb.alias == "Sofa light"
 
 
 async def test_every_connection_is_released_when_north_stops() -> None:

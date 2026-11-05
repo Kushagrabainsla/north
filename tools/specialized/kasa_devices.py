@@ -72,6 +72,7 @@ class KasaDevices:
         self._names: dict[str, str] = {}  # device id -> the name discovery reported
         self._found_at: float | None = None
         self._problem = ""
+        self._locked: list[str] = []  # devices found that refused every TP-Link login north has
         self._finding = asyncio.Lock()
         # The newest change waiting for each device that is being streamed to, and its sender.
         self._latest: dict[str, LightChange] = {}
@@ -82,6 +83,11 @@ class KasaDevices:
     def problem(self) -> str:
         """Why devices could not be found or reached, or "" when nothing is wrong."""
         return self._problem
+
+    @property
+    def locked(self) -> list[str]:
+        """The devices found that refused every TP-Link login north has, by name and address."""
+        return list(self._locked)
 
     async def devices(self, *, look_again: bool = False) -> list[dict[str, Any]]:
         """Every device found, with what it can do and its state now."""
@@ -161,15 +167,20 @@ class KasaDevices:
             pairs, diagnostic = await asyncio.to_thread(self._discover)
             known = {getattr(dev, "host", ""): device_id for device_id, dev in self._devices.items()}
             errors: list[str] = []
+            locked: list[str] = []
             for host, name in pairs:
                 if host in known:
                     self._names[known[host]] = name
                     continue
                 try:
-                    dev = await asyncio.wait_for(self._open(host), _TIMEOUT_SECONDS)
+                    # Each saved account may be tried in turn, each with its own timeout.
+                    dev = await asyncio.wait_for(self._open(host), _TIMEOUT_SECONDS * 3)
                     await asyncio.wait_for(dev.update(), _TIMEOUT_SECONDS)
                 except Exception as exc:  # noqa: BLE001 - one bulb that will not answer must not hide the rest
-                    errors.append(f"{name} ({host}): {type(exc).__name__}: {exc}")
+                    if _refused_login(exc):
+                        locked.append(f"{name} ({host})")
+                    else:
+                        errors.append(f"{name} ({host}): {type(exc).__name__}: {exc}")
                     continue
                 device_id = str(getattr(dev, "device_id", "") or host)
                 if (moved := self._devices.get(device_id)) is not None:
@@ -177,7 +188,8 @@ class KasaDevices:
                 self._devices[device_id] = dev
                 self._names[device_id] = name
             self._found_at = time.monotonic()
-            self._problem = _why_not(pairs, diagnostic, errors, bool(self._devices))
+            self._locked = locked
+            self._problem = _why_not(pairs, diagnostic, errors, locked)
 
     async def _read(self, device_id: str) -> None:
         await asyncio.wait_for(self._devices[device_id].update(), _TIMEOUT_SECONDS)
@@ -359,20 +371,50 @@ def _light(dev: Any) -> Any:
     return getattr(dev, "modules", {}).get(Module.Light)
 
 
-def _why_not(pairs: list[tuple[str, str]], diagnostic: str, errors: list[str], reached: bool) -> str:
+def _why_not(pairs: list[tuple[str, str]], diagnostic: str, errors: list[str], locked: list[str]) -> str:
+    """What stops north from controlling the devices it found, or "" when nothing does.
+
+    Every bulb that refused the login was named with python-kasa's long error, four times over,
+    followed by a hint to check the Wi-Fi, though the bulbs had been found.
+    """
     if not pairs:
         return diagnostic
-    if not errors:
-        return ""
-    why = "; ".join(errors)
-    if "AuthenticationError" in why and not credential_args():
-        from config.settings import settings
+    parts = []
+    if locked:
+        one = len(locked) == 1
+        count = f"{len(locked)} bulb{'' if one else 's'}"
+        where = "Settings > Connections > Kasa lights (or NORTH_KASA_USERNAME and NORTH_KASA_PASSWORD in north's .env)"
+        if accounts():
+            parts.append(
+                f"{count} refused the TP-Link logins north has: {', '.join(locked)}. Each bulb answers only the "
+                f"account it was set up with in the Kasa app; add that one in {where}."
+            )
+        else:
+            parts.append(
+                f"{count} {'needs' if one else 'need'} the TP-Link login {'it was' if one else 'they were'} set up "
+                f"with in the Kasa app: {', '.join(locked)}. "
+                f"Add it in {where}."
+            )
+    if errors:
+        parts.append(f"Not answering: {'; '.join(errors)}")
+    return " ".join(parts)
 
-        why += (
-            " No TP-Link account is configured: set NORTH_KASA_USERNAME and NORTH_KASA_PASSWORD in "
-            f"{settings.north_home / '.env'}. Kasa firmware since 2023 requires one."
-        )
-    return why if not reached else f"Some devices could not be reached: {why}"
+
+def _refused_login(error: BaseException) -> bool:
+    from kasa.exceptions import AuthenticationError
+
+    return isinstance(error, AuthenticationError) or type(error).__name__ == "AuthenticationError"
+
+
+def accounts() -> list[tuple[str, str]]:
+    """The TP-Link logins north has, in the order they are tried: yours, then a second one."""
+    from config.settings import settings
+
+    logins = [
+        (settings.kasa_username, settings.kasa_password),
+        (settings.kasa_second_username, settings.kasa_second_password),
+    ]
+    return [(username, password) for username, password in logins if username and password]
 
 
 def credential_args() -> list[str]:
@@ -382,11 +424,10 @@ def credential_args() -> list[str]:
     credential and then refuse everything else, so this is the difference between
     seeing a bulb and being able to switch it on.
     """
-    from config.settings import settings
-
-    if not (settings.kasa_username and settings.kasa_password):
+    if not (logins := accounts()):
         return []
-    return ["--username", settings.kasa_username, "--password", settings.kasa_password]
+    username, password = logins[0]
+    return ["--username", username, "--password", password]
 
 
 def parse_discovery(payload: str) -> list[tuple[str, str]]:
@@ -487,7 +528,7 @@ def redacted(cmd: list[str]) -> list[str]:
 
 
 async def open_device_at(host: str) -> Any:
-    """Open one device, letting discovery work out how to talk to it.
+    """Open one device and read it, with the first TP-Link login it accepts.
 
     ``Device.connect(host=...)`` assumes the legacy protocol and dials port 9999,
     which a KLAP device is not listening on - so every bulb failed with "connect
@@ -495,19 +536,30 @@ async def open_device_at(host: str) -> Any:
     device which protocol and port it speaks before connecting, and carries the
     login while it does.
 
-    The credentials have to travel here as well as to the discovery subprocess:
-    discovery only has to *see* a device, control has to authenticate to it.
+    A bulb answers only the account it was set up with in the Kasa app, so each saved
+    login is tried in turn: yours, then a friend's. With none saved, python-kasa tries
+    the defaults that a bulb never linked to an account accepts.
     """
     from kasa import Discover
 
-    from config.settings import settings
-
-    return await Discover.discover_single(
-        host,
-        timeout=int(_TIMEOUT_SECONDS),
-        username=settings.kasa_username or None,
-        password=settings.kasa_password or None,
-    )
+    refused: BaseException = LookupError(f"no TP-Link login was tried on {host}")
+    for username, password in accounts() or [("", "")]:
+        dev = None
+        try:
+            dev = await Discover.discover_single(
+                host, timeout=int(_TIMEOUT_SECONDS), username=username or None, password=password or None
+            )
+            if dev is None:
+                raise LookupError(f"nothing answered at {host}")
+            await dev.update()
+            return dev
+        except Exception as exc:
+            if dev is not None:
+                await close_devices([dev])
+            if not _refused_login(exc):
+                raise
+            refused = exc
+    raise refused
 
 
 async def close_devices(devices: Any) -> None:

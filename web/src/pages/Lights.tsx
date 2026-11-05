@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, post } from "../api";
 import { Empty, ErrorNotice, Loading, PageHeader } from "../components";
 import { useResource } from "../hooks";
@@ -51,9 +52,13 @@ export function Lights() {
     }
   };
   const mineCount = lights.filter((light) => light.mine).length;
-  const empty = !lights.length
-    ? `${overview.data?.problem || "No Kasa devices were found."} North finds bulbs on the network of the computer it runs on: make sure that computer and your bulbs are on the same Wi-Fi, then press Look again.`
-    : "None of these lights is marked as yours yet: switch to All lights and press ☆ Mine on yours.";
+  const locked = overview.data?.locked ?? [];
+  // The Wi-Fi hint only when nothing was found: bulbs that refuse the login were found.
+  const empty = lights.length
+    ? "None of these lights is marked as yours yet: switch to All lights and press ☆ Mine on yours."
+    : locked.length
+      ? "No light answers yet: they need their TP-Link login."
+      : `${overview.data?.problem || "No Kasa devices were found."} North finds bulbs on the network of the computer it runs on: make sure that computer and your bulbs are on the same Wi-Fi, then press Look again.`;
 
   return <div className="page lights-page">
     <PageHeader
@@ -75,7 +80,10 @@ export function Lights() {
         </div>
       </section>
       {shown.length > 0 && <MusicSync lights={shown} scope={chosen} onStopped={() => void overview.reload()}/>}
-      {lights.length > 0 && overview.data?.problem && <p className="lights-notice">{overview.data.problem}</p>}
+      {locked.length > 0 && <p className="lights-notice lights-locked">
+        {locked.length} light{locked.length === 1 ? "" : "s"} found {locked.length === 1 ? "needs its" : "need their"} TP-Link login, the Kasa app account {locked.length === 1 ? "it was" : "they were"} set up with: {locked.join(", ")}. <Link to="/settings">Add it in Settings → Connections → Kasa lights</Link>, then press Look again.
+      </p>}
+      {(lights.length > 0 || locked.length > 0) && overview.data?.problem && !locked.length && <p className="lights-notice">{overview.data.problem}</p>}
       {notice && <p className="lights-notice" role="status">{notice}</p>}
       {shown.length
         ? <div className="lights-grid">{shown.map((light) => <LightCard key={light.id} light={light} onChanged={merge} onError={(error) => setNotice(`${light.name}: ${message(error)}`)} onMine={markMine}/>)}</div>
