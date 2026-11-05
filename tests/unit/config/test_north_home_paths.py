@@ -27,6 +27,7 @@ _MAY_NAME_DEFAULT_HOME = {
     "utils/handoff.py": "the same default, for the same reason",
     "tools/_path.py": "a default install's home stays blocked while another home is in use",
     "coding_agents/constants.py": "the same, for what a coding agent may never read",
+    "tools/universal/_draft_checks.py": "finds a tool draft that writes the default home into its code",
 }
 # What the model reads: agent prompts and the bundled skills.
 _MODEL_FACING = ("agents/**/prompts/*.md", "resources/**/*.md")
