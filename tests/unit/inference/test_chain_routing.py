@@ -115,9 +115,9 @@ class TestChainConstruction:
         pinned = PartProfile("coder", frozenset({"tools"}), 0, Order.CODING, pinned_model="not-a-model")
         assert _chain(pinned)[0].canonical_id == "claude-fable-5-1"
 
-    def test_the_reviewer_chain_never_contains_the_coders_model(self) -> None:
+    def test_an_excluded_model_is_never_in_the_chain(self) -> None:
         """The property the two-list router violated whenever the primary ran dry."""
-        chain = narrow(_chain(profile_for("reviewer")), Requirements(exclude=frozenset({"claude-fable-5-1"})))
+        chain = narrow(_chain(profile_for("coder")), Requirements(exclude=frozenset({"claude-fable-5-1"})))
         assert "claude-fable-5-1" not in {c.canonical_id for c in chain}
         assert chain, "excluding one model must not empty an exhaustive chain"
 

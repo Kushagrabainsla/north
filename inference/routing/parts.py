@@ -46,7 +46,6 @@ class Order:
     """
 
     CODING = "coding_score"
-    AGENTIC = "agentic_score"
     INTELLIGENCE = "intelligence_score"
     CHEAPEST = "cheapest"
 
@@ -83,8 +82,6 @@ class PartProfile:
 NESTED_SEPARATOR = ":"
 COMPACT_SUFFIX = "compact"
 
-_CODING_PARTS = ("coder", "reviewer", "tester")
-_DESIGN_PARTS = ("architect", "spec_critique")
 _TINY_STRUCTURED_PARTS = ("critic", "north_star_checker")
 _BACKGROUND_PARTS = ("extraction_pipeline", "episode_consolidator", "skill_distiller")
 _PROSE_PARTS = ("synthesizer", "context_injector")
@@ -100,14 +97,6 @@ _BACKGROUND_FLOOR = 0.30
 DEFAULT_PART_PROFILES: dict[str, PartProfile] = {
     # The expensive one. Everything else exists so this can have the best model.
     "coder": PartProfile("coder", frozenset({TOOLS}), _CODING_CONTEXT, Order.CODING),
-    # Ranked identically to the coder; independence comes from exclude_models,
-    # which the chain honours as a hard filter rather than a preference.
-    "reviewer": PartProfile("reviewer", frozenset({TOOLS}), 0, Order.CODING),
-    "tester": PartProfile("tester", frozenset({TOOLS}), 0, Order.CODING),
-    "architect": PartProfile("architect", frozenset({REASONING}), 0, Order.INTELLIGENCE),
-    "spec_critique": PartProfile("spec_critique", frozenset({REASONING}), 0, Order.INTELLIGENCE),
-    # Reads a lot, so it needs the window; cost enters only as the tie-break.
-    "researcher": PartProfile("researcher", frozenset({TOOLS}), _CODING_CONTEXT, Order.AGENTIC),
     # Small JSON, but it gates every task - cheap, yet not from the bottom.
     "planner": PartProfile(
         "planner", frozenset({STRUCTURED}), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR

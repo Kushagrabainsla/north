@@ -81,9 +81,6 @@ class CatalogSnapshot:
     def is_empty(self) -> bool:
         return not self.facts or not self.endpoints_by_model
 
-    def endpoints_of(self, canonical_id: str) -> list[Endpoint]:
-        return self.endpoints_by_model.get(canonical_id, [])
-
 
 class FactsCatalog:
     """Fetches, merges, persists and serves model facts.

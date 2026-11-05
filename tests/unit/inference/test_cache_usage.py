@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-from inference.facts.models import Endpoint
 from inference.usage import cache_tokens
 
 
@@ -36,26 +35,6 @@ class TestProviderShapes:
 
     def test_a_float_count_is_accepted(self) -> None:
         assert cache_tokens({"prompt_tokens_details": {"cached_tokens": 128.0}}) == (128, 0)
-
-
-class TestEndpointCacheDiscount:
-    """Publishing a cache discount is a pricing fact, not a behavioural one."""
-
-    def test_a_published_cache_price_is_a_discount(self) -> None:
-        assert Endpoint("m", "openrouter", "m", cache_read_price=2e-7).discounts_cache_reads is True
-
-    def test_a_free_endpoint_quotes_no_discount_but_may_still_cache(self) -> None:
-        """Measured: an OpenRouter free model served 99% of a warm prefix from cache.
-
-        It publishes no cache price because it has no price at all, so this must
-        never be read as "it does not cache" - only the response can say that.
-        """
-        assert Endpoint("m", "openrouter", "m:free", price_out=0.0).discounts_cache_reads is False
-
-    def test_free_and_discounted_are_independent(self) -> None:
-        both = Endpoint("m", "p", "m", price_in=0.0, price_out=0.0, cache_read_price=0.0)
-        assert both.is_free is True
-        assert both.discounts_cache_reads is True
 
 
 class TestItReachesTheLedger:

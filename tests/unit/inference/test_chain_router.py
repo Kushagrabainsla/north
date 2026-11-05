@@ -137,10 +137,10 @@ async def test_one_gateway_error_does_not_bench_the_provider(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_reviewer_never_reuses_the_coders_model(tmp_path) -> None:
+async def test_an_excluded_model_is_never_used(tmp_path) -> None:
     router, _, decisions = _router(tmp_path, {})
     result = await router.dispatch(
-        component="reviewer",
+        component="coder",
         requirements=requirements_from(needs_tools=True, exclude_models=["claude-fable-5.1"]),
         call_fn=_call,
         task_id="t3",

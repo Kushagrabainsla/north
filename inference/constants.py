@@ -50,57 +50,6 @@ _MODEL_SPEED_ALPHA: float = 0.25
 _MODEL_SPEED_MIN_SAMPLES: int = 3
 _MODEL_SPEED_FLOOR_TOK_PER_SEC: float = 5.0
 
-# Model family-quality tiers (price-FREE prior). Keyed by case-insensitive
-# substring; longest match wins. This is the static "smartness prior" used when
-# price carries no signal (all providers free). Overridable per-install via
-# ~/.north/model_tiers.json (see inference/model_scorer.py).
-MODEL_FAMILY_TIERS: dict[str, float] = {
-    # Frontier reasoning / pro
-    "claude-opus-4": 0.96,
-    "claude-opus": 0.95,
-    "gpt-5": 0.95,
-    "codex": 0.95,  # OpenAI's dedicated coding line
-    "claude-fable": 0.94,
-    "gemini-3.1-pro": 0.94,
-    "gemini-3-pro": 0.93,
-    "gemini-2.5-pro": 0.92,
-    "ox-alpha": 0.88,
-    "0x-alpha": 0.88,
-    "0xalpha": 0.88,
-    "stealth": 0.88,
-    "claude-sonnet": 0.85,
-    "gemini-2.0-pro": 0.80,
-    "gpt-oss-120b": 0.80,
-    # Current strong open models. Free-tier installs run on these, and leaving them
-    # at the unknown-family floor made a 550B model rank like a 7B one.
-    "minimax-m3": 0.82,
-    "glm-5": 0.80,
-    "nemotron-3-ultra": 0.80,
-    "minimax-m2.7": 0.76,
-    "nemotron-3-super": 0.74,
-    "deepseek-r1": 0.78,
-    "gemini-pro": 0.78,  # generic pro catch-all
-    "claude": 0.75,  # generic claude catch-all
-    # Mid
-    "llama-3.3-70b": 0.62,
-    "gemini-3.1-flash": 0.72,
-    "gemini-3-flash": 0.72,
-    "gemini-3": 0.72,  # any other gemini-3.x (3.6/3.7/3.8 flash) - not the 0.50 floor
-    "gemini-2.5-flash": 0.70,
-    "gemini-flash": 0.65,  # generic flash catch-all
-    "qwen3.6-27b": 0.60,
-    "qwen3-32b": 0.58,
-    "deepseek": 0.60,
-    "gpt": 0.60,  # generic gpt catch-all
-    # Small / fast
-    "llama-3.1-8b": 0.32,
-    "llama-3-8b": 0.30,
-    "gpt-oss-20b": 0.42,
-    "allam": 0.25,
-    "llama": 0.40,
-    "gemini": 0.50,  # generic gemini catch-all (floor for unmatched gemini)
-}
-
 # (task_id, component, capability, priority) is reused for that task's later
 # steps so a multi-step coding task is done by one consistent model. Bounded
 # LRU so a long-lived server never grows this map without limit.

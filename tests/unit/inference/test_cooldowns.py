@@ -67,4 +67,3 @@ def test_capability_cooldown_isolates_specific_capability() -> None:
     assert store.is_capability_active(_KEY, "tool_calls") is True
     assert store.is_capability_active(_KEY, "completion") is False
     assert store.is_active(_KEY) is False  # General model is still active!
-    assert store.remaining_capability(_KEY, "tool_calls") > 3500

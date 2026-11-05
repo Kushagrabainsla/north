@@ -438,16 +438,6 @@ class ModelDispatcher(InferenceRouter):
             return []
         return self._decisions.recent(task_id=task_id, part=part, limit=limit)
 
-    def entitlement_summary(self) -> dict[str, str]:
-        """Per-provider entitlement blocks, for `north limits` and health checks.
-
-        Answers the question a 24-hour provider blackout used to make unanswerable:
-        which providers need an action, and which of their models still work.
-        """
-        if self._availability is None:
-            return {}
-        return self._availability.entitlements.summary()
-
     def prune_routing_decisions(self, retention_days: int) -> int:
         """Drop decisions older than *retention_days*. Called by the cleanup job."""
         if self._decisions is None:
@@ -839,16 +829,6 @@ class ModelDispatcher(InferenceRouter):
         """
         return [r.to_dict() for r in self._rate_limit_status.snapshot()]
 
-    def rate_limit_status_summary(self) -> dict[str, int | None]:
-        """Counts for the status formatter's 'unknown vs verified' distinction.
-
-        ``checked`` = models used successfully this session; ``pool_total`` = total
-        completion-capable models in the registry. Lets the UI report how many models
-        have never been probed (and are therefore 'unknown', not 'available').
-        """
-        pool_total = sum(1 for info, _ in self._registry.values() if info.supports(ModelCapability.COMPLETION))
-        return {"checked": self._rate_limit_status.checked_count(), "pool_total": pool_total}
-
     def models_by_capability(self) -> dict[str, ModelGroup]:
         """Build a pool snapshot from the dispatcher's own registry across capability pools."""
         reasoning: list[ModelInfo] = []
@@ -1063,7 +1043,6 @@ class ModelDispatcher(InferenceRouter):
         self._record_model_outcome(key, True)
         self._persist_model_score(key)
         self._provider_health.record_success(info.provider_name)
-        self._rate_limit_status.mark_ok(info.provider_name, info.model_id)
 
     def _penalise_degenerate(
         self,

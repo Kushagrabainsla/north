@@ -140,16 +140,6 @@ class EntitlementLedger:
         state = self.state_of(endpoint)
         return state.state if state is not None else Entitlement.UNKNOWN
 
-    def summary(self) -> dict[str, str]:
-        """Per-provider entitlement, for ``north limits`` and the health surface."""
-        out = {provider: state.reason for provider, state in self._auth.items()}
-        now = time.monotonic()
-        for tier in (self._paid, self._free):
-            for provider, state in tier.items():
-                if state.until is None or state.until > now:
-                    out.setdefault(provider, state.reason)
-        return out
-
 
 class AvailabilityView:
     """One place that answers "can this endpoint be called, and if not why not".
@@ -206,8 +196,6 @@ class AvailabilityView:
     def record_success(self, endpoint: Endpoint) -> None:
         self._entitlements.clear_tier(endpoint.provider, is_free=endpoint.is_free)
         self._health.record_success(endpoint.provider)
-        if self._status is not None:
-            self._status.mark_ok(endpoint.provider, endpoint.provider_model_id)
 
     def apply(self, failure: Failure, endpoint: Endpoint, *, provider_down: bool = False) -> None:
         """Update availability from one classified failure, at its own scope and no wider.

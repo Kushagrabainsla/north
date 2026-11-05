@@ -86,15 +86,6 @@ class Failure:
     status_code: int | None = None
     detail: str = ""
 
-    @property
-    def is_provider_wide(self) -> bool:
-        return self.scope in (Scope.PROVIDER_AUTH, Scope.PROVIDER_DOWN)
-
-    @property
-    def is_account_wide(self) -> bool:
-        """True when the failure is about the account, so no other model here will fare better."""
-        return self.scope in (Scope.ACCOUNT_FREE, Scope.ACCOUNT_PAID)
-
 
 def _body_text(exc: object) -> str:
     body = getattr(exc, "body", None)

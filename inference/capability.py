@@ -41,13 +41,6 @@ def quality_from_cost(cost_per_token: float) -> float:
     return max(0.0, min(normalised, 1.0))
 
 
-class ModelState(StrEnum):
-    ACTIVE = "active"
-    RATE_LIMITED = "rate_limited"
-    DEPLETED = "depleted"
-    DEGRADED = "degraded"
-
-
 class ModelCapability(StrEnum):
     COMPLETION = "completion"
     TOOL_CALLS = "tool_calls"

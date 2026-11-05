@@ -103,12 +103,6 @@ class CooldownStore:
             return False
         return True
 
-    def remaining_capability(self, key: _CooldownKey, capability: str) -> float:
-        """Return remaining capability cooldown seconds (0.0 if not active)."""
-        cap_key = (key[0], key[1], str(capability))
-        exp = self._capability_expiry.get(cap_key, 0.0)
-        return max(0.0, exp - time.monotonic())
-
     def set_capability_cooldown(
         self,
         key: _CooldownKey,

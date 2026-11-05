@@ -101,29 +101,3 @@ async def test_generic_inference_error_recorded_as_status_error(tmp_path):
         await dispatcher.complete(req)
     status = dispatcher.rate_limit_status()
     assert any(r["kind"] == "error" and r["model"] == "openrouter/flaky-model" for r in status)
-
-
-@pytest.mark.asyncio
-async def test_success_marks_model_checked(tmp_path):
-    info = ModelInfo(
-        model_id="openrouter/ok-model",
-        provider_name="openrouter",
-        capabilities=frozenset(["completion"]),
-        context_window=128000,
-        cost_per_token=0.0,
-        base_quality=0.5,
-    )
-
-    class OkProvider:
-        name = "openrouter"
-
-        def get_models(self):
-            return {"openrouter/ok-model": info}
-
-        async def complete(self, model_id: str, request: CompletionRequest):
-            return CompletionResponse(text="ok", model_used=model_id, tokens_in=1, tokens_out=1, cost_usd=0.0)
-
-    dispatcher = _dispatcher([OkProvider()], tmp_path)
-    req = CompletionRequest(prompt="test", component="test")
-    await dispatcher.complete(req)
-    assert dispatcher._rate_limit_status.checked_count() == 1

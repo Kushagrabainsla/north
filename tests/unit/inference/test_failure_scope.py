@@ -25,7 +25,6 @@ def test_the_401_that_started_this_is_about_the_account_not_the_provider() -> No
         PaymentRequiredError("claude-opus-4-8", "opencode_zen", status_code=401, body=_BILLING_BODY),
     )
     assert failure.scope is Scope.ACCOUNT_PAID
-    assert not failure.is_provider_wide
 
 
 def test_a_401_without_a_billing_marker_is_a_bad_key() -> None:

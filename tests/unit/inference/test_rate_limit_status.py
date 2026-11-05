@@ -201,24 +201,6 @@ def test_record_error_captures_transient_failure(tmp_path) -> None:
     assert "JSON parse failed" in md
 
 
-def test_mark_ok_tracks_checked_count(tmp_path) -> None:
-    store = RateLimitStatusStore(tmp_path / "rls.json")
-    assert store.checked_count() == 0
-    store.mark_ok("openrouter", "anthropic/claude")
-    store.mark_ok("gemini", "gemini-flash")
-    assert store.checked_count() == 2
-    # mark_ok does NOT create an unavailable record
-    assert not store.is_active("openrouter", "anthropic/claude")
-
-
-def test_format_status_unknown_footer(tmp_path) -> None:
-    # No failures but pool only partially probed -> honest "unknown" note.
-    text = format_status_markdown(tmp_path / "missing.json", checked=3, pool_total=10)
-    assert "no active cooldowns" in text
-    assert "3/10" in text
-    assert "not yet tried" in text
-
-
 def test_expired_records_dropped_on_load(tmp_path) -> None:
     path = tmp_path / "rls.json"
     store = RateLimitStatusStore(path)
@@ -367,10 +349,10 @@ def test_a_weekly_reset_the_provider_reported_is_shown_as_reported() -> None:
 def test_reset_times_show_in_the_time_zone_chosen_in_settings(monkeypatch) -> None:
     """The Mac's own zone is not the one the user picked; Settings decides."""
     import utils.time as north_time
-    from inference.rate_limit_status import RateLimitRecord
+    from inference.rate_limit_status import RateLimitRecord, _format_markdown
 
     monkeypatch.setattr(north_time, "_configured_timezone_name", None)
     north_time.configure_timezone("Asia/Kolkata")
     record = RateLimitRecord("codex", "gpt", "rate_limit", 60.0, "retry-after", "", available_at_epoch=86400.0)
 
-    assert record.available_at_local == "05:30:00"  # 00:00 UTC on 2 Jan 1970
+    assert "05:30:00" in _format_markdown(record)  # 00:00 UTC on 2 Jan 1970

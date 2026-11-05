@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 InferenceCallSink = Callable[[str | None, dict[str, Any]], Awaitable[None]]
 
 _PLANNING_COMPONENTS = frozenset({"planner", "router", "north_star_checker"})
-_REVIEW_COMPONENTS = frozenset({"critic", "spec_critique", "approval_decider"})
+_REVIEW_COMPONENTS = frozenset({"critic", "approval_decider"})
 _SYNTHESIS_COMPONENTS = frozenset({"synthesizer"})
 _MEMORY_COMPONENTS = frozenset(
     {
@@ -94,10 +94,6 @@ class CostTracker(InferenceRouter):
     def set_call_sink(self, sink: InferenceCallSink | None) -> None:
         """Attach durable call telemetry after the ledger/stream have been built."""
         self._call_sink = sink
-
-    def get_inner(self) -> InferenceRouter:
-        """Return the wrapped router (e.g. for live reload hooks)."""
-        return self._inner
 
     def pop_task_cost(self, task_id: str) -> float:
         """Return accumulated cost for task_id and remove it from the store."""

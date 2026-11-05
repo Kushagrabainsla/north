@@ -96,20 +96,8 @@ class RateLimitRecord:
 
     # ---- derived display helpers (not persisted) ----
     @property
-    def available_at_local(self) -> str:
-        if self.available_at_epoch <= 0:
-            return "unknown"
-        return epoch_to_local(self.available_at_epoch).strftime("%H:%M:%S")
-
-    @property
     def remaining_seconds(self) -> float:
         return max(0.0, self.available_at_epoch - time.time())
-
-    @property
-    def tier_label(self) -> str:
-        if self.is_free is None:
-            return "tier?"
-        return "free" if self.is_free else "paid"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -281,9 +269,6 @@ class RateLimitStatusStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path
         self._records: dict[_Key, RateLimitRecord] = {}
-        # Models successfully used this session. In-memory only (not persisted) so a
-        # restart honestly reports un-tried models as "unknown" rather than "ok".
-        self._checked: set[_Key] = set()
         # Serialises concurrent _persist_sync calls so the read-modify-write is atomic.
         self._persist_lock = threading.Lock()
         # Debounced flush: a pending asyncio.Task that writes after a delay.
@@ -350,12 +335,6 @@ class RateLimitStatusStore:
                 await asyncio.get_running_loop().run_in_executor(None, self._persist_sync, snapshot)
             except Exception:
                 logger.warning("Failed to persist rate-limit status", exc_info=True)
-
-    def flush_now(self) -> None:
-        """Synchronous immediate flush (call at shutdown)."""
-        if self._dirty and self._path is not None:
-            self._persist_sync(list(self._records.values()))
-            self._dirty = False
 
     def _persist_sync(self, records: list[RateLimitRecord] | None = None) -> None:
         if self._path is None:
@@ -484,14 +463,6 @@ class RateLimitStatusStore:
             reason=reason or "payload too large (413)",
             is_free=is_free,
         )
-
-    def mark_ok(self, provider: str, model: str) -> None:
-        """Note that a model completed successfully this session (used for the
-        'unknown vs verified-available' distinction). In-memory only."""
-        self._checked.add((provider, model))
-
-    def checked_count(self) -> int:
-        return len(self._checked)
 
     def _upsert(
         self,
@@ -628,39 +599,17 @@ def _format_markdown(rec: RateLimitRecord) -> str:
     )
 
 
-def format_status_markdown(
-    path: Path,
-    *,
-    checked: int | None = None,
-    pool_total: int | None = None,
-) -> str:
-    """Render active rate-limit status as Markdown (used by ``north limits`` and Telegram).
-
-    ``checked`` / ``pool_total`` (when provided) let the caller surface how many
-    models have actually been probed this session vs how many exist in the pool, so
-    un-tried models are shown as *unknown* rather than falsely "available".
-    """
+def format_status_markdown(path: Path) -> str:
+    """Render active rate-limit status as Markdown (used by ``north limits`` and Telegram)."""
     records = load_active_records(path)
     if not records:
-        if checked is not None and pool_total is not None and pool_total > 0:
-            unverified = max(0, pool_total - checked)
-            if unverified:
-                return (
-                    f"_no active cooldowns_ — {checked}/{pool_total} model(s) probed this session; "
-                    f"{unverified} not yet tried (status unknown)"
-                )
         return "_no active cooldowns recorded_ (no failures seen this session)"
     lines = [f"*rate-limit status* — {len(records)} unavailable", ""]
     lines.extend(_format_markdown(r) for r in records)
     return "\n".join(lines)
 
 
-def format_status_table(
-    path: Path,
-    *,
-    checked: int | None = None,
-    pool_total: int | None = None,
-) -> Table:
+def format_status_table(path: Path) -> Table:
     """Render active rate-limit status as a Rich Table."""
     records = load_active_records(path)
     t = Table(title="Inference Rate Limits & Cooldowns", box=ROUNDED, header_style="bold cyan")
@@ -673,11 +622,6 @@ def format_status_table(
     t.add_column("Signal Source / Reason", style="bright_black")
 
     if not records:
-        if checked is not None and pool_total is not None and pool_total > 0:
-            unverified = max(0, pool_total - checked)
-            status_desc = f"{checked}/{pool_total} probed, {unverified} not yet tried"
-        else:
-            status_desc = "All model pools are operational"
         t.add_row(
             "All",
             "No active rate limits or cooldowns",
@@ -685,7 +629,7 @@ def format_status_table(
             Text("READY", style="bold green"),
             "-",
             "-",
-            status_desc,
+            "All model pools are operational",
         )
         return t
 

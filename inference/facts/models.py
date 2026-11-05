@@ -201,19 +201,6 @@ class Endpoint:
         return float("inf")
 
     @property
-    def discounts_cache_reads(self) -> bool:
-        """True when this endpoint publishes a cheaper price for cached tokens.
-
-        Deliberately not named ``caches``: a free endpoint quotes no cache price
-        because there is no price to quote, yet OpenRouter's free models were
-        measured serving 99% of a warm prefix from cache. Whether an endpoint
-        caches is a fact only the response can tell you (inference/usage.py);
-        this is the narrower question routing can act on - is there money to be
-        saved by sending a long, repeated prefix here.
-        """
-        return self.cache_read_price is not None
-
-    @property
     def is_free(self) -> bool:
         """True only when a price was published and it is zero.
 
