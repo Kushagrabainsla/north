@@ -34,3 +34,15 @@ def test_a_session_s_activity_and_turns_have_their_own_cells_on_a_phone() -> Non
 def test_the_activity_strip_fills_each_row_however_few_events_there_are() -> None:
     assert "flex-wrap: wrap" in _rule(".activity-line")
     assert "grid-template-columns: repeat(4, 1fr)" not in _rule(".activity-line")
+
+
+def test_the_devices_page_lines_up_with_its_header_like_every_other_page() -> None:
+    """Its blocks were indented 26 px with margins of their own, and the Add a device panel then ran off the
+    right edge at 1080 px. A page's blocks sit on its edges and are spaced by its one gap; checked in a browser
+    at 390, 1080 and 1400 px, every block's left and right edges equal the header's."""
+    for selector in (".lights-bar", ".lights-notice", ".lights-grid", ".music-sync"):
+        body = _rule(selector)
+        assert body, selector
+        assert not re.search(r"\b(margin|padding)\s*:\s*0 \d+px", body), selector
+    assert not re.search(r"\.(lights-bar|lights-notice|music-sync|add-device)[^{]*\{[^}]*margin-(left|right)", CSS)
+    assert ".add-device {" not in CSS  # the shared Panel, as in Settings

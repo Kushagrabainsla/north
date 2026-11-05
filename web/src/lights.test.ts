@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDeviceRequest, brandOf, foundRequest, inScope, kelvinToRgb, latestWins, swatch, type Light } from "./lights";
+import { addDeviceRequest, brandOf, foundRequest, inScope, kelvinToRgb, latestWins, scanSummary, swatch, type Light } from "./lights";
 
 const light = (over: Partial<Light>): Light => ({
   id: "a", name: "Desk lamp", host: "10.0.0.36", model: "KL130", on: true, kind: "light",
@@ -96,5 +96,23 @@ describe("adding a device Find devices saw", () => {
         "at 192.168.1.20, found on the network by mDNS _hue._tcp (bridgeid=001788fffe1a2b3c). " +
         "North can reach it through the bridge's local API; pressing its link button once gives north a key.",
     );
+  });
+});
+
+describe("what a Find devices scan means", () => {
+  it("says why the list is short: Kasa is already here, others are not lights, and what cannot be seen", () => {
+    const text = scanSummary({ found: [], others: 7 }, 4);
+    expect(text).toContain("North found no other lights, plugs or switches it knows on this network.");
+    expect(text).toContain("Your 4 Kasa devices are found by North itself and already on this page.");
+    expect(text).toContain("7 other devices answered (TVs, speakers, routers and the like)");
+    expect(text).toContain("maker's cloud or to a building's hub");
+  });
+
+  it("leaves out what does not apply", () => {
+    const one = { id: "wiz@1", brand: "WiZ", key: "wiz", kind: "light", name: "WiZ light", address: "1", how: "WiZ", reach: "", cannot: "", details: {}, added: false };
+    const text = scanSummary({ found: [one], others: 0 }, 0);
+    expect(text).not.toContain("found no other");
+    expect(text).not.toContain("Kasa");
+    expect(text).not.toContain("answered");
   });
 });

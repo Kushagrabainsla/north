@@ -123,20 +123,38 @@ class Probe:
     bind: int = 0
 
 
+@dataclass(frozen=True)
+class Scan:
+    """What one look at the network found: the devices north recognised, and how many others answered."""
+
+    found: list[Found]
+    # Hosts that answered but are not a light, plug or switch north knows: TVs, speakers, routers.
+    # Said on the page, so a short list reads as "nothing else is a light", not "the scan saw nothing".
+    others: int
+
+
 async def discover(
     listen: Callable[[Probe, float], list[tuple[bytes, str]]] | None = None, seconds: float = LISTEN_SECONDS
-) -> list[Found]:
-    """Every device found by any probe, once each: what north can connect to first, then by brand."""
+) -> Scan:
+    """Every device found by any probe, once each, what north can connect to first; and how many others answered."""
     listen = listen or listen_udp
     answers = await asyncio.gather(*(asyncio.to_thread(listen, probe, seconds) for probe in PROBES))
     found: list[Found] = []
+    heard: set[str] = set()
+    recognised: set[str] = set()
     for probe, replies in zip(PROBES, answers, strict=True):
         for packet, sender in replies:
+            heard.add(sender)
             try:
-                found += probe.read(packet, sender)
+                read = probe.read(packet, sender)
             except Exception:  # noqa: BLE001 - one odd answer must not hide the others
                 logger.debug("discovery: an answer to %s could not be read", probe.name, exc_info=True)
-    return _once_each(found)
+                continue
+            if read:
+                recognised.add(sender)
+            found += read
+    kept = _once_each(found)
+    return Scan(kept, len(heard - recognised - {item.host for item in found}))
 
 
 def _once_each(found: Iterable[Found]) -> list[Found]:
@@ -355,7 +373,8 @@ def read_lifx(packet: bytes, sender: str) -> list[Found]:
 
 
 PROBES: tuple[Probe, ...] = (
-    Probe("mDNS", mdns_query(_MDNS_SERVICES), ("224.0.0.251", 5353), read_mdns),
+    # Also asks which services exist at all, so every mDNS device answers and the others can be counted.
+    Probe("mDNS", mdns_query([*_MDNS_SERVICES, "_services._dns-sd._udp.local"]), ("224.0.0.251", 5353), read_mdns),
     Probe(
         "SSDP",
         b'M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: "ssdp:discover"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n',

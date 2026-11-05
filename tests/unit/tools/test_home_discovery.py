@@ -14,7 +14,7 @@ import threading
 
 from tools import home_discovery as discovery
 from tools.home import Home
-from tools.home_discovery import GOVEE, HOMEKIT, HUE, LIFX, SHELLY, WEMO, WIZ, YEELIGHT, Found, Probe
+from tools.home_discovery import GOVEE, HOMEKIT, HUE, LIFX, SHELLY, WEMO, WIZ, YEELIGHT, Found, Probe, Scan
 from tools.registry import ToolRegistry
 
 
@@ -191,22 +191,27 @@ async def test_one_bridge_announcing_itself_three_ways_is_listed_once_and_what_n
     lamp.txt("Eve Lamp._hap._tcp.local", ci="5")
     answers["mDNS"].append((lamp.packet(), "192.168.1.50"))
 
-    found = await discovery.discover(lambda probe, _seconds: answers.get(probe.name, []))
+    tv = _Answer()
+    tv.ptr("_services._dns-sd._udp.local", "_googlecast._tcp.local")  # a TV saying what it offers
+    answers["mDNS"].append((tv.packet(), "192.168.1.80"))
 
-    assert [(f.brand.key, f.host) for f in found] == [
+    scan = await discovery.discover(lambda probe, _seconds: answers.get(probe.name, []))
+
+    assert [(f.brand.key, f.host) for f in scan.found] == [
         ("hue", "192.168.1.20"),
         ("wiz", "192.168.1.60"),
         ("homekit", "192.168.1.50"),  # north cannot reach it: last
     ]
+    assert scan.others == 2  # the router and the TV answered: counted, not listed
 
 
 async def test_an_answer_that_cannot_be_read_hides_nothing_else() -> None:
     loop = bytearray(struct.pack("!HHHHHH", 0, 0x8400, 0, 1, 0, 0)) + b"\xc0\x0c"  # a name that points at itself
     answers = {"mDNS": [(bytes(loop), "192.168.1.9")], "WiZ": [(b"not json", "192.168.1.8"), (_WIZ, "192.168.1.60")]}
 
-    found = await discovery.discover(lambda probe, _seconds: answers.get(probe.name, []))
+    scan = await discovery.discover(lambda probe, _seconds: answers.get(probe.name, []))
 
-    assert [f.brand for f in found] == [WIZ]
+    assert [f.brand for f in scan.found] == [WIZ]
 
 
 def test_a_probe_is_sent_and_its_answers_are_heard() -> None:
@@ -233,10 +238,13 @@ async def test_the_devices_page_says_which_brands_north_already_has_a_tool_for()
     registry = ToolRegistry(auto_register=False)
     registry.register(_Hue())
 
-    async def on_the_network() -> list[Found]:
-        return [Found(HUE, "Hue bridge", "192.168.1.20", "SSDP"), Found(WIZ, "WiZ light", "192.168.1.60", "WiZ")]
+    async def on_the_network() -> Scan:
+        found = [Found(HUE, "Hue bridge", "192.168.1.20", "SSDP"), Found(WIZ, "WiZ light", "192.168.1.60", "WiZ")]
+        return Scan(found, others=5)
 
-    found = await Home(registry, find_on_network=on_the_network).discover()
+    scan = await Home(registry, find_on_network=on_the_network).discover()
 
+    found = scan["found"]
     assert [(f["brand"], f["added"]) for f in found] == [("Philips Hue", True), ("WiZ", False)]
     assert found[1]["id"] == "wiz@192.168.1.60" and found[1]["reach"].startswith("its local UDP API")
+    assert scan["others"] == 5

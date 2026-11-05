@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from config import secret_store
 from tools.base import Tool
-from tools.home_discovery import Found, discover
+from tools.home_discovery import Scan, discover
 from tools.models import ToolInput, ToolOutput
 from utils.tasks import spawn
 
@@ -210,7 +210,7 @@ class Home:
         self,
         registry: ToolRegistry,
         idle_seconds: float = 5.0,
-        find_on_network: Callable[[], Awaitable[list[Found]]] | None = None,
+        find_on_network: Callable[[], Awaitable[Scan]] | None = None,
     ) -> None:
         self._registry = registry
         self._find_on_network = find_on_network or discover
@@ -255,13 +255,13 @@ class Home:
         self._problems = problems
         return found
 
-    async def discover(self) -> list[dict[str, Any]]:
-        """What is on the network that north could control, each saying whether north has a tool for its brand."""
+    async def discover(self) -> dict[str, Any]:
+        """What is on the network that north could control, each saying whether north has a tool for its brand,
+        and how many other devices answered."""
         brands = self._brands()
-        return [
-            found.shown() | {"added": any(found.brand.key in name for name in brands)}
-            for found in await self._find_on_network()
-        ]
+        scan = await self._find_on_network()
+        found = [item.shown() | {"added": any(item.brand.key in name for name in brands)} for item in scan.found]
+        return {"found": found, "others": scan.others}
 
     async def apply(self, device_id: str, change: LightChange, *, confirm: bool = True) -> dict[str, Any]:
         """Make *change* on one device of any brand and return how it is after.

@@ -62,6 +62,25 @@ export interface FoundDevice {
   added: boolean; // north already has a tool for this brand
 }
 
+/** What Find devices heard: the devices it recognised, and how many others answered that are not for this page. */
+export interface Scan {
+  found: FoundDevice[];
+  others: number;
+}
+
+/**
+ * What a scan means in words, so "nothing new" is never a mystery: your Kasa devices are already on the page,
+ * other things answered but are not lights or plugs, and what cannot be seen from here at all.
+ */
+export function scanSummary(scan: Scan, kasa: number): string {
+  const parts: string[] = [];
+  if (!scan.found.length) parts.push("North found no other lights, plugs or switches it knows on this network.");
+  if (kasa) parts.push(`Your ${kasa} Kasa device${kasa === 1 ? " is" : "s are"} found by North itself and already on this page.`);
+  if (scan.others) parts.push(`${scan.others} other device${scan.others === 1 ? "" : "s"} answered (TVs, speakers, routers and the like): not lights, plugs or switches North knows.`);
+  parts.push("North cannot see a device that talks only to its maker's cloud or to a building's hub, or one on another Wi-Fi network such as a guest network: describe it below.");
+  return parts.join(" ");
+}
+
 /** What north is told when you choose a device Find devices saw: everything discovery learned about it. */
 export function foundRequest(found: FoundDevice): string {
   const details = Object.entries(found.details).filter(([, value]) => value).map(([key, value]) => `${key}=${value}`).join(", ");

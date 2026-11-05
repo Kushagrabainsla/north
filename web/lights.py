@@ -96,7 +96,7 @@ async def list_lights(look_again: bool = False) -> dict[str, Any]:
 @router.get("/lights/discover")
 async def discover_devices() -> dict[str, Any]:
     """Lights, plugs and switches on your network, each saying how north would reach it or why it cannot yet."""
-    return {"found": await _home().discover()}
+    return await _home().discover()
 
 
 @router.post("/lights/apply")

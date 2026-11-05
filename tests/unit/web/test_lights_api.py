@@ -229,21 +229,17 @@ async def test_a_brand_added_through_north_shows_here_and_is_yours_to_mark_and_c
 
 
 async def test_find_devices_lists_what_is_on_the_network_and_how_north_would_reach_it(home) -> None:
-    from tools.home_discovery import HOMEKIT, WIZ, Found
+    from tools.home_discovery import HOMEKIT, WIZ, Found, Scan
 
     services, _, _ = home
 
-    async def on_the_network() -> list[Found]:
-        return [
-            Found(WIZ, "WiZ light", "192.168.1.60", "WiZ discovery"),
-            Found(HOMEKIT, "Hall Lamp", "192.168.1.50", "mDNS _hap._tcp"),
-        ]
+    async def on_the_network() -> Scan:
+        wiz = Found(WIZ, "WiZ light", "192.168.1.60", "WiZ discovery")
+        return Scan([wiz, Found(HOMEKIT, "Hall Lamp", "192.168.1.50", "mDNS _hap._tcp")], others=3)
 
     services = services.replace(home=Home(services.tool_registry, find_on_network=on_the_network))
     with bind_services(services):
-        found = (await lights.discover_devices())["found"]
+        scan = await lights.discover_devices()
 
-    assert [(f["brand"], f["added"], bool(f["cannot"])) for f in found] == [
-        ("WiZ", False, False),
-        ("HomeKit accessory", False, True),
-    ]
+    found = [(f["brand"], f["added"], bool(f["cannot"])) for f in scan["found"]]
+    assert found == [("WiZ", False, False), ("HomeKit accessory", False, True)] and scan["others"] == 3
