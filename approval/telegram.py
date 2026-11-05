@@ -99,7 +99,10 @@ class TelegramNotifier(Notifier):
         if card.message:
             lines.append(card.message)
 
-        if card.fields:
+        if card.asks_several:
+            lines.append("")
+            lines.extend(card.numbered_questions())
+        elif card.fields:
             lines.append("")
             for field in card.fields:
                 value = str(field.value)
@@ -113,7 +116,9 @@ class TelegramNotifier(Notifier):
                 preview += "…"
             lines.extend(["", "_Source:_", preview])
 
-        if card.type is CardType.QUESTION:
+        if card.asks_several:
+            lines.extend(["", "Reply with one line per question, in order. An option's number picks it."])
+        elif card.type is CardType.QUESTION:
             lines.extend(["", "Tap an answer, or reply with your own." if card.options else "Reply with your answer."])
 
         footer = f"_{card.agent}_" if card.agent else ""

@@ -99,7 +99,9 @@ ASK_USER_SCHEMA: dict = {
             "stated in the task or context - NEVER assume or invent it. The user's "
             "typed answer is returned as the tool result so you can continue with it. "
             "This is for gathering information, not for approving an action "
-            "(use request_approval for that). For a real-world handoff such as login, MFA, "
+            "(use request_approval for that). When several choices are open, ask them together "
+            "in `questions`: the user answers them on one card, in one go. "
+            "For a real-world handoff such as login, MFA, "
             "or browser takeover, set requires_user_action=true and use the same mode policy "
             "to obtain an answer. Send that handoff as its own tool call, then verify "
             "the resulting state before continuing the original task."
@@ -109,7 +111,29 @@ ASK_USER_SCHEMA: dict = {
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "The specific question to ask. One clear question at a time.",
+                    "description": (
+                        "The specific question to ask. With `questions`, an optional one-line lead-in instead."
+                    ),
+                },
+                "questions": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "description": (
+                        "Several questions asked on one card and answered together, instead of one call "
+                        "each. The result lists every answer."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string"},
+                            "options": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Suggested answers; the user can always type their own.",
+                            },
+                        },
+                        "required": ["question"],
+                    },
                 },
                 "requires_user_action": {
                     "type": "boolean",
@@ -129,7 +153,6 @@ ASK_USER_SCHEMA: dict = {
                     ),
                 },
             },
-            "required": ["question"],
         },
     },
 }

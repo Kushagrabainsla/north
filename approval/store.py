@@ -245,8 +245,13 @@ class ApprovalStore:
         update: dict[str, Any] = {"status": status, "chosen_option": chosen_option}
         if decided_by:
             update["decided_by"] = decided_by
+        if card.asks_several and not values:
+            values = card.answers_in(chosen_option)  # one message from Telegram or the terminal
         if card.fields:
             update["response"] = card.merge_response(values)
+        if card.asks_several:
+            # The answers, as the one reply everything else reads; a reply north could not split stays as sent.
+            update["chosen_option"] = card.answers_text(update["response"]) or chosen_option
         resolved = card.model_copy(update=update).scrubbed()
         self._cards[card_id] = resolved
         self._write(resolved)

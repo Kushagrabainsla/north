@@ -72,6 +72,8 @@ _ASK_USER_NO_ANSWER = (
 
 # Agent-loop built-ins, not registry tools - excluded from tool-reliability tracking.
 _INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user", "find_tools"})
+# Questions on one ask_user card: enough for a flow's setup, few enough to answer at a glance.
+_MAX_QUESTIONS = 8
 
 
 # Soft limits guide the model toward synthesis; they never terminate a run.
@@ -1452,11 +1454,17 @@ class AgenticLLMAgent(LLMAgent):
         physical action happened, so the caller must verify the resulting state.
         """
         question = str(params.get("question", "")).strip()
-        if not question:
-            return _failed_json("ask_user requires a non-empty 'question'.")
         requires_user_action = params.get("requires_user_action", False)
         if not isinstance(requires_user_action, bool):
             return _failed_json("requires_user_action must be a boolean.")
+        if params.get("questions"):
+            if requires_user_action:
+                return _failed_json(
+                    "A handoff (requires_user_action) is asked on its own: call ask_user with `question` alone."
+                )
+            return await self._ask_several(payload, question, params["questions"])
+        if not question:
+            return _failed_json("ask_user requires a non-empty 'question', or several in 'questions'.")
         options = [str(o) for o in params.get("options", []) if str(o).strip()]
 
         card = await self._surface_card(
@@ -1472,6 +1480,47 @@ class AgenticLLMAgent(LLMAgent):
         if not answer:
             return json.dumps({"success": False, "answered": False, "error": _ASK_USER_NO_ANSWER})
         return json.dumps({"success": True, "answered": True, "answer": answer, "answered_by": _answered_by(card)})
+
+    async def _ask_several(self, payload: AgentPayload, lead: str, raw: Any) -> str:
+        """Ask several questions on one card and return every answer at once.
+
+        Asked one call at a time, setting up a flow took five exchanges; on one card the user
+        answers them together. Each question is an editable field whose options are suggestions.
+        """
+        if not isinstance(raw, list) or not 1 <= len(raw) <= _MAX_QUESTIONS:
+            return _failed_json(f"'questions' must be a list of 1 to {_MAX_QUESTIONS} questions.")
+        fields: list[CardField] = []
+        for number, item in enumerate(raw, 1):
+            text = str(item.get("question") or "").strip() if isinstance(item, dict) else ""
+            if not text:
+                return _failed_json(f"Question {number} in 'questions' needs a non-empty 'question'.")
+            options = [str(o).strip() for o in item.get("options") or [] if str(o).strip()]
+            fields.append(CardField(name=f"q{number}", label=text, value="", editable=True, options=options))
+        card = await self._surface_card(
+            payload,
+            card_type=CardType.QUESTION,
+            title=f"{self.name.title()} - Questions",
+            body=lead or "Answer these together, then send them.",
+            options=[],
+            event=CardEvent.QUESTION,
+            fields=fields,
+        )
+        answers = card.response or {}
+        if all(str(answers.get(field.name) or "").strip() for field in fields):
+            listed = [{"question": field.label, "answer": str(answers[field.name]).strip()} for field in fields]
+            return json.dumps({"success": True, "answered": True, "answers": listed, "answered_by": _answered_by(card)})
+        reply = (card.chosen_option or "").strip()
+        if not reply:
+            return json.dumps({"success": False, "answered": False, "error": _ASK_USER_NO_ANSWER})
+        return json.dumps(
+            {
+                "success": True,
+                "answered": True,
+                "reply": reply,
+                "note": "The user answered in one message: read each answer from it, and ask only what it leaves open.",
+                "answered_by": _answered_by(card),
+            }
+        )
 
     async def _call_tool(
         self,

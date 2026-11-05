@@ -1720,18 +1720,19 @@ class NorthApp(App[None]):
         self._pending_cards[card_id] = {**data, "task_id": data.get("task_id") or task_id}
         self._set_status("")
         options = data.get("options") or []
+        question = _question_text(data)
         turn = self._current_turn_activity.get(task_id)
         if turn is not None:
             turn["phase"] = "waiting for answer"
             turn["interaction"] = {
                 "kind": "question",
-                "message": data.get("question", ""),
+                "message": question,
                 "options": options,
             }
             self._render_active_turns()
         if turn is None:
             self._log("  [cyan]question required[/cyan]")
-            self._log_rich(RichText("    " + data.get("question", ""), style="white"))
+            self._log_rich(RichText("    " + question, style="white"))
             for index, option in enumerate(options, 1):
                 self._log(f"    [bright_black][{index}][/bright_black]  {option}")
 
@@ -2644,3 +2645,17 @@ async def run(
     """Launch the TUI. Blocks until the user exits."""
     app = NorthApp(base_url=base_url, headers=headers, workspace=workspace)
     await app.run_async()
+
+
+def _question_text(data: dict) -> str:
+    """A question card as the TUI shows it: several questions numbered, with how to answer them in one line."""
+    question = str(data.get("question") or "")
+    fields = [field for field in data.get("fields") or [] if isinstance(field, dict)]
+    if not fields:
+        return question
+    lines = [question] if question else []
+    for number, field in enumerate(fields, 1):
+        options = " / ".join(f"{index}) {option}" for index, option in enumerate(field.get("options") or [], 1))
+        lines.append(f"{number}. {field.get('label') or field.get('name')}" + (f"   {options}" if options else ""))
+    lines.append("Answer them in one line, in order, separated by ;")
+    return "\n".join(lines)

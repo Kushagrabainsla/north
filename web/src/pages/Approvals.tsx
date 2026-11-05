@@ -17,10 +17,13 @@ export function CardFieldRow({
   field,
   value,
   onChange,
+  asking = false,
 }: {
   field: CardField;
   value: unknown;
   onChange: (v: unknown) => void;
+  // A question's answer, not work to check: no "editable" mark, and its options are buttons.
+  asking?: boolean;
 }) {
   const text = value === null || value === undefined ? "" : String(value);
   let control;
@@ -71,20 +74,55 @@ export function CardFieldRow({
       <input
         type={field.type === "number" ? "number" : "text"}
         value={text}
+        placeholder={asking ? "Your answer" : undefined}
         onChange={(e) => onChange(e.target.value)}
       />
     );
   }
+  const label = (
+    <span>
+      {fieldLabel(field)}
+      {field.editable && !asking && <em> editable</em>}
+    </span>
+  );
+  // Suggested answers are buttons, so the field is not a <label>: a label passes a click
+  // on the question to its first button, which would pick the first option.
+  if (field.editable && field.type === "text" && field.options.length > 0) {
+    return (
+      <div className="card-field">
+        {label}
+        <div className="reason-chips">
+          {field.options.map((o) => (
+            <button
+              type="button"
+              key={o}
+              className={text === o ? "active" : ""}
+              onClick={() => onChange(o)}
+            >
+              {o}
+            </button>
+          ))}
+        </div>
+        {control}
+      </div>
+    );
+  }
   return (
     <label className="card-field">
-      <span>
-        {fieldLabel(field)}
-        {field.editable && <em> editable</em>}
-      </span>
+      {label}
       {control}
     </label>
   );
 }
+
+// Every question on a card that asks several is answered: only then are they sent, together.
+export const answersComplete = (
+  card: Approval,
+  values: Record<string, unknown>,
+) =>
+  card.fields.every(
+    (field) => String(values[field.name] ?? "").trim() !== "",
+  );
 
 // Reviewing does not need to be fast. This page is where something goes out in
 // your name, so optimising it for throughput optimises for the failure it exists
@@ -141,6 +179,7 @@ export function ApprovalCard({
             <CardFieldRow
               key={field.name}
               field={field}
+              asking={card.type === "question"}
               value={values[field.name]}
               onChange={(v) =>
                 setValues((prev) => ({ ...prev, [field.name]: v }))
@@ -236,7 +275,15 @@ export function ApprovalCard({
         </div>
       ) : (
         <div className="approval-actions">
-          {card.type === "question" ? (
+          {card.type === "question" && fields.length > 0 ? (
+            <button
+              className="primary-button"
+              disabled={!answersComplete(card, values)}
+              onClick={() => onDecide("answered", "", values)}
+            >
+              Send answers
+            </button>
+          ) : card.type === "question" ? (
             // Options are shortcuts; a question can always be answered in your own words.
             // With buttons only, a question asked without options could not be answered here.
             <>

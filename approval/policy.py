@@ -21,8 +21,8 @@ indistinguishable from one that never happened.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -190,13 +190,17 @@ class Ruling:
 
 @dataclass(frozen=True)
 class Answer:
-    """A card decided without the user: the decision, the option taken, and why."""
+    """A card decided without the user: the decision, the option taken, and why.
+
+    *values* answers a card's several questions, by field name.
+    """
 
     decision: str
     chosen_option: str
     reason: str
     decided_by: str
     memory_used: tuple[MemoryRef, ...] = ()
+    values: Mapping[str, str] = field(default_factory=dict)
 
 
 class Decider(Protocol):
@@ -305,11 +309,33 @@ class ApprovalPolicy:
         """
         mode = self.mode_provider()
         if mode is ApprovalMode.YOLO:
+            if card.asks_several:
+                values = {q.name: affirmative_option(q.options) or YES_ANSWER for q in card.fields}
+                return Answer(ApprovalDecision.ANSWERED, "", "yes to everything", DecidedBy.YOLO, values=values)
             chosen = affirmative_option(card.options) or YES_ANSWER
             return Answer(ApprovalDecision.ANSWERED, chosen, "yes to everything", DecidedBy.YOLO)
         if mode is ApprovalMode.AUTONOMOUS and self.decider is not None:
-            return await self.decider.answer(card)
+            return await (self._answer_each(card, self.decider) if card.asks_several else self.decider.answer(card))
         return None
+
+    @staticmethod
+    async def _answer_each(card: Card, decider: Decider) -> Answer | None:
+        """The memory decider's answer to each of *card*'s questions, or None to ask if it cannot answer one."""
+        answers: list[tuple[str, Answer]] = []
+        for question in card.fields:
+            asked = {"message": question.display_label(), "options": question.options, "fields": []}
+            answer = await decider.answer(card.model_copy(update=asked))
+            if answer is None:
+                return None
+            answers.append((question.name, answer))
+        return Answer(
+            ApprovalDecision.ANSWERED,
+            "",
+            "; ".join(answer.reason for _, answer in answers),
+            DecidedBy.MEMORY_DECIDER,
+            tuple(ref for _, answer in answers for ref in answer.memory_used),
+            values={name: answer.chosen_option for name, answer in answers},
+        )
 
     async def _autonomous(self, action: Action) -> Ruling:
         """Autonomous never asks: the deterministic tiers first, then the memory decider.

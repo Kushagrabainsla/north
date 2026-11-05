@@ -14,7 +14,7 @@ domains: [general, engineering]
 - Build one tool for the user's task, not one per API endpoint: `get_weather` that answers the question, not `geocode` plus `forecast`.
 
 ## Ask once, before writing
-Work out what you can yourself (which public service, its URL, its response format). Then, if anything only the user can decide is still open (which account, which device, what counts as done, whether it may change or send anything), ask it all in **one** `ask_user` call, as a short numbered list. Do not ask what you can find out, and do not ask again for what the user already said.
+Work out what you can yourself (which public service, its URL, its response format). Then, if anything only the user can decide is still open (which account, which device, what counts as done, whether it may change or send anything), ask it all in **one** `ask_user` call, one item of `questions` each. Do not ask what you can find out, and do not ask again for what the user already said.
 
 North has no place yet to keep a key or password for a custom tool. Prefer a service that needs none (Open-Meteo for weather, for example). If a key is unavoidable, stop and tell the user what is needed; never put a key in the code and never ask for one in chat.
 

@@ -229,7 +229,13 @@ class UserInteraction:
     def record_resolved(self, card: Card, answer: Answer) -> None:
         """Store *card* already decided - an action north took, or answered, without asking - and why."""
         self._store.add(card.model_copy(update={"reason": answer.reason, "memory_used": list(answer.memory_used)}))
-        self._store.resolve(card.id, answer.decision, chosen_option=answer.chosen_option, decided_by=answer.decided_by)
+        self._store.resolve(
+            card.id,
+            answer.decision,
+            chosen_option=answer.chosen_option,
+            values=dict(answer.values) or None,
+            decided_by=answer.decided_by,
+        )
 
     async def _await(self, card: Card) -> Card:
         """Wait for the user's answer, however long it takes (CODING_STYLE §13.5)."""
@@ -293,16 +299,9 @@ class UserInteraction:
         if answer is None:
             return None
         self.record_resolved(card, answer)
-        await self._audit(card, answer)
-        return card.model_copy(
-            update={
-                "status": answer.decision,
-                "chosen_option": answer.chosen_option,
-                "decided_by": answer.decided_by,
-                "reason": answer.reason,
-                "memory_used": list(answer.memory_used),
-            }
-        )
+        resolved = self._store.get(card.id) or card
+        await self._audit(resolved, answer)
+        return resolved
 
     async def _audit(self, card: Card, answer: Answer) -> None:
         """Ledger a decision north took for you, exactly as a decision of yours is ledgered."""
@@ -316,7 +315,7 @@ class UserInteraction:
                 agent=card.agent,
                 action=f"auto_{answer.decision}",
                 input=card.title,
-                output=f"{answer.chosen_option or answer.decision} - {answer.reason}",
+                output=f"{card.chosen_option or answer.decision} - {answer.reason}",
                 status=LedgerStatus.COMPLETED,
             )
         )

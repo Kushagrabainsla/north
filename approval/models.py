@@ -5,6 +5,7 @@ See docs/CODING_STYLE.md Section 7.4 and README Section 9.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -130,7 +131,8 @@ class CardField(BaseModel):
     type: CardFieldType = CardFieldType.TEXT
     value: Any = ""
     editable: bool = False
-    # Choices for `type == SELECT`; ignored otherwise.
+    # For SELECT, the only choices. For an editable TEXT field, suggested answers
+    # shown as buttons, which you may pick or type over (a question's options).
     options: list[str] = Field(default_factory=list)
 
     def display_label(self) -> str:
@@ -243,6 +245,48 @@ class Card(BaseModel):
         """Whether this card survives its task reaching a terminal state."""
         return bool(self.source) or not self.blocking
 
+    @property
+    def asks_several(self) -> bool:
+        """A question card whose fields are its questions, answered together on the one card."""
+        return self.type is CardType.QUESTION and bool(self.fields)
+
+    def answers_in(self, reply: str) -> dict[str, str]:
+        """The answer *reply* gives to each of this card's questions, by field name; {} when it cannot tell.
+
+        Telegram and the terminal take one message. A reply with one line per question, in
+        order, numbered or not, answers each; so does one line with the answers split by ";".
+        An option's number picks that option. Any other reply is not split up: the agent
+        reads it whole.
+        """
+        if len(self.fields) == 1:
+            return {self.fields[0].name: reply.strip()} if reply.strip() else {}
+        lines = [line for line in reply.splitlines() if line.strip()]
+        if len(lines) == 1:
+            lines = lines[0].split(";")
+        if len(lines) != len(self.fields):
+            return {}
+        answers = zip(self.fields, lines, strict=True)
+        return {field.name: _picked(field, _NUMBERED.sub("", line).strip()) for field, line in answers}
+
+    def numbered_questions(self) -> list[str]:
+        """Each question, numbered, with its options numbered under it: how a one-message channel shows them."""
+        lines: list[str] = []
+        for number, field in enumerate(self.fields, 1):
+            lines.append(f"{number}. {field.display_label()}")
+            lines.extend(f"    {index}) {option}" for index, option in enumerate(field.options, 1))
+        return lines
+
+    def answers_text(self, values: dict[str, Any]) -> str:
+        """Each question with its answer from *values*, one per line; "" while any is unanswered.
+
+        What a several-question card resolves to as its `chosen_option`, so everything that
+        reads an answer (the ledger, past decisions, a task that starts over) reads them all.
+        """
+        answers = [(field.display_label(), str(values.get(field.name) or "").strip()) for field in self.fields]
+        if not answers or not all(answer for _, answer in answers):
+            return ""
+        return "\n".join(f"{question} → {answer}" for question, answer in answers)
+
     def scrubbed(self) -> Card:
         """A copy with anything that looks like a credential taken out.
 
@@ -298,6 +342,20 @@ class Card(BaseModel):
             if field is not None:
                 merged[name] = _coerce(field, raw)
         return merged
+
+
+# "1. " or "2) " in front of an answer in a one-message reply; "2026-11-05" and "1.5 hours" keep their digits.
+_NUMBERED = re.compile(r"^\s*\d+[.)]\s+")
+
+
+def _picked(field: CardField, answer: str) -> str:
+    """*answer* to a question, with an option's name in any case, or its number, read as that option."""
+    named = next((option for option in field.options if option.lower() == answer.lower()), None)
+    if named is not None:
+        return named
+    if answer.isdigit() and 1 <= int(answer) <= len(field.options):
+        return field.options[int(answer) - 1]
+    return answer
 
 
 def _coerce(field: CardField, raw: Any) -> Any:

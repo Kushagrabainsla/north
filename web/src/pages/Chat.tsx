@@ -5,8 +5,9 @@ import { api, del, patch, post } from "../api";
 import { Empty, ErrorNotice, InferenceCategories, Loading, Markdown, PageHeader, PromptTelemetry, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import type { Approval, CardField, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
+import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
 import { STEP_EVENTS, foldStep, type Step } from "./liveSteps";
+import { CardFieldRow, answersComplete } from "./Approvals";
 
 /** North's self-checks, rendered live rather than only reachable in the ledger.
  *  Each entry turns one SSE payload into a one-line verdict plus its details. */
@@ -123,20 +124,11 @@ function LiveSteps({ steps }: { steps: Step[] }) {
   </div>;
 }
 
-function InlineCardField({ field, value, onChange }: { field: CardField; value: unknown; onChange: (value: unknown) => void }) {
-  const text = value === null || value === undefined ? "" : String(value);
-  if (!field.editable) return <label className="card-field"><span>{field.label || field.name.replaceAll("_", " ")}</span>{field.type === "link" ? <a className="card-field-value" href={text} target="_blank" rel="noreferrer">{text}</a> : <div className="card-field-value">{field.type === "boolean" ? (value ? "yes" : "no") : text || "-"}</div>}</label>;
-  if (field.type === "textarea") return <label className="card-field"><span>{field.label || field.name}</span><textarea value={text} rows={5} onChange={event => onChange(event.target.value)}/></label>;
-  if (field.type === "boolean") return <label className="card-field"><span>{field.label || field.name}</span><input type="checkbox" checked={Boolean(value)} onChange={event => onChange(event.target.checked)}/></label>;
-  if (field.type === "select") return <label className="card-field"><span>{field.label || field.name}</span><select value={text} onChange={event => onChange(event.target.value)}>{field.options.map(option => <option key={option}>{option}</option>)}</select></label>;
-  return <label className="card-field"><span>{field.label || field.name}</span><input type={field.type === "number" ? "number" : "text"} value={text} onChange={event => onChange(event.target.value)}/></label>;
-}
-
 export function ApprovalCard({ card, respond }: { card: Approval; respond: (card: Approval, decision: string, answer?: string, values?: Record<string, unknown>) => Promise<void> }) {
   const [answer, setAnswer] = useState("");
   const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries((card.fields || []).map(field => [field.name, field.value])));
   const isQuestion = card.type === "question";
-  return <div className="inline-approval"><small>{isQuestion ? "North needs your answer" : "Approval required"}</small><b>{card.title}</b><Markdown>{card.message}</Markdown>{(card.fields || []).length > 0 && <div className="card-fields">{card.fields.map(field => <InlineCardField key={field.name} field={field} value={values[field.name]} onChange={value => setValues(current => ({ ...current, [field.name]: value }))}/>)}</div>}{card.context && <details className="card-context"><summary>Review source</summary><pre>{card.context}</pre></details>}<div className="inline-approval-actions">{isQuestion ? <>{card.options.map(option => <button key={option} onClick={() => respond(card, "answered", option, values)}>{option}</button>)}<input value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Type your answer"/><button disabled={!answer.trim()} onClick={() => respond(card, "answered", answer, values)}>Answer</button></> : <><button onClick={() => respond(card, "approved", "", values)}>Approve</button><button className="danger-link" onClick={() => respond(card, "rejected", "", values)}>Reject</button></>}</div></div>;
+  return <div className="inline-approval"><small>{isQuestion ? "North needs your answer" : "Approval required"}</small><b>{card.title}</b><Markdown>{card.message}</Markdown>{(card.fields || []).length > 0 && <div className="card-fields">{card.fields.map(field => <CardFieldRow key={field.name} field={field} asking={isQuestion} value={values[field.name]} onChange={value => setValues(current => ({ ...current, [field.name]: value }))}/>)}</div>}{card.context && <details className="card-context"><summary>Review source</summary><pre>{card.context}</pre></details>}<div className="inline-approval-actions">{isQuestion && (card.fields || []).length > 0 ? <button disabled={!answersComplete(card, values)} onClick={() => respond(card, "answered", "", values)}>Send answers</button> : isQuestion ? <>{card.options.map(option => <button key={option} onClick={() => respond(card, "answered", option, values)}>{option}</button>)}<input value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Type your answer"/><button disabled={!answer.trim()} onClick={() => respond(card, "answered", answer, values)}>Answer</button></> : <><button onClick={() => respond(card, "approved", "", values)}>Approve</button><button className="danger-link" onClick={() => respond(card, "rejected", "", values)}>Reject</button></>}</div></div>;
 }
 
 function EventRows({ entries }: { entries: LedgerEntry[] }) {

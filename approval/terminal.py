@@ -40,7 +40,10 @@ class TerminalNotifier(Notifier):
             f"Message: {card.message}",
         ]
 
-        if card.type == CardType.QUESTION and card.options:
+        if card.asks_several:
+            lines.append("Questions:")
+            lines.extend(f"  {line}" for line in card.numbered_questions())
+        elif card.type == CardType.QUESTION and card.options:
             lines.append("Options:")
             for i, opt in enumerate(card.options, 1):
                 lines.append(f"  [{i}] {opt}")

@@ -21,7 +21,7 @@ domains: [general, engineering]
 - **`description`**: one sentence on what it owns.
 - **`accepts`**: the words and short phrases of requests it owns. Keep them specific: broad words ("help", "file", "check") pull in work that belongs to `general`.
 - **`system_prompt`**: what it owns, what it does not own (and hands back), its procedure, when it asks the user, and what it reports as done. Say why behind each rule.
-- Ask the user once, in one `ask_user` call, only for choices that change what it owns or may do; never guess accounts, recipients or permission to make changes.
+- Ask the user once, in one `ask_user` call with `questions`, only for choices that change what it owns or may do; never guess accounts, recipients or permission to make changes.
 
 ## A compact example (a call to `create_agent`)
 

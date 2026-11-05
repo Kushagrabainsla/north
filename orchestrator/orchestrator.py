@@ -584,6 +584,8 @@ class Orchestrator:
             card_id, decision, chosen_option=chosen_option, values=values, decided_by=DecidedBy.YOU
         ):
             raise ValueError(f"Approval card {card_id!r} could not be resolved.")
+        # A card of several questions resolves to all its answers, which the client did not send as one.
+        chosen_option = (self._approval_store.get(card_id) or card).chosen_option
         # Which fields the user changed, by name only. Whether the work was
         # accepted as offered or corrected is the useful signal; the values
         # themselves can hold anything the form did, so they go no further than
