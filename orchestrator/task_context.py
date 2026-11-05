@@ -145,8 +145,6 @@ class TaskContextStore:
         active_task_ids: frozenset[str],
         completed_retention_days: int = 7,
         failed_retention_days: int = 30,
-        # Legacy alias kept for callers that pass retention_days= by keyword.
-        retention_days: int | None = None,
     ) -> int:
         """Delete rows for inactive tasks past their retention window.
 
@@ -155,8 +153,6 @@ class TaskContextStore:
         Conditions for deleted task_ids are pruned from the in-memory dict.
         Returns the number of rows removed.
         """
-        if retention_days is not None:
-            completed_retention_days = retention_days
 
         completed_cutoff = (utcnow() - datetime.timedelta(days=completed_retention_days)).isoformat()
         failed_cutoff = (utcnow() - datetime.timedelta(days=failed_retention_days)).isoformat()

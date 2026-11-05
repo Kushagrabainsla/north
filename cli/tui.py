@@ -870,7 +870,7 @@ class NorthApp(App[None]):
         """Set a live dial (power/autonomy) via the settings endpoint.
 
         Called from slash commands. With no value, shows the current value - and
-        for autonomy, the modes the API offers. Accepts the legacy names too.
+        for autonomy, the modes the API offers.
         """
         full_url = f"{self.base_url}{url}"
         try:
@@ -1843,8 +1843,6 @@ class NorthApp(App[None]):
                     headers=self.headers,
                     json={
                         "card_id": data.get("card_id", ""),
-                        "task_id": data.get("task_id", ""),
-                        "agent": data.get("agent", ""),
                         "decision": decision,
                         "chosen_option": chosen,
                     },

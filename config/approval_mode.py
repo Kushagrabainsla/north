@@ -11,9 +11,6 @@ Four modes, from most to least supervised (CODING_STYLE §7.3):
 - ``yolo``: never asks; every approval is yes and every question gets the yes
   answer (or, when no option says yes, "proceed with your best judgement").
 
-Older names still load as aliases (``interactive``, ``auto``, the
-``unattended_mode``/``autonomous_mode`` booleans), so no stored setting breaks.
-
 Whether an action may run without asking is decided in exactly one place -
 ``approval/policy.py``. This module only names the modes, so every surface (the
 settings API, dashboard, TUI, CLI, Telegram, ``north_config``) shows and accepts
@@ -53,29 +50,12 @@ _DESCRIPTIONS: dict[ApprovalMode, str] = {
 # What YOLO answers to a question that offers no options, or none that says yes.
 YES_ANSWER = "Yes. Proceed with your best judgement."
 
-# Older and friendlier names, so a stored setting or a typed word still means something.
-_ALIASES: dict[str, ApprovalMode] = {
-    "interactive": ApprovalMode.ASK,
-    "manual": ApprovalMode.ASK,
-    "default": ApprovalMode.ASK,
-    "readonly": ApprovalMode.ASK,
-    "read-only": ApprovalMode.ASK,
-    "read_only": ApprovalMode.ASK,
-    "auto": ApprovalMode.SAFE,
-    "unattended": ApprovalMode.SAFE,
-    "assisted": ApprovalMode.SAFE,
-    "full": ApprovalMode.YOLO,
-    "all": ApprovalMode.YOLO,
-}
-
 
 def parse_approval_mode(raw: str | None) -> ApprovalMode | None:
-    """Parse a mode name (or alias), or None if *raw* is empty/unrecognised."""
+    """Parse a mode name, or None if *raw* is empty/unrecognised."""
     key = (raw or "").strip().lower()
     if not key:
         return None
-    if key in _ALIASES:
-        return _ALIASES[key]
     try:
         return ApprovalMode(key)
     except ValueError:
@@ -113,19 +93,5 @@ def approve_option(options: list[str]) -> str:
 
 
 def resolve_approval_mode(settings: object) -> ApprovalMode:
-    """Determine the effective approval mode from settings.
-
-    ``autonomy`` (new name) wins when set; ``approval_mode`` is honoured as a
-    legacy fallback; otherwise the legacy ``autonomous_mode`` / ``unattended_mode``
-    booleans are honoured; otherwise the default (ask).
-    """
-    explicit = parse_approval_mode(getattr(settings, "autonomy", None))
-    if explicit is None:
-        explicit = parse_approval_mode(getattr(settings, "approval_mode", None))
-    if explicit is not None:
-        return explicit
-    if bool(getattr(settings, "autonomous_mode", False)):
-        return ApprovalMode.AUTONOMOUS
-    if bool(getattr(settings, "unattended_mode", False)):
-        return ApprovalMode.SAFE
-    return ApprovalMode.ASK
+    """The mode NORTH_APPROVAL_MODE sets, or ask when it is empty or not a mode."""
+    return parse_approval_mode(getattr(settings, "approval_mode", None)) or ApprovalMode.ASK

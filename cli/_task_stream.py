@@ -284,8 +284,6 @@ class TaskStepFeed:
                 "/orchestrator/approval/respond",
                 json={
                     "card_id": data.get("card_id", ""),
-                    "task_id": self.stream.task_id,
-                    "agent": data.get("agent", ""),
                     "decision": decision,
                     "chosen_option": chosen,
                 },

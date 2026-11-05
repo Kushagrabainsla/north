@@ -84,7 +84,6 @@ def test_dangerous_git_args_rejected():
 
 def test_from_settings():
     class S:
-        unattended_mode = True
         unattended_extra_commands = ("bazel test",)
 
     p = UnattendedPolicy.from_settings(S())

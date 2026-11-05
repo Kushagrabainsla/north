@@ -1612,7 +1612,7 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
   tool_index.db          <- per-tool embedding vectors for semantic tool selection
   facts.db               <- per-fact embedding vectors for semantic context retrieval
   approvals.db           <- approval cards, so prepared work waiting on you survives a restart
-  approval_memory.db     <- how you decided past actions, replayed in `auto` mode
+  approval_memory.db     <- how you decided past actions, replayed in `safe` mode
   settings.json          <- user settings (inference strategy, etc.)
   secret.key             <- shared secret for notification callbacks and REST API auth
   tasks/

@@ -153,8 +153,8 @@ async def test_telegram_gateway_slash_commands(monkeypatch: pytest.MonkeyPatch) 
     gw._cancel_task.assert_awaited_with("task_abc")
     assert "cancelled" in gw._send_message.call_args[0][1].lower()
 
-    # /autonomy auto: the old name still works, and is sent as the key the API reads.
-    await gw._process_message({"message_id": 3, "chat": {"id": 12345}, "text": "/autonomy auto"})
+    # /autonomy safe is sent as the key the API reads.
+    await gw._process_message({"message_id": 3, "chat": {"id": 12345}, "text": "/autonomy safe"})
     gw._update_settings.assert_awaited_with({"autonomy": "safe"})
     assert "`safe`" in gw._send_message.call_args[0][1]
 

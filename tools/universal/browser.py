@@ -60,8 +60,6 @@ _MAX_CDP_RESPONSE_BYTES = 1_000_000
 # Parameters that once attached chrome-agent to the user's own Chrome. Saved
 # profiles replaced them; they are refused, never silently ignored.
 _RAW_ATTACH_KEYS = ("connect", "copy_cookies")
-# The old per-call context confirmation; a saved profile now carries that choice.
-_RETIRED_CONTEXT_KEYS = ("browser_context", "context_confirmed")
 
 
 def _site(url: str) -> str:
@@ -1165,7 +1163,6 @@ class BrowserTool(Tool):
                 success=False,
                 error="North reaches your own browser only through a saved profile: pass a profile_id.",
             )
-        params = {key: value for key, value in params.items() if key not in _RETIRED_CONTEXT_KEYS}
         try:
             params, profile = self._resolve_profile(params)
         except ValueError as exc:

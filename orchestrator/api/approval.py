@@ -22,10 +22,8 @@ class ApprovalResponse(BaseModel):
     # Why, for a rejection. Without one a rejection says only "no", which cannot
     # be learned from - and this is the highest-quality signal north gets.
     reason: str = Field(default="", max_length=2000)
-    # Legacy fields - ignored. The decision binds to the server-issued card:
-    # task_id and agent are read from the stored card, never trusted from the client.
-    task_id: str = ""
-    agent: str = ""
+    # Which task and agent the card belongs to come from the stored card, never
+    # from the client: the decision binds to the card the server issued.
 
 
 @router.post("/approval/respond", status_code=204)

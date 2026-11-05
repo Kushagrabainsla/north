@@ -308,28 +308,6 @@ def _conversation_payload(conversation) -> dict[str, Any]:
     return asdict(conversation)
 
 
-_LEGACY_WAITING_RE = re.compile(
-    r"\b(?:tell me once|let me know once|please (?:confirm|choose|provide|open|start)|"
-    r"need you to|once (?:it|you) [^.\n]{0,100}(?:tell me|let me know)|"
-    r"(?:do|would|could|can) you (?:want|prefer|confirm|choose|provide|open|start))\b",
-    re.IGNORECASE,
-)
-_LEGACY_BLOCKED_RE = re.compile(
-    r"\b(?:blocked|cannot continue|can't continue|unable to continue|not reachable|"
-    r"missing (?:a )?(?:capability|credential|dependency))\b",
-    re.IGNORECASE,
-)
-
-
-def _legacy_outcome_status(output: str) -> str:
-    """Recover an honest state for ledger rows written before outcome_status existed."""
-    if _LEGACY_WAITING_RE.search(output) or output.rstrip().endswith("?"):
-        return "waiting_for_user"
-    if _LEGACY_BLOCKED_RE.search(output):
-        return "blocked"
-    return "response_ready"
-
-
 def _workspace_path(value: str) -> str:
     """Return a stable absolute directory path suitable for a task workspace."""
     if not value.strip():
@@ -483,8 +461,6 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
             if entry.output:
                 output = entry.output
                 break
-    if output and outcome_status == "working":
-        outcome_status = _legacy_outcome_status(output)
     if task and task.status in {"failed", "cancelled", "needs_attention"}:
         outcome_status = "blocked"
     elif task and task.status == "completed" and outcome_status == "working":

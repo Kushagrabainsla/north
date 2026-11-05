@@ -48,9 +48,8 @@ CREATE TABLE IF NOT EXISTS schedule_provisioning (
 """
 
 # Columns added after v1; existing databases get them via ALTER (CODING_STYLE 11.4).
-# `weekdays` supersedes the single-day `weekday`, which is left in place because
-# SQLite cannot drop a column cheaply and a stale column costs nothing; it is
-# read exactly once, by the migration below, and never written again.
+# `weekdays` superseded the single-day `weekday`, which is left in place because
+# SQLite cannot drop a column cheaply and a stale column costs nothing.
 _ADDED_COLUMNS = {
     "tz": "TEXT",
     "created_epoch": "REAL",
@@ -142,18 +141,6 @@ class UserCronStore:
             for column, decl in _ADDED_COLUMNS.items():
                 if column not in existing:
                     conn.execute(f"ALTER TABLE user_cron_entries ADD COLUMN {column} {decl}")
-            # Entries written before zones were stored were read in the machine's
-            # local zone by the old scheduler, so that is what they meant.
-            conn.execute(
-                "UPDATE user_cron_entries SET tz = ? WHERE tz IS NULL",
-                (local_timezone_name(),),
-            )
-            # A single-day entry means the same rule as a one-element set, so it
-            # migrates by being spelled the new way rather than by being rewritten.
-            conn.execute(
-                "UPDATE user_cron_entries SET weekdays = CAST(weekday AS TEXT)"
-                " WHERE weekdays IS NULL AND weekday IS NOT NULL"
-            )
 
     async def add(
         self,

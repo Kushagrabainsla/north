@@ -21,34 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 class SQLiteContextStore(ContextStore):
-    """Database-backed context documents with one-time Markdown migration."""
+    """Database-backed context documents."""
 
-    def __init__(self, db_path: Path, legacy_path: Path | None = None) -> None:
+    def __init__(self, db_path: Path) -> None:
         from utils.db import open_db_connection
 
         self._db_path = db_path
-        self._legacy_path = legacy_path
         self._locks: dict[str, asyncio.Lock] = {}
         with open_db_connection(db_path) as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS context_documents (document TEXT PRIMARY KEY, content TEXT NOT NULL)"
             )
-            conn.execute("CREATE TABLE IF NOT EXISTS context_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-            migrated = conn.execute(
-                "SELECT 1 FROM context_metadata WHERE key = 'markdown_migration_complete'"
-            ).fetchone()
-            if legacy_path is not None and migrated is None:
-                for document in ContextDocument:
-                    path = legacy_path / document.value
-                    exists = conn.execute(
-                        "SELECT 1 FROM context_documents WHERE document = ?", (document.value,)
-                    ).fetchone()
-                    if path.exists() and exists is None:
-                        conn.execute(
-                            "INSERT INTO context_documents(document, content) VALUES (?, ?)",
-                            (document.value, path.read_text(encoding="utf-8")),
-                        )
-                conn.execute("INSERT INTO context_metadata(key, value) VALUES ('markdown_migration_complete', '1')")
 
     async def read(self, document: ContextDocument) -> str:
         return await asyncio.to_thread(self._read_sync, document)

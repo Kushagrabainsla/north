@@ -125,8 +125,6 @@ _CONFIG_KEYS = {
     "telegram.allowed_chat_ids": ("telegram_allowed_chat_ids", str),
     # Approval & Autonomy
     "approval_mode": ("approval_mode", str),
-    "unattended_mode": ("unattended_mode", _bool_cast),
-    "autonomous_mode": ("autonomous_mode", _bool_cast),
     # Sandboxing & Git
     "sandbox.enabled": ("sandbox_enabled", _bool_cast),
     "sandbox.os": ("os_sandbox_enabled", _bool_cast),

@@ -153,16 +153,11 @@ class Settings(BaseSettings):
 
     # Approval mode - one dial for how much north does without asking: ask
     # (default), safe, autonomous or yolo, defined in config/approval_mode.py.
-    # Set via NORTH_APPROVAL_MODE. Empty = fall back to the legacy booleans below,
-    # then to "ask".
+    # Set via NORTH_APPROVAL_MODE. Empty = "ask".
     approval_mode: str = ""
 
-    # Legacy boolean toggles - still honoured as a fallback when approval_mode is
-    # left at its default, so older configs keep working. Prefer approval_mode.
-    # unattended -> "safe"; autonomous -> "autonomous".
-    unattended_mode: bool = False
+    # Commands safe mode also runs without asking, beside the shipped safe list.
     unattended_extra_commands: tuple[str, ...] = ()
-    autonomous_mode: bool = False
 
     # Telegram bot token for the Telegram gateway.
     # Set NORTH_TELEGRAM_BOT_TOKEN in environment or .env.

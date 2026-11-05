@@ -90,12 +90,12 @@ async def test_the_reminder_stays_quiet_when_nothing_waits() -> None:
 
 def test_an_old_settings_file_with_a_timeout_still_loads(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps({"autonomy": "auto", "approval_timeout_seconds": 1800.0}))
+    path.write_text(json.dumps({"autonomy": "safe", "approval_timeout_seconds": 1800.0}))
 
     settings = NorthSettings(path)
     settings.set_timezone("UTC")  # any save
 
-    assert settings.autonomy.value == "safe"  # "auto" still loads, as its new name
+    assert settings.autonomy.value == "safe"
     assert "approval_timeout_seconds" not in json.loads(path.read_text())
 
 

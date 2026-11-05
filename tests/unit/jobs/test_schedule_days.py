@@ -190,27 +190,6 @@ def test_an_unreadable_stored_selection_falls_back_to_daily() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_single_day_row_written_before_sets_still_reads(tmp_path) -> None:
-    """Migration: the old `weekday` column means the same as a one-element set."""
-    import sqlite3
-
-    db = tmp_path / "jobs.db"
-    with sqlite3.connect(db) as conn:
-        conn.execute(
-            "CREATE TABLE user_cron_entries (name TEXT PRIMARY KEY, agent TEXT NOT NULL,"
-            " task TEXT NOT NULL, hour INTEGER NOT NULL, minute INTEGER NOT NULL,"
-            " weekday INTEGER, created_at DATETIME)"
-        )
-        conn.execute("INSERT INTO user_cron_entries VALUES ('user_old', 'general', 'water', 15, 0, 2, NULL)")
-
-    store = UserCronStore(db)
-    (row,) = await store.list()
-    assert row["weekdays"] == frozenset({2})
-    assert row["enabled"] is True
-    assert CronEntry.from_row(row).cadence == "every Wed"
-
-
-@pytest.mark.asyncio
 async def test_storing_and_reading_back_a_weekday_schedule(tmp_path) -> None:
     store = UserCronStore(tmp_path / "jobs.db")
     await store.add("user_stretch", "general", "stretch", 9, 30, WEEKDAYS)

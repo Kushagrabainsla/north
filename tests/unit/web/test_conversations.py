@@ -8,20 +8,6 @@ from web import api as web_api
 from web.conversations import ConversationStore
 
 
-def test_legacy_waiting_answer_is_not_labeled_complete() -> None:
-    assert (
-        web_api._legacy_outcome_status("Please confirm Chrome is open. Once it does, I'll continue.")
-        == "waiting_for_user"
-    )
-    assert web_api._legacy_outcome_status("Do you want me to continue?") == "waiting_for_user"
-    assert (
-        web_api._legacy_outcome_status("Once it is open, tell me and I will verify the connection.")
-        == "waiting_for_user"
-    )
-    assert web_api._legacy_outcome_status("Can we do that?") == "waiting_for_user"
-    assert web_api._legacy_outcome_status("The requested summary is ready.") == "response_ready"
-
-
 async def test_conversation_lifecycle_and_turn_order(tmp_path) -> None:
     store = ConversationStore(tmp_path / "web.db")
 

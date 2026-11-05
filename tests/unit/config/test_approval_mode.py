@@ -1,4 +1,4 @@
-"""Tests for the unified approval mode dial (interactive / auto / autonomous)."""
+"""Tests for the approval mode dial (ask / safe / autonomous / yolo)."""
 
 from __future__ import annotations
 
@@ -7,45 +7,25 @@ from types import SimpleNamespace
 from config.approval_mode import ApprovalMode, parse_approval_mode, resolve_approval_mode
 
 
-def _settings(**kw) -> SimpleNamespace:
-    base = {"approval_mode": "", "unattended_mode": False, "autonomous_mode": False}
-    base.update(kw)
-    return SimpleNamespace(**base)
-
-
-def test_parse_canonical_and_synonyms():
+def test_parse_each_mode_whatever_its_case():
     assert parse_approval_mode("ask") is ApprovalMode.ASK
     assert parse_approval_mode("safe") is ApprovalMode.SAFE
-    assert parse_approval_mode("interactive") is ApprovalMode.ASK
-    assert parse_approval_mode("readonly") is ApprovalMode.ASK
-    assert parse_approval_mode("auto") is ApprovalMode.SAFE
-    assert parse_approval_mode("unattended") is ApprovalMode.SAFE
     assert parse_approval_mode("autonomous") is ApprovalMode.AUTONOMOUS
     assert parse_approval_mode("yolo") is ApprovalMode.YOLO
-    assert parse_approval_mode("all") is ApprovalMode.YOLO
-    assert parse_approval_mode("  AUTO  ") is ApprovalMode.SAFE
+    assert parse_approval_mode("  SAFE  ") is ApprovalMode.SAFE
 
 
 def test_parse_empty_or_unknown_is_none():
     assert parse_approval_mode("") is None
     assert parse_approval_mode(None) is None
     assert parse_approval_mode("bogus") is None
+    assert parse_approval_mode("auto") is None, "the old names are gone"
 
 
-def test_resolve_defaults_to_interactive():
-    assert resolve_approval_mode(_settings()) is ApprovalMode.ASK
+def test_resolve_defaults_to_ask():
+    assert resolve_approval_mode(SimpleNamespace(approval_mode="")) is ApprovalMode.ASK
+    assert resolve_approval_mode(SimpleNamespace(approval_mode="interactive")) is ApprovalMode.ASK
 
 
-def test_resolve_explicit_mode_wins():
-    assert resolve_approval_mode(_settings(approval_mode="autonomous")) is ApprovalMode.AUTONOMOUS
-
-
-def test_resolve_falls_back_to_legacy_booleans():
-    assert resolve_approval_mode(_settings(unattended_mode=True)) is ApprovalMode.SAFE
-    assert resolve_approval_mode(_settings(autonomous_mode=True)) is ApprovalMode.AUTONOMOUS
-
-
-def test_explicit_mode_overrides_legacy_boolean():
-    # approval_mode set to interactive must win even if a legacy boolean is on
-    s = _settings(approval_mode="interactive", autonomous_mode=True)
-    assert resolve_approval_mode(s) is ApprovalMode.ASK
+def test_resolve_reads_the_mode_set():
+    assert resolve_approval_mode(SimpleNamespace(approval_mode="autonomous")) is ApprovalMode.AUTONOMOUS

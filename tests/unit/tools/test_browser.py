@@ -17,7 +17,7 @@ from tools.universal.browser import (
 
 
 def _isolated(**params):
-    return {"browser_context": "isolated", "context_confirmed": True, **params}
+    return dict(params)
 
 
 def test_browser_guidance_selects_profile_and_reuses_existing_login():

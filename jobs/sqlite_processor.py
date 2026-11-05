@@ -42,17 +42,6 @@ CREATE TABLE IF NOT EXISTS job_queue (
 )
 """
 
-# The v1 table stored ISO-8601 text in these columns; each maps to the epoch
-# column that replaced it. Databases created before this change are rebuilt once,
-# on construction, by _migrate_iso_columns_to_epoch().
-_LEGACY_TIME_COLUMNS = {
-    "scheduled_at": "scheduled_epoch",
-    "started_at": "started_epoch",
-    "completed_at": "completed_epoch",
-    "retry_after": "retry_epoch",
-    "created_at": "created_epoch",
-}
-
 # NEEDS_ATTENTION is terminal in the same sense the others are: the queue is
 # finished with the job. It differs in why - not "this is over" but "only a
 # person can decide what happens next" - so it is never re-queued automatically.
@@ -98,73 +87,6 @@ def _optional_datetime(epoch: float | None) -> datetime | None:
     return from_epoch(epoch) if epoch is not None else None
 
 
-def _legacy_text_to_epoch(text: str | None) -> float | None:
-    """Convert one v1 ISO-8601 cell to epoch seconds.
-
-    SQLite's CURRENT_TIMESTAMP default wrote naive UTC ("2026-05-21 07:00:00"),
-    while Python wrote offset-aware ISO, so a naive value is read as UTC here -
-    which is what it was. An unparseable cell becomes NULL rather than failing
-    the migration and locking the user out of their queue.
-    """
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(text))
-    except ValueError:
-        logger.warning("JobProcessor: dropping unparseable legacy timestamp %r", text)
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.timestamp()
-
-
-def _migrate_iso_columns_to_epoch(conn: sqlite3.Connection) -> None:
-    """Rebuild a v1 job_queue whose time columns hold ISO-8601 text.
-
-    Column types cannot be changed in place, so the old rows are copied into the
-    epoch-shaped table and the old one dropped - once, on the first construction
-    against an old database. Later constructions see no legacy column and return.
-    """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(job_queue)")}
-    if not columns & _LEGACY_TIME_COLUMNS.keys():
-        return
-    logger.info("JobProcessor: migrating job_queue timestamps to epoch seconds")
-    conn.execute("ALTER TABLE job_queue RENAME TO job_queue_legacy")
-    conn.execute("DROP INDEX IF EXISTS idx_job_queue_pending")
-    conn.execute("DROP INDEX IF EXISTS idx_job_queue_agent_task")
-    conn.execute(_SCHEMA)
-    rows = conn.execute("SELECT * FROM job_queue_legacy").fetchall()
-    for row in rows:
-        epochs = {new: _legacy_text_to_epoch(row[old]) for old, new in _LEGACY_TIME_COLUMNS.items()}
-        conn.execute(
-            """
-            INSERT INTO job_queue (
-                job_id, type, agent, task, payload, status, priority,
-                scheduled_epoch, started_epoch, completed_epoch,
-                retry_count, max_retries, retry_epoch, created_epoch
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                row["job_id"],
-                row["type"],
-                row["agent"],
-                row["task"],
-                row["payload"],
-                row["status"],
-                row["priority"],
-                epochs["scheduled_epoch"] if epochs["scheduled_epoch"] is not None else 0.0,
-                epochs["started_epoch"],
-                epochs["completed_epoch"],
-                row["retry_count"],
-                row["max_retries"],
-                epochs["retry_epoch"],
-                epochs["created_epoch"] if epochs["created_epoch"] is not None else now_epoch(),
-            ),
-        )
-    conn.execute("DROP TABLE job_queue_legacy")
-    logger.info("JobProcessor: migrated %d job(s) to epoch timestamps", len(rows))
-
-
 class SQLiteJobProcessor(JobProcessor):
     """Persistent job queue backed by a SQLite file.
 
@@ -188,7 +110,6 @@ class SQLiteJobProcessor(JobProcessor):
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
-            _migrate_iso_columns_to_epoch(conn)
             # Indexes for the hot paths: claim_next (pending eligibility + ordering)
             # and the cron duplicate-run guard (agent + task + status).
             conn.execute(

@@ -71,8 +71,6 @@ async def receive_decision(
                 f"{server_url()}/orchestrator/approval/respond",
                 json={
                     "card_id": payload.card_id,
-                    "task_id": payload.task_id,
-                    "agent": payload.agent,
                     "decision": decision,
                     "chosen_option": payload.action,
                 },

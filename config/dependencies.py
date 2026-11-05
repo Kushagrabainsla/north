@@ -15,7 +15,6 @@ import asyncio
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents.inbox import TaskInbox
@@ -281,17 +280,6 @@ def _build_dates_fn(cost_tracker: CostTracker) -> DatesFn:
     return _dates_fn
 
 
-def _migrate_legacy_public_document(context_dir: Path) -> None:
-    """2b memory model: public.md was renamed to user.md.
-
-    Preserves the user's existing facts document under the new name. Idempotent.
-    """
-    legacy_public = context_dir / "public.md"
-    user_doc = context_dir / "user.md"
-    if legacy_public.exists() and not user_doc.exists():
-        legacy_public.rename(user_doc)
-
-
 def _default_north_settings() -> NorthSettings:
     from config.approval_mode import resolve_approval_mode
 
@@ -321,9 +309,8 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     # Activate the persisted user choice before stores migrate old schedules or
     # any component renders a local time.
     configure_timezone(north_settings.timezone)
-    _migrate_legacy_public_document(settings.north_home / "context")
 
-    context_store = SQLiteContextStore(settings.north_home / "memory.db", legacy_path=settings.north_home / "context")
+    context_store = SQLiteContextStore(settings.north_home / "memory.db")
     ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
     base_router = build_inference_router_from_settings(
