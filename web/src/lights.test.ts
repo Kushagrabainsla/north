@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDeviceRequest, brandOf, inScope, kelvinToRgb, latestWins, swatch, type Light } from "./lights";
+import { addDeviceRequest, brandOf, foundRequest, inScope, kelvinToRgb, latestWins, swatch, type Light } from "./lights";
 
 const light = (over: Partial<Light>): Light => ({
   id: "a", name: "Desk lamp", host: "10.0.0.36", model: "KL130", on: true, kind: "light",
@@ -80,6 +80,21 @@ describe("a device of any brand", () => {
   it("asks north to add a device in the user's own words, naming where it should show", () => {
     expect(addDeviceRequest("  A Philips Hue bridge at 192.168.1.20 ")).toBe(
       "Add this to my Devices page, so I can control it there and from chat: A Philips Hue bridge at 192.168.1.20",
+    );
+  });
+});
+
+describe("adding a device Find devices saw", () => {
+  it("tells north everything discovery learned, so it asks only what the user must do", () => {
+    const found = {
+      id: "hue@192.168.1.20", brand: "Philips Hue", key: "hue", kind: "bridge", name: "Hue Bridge - 1A2B3C",
+      address: "192.168.1.20", how: "mDNS _hue._tcp", reach: "the bridge's local API; pressing its link button once gives north a key",
+      cannot: "", details: { bridgeid: "001788fffe1a2b3c", modelid: "" }, added: false,
+    };
+    expect(foundRequest(found)).toBe(
+      'Add this to my Devices page, so I can control it there and from chat: the Philips Hue bridge "Hue Bridge - 1A2B3C" ' +
+        "at 192.168.1.20, found on the network by mDNS _hue._tcp (bridgeid=001788fffe1a2b3c). " +
+        "North can reach it through the bridge's local API; pressing its link button once gives north a key.",
     );
   });
 });

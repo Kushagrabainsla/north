@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, post } from "../api";
 import { Empty, ErrorNotice, Loading, PageHeader } from "../components";
 import { useResource } from "../hooks";
-import { addDeviceRequest, brandOf, inScope, kelvinToRgb, latestWins, swatch, type Light, type LightChange, type LightsOverview, type Scope } from "../lights";
+import { addDeviceRequest, brandOf, foundRequest, inScope, kelvinToRgb, latestWins, swatch, type FoundDevice, type Light, type LightChange, type LightsOverview, type Scope } from "../lights";
 import { sliceMs, type Levels } from "../listen";
 import listenWorklet from "../listen.worklet.ts?worker&url";
 import { hear, listening, spread, type Frame, type Mode } from "../music";
@@ -91,7 +91,7 @@ export function Lights() {
       </section>
       {shown.length > 0 && <MusicSync lights={shown} scope={chosen} onStopped={() => void overview.reload()}/>}
       {locked.length > 0 && <p className="lights-notice lights-locked">
-        {locked.length} light{locked.length === 1 ? "" : "s"} found {locked.length === 1 ? "needs its" : "need their"} TP-Link login, the Kasa app account {locked.length === 1 ? "it was" : "they were"} set up with: {locked.join(", ")}. <Link to="/settings">Add it in Settings → Connections → Kasa lights</Link>, then press Look again.
+        {locked.length} Kasa light{locked.length === 1 ? "" : "s"} found {locked.length === 1 ? "needs its" : "need their"} TP-Link login, the Kasa app account {locked.length === 1 ? "it was" : "they were"} set up with: {locked.join(", ")}. <Link to="/settings">Add it in Settings → Secrets as kasa_email and kasa_password</Link>, then press Look again.
       </p>}
       {(lights.length > 0 || locked.length > 0) && overview.data?.problem && !locked.length && <p className="lights-notice">{overview.data.problem}</p>}
       {notice && <p className="lights-notice" role="status">{notice}</p>}
@@ -102,31 +102,60 @@ export function Lights() {
   </div>;
 }
 
-// Adding a brand north does not control yet: you say what it is, and north writes what it needs
-// in a session you can follow, asking you for anything only you know (its address, a login).
+// Adding a device north does not control yet. North looks on your network first and lists what it
+// recognises, saying for each how it would reach it or why it cannot yet; choosing one opens a session
+// where north writes what it needs, asking only for what you must do (press a button, a login). What
+// discovery cannot see (a device only its cloud app reaches) is described in your own words below.
 function AddDevice({ onCancel }: { onCancel: () => void }) {
   const navigate = useNavigate();
+  const [found, setFound] = useState<FoundDevice[] | null>(null);
+  const [looking, setLooking] = useState(false);
   const [what, setWhat] = useState("");
-  const [sending, setSending] = useState(false);
+  const [sending, setSending] = useState("");
   const [error, setError] = useState("");
-  const ask = async () => {
-    setSending(true); setError("");
+  const look = async () => {
+    setLooking(true); setError("");
+    try { setFound((await api<{ found: FoundDevice[] }>("/web/api/lights/discover")).found); }
+    catch (err) { setError(message(err)); }
+    finally { setLooking(false); }
+  };
+  useEffect(() => { void look(); }, []);
+  const ask = async (key: string, title: string, request: string) => {
+    setSending(key); setError("");
     try {
-      const session = await post<Conversation>("/web/api/conversations", { title: `Add ${what.trim()}`.slice(0, 80) });
-      await post(`/web/api/conversations/${session.id}/turns`, { prompt: addDeviceRequest(what) });
+      const session = await post<Conversation>("/web/api/conversations", { title: `Add ${title}`.slice(0, 80) });
+      await post(`/web/api/conversations/${session.id}/turns`, { prompt: request });
       navigate(`/sessions/${session.id}`);
     } catch (err) {
       setError(message(err));
-      setSending(false);
+      setSending("");
     }
   };
   return <section className="panel setup-form add-device" aria-label="Add a device">
-    <p className="setup-copy muted">Say what it is: its brand and model, and where it is if you know (its address, or the app you use for it). North works out how to control it, asks you for anything only you know, and once it works the device shows up here beside your other lights, with the same controls and music sync.</p>
-    <textarea value={what} rows={2} placeholder="A Philips Hue bridge at 192.168.1.20" onChange={(event) => setWhat(event.target.value)}/>
+    <p className="setup-copy muted">North looks on your network for lights, plugs and switches it can connect to. Choose one and North works out how to control it, in a session you can follow, asking you only for what you need to do: press a button, turn on a setting, or add a login. Once it works, it shows up here with the same controls and music sync.</p>
+    {looking ? <p className="muted">Looking on your network… this takes a few seconds.</p>
+      : found && (found.length
+        ? <div className="provider-list found-list">{found.map((device) => <div className="provider-row" key={device.id}>
+          <div>
+            <b>{device.brand} · {device.name}</b>
+            <small>{device.kind} at {device.address} · found by {device.how}</small>
+            <small>{device.cannot ? `North can't connect to it yet: ${device.cannot}.` : `North reaches it through ${device.reach}.`}</small>
+          </div>
+          {device.added ? <span className="provider-state configured">North has a tool for {device.brand}</span>
+            : device.cannot ? null
+            : <button className="primary-button" type="button" disabled={Boolean(sending)} onClick={() => ask(device.id, `${device.brand} ${device.name}`, foundRequest(device))}>{sending === device.id ? "Asking North…" : "Add"}</button>}
+        </div>)}</div>
+        : <p className="muted">Nothing found on this network. Your Kasa bulbs show up by themselves; for anything else, describe it below.</p>)}
+    <div className="setup-actions">
+      <button className="ghost-button" type="button" onClick={look} disabled={looking}>{looking ? "Looking…" : "Look again"}</button>
+    </div>
+    <label>Not listed? Say what it is: its brand and model, and where it is if you know (its address, or the app you use for it).
+      <textarea value={what} rows={2} placeholder="A Philips Hue bridge at 192.168.1.20" onChange={(event) => setWhat(event.target.value)}/>
+    </label>
     {error && <ErrorNotice message={error}/>}
     <div className="setup-actions">
-      <button className="primary-button" type="button" disabled={!what.trim() || sending} onClick={ask}>{sending ? "Asking North…" : "Ask North to add it"}</button>
-      <button className="ghost-button" type="button" onClick={onCancel}>Cancel</button>
+      <button className="primary-button" type="button" disabled={!what.trim() || Boolean(sending)} onClick={() => ask("typed", what.trim(), addDeviceRequest(what))}>{sending === "typed" ? "Asking North…" : "Ask North to add it"}</button>
+      <button className="ghost-button" type="button" onClick={onCancel}>Close</button>
     </div>
   </section>;
 }

@@ -26,9 +26,11 @@ from config.settings import settings
 FILE_NAME = "secrets.json"
 # A name the model and the user can both say: lowercase letters, digits and underscores.
 NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
-# Long enough that taking it out of tool output never hits it by chance: a 4-character
-# value turns up inside a screenshot's base64 often enough to corrupt it.
-MIN_VALUE_LENGTH = 8
+# As short as a TP-Link password may be. Images are left alone when values are taken out of
+# tool output (`_IMAGE_KEYS`): a short value turns up inside a screenshot's base64 by chance.
+MIN_VALUE_LENGTH = 6
+# Where a tool returns an image: the model sees it as a picture, never as text.
+_IMAGE_KEYS = frozenset({"base64_image"})
 MAX_VALUE_LENGTH = 8192
 
 # The tool running now and the names it declared: what `secret()` may release.
@@ -123,7 +125,7 @@ def _hidden(value: Any, known: list[tuple[str, str]]) -> Any:
             value = value.replace(secret_value, label)
         return value
     if isinstance(value, dict):
-        return {key: _hidden(item, known) for key, item in value.items()}
+        return {key: item if key in _IMAGE_KEYS else _hidden(item, known) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return type(value)(_hidden(item, known) for item in value)
     return value

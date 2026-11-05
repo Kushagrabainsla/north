@@ -47,6 +47,30 @@ export function brandOf(light: Light): string {
 export const addDeviceRequest = (what: string) =>
   `Add this to my Devices page, so I can control it there and from chat: ${what.trim()}`;
 
+/** A device Find devices saw on the network: what it is, where, and how north would reach it. */
+export interface FoundDevice {
+  id: string;
+  brand: string;
+  key: string;
+  kind: string;
+  name: string;
+  address: string;
+  how: string;
+  reach: string;
+  cannot: string; // why north cannot connect to it yet; "" when it can
+  details: Record<string, string>;
+  added: boolean; // north already has a tool for this brand
+}
+
+/** What north is told when you choose a device Find devices saw: everything discovery learned about it. */
+export function foundRequest(found: FoundDevice): string {
+  const details = Object.entries(found.details).filter(([, value]) => value).map(([key, value]) => `${key}=${value}`).join(", ");
+  return addDeviceRequest(
+    `the ${found.brand} ${found.kind} "${found.name}" at ${found.address}, found on the network by ${found.how}` +
+      `${details ? ` (${details})` : ""}. North can reach it through ${found.reach}.`,
+  );
+}
+
 /** The lights a choice covers: yours, or every one on the network (a friend's too). */
 export const inScope = (lights: Light[], scope: Scope) => (scope === "mine" ? lights.filter((light) => light.mine) : lights);
 

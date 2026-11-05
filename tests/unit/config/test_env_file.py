@@ -13,18 +13,18 @@ TRICKY = ["p@ss w#rd", "$HOME and 'quotes' \"too\"", "back\\slash in it", "=equa
 @pytest.mark.parametrize("password", TRICKY)
 def test_a_password_is_read_back_exactly(tmp_path, password: str) -> None:
     """`p@ss w#rd` was cut at the `#`, read as a comment, when a value was written as it was."""
-    write_env_key(tmp_path, "NORTH_KASA_PASSWORD", password)
+    write_env_key(tmp_path, "NORTH_GROQ_API_KEY", password)
 
-    assert Settings(_env_file=tmp_path / ".env").kasa_password == password
+    assert Settings(_env_file=tmp_path / ".env").groq_api_key == password
     assert (tmp_path / ".env").stat().st_mode & 0o777 == 0o600
 
 
 def test_a_plain_value_is_written_as_it_is_and_can_be_removed(tmp_path) -> None:
     write_env_key(tmp_path, "NORTH_GROQ_API_KEY", "gsk_real")
-    write_env_key(tmp_path, "NORTH_KASA_USERNAME", "me@example.com")
+    write_env_key(tmp_path, "NORTH_GEMINI_API_KEY", "gemini-real")
     remove_env_key(tmp_path, "NORTH_GROQ_API_KEY")
 
-    assert (tmp_path / ".env").read_text() == "NORTH_KASA_USERNAME=me@example.com\n"
+    assert (tmp_path / ".env").read_text() == "NORTH_GEMINI_API_KEY=gemini-real\n"
 
 
 @pytest.mark.parametrize(
@@ -32,5 +32,5 @@ def test_a_plain_value_is_written_as_it_is_and_can_be_removed(tmp_path) -> None:
 )
 def test_a_value_the_file_cannot_hold_exactly_is_refused(tmp_path, value: str, why: str) -> None:
     with pytest.raises(ValueError, match=why):
-        write_env_key(tmp_path, "NORTH_KASA_PASSWORD", value)
+        write_env_key(tmp_path, "NORTH_GROQ_API_KEY", value)
     assert not (tmp_path / ".env").exists()

@@ -17,14 +17,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
+from config import secret_store
 from tools.home import LightChange
 
 logger = logging.getLogger(__name__)
@@ -260,7 +263,7 @@ def _why_not(pairs: list[tuple[str, str]], diagnostic: str, errors: list[str], l
     if locked:
         one = len(locked) == 1
         count = f"{len(locked)} bulb{'' if one else 's'}"
-        where = "Settings > Connections > Kasa lights (or NORTH_KASA_USERNAME and NORTH_KASA_PASSWORD in north's .env)"
+        where = _WHERE
         if accounts():
             parts.append(
                 f"{count} refused the TP-Link logins north has: {', '.join(locked)}. Each bulb answers only the "
@@ -283,15 +286,66 @@ def _refused_login(error: BaseException) -> bool:
     return isinstance(error, AuthenticationError) or type(error).__name__ == "AuthenticationError"
 
 
-def accounts() -> list[tuple[str, str]]:
-    """The TP-Link logins north has, in the order they are tried: yours, then a second one."""
-    from config.settings import settings
+# The TP-Link logins, as your secrets (CODING_STYLE §7.6): yours, then a second one (a friend's bulbs).
+LOGINS: tuple[tuple[str, str], ...] = (("kasa_email", "kasa_password"), ("kasa_second_email", "kasa_second_password"))
+KASA_SECRETS: tuple[str, ...] = tuple(name for login in LOGINS for name in login)
+_WHERE = "Settings, Secrets, as kasa_email and kasa_password (a friend's: kasa_second_email and kasa_second_password)"
 
-    logins = [
-        (settings.kasa_username, settings.kasa_password),
-        (settings.kasa_second_username, settings.kasa_second_password),
-    ]
-    return [(username, password) for username, password in logins if username and password]
+
+def accounts() -> list[tuple[str, str]]:
+    """The TP-Link logins north has, in the order they are tried: yours, then a second one.
+
+    North's own Kasa code reads them from the secret store itself; releasing a secret only to the
+    tool that declared it guards the code the model writes.
+    """
+    store = secret_store.store()
+    logins = [(store.value(email) or "", store.value(password) or "") for email, password in LOGINS]
+    return [(email, password) for email, password in logins if email and password]
+
+
+# Where the TP-Link logins were kept before they were secrets. Moved once, when north starts.
+_ENV_LOGINS = {
+    "NORTH_KASA_USERNAME": "kasa_email",
+    "NORTH_KASA_PASSWORD": "kasa_password",
+    "NORTH_KASA_SECOND_USERNAME": "kasa_second_email",
+    "NORTH_KASA_SECOND_PASSWORD": "kasa_second_password",
+}
+_NOTES = {
+    "kasa_email": "TP-Link login (email) for your Kasa bulbs",
+    "kasa_password": "TP-Link password for your Kasa bulbs",
+    "kasa_second_email": "a second TP-Link login (email), such as a friend's bulbs",
+    "kasa_second_password": "the second TP-Link login's password",
+}
+
+
+def move_logins_to_secrets(home: Path) -> list[str]:
+    """Move TP-Link logins from north's .env into your secrets, and return the names moved.
+
+    A login the secret store cannot keep (too short) stays in .env and is named in north.log;
+    north then does not use it, and the Devices page says where to add it.
+    """
+    from dotenv import dotenv_values
+
+    from config.env_file import remove_env_key
+
+    env = dotenv_values(home / ".env") if (home / ".env").exists() else {}
+    store = secret_store.SecretStore(home)
+    moved: list[str] = []
+    for env_key, name in _ENV_LOGINS.items():
+        value = env.get(env_key) or ""
+        if not value:
+            continue
+        if name not in store.names():
+            if why := secret_store.unusable(name, value):
+                logger.warning("kasa: %s stays in .env and is not used: %s Add it in %s.", env_key, why, _WHERE)
+                continue
+            store.save(name, value, note=_NOTES[name])
+        remove_env_key(home, env_key)
+        os.environ.pop(env_key, None)
+        moved.append(name)
+    if moved:
+        logger.info("kasa: TP-Link logins moved from .env to your secrets: %s", ", ".join(moved))
+    return moved
 
 
 def credential_args() -> list[str]:
@@ -384,11 +438,9 @@ def run_discovery() -> tuple[list[tuple[str, str]], str]:
         # returning an empty list and an empty explanation.
         refused = authentication_failed(result.stderr or "") + authentication_failed(output)
         if refused:
-            from config.settings import settings
-
             return [], (
                 f"{refused} device(s) refused authentication. Newer Kasa firmware needs a TP-Link "
-                f"account: set NORTH_KASA_USERNAME and NORTH_KASA_PASSWORD in {settings.north_home / '.env'}."
+                f"account: add it in {_WHERE}."
             )
         return [], last_err or "kasa discover found nothing on this network"
 

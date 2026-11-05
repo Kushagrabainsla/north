@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from config import secret_store
 from tests.unit.tools.kasa_fakes import FakeBulb, FakeNetwork
 from tools.specialized import kasa_devices
 from tools.specialized.kasa_devices import KasaDevices, LightChange
@@ -85,22 +86,18 @@ def test_devices_that_refuse_the_login_say_so(monkeypatch: pytest.MonkeyPatch) -
 
     assert pairs == []
     assert "2 device(s) refused authentication" in diagnostic
-    assert "NORTH_KASA_USERNAME" in diagnostic
+    assert "Settings, Secrets, as kasa_email and kasa_password" in diagnostic
 
 
-def test_the_login_is_passed_to_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    from config.settings import settings
+def test_the_login_is_passed_to_discovery() -> None:
+    """The TP-Link login is one of your secrets: kasa_email and kasa_password."""
+    secret_store.store().save("kasa_email", "me@example.com")
+    secret_store.store().save("kasa_password", "hunter2")
 
-    monkeypatch.setattr(settings, "kasa_username", "me@example.com", raising=False)
-    monkeypatch.setattr(settings, "kasa_password", "hunter2", raising=False)
     assert kasa_devices.credential_args() == ["--username", "me@example.com", "--password", "hunter2"]
 
 
-def test_no_login_configured_passes_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    from config.settings import settings
-
-    monkeypatch.setattr(settings, "kasa_username", "", raising=False)
-    monkeypatch.setattr(settings, "kasa_password", "", raising=False)
+def test_no_login_configured_passes_none() -> None:
     assert kasa_devices.credential_args() == []
 
 
@@ -204,10 +201,6 @@ async def test_bulbs_that_refuse_the_login_are_named_once_with_where_to_add_it(m
     """Four bulbs each repeated python-kasa's long error, then a hint to check the Wi-Fi, though all were found."""
     from kasa.exceptions import AuthenticationError
 
-    from config.settings import settings
-
-    for field in ("kasa_username", "kasa_password", "kasa_second_username", "kasa_second_password"):
-        monkeypatch.setattr(settings, field, "", raising=False)
     network = FakeNetwork(FakeBulb("10.0.0.36", "KL125(US)"), FakeBulb("10.0.0.47", "KL125(US) "))
     for host in network.bulbs:
         network.refuse[host] = AuthenticationError("Device response did not match our challenge")
@@ -216,7 +209,7 @@ async def test_bulbs_that_refuse_the_login_are_named_once_with_where_to_add_it(m
     assert await devices.devices() == []
     assert devices.locked == ["KL125(US) (10.0.0.36)", "KL125(US)  (10.0.0.47)"]
     assert devices.problem.startswith("2 bulbs need the TP-Link login they were set up with in the Kasa app")
-    assert devices.problem.count("challenge") == 0 and "Settings > Connections > Kasa lights" in devices.problem
+    assert devices.problem.count("challenge") == 0 and "Settings, Secrets, as kasa_email" in devices.problem
 
 
 async def test_a_bulb_that_will_not_answer_for_another_reason_is_named_with_why() -> None:
@@ -233,12 +226,14 @@ async def test_each_login_is_tried_until_a_bulb_accepts_one(monkeypatch) -> None
     from kasa import Discover
     from kasa.exceptions import AuthenticationError
 
-    from config.settings import settings
-
-    monkeypatch.setattr(settings, "kasa_username", "me@example.com", raising=False)
-    monkeypatch.setattr(settings, "kasa_password", "mine", raising=False)
-    monkeypatch.setattr(settings, "kasa_second_username", "friend@example.com", raising=False)
-    monkeypatch.setattr(settings, "kasa_second_password", "theirs", raising=False)
+    store = secret_store.store()
+    for name, value in (
+        ("kasa_email", "me@example.com"),
+        ("kasa_password", "mine-123"),
+        ("kasa_second_email", "friend@example.com"),
+        ("kasa_second_password", "theirs"),
+    ):
+        store.save(name, value)
     tried: list[str] = []
 
     async def discover_single(host, *, timeout, username, password):

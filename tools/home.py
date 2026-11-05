@@ -18,11 +18,13 @@ import contextlib
 import logging
 import time
 from abc import abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from config import secret_store
 from tools.base import Tool
+from tools.home_discovery import Found, discover
 from tools.models import ToolInput, ToolOutput
 from utils.tasks import spawn
 
@@ -204,8 +206,14 @@ class Home:
     up without a restart.
     """
 
-    def __init__(self, registry: ToolRegistry, idle_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        idle_seconds: float = 5.0,
+        find_on_network: Callable[[], Awaitable[list[Found]]] | None = None,
+    ) -> None:
         self._registry = registry
+        self._find_on_network = find_on_network or discover
         self._problems: list[str] = []
         # The newest change waiting for each device that is being streamed to, and whether it is a beat.
         self._latest: dict[str, tuple[LightChange, bool]] = {}
@@ -246,6 +254,14 @@ class Home:
             problems.insert(0, kasa.problem)
         self._problems = problems
         return found
+
+    async def discover(self) -> list[dict[str, Any]]:
+        """What is on the network that north could control, each saying whether north has a tool for its brand."""
+        brands = self._brands()
+        return [
+            found.shown() | {"added": any(found.brand.key in name for name in brands)}
+            for found in await self._find_on_network()
+        ]
 
     async def apply(self, device_id: str, change: LightChange, *, confirm: bool = True) -> dict[str, Any]:
         """Make *change* on one device of any brand and return how it is after.

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post } from "../api";
 import { BrowserProfiles } from "../browserProfiles";
-import { CodingAgents, KasaAccounts, ProviderConnections, Secrets, TelegramConnection } from "../connections";
+import { CodingAgents, ProviderConnections, Secrets, TelegramConnection } from "../connections";
 import { configureDisplayTimezone, Empty, ErrorNotice, Loading, PageHeader, Panel, YoloBadge } from "../components";
 import { useResource } from "../hooks";
 import { Link } from "react-router-dom";
@@ -283,7 +283,6 @@ export function SettingsPage() {
         <CodingAgents />
         <BrowserProfiles />
         <TelegramConnection />
-        <KasaAccounts />
         <Secrets />
       </div>
     </div>

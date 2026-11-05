@@ -398,72 +398,6 @@ export function TelegramConnection() {
   </Panel>;
 }
 
-interface KasaAccount { slot: "yours" | "second"; email: string; saved: boolean }
-interface KasaAccountSaved { accounts: KasaAccount[]; answering: number; locked: string[]; problem: string }
-
-const KASA_SLOTS: Record<KasaAccount["slot"], string> = {
-  yours: "Your TP-Link account",
-  second: "A second account (a friend's bulbs, say)",
-};
-
-// The Kasa app login your bulbs were set up with: they answer only that account. North keeps it in
-// ~/.north/.env on this computer; the password is never shown again, here or anywhere.
-export function KasaAccounts() {
-  const resource = useResource<{ accounts: KasaAccount[] }>("/web/api/lights/accounts");
-  const [busy, setBusy] = useState("");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const accounts = resource.data?.accounts ?? [];
-  const saved = accounts.filter((account) => account.saved).length;
-  const save = async (slot: KasaAccount["slot"], email: string, password: string) => {
-    setBusy(slot); setError(""); setMessage("");
-    try {
-      const out = await api<KasaAccountSaved>(`/web/api/lights/accounts/${slot}`, { method: "PUT", body: JSON.stringify({ email, password }) });
-      setMessage(`Saved. ${out.answering} light${out.answering === 1 ? "" : "s"} answer now.${out.locked.length ? ` Still locked: ${out.locked.join(", ")}.` : ""}`);
-      await resource.reload();
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
-    finally { setBusy(""); }
-  };
-  const forget = async (slot: KasaAccount["slot"]) => {
-    setBusy(slot); setError(""); setMessage("");
-    try { await api(`/web/api/lights/accounts/${slot}`, { method: "DELETE" }); setMessage("Forgotten."); await resource.reload(); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
-    finally { setBusy(""); }
-  };
-  return <Panel title="Kasa lights" label={saved ? `${saved} login${saved === 1 ? "" : "s"} saved` : "Optional"}>
-    {message && <div className="notice">{message}</div>}
-    {(error || resource.error) && <ErrorNotice message={error || resource.error}/>}
-    <p className="setup-copy muted">Bulbs set up with the Kasa or TP-Link app answer only the account they were set up with. Add that login here; north keeps it on this computer and tries it on your bulbs straight away. Nothing is reset, and the app keeps working as before.</p>
-    {accounts.map((account) => <KasaAccountForm key={account.slot} account={account} busy={busy === account.slot} onSave={save} onForget={forget}/>)}
-  </Panel>;
-}
-
-function KasaAccountForm({ account, busy, onSave, onForget }: {
-  account: KasaAccount;
-  busy: boolean;
-  onSave: (slot: KasaAccount["slot"], email: string, password: string) => void;
-  onForget: (slot: KasaAccount["slot"]) => void;
-}) {
-  const [email, setEmail] = useState(account.email);
-  const [password, setPassword] = useState("");
-  useEffect(() => setEmail(account.email), [account.email]);
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    onSave(account.slot, email.trim(), password);
-    setPassword("");
-  };
-  return <form className="setup-form" onSubmit={submit} aria-label={KASA_SLOTS[account.slot]}>
-    <b className="kasa-account-title">{KASA_SLOTS[account.slot]}</b>
-    <label>Email<input type="email" autoComplete="off" value={email} placeholder="the Kasa app login" onChange={(event) => setEmail(event.target.value)}/></label>
-    <label>Password<input type="password" autoComplete="new-password" value={password}
-      placeholder={account.saved ? "Saved · type it again to replace it" : "the Kasa app password"} onChange={(event) => setPassword(event.target.value)}/></label>
-    <div className="setup-actions">
-      <button className="primary-button" type="submit" disabled={busy || !email.trim() || !password}>{busy ? "Trying it on your bulbs…" : "Save"}</button>
-      {account.saved && <button className="ghost-button" type="button" disabled={busy} onClick={() => onForget(account.slot)}>Forget</button>}
-    </div>
-  </form>;
-}
-
 // Your keys and passwords for North's tools (CODING_STYLE §7.6). North's AI only ever
 // sees a secret's name; nothing here ever shows a value again, not even part of one.
 export interface SavedSecret {
@@ -479,7 +413,7 @@ interface SecretsList {
 }
 
 const SECRET_NAME = /^[a-z][a-z0-9_]{0,63}$/;
-export const SECRET_MIN_LENGTH = 8;
+export const SECRET_MIN_LENGTH = 6;
 
 // Why a secret cannot be saved yet, or "" when it can: the same rules north checks.
 export function secretProblem(name: string, value: string): string {

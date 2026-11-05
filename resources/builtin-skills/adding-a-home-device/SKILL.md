@@ -13,6 +13,8 @@ domains: [general]
 2. Find out how the brand is controlled with what north has: a local HTTP API (Hue bridge, Shelly, Elgato), or a cloud API with a key (Govee, LIFX cloud), through `httpx`. A brand that needs a package north does not have cannot be added this way: say so, and what it needs.
 
 ## Ask once
+A request from the Devices page's Find devices already names the brand, its address, how it was found (mDNS, SSDP, its own discovery) and how north reaches it: start from that, and do not ask for any of it again.
+
 In one `ask_user` call with `questions`, ask only what you cannot find out: where the device or its bridge is on the network, and which login, key or pairing the brand needs.
 - A key or token is a secret. `create_tool` `action='list'` names the saved ones; use one that fits. Otherwise choose a short name (`hue_bridge`) and ask the user to add it on the dashboard, under Settings, Secrets, with that name. Never ask for its value in chat.
 - A step the user does by hand (pressing the bridge's link button, then saying done) is its own `ask_user` call with `requires_user_action=true`.
@@ -22,6 +24,7 @@ In one `ask_user` call with `questions`, ask only what you cannot find out: wher
 - `async def find(self) -> list[Device]`: every device and how it is now. `Device(id, name, on, dims=..., colors=..., white=(warmest, coolest), brightness=..., hue=..., saturation=..., kelvin=...)`, with brightness 1-100, hue 0-360, saturation 0-100 and white in kelvin. Leave out what a device cannot do: a plug has only `on`, and a slider for a lamp that cannot dim would do nothing.
 - `async def change(self, device_id: str, change: LightChange) -> Device`: send only the fields that are set (`None` means leave it as it is), then return the device as the brand reports it now. Convert to the brand's own units on the way out and back.
 - Use the brand's stable id for `id`, never a list position, and `httpx.AsyncClient(timeout=5)`. Raise when a request fails: north reports it beside the device.
+- A home router can give a device a new address. When the brand answers a discovery call on the network (WiZ, LIFX, Yeelight, Govee, a Hue bridge over SSDP), `find()` looks the devices up that way each time, by their stable id; otherwise keep the address in one constant at the top of the file.
 - Do not write `run`: `DeviceTool` gives the tool its `list` and `set` actions.
 
 ## A complete example

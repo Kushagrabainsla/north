@@ -15,7 +15,7 @@ from approval.policy import Action, ActionKind
 from tools.base import Tool
 from tools.home import SCENES, LightChange
 from tools.models import ToolInput, ToolOutput
-from tools.specialized.kasa_devices import KasaDevices
+from tools.specialized.kasa_devices import KASA_SECRETS, KasaDevices
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +224,9 @@ class KasaTool(Tool):
         },
         "required": ["action"],
     }
+
+    # Your TP-Link logins, if your bulbs need them; the Secrets panel shows they are this tool's.
+    uses_secrets = KASA_SECRETS
 
     def __init__(self, devices: KasaDevices | None = None) -> None:
         # Shared with the dashboard's Devices page, which reaches it through this tool in the registry.

@@ -36,7 +36,7 @@ describe("saving a key says what trying it found", () => {
 describe("the Secrets panel", () => {
   it("says why a name or value cannot be saved, with north's own rules", () => {
     expect(secretProblem("Open Weather", "")).toMatch(/lowercase/);
-    expect(secretProblem("openweather", "short")).toMatch(/at least 8/);
+    expect(secretProblem("openweather", "short")).toMatch(/at least 6/);
     expect(secretProblem("openweather", "owm-1234-abcd")).toBe("");
     expect(secretProblem("", "")).toBe("");
   });

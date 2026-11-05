@@ -144,24 +144,14 @@ async def test_music_sync_follows_the_frames_then_puts_the_lights_back(home) -> 
     assert store.all() == []
 
 
-async def test_a_tp_link_login_saved_here_unlocks_the_bulbs_set_up_with_it(home, monkeypatch, tmp_path) -> None:
-    """The user had no login set: all four bulbs refused, and the only fix was editing north's .env."""
-    import os
-    from pathlib import Path
-
+async def test_tp_link_logins_saved_as_secrets_unlock_the_bulbs_set_up_with_them(home) -> None:
+    """The logins had a panel of their own and lived in .env; now they are secrets, beside every other key."""
     from kasa.exceptions import AuthenticationError
 
+    from config import secret_store
     from tools.specialized import kasa_devices
 
     services, bulbs, _ = home
-    for key in (
-        "NORTH_KASA_USERNAME",
-        "NORTH_KASA_PASSWORD",
-        "NORTH_KASA_SECOND_USERNAME",
-        "NORTH_KASA_SECOND_PASSWORD",
-    ):
-        monkeypatch.setenv(key, "")  # restored afterwards, whatever the routes write
-    north_home = Path(os.environ["NORTH_HOME"])
     owners = dict.fromkeys(MINE, ("me@example.com", "p@ss w#rd")) | dict.fromkeys(
         FRIENDS, ("friend@example.com", "theirs")
     )
@@ -175,35 +165,43 @@ async def test_a_tp_link_login_saved_here_unlocks_the_bulbs_set_up_with_it(home,
         return await opened(host)
 
     network._open = needs_its_owners_login
-    services = services.replace(north_home=north_home)
+    store = secret_store.store()
     with bind_services(services):
         before = await lights.list_lights()
-        mine = await lights.save_kasa_account(
-            "yours", lights.KasaAccountUpdate(email="me@example.com", password="p@ss w#rd")
-        )
-        both = await lights.save_kasa_account(
-            "second", lights.KasaAccountUpdate(email="friend@example.com", password="theirs")
-        )
-        listed = await lights.kasa_accounts()
-        for slot in ("yours", "second"):
-            await lights.remove_kasa_account(slot)
+        store.save("kasa_email", "me@example.com")
+        store.save("kasa_password", "p@ss w#rd")
+        mine = await lights.list_lights(look_again=True)
+        store.save("kasa_second_email", "friend@example.com")
+        store.save("kasa_second_password", "theirs")
+        both = await lights.list_lights(look_again=True)
 
     assert before["lights"] == [] and len(before["locked"]) == 4
-    assert mine["answering"] == 2 and len(mine["locked"]) == 2 and both["answering"] == 4 and both["locked"] == []
-    assert listed["accounts"] == [
-        {"slot": "yours", "email": "me@example.com", "saved": True},
-        {"slot": "second", "email": "friend@example.com", "saved": True},
-    ]
-    assert "p@ss" not in str(listed) and "theirs" not in str(both)  # a password is never sent back
-    assert "NORTH_KASA" not in (north_home / ".env").read_text()
+    assert "Settings, Secrets, as kasa_email and kasa_password" in before["problem"]
+    assert len(mine["lights"]) == 2 and len(mine["locked"]) == 2
+    assert len(both["lights"]) == 4 and both["locked"] == []
 
 
-async def test_a_password_the_file_cannot_hold_is_refused_before_anything_is_saved(home) -> None:
-    services, _, _ = home
-    with bind_services(services), pytest.raises(HTTPException) as refused:
-        await lights.save_kasa_account("yours", lights.KasaAccountUpdate(email="me@example.com", password="x${HOME}"))
+def test_logins_kept_in_env_move_to_secrets_once_and_leave_env(tmp_path) -> None:
+    """The user's TP-Link logins were in north's .env; on the first start they become secrets."""
+    from config import secret_store
+    from config.env_file import write_env_key
+    from tools.specialized.kasa_devices import move_logins_to_secrets
 
-    assert refused.value.status_code == 422 and not (services.north_home / ".env").exists()
+    write_env_key(tmp_path, "NORTH_KASA_USERNAME", "me@example.com")
+    write_env_key(tmp_path, "NORTH_KASA_PASSWORD", "p@ss w#rd")
+    write_env_key(tmp_path, "NORTH_KASA_SECOND_USERNAME", "friend@example.com")
+    write_env_key(tmp_path, "NORTH_KASA_SECOND_PASSWORD", "abc")  # too short to keep: stays, and is named
+    write_env_key(tmp_path, "NORTH_GROQ_API_KEY", "gsk_untouched")
+
+    moved = move_logins_to_secrets(tmp_path)
+    again = move_logins_to_secrets(tmp_path)
+
+    store = secret_store.SecretStore(tmp_path)
+    assert moved == ["kasa_email", "kasa_password", "kasa_second_email"] and again == []
+    assert (store.value("kasa_email"), store.value("kasa_password")) == ("me@example.com", "p@ss w#rd")
+    assert [s.note for s in store.saved() if s.name == "kasa_email"] == ["TP-Link login (email) for your Kasa bulbs"]
+    env = (tmp_path / ".env").read_text()
+    assert "NORTH_KASA_USERNAME" not in env and "NORTH_KASA_SECOND_PASSWORD=abc" in env and "gsk_untouched" in env
 
 
 async def test_a_brand_added_through_north_shows_here_and_is_yours_to_mark_and_change(home) -> None:
@@ -228,3 +226,24 @@ async def test_a_brand_added_through_north_shows_here_and_is_yours_to_mark_and_c
     assert store.all() == []  # yours to change, with no card
     [route] = [r for r in lights.router.routes if isinstance(r, APIRoute) and r.path.endswith("/mine")]
     assert route.matches({"type": "http", "path": "/lights/hue_lights/3/mine", "method": "PUT"})[0].name == "FULL"
+
+
+async def test_find_devices_lists_what_is_on_the_network_and_how_north_would_reach_it(home) -> None:
+    from tools.home_discovery import HOMEKIT, WIZ, Found
+
+    services, _, _ = home
+
+    async def on_the_network() -> list[Found]:
+        return [
+            Found(WIZ, "WiZ light", "192.168.1.60", "WiZ discovery"),
+            Found(HOMEKIT, "Hall Lamp", "192.168.1.50", "mDNS _hap._tcp"),
+        ]
+
+    services = services.replace(home=Home(services.tool_registry, find_on_network=on_the_network))
+    with bind_services(services):
+        found = (await lights.discover_devices())["found"]
+
+    assert [(f["brand"], f["added"], bool(f["cannot"])) for f in found] == [
+        ("WiZ", False, False),
+        ("HomeKit accessory", False, True),
+    ]

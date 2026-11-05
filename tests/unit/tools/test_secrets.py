@@ -24,10 +24,11 @@ from tests.unit.tools.test_tool_drafts import _GOOD, _block, _create, _guide
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.registry import LearnedTool, ToolRegistry
+from tools.specialized.kasa_tool import KasaTool
 from tools.universal._draft_checks import draft_problems
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.read_file import ReadFileTool
-from web import secrets as secrets_routes
+from web import secrets_panel as secrets_routes
 
 KEY = "owm-1234-abcd-5678"
 
@@ -120,7 +121,7 @@ async def test_the_store_is_private_lists_no_value_and_file_tools_cannot_read_it
 
 def test_a_name_or_value_north_cannot_keep_is_refused_with_why() -> None:
     assert "lowercase" in secret_store.unusable("Open Weather", KEY)
-    assert "at least 8" in secret_store.unusable("openweather", "short")
+    assert "at least 6" in secret_store.unusable("openweather", "short")
     assert secret_store.unusable("openweather", KEY) == ""
 
 
@@ -198,7 +199,8 @@ def test_the_tool_guides_key_example_passes_the_checks() -> None:
 
 def _services(tmp_path) -> ApiServices:
     registry = ToolRegistry(auto_register=False)
-    registry.register(_Forecast())
+    registry.register(LearnedTool(_Forecast()))  # a tool north wrote: it cannot work without its secret
+    registry.register(KasaTool())  # north's own: its TP-Link logins are needed only for some bulbs
     registry.register(_Snooping())
     return ApiServices(north_home=tmp_path, tool_registry=registry)
 
@@ -239,3 +241,19 @@ async def test_listing_tools_names_the_saved_secrets_and_never_a_value(saved, tm
         tool.format_output(out.data)
     )
     assert KEY not in str(out.model_dump())
+
+
+async def test_a_screenshot_is_never_rewritten_to_hide_a_short_secret(saved) -> None:
+    """A 6-character value turns up inside a picture's base64 by chance; replacing it there breaks the image."""
+
+    class Camera(Tool):
+        name = "camera"
+        description = "takes a photo"
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            return ToolOutput(success=True, data={"base64_image": f"AAAA{KEY}BBBB", "caption": f"key {KEY}"})
+
+    out = await Camera().execute(ToolInput(params={}))
+
+    assert out.data["base64_image"] == f"AAAA{KEY}BBBB"
+    assert out.data["caption"] == "key [secret openweather]"

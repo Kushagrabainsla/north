@@ -4,21 +4,19 @@ A control you use here acts as you: it does what you set at once, with no approv
 card, and reaches the device through `tools.home.Home`, the one home for devices of
 every brand (§7.5): Kasa, which north ships, and each brand north wrote a tool for when
 you added a device. north.log notes each change. Which lights are yours, as opposed to
-a friend's on the same network, is kept in north's settings. The TP-Link logins here
-are Kasa's own.
+a friend's on the same network, is kept in north's settings. Kasa's TP-Link logins are
+your secrets (Settings, Secrets).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from config.env_file import remove_env_key, unstorable, write_env_key
 from orchestrator.api_context import current_services
 from tools.home import SCENES, Home, LightChange, change_of
 
@@ -75,22 +73,6 @@ class LiveFrames(BaseModel):
     beat: bool = False
 
 
-class KasaAccountUpdate(BaseModel):
-    """A TP-Link login: the Kasa app account some of the bulbs were set up with."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=1, max_length=256)
-
-
-# Where each login is kept in north's .env: your account, and a second one (a friend's bulbs).
-_ACCOUNT_KEYS = {
-    "yours": ("NORTH_KASA_USERNAME", "NORTH_KASA_PASSWORD"),
-    "second": ("NORTH_KASA_SECOND_USERNAME", "NORTH_KASA_SECOND_PASSWORD"),
-}
-
-
 class MineUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -109,6 +91,12 @@ async def list_lights(look_again: bool = False) -> dict[str, Any]:
         "locked": home.locked,
         "scenes": sorted(SCENES),
     }
+
+
+@router.get("/lights/discover")
+async def discover_devices() -> dict[str, Any]:
+    """Lights, plugs and switches on your network, each saying how north would reach it or why it cannot yet."""
+    return {"found": await _home().discover()}
 
 
 @router.post("/lights/apply")
@@ -161,70 +149,6 @@ async def stop_music_sync() -> dict[str, bool]:
     """Stop following the music and put the lights back as they were."""
     await _home().live.stop()
     return {"stopped": True}
-
-
-@router.get("/lights/accounts")
-async def kasa_accounts() -> dict[str, Any]:
-    """The TP-Link logins north has for your bulbs, by email; a password is never sent back."""
-    return {"accounts": _accounts()}
-
-
-@router.put("/lights/accounts/{slot}")
-async def save_kasa_account(slot: str, body: KasaAccountUpdate) -> dict[str, Any]:
-    """Keep a TP-Link login in north's .env, then try it on the bulbs at once.
-
-    Bulbs set up with the Kasa app answer only that account, and the login could only be
-    set by editing north's .env by hand.
-    """
-    keys = _account_keys(slot)
-    values = (body.email.strip(), body.password)
-    for value in values:
-        if why := unstorable(value):
-            raise HTTPException(status_code=422, detail=f"North cannot keep this login exactly: {why}.")
-    home = current_services().require("north_home")
-    for key, value in zip(keys, values, strict=True):
-        await asyncio.to_thread(write_env_key, home, key, value)
-        os.environ[key] = value
-    _reload_settings()
-    home = _home()
-    found = [device for device in await home.devices(look_again=True) if device["source"] == "kasa"]
-    logger.info("Lights: a TP-Link login was saved for %s; %d device(s) answer", slot, len(found))
-    return {"accounts": _accounts(), "answering": len(found), "locked": home.locked, "problem": home.problem}
-
-
-@router.delete("/lights/accounts/{slot}")
-async def remove_kasa_account(slot: str) -> dict[str, Any]:
-    """Forget a TP-Link login; bulbs already connected keep working until north restarts."""
-    home = current_services().require("north_home")
-    for key in _account_keys(slot):
-        await asyncio.to_thread(remove_env_key, home, key)
-        os.environ.pop(key, None)
-    _reload_settings()
-    return {"accounts": _accounts()}
-
-
-def _account_keys(slot: str) -> tuple[str, str]:
-    if slot not in _ACCOUNT_KEYS:
-        raise HTTPException(status_code=404, detail="Unknown account; it is yours or second.")
-    return _ACCOUNT_KEYS[slot]
-
-
-def _accounts() -> list[dict[str, Any]]:
-    from config.settings import settings
-
-    pairs = {
-        "yours": (settings.kasa_username, settings.kasa_password),
-        "second": (settings.kasa_second_username, settings.kasa_second_password),
-    }
-    return [
-        {"slot": slot, "email": email, "saved": bool(email and password)} for slot, (email, password) in pairs.items()
-    ]
-
-
-def _reload_settings() -> None:
-    from config.settings import reload_settings
-
-    reload_settings()
 
 
 @router.put("/lights/{device_id:path}/mine")

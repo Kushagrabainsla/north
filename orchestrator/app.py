@@ -97,6 +97,7 @@ from tools.specialized._sandbox import SandboxConfig
 from tools.specialized.bash import BashTool
 from tools.specialized.coding_agent import CodingAgentTool
 from tools.specialized.coding_shell import BashShell
+from tools.specialized.kasa_devices import move_logins_to_secrets as move_kasa_logins_to_secrets
 from tools.tool_index import ToolIndex
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_agent import CreateAgentTool
@@ -1026,6 +1027,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _attach_embedding_index(deps)
 
     _step("building tool registry")
+    # TP-Link logins kept in .env before they were secrets (CODING_STYLE §7.6). Remove once moved everywhere.
+    move_kasa_logins_to_secrets(settings.north_home)
     approval_memory = ApprovalMemory(settings.north_home / "approval_memory.db")
     # The safe-action list, in the same database as the learned decisions: both
     # answer "what may north do without asking me", and it saves a 16th SQLite

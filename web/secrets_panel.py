@@ -33,11 +33,17 @@ def _store() -> SecretStore:
     return SecretStore(current_services().require("north_home"))
 
 
-def _used_by() -> dict[str, list[str]]:
-    """Which tools declare each secret, by secret name."""
+def _used_by(*, wrote: bool = False) -> dict[str, list[str]]:
+    """Which tools declare each secret, by secret name; with *wrote*, only tools north wrote.
+
+    A tool north wrote cannot work without its secrets. North's own may use one only when you
+    have it: Kasa needs a TP-Link login only for bulbs set up with one.
+    """
     registry = current_services().tool_registry
     users: dict[str, list[str]] = {}
     for tool in registry.all_tools() if registry is not None else []:
+        if wrote and getattr(tool, "inner", None) is None:
+            continue
         for name in tool.uses_secrets:
             users.setdefault(name, []).append(tool.name)
     return {name: sorted(tools) for name, tools in users.items()}
@@ -46,7 +52,7 @@ def _used_by() -> dict[str, list[str]]:
 @router.get("/secrets")
 async def list_secrets() -> dict[str, Any]:
     saved = await asyncio.to_thread(_store().saved)
-    used_by = _used_by()
+    used_by, needed = _used_by(), _used_by(wrote=True)
     names = {item.name for item in saved}
     return {
         "secrets": [
@@ -54,7 +60,7 @@ async def list_secrets() -> dict[str, Any]:
             for item in saved
         ],
         # A tool can declare a secret before you saved it: the panel says which are still missing.
-        "missing": [{"name": name, "used_by": tools} for name, tools in sorted(used_by.items()) if name not in names],
+        "missing": [{"name": name, "used_by": tools} for name, tools in sorted(needed.items()) if name not in names],
     }
 
 

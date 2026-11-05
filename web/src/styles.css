@@ -1722,4 +1722,3 @@ button:not(:disabled):active { transform: translateY(1px); }
 .music-note { flex-basis: 100%; margin: 0; }
 @media (max-width: 680px) { .music-sync { margin-left: 16px; margin-right: 16px; } }
 .lights-locked a { color: var(--accent); text-decoration: underline; }
-.kasa-account-title { display: block; font-size: 11px; margin-top: 6px; }
