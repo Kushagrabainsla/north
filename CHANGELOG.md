@@ -5,6 +5,7 @@ All notable changes to north are documented here.
 ## [Unreleased]
 
 ### Added
+- **CODING_STYLE §7.3: your own controls act as you** (`docs/CODING_STYLE.md`). A device control you use yourself on the dashboard, such as a light's switch, slider, colour or music sync, runs with no approval card; a change north makes for you from chat or a flow still asks as your mode says.
 - **CODING_STYLE: one approval card per requirement, and a paused task resumes where it stopped** (`docs/CODING_STYLE.md` §7.3, §15.5). Whatever an agent needs to do one thing is asked once, by the approval layer; a task you paused, or one a restart cut off, continues from the step it had reached instead of starting over.
 - **CODING_STYLE §1: lean code** (`docs/CODING_STYLE.md`), beside clean code, SOLID and DRY: the smallest change that removes a cause, nothing added before something needs it, and whatever a change leaves unused deleted with it.
 - **CODING_STYLE §7.5: each mechanism has one home** (`docs/CODING_STYLE.md`): asking you, recording what ran, reaching you, pricing, paths and dependency checks are each built in one module that the others use; a module hands that home the facts only it knows, and keeps no copy, shortcut or memory of its own.
