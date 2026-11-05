@@ -1,6 +1,6 @@
 ---
 name: adding-a-home-device
-description: "Use when the user wants lights, plugs or switches of a brand north does not control yet added to the Devices page or controlled from chat: a Philips Hue bridge, a Govee strip, a Shelly plug, a WiZ bulb."
+description: "Use when the user wants lights, plugs or switches of a brand north does not control yet added to the Devices page or controlled from chat (a Philips Hue bridge, a Govee strip, a Shelly plug, a WiZ bulb), or asks whether north can control a device on their network that the Devices page found."
 intents: [create-tool]
 domains: [general]
 ---
@@ -18,6 +18,13 @@ A request from the Devices page's Find devices already names the brand, its addr
 In one `ask_user` call with `questions`, ask only what you cannot find out: where the device or its bridge is on the network, and which login, key or pairing the brand needs.
 - A key or token is a secret. `create_tool` `action='list'` names the saved ones; use one that fits. Otherwise choose a short name (`hue_bridge`) and ask the user to add it on the dashboard, under Settings, Secrets, with that name. Never ask for its value in chat.
 - A step the user does by hand (pressing the bridge's link button, then saying done) is its own `ask_user` call with `requires_user_action=true`.
+
+## A device Find devices could not name
+"Try to connect" sends what the scan saw: the address, the network card's maker, the names it gives itself, the web page it serves and the ports it answers on. Work from those, without changing anything on the device:
+1. Say what it most likely is. The maker narrows it (Espressif or Tuya: a plug, bulb or switch of some brand; TP-Link: Kasa or Tapo), and so does a web page's title (Tasmota, Shelly, WLED, ESPHome) or a port (6668: a Tuya device).
+2. Look for a local way in that north can use: the web page's own API (`fetch_url` on the device's address), or the brand's documented local protocol. Read only: a request that switches something happens in the tool's test, after the user approves it.
+3. If there is a way in, write the `DeviceTool` as below. If the only way is the maker's cloud, a pairing north cannot do (HomeKit, Matter), or a key only the maker's app holds (Tuya's local key), say so plainly, and what it would take.
+4. A computer, a phone, a TV or a router is not a light, plug or switch: say what it is, and stop.
 
 ## Write it
 - Subclass `DeviceTool` (from `tools.home`). Set `name` to the brand in snake_case (`hue_lights`), `description` to which devices and where, and `uses_secrets` to the secrets it reads.

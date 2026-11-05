@@ -112,8 +112,23 @@ class Found:
         }
 
 
+@dataclass
+class Heard:
+    """What one host said about itself in any answer: its mDNS services and names, its SSDP server."""
+
+    services: set[str] = field(default_factory=set)  # "_googlecast._tcp"
+    names: set[str] = field(default_factory=set)  # "Living Room TV"
+    server: str = ""  # an SSDP answer's SERVER header
+
+    def add(self, other: Heard) -> None:
+        self.services |= other.services
+        self.names |= other.names
+        self.server = self.server or other.server
+
+
 # A probe: what to send, where, and how to read each answer. `bind` is the port answers come to,
-# for a brand that answers on a port of its own (Govee) rather than to the sender.
+# for a brand that answers on a port of its own (Govee) rather than to the sender. `heard` reads
+# what any host said about itself, recognised or not, for the list of every device.
 @dataclass(frozen=True)
 class Probe:
     name: str
@@ -121,40 +136,51 @@ class Probe:
     to: tuple[str, int]
     read: Callable[[bytes, str], list[Found]]
     bind: int = 0
+    heard: Callable[[bytes, str], dict[str, Heard]] | None = None
 
 
 @dataclass(frozen=True)
 class Scan:
-    """What one look at the network found: the devices north recognised, and how many others answered."""
+    """What one look at the network heard: the devices north recognised, and what every host said about itself."""
 
     found: list[Found]
-    # Hosts that answered but are not a light, plug or switch north knows: TVs, speakers, routers.
-    # Said on the page, so a short list reads as "nothing else is a light", not "the scan saw nothing".
-    others: int
+    heard: dict[str, Heard]
 
 
 async def discover(
     listen: Callable[[Probe, float], list[tuple[bytes, str]]] | None = None, seconds: float = LISTEN_SECONDS
 ) -> Scan:
-    """Every device found by any probe, once each, what north can connect to first; and how many others answered."""
+    """Every device found by any probe, once each, what north can connect to first; and what every host said.
+
+    A second, shorter mDNS round asks for the names behind each service heard, so a TV is listed as
+    "Living Room TV" and not only as an address.
+    """
     listen = listen or listen_udp
     answers = await asyncio.gather(*(asyncio.to_thread(listen, probe, seconds) for probe in PROBES))
     found: list[Found] = []
-    heard: set[str] = set()
-    recognised: set[str] = set()
+    heard: dict[str, Heard] = {}
     for probe, replies in zip(PROBES, answers, strict=True):
-        for packet, sender in replies:
-            heard.add(sender)
-            try:
-                read = probe.read(packet, sender)
-            except Exception:  # noqa: BLE001 - one odd answer must not hide the others
-                logger.debug("discovery: an answer to %s could not be read", probe.name, exc_info=True)
-                continue
-            if read:
-                recognised.add(sender)
-            found += read
-    kept = _once_each(found)
-    return Scan(kept, len(heard - recognised - {item.host for item in found}))
+        found += _read(probe, replies, heard)
+    services = sorted(
+        {s for h in heard.values() for s in h.services} - {k.removesuffix(".local") for k in _MDNS_SERVICES}
+    )
+    if services:
+        names = Probe("mDNS names", mdns_query(f"{s}.local" for s in services[:30]), _MDNS, read_mdns, heard=mdns_heard)
+        found += _read(names, await asyncio.to_thread(listen, names, seconds / 2), heard)
+    return Scan(_once_each(found), heard)
+
+
+def _read(probe: Probe, replies: list[tuple[bytes, str]], heard: dict[str, Heard]) -> list[Found]:
+    found: list[Found] = []
+    for packet, sender in replies:
+        heard.setdefault(sender, Heard())
+        try:
+            found += probe.read(packet, sender)
+            for host, said in (probe.heard(packet, sender) if probe.heard else {}).items():
+                heard.setdefault(host, Heard()).add(said)
+        except Exception:  # noqa: BLE001 - one odd answer must not hide the others
+            logger.debug("discovery: an answer to %s could not be read", probe.name, exc_info=True)
+    return found
 
 
 def _once_each(found: Iterable[Found]) -> list[Found]:
@@ -210,6 +236,7 @@ def listen_udp(probe: Probe, seconds: float) -> list[tuple[bytes, str]]:
 # ── mDNS ─────────────────────────────────────────────────────────────────────
 
 _PTR, _TXT, _SRV, _A = 12, 16, 33, 1
+_MDNS = ("224.0.0.251", 5353)
 
 
 def mdns_query(services: Iterable[str]) -> bytes:
@@ -219,17 +246,27 @@ def mdns_query(services: Iterable[str]) -> bytes:
     return header + b"".join(_encode_name(service) + struct.pack("!HH", _PTR, 1) for service in services)
 
 
-def read_mdns(packet: bytes, sender: str) -> list[Found]:
-    """The devices an mDNS answer announces, for the services north recognises."""
+@dataclass
+class _Mdns:
+    """The records of one mDNS answer: which instances offer each service, and where each one is."""
+
+    instances: dict[str, list[str]] = field(default_factory=dict)  # service -> instances
+    srv: dict[str, tuple[int, str]] = field(default_factory=dict)  # instance -> (port, host name)
+    txt: dict[str, dict[str, str]] = field(default_factory=dict)
+    addresses: dict[str, str] = field(default_factory=dict)  # host name -> IPv4
+
+    def host(self, instance: str, sender: str) -> tuple[str, int]:
+        port, target = self.srv.get(instance.lower(), (0, ""))
+        return self.addresses.get(target, sender), port
+
+
+def _parse_mdns(packet: bytes) -> _Mdns:
     _id, _flags, questions, *counts = struct.unpack("!HHHHHH", packet[:12])
     offset = 12
     for _ in range(questions):
         _name, offset = _read_name(packet, offset)
         offset += 4
-    instances: dict[str, list[str]] = {}
-    srv: dict[str, tuple[int, str]] = {}
-    txt: dict[str, dict[str, str]] = {}
-    addresses: dict[str, str] = {}
+    parsed = _Mdns()
     for _ in range(sum(counts)):
         name, offset = _read_name(packet, offset)
         kind, _klass, _ttl, length = struct.unpack("!HHIH", packet[offset : offset + 10])
@@ -237,32 +274,59 @@ def read_mdns(packet: bytes, sender: str) -> list[Found]:
         data = offset
         offset += length
         if kind == _PTR:
-            instances.setdefault(name.lower(), []).append(_read_name(packet, data)[0])
+            parsed.instances.setdefault(name.lower(), []).append(_read_name(packet, data)[0])
         elif kind == _SRV:
             port = struct.unpack("!H", packet[data + 4 : data + 6])[0]
-            srv[name.lower()] = (port, _read_name(packet, data + 6)[0].lower())
+            parsed.srv[name.lower()] = (port, _read_name(packet, data + 6)[0].lower())
         elif kind == _TXT:
-            txt[name.lower()] = _read_txt(packet[data:offset])
+            parsed.txt[name.lower()] = _read_txt(packet[data:offset])
         elif kind == _A and length == 4:
-            addresses[name.lower()] = socket.inet_ntoa(packet[data:offset])
+            parsed.addresses[name.lower()] = socket.inet_ntoa(packet[data:offset])
+    return parsed
+
+
+def read_mdns(packet: bytes, sender: str) -> list[Found]:
+    """The devices an mDNS answer announces, for the services north recognises."""
+    parsed = _parse_mdns(packet)
     found = []
-    for service, names in instances.items():
+    for service, names in parsed.instances.items():
         brand = _MDNS_SERVICES.get(service)
         if brand is None:
             continue
         for instance in names:
-            port, target = srv.get(instance.lower(), (0, ""))
-            host = addresses.get(target, sender)
-            details = txt.get(instance.lower(), {})
+            host, port = parsed.host(instance, sender)
+            details = parsed.txt.get(instance.lower(), {})
             kind = ""
             if brand is HOMEKIT:
                 kind = _HOMEKIT_KINDS.get(details.get("ci", ""), "")
                 if not kind:
                     continue  # a TV or a speaker: not for the Devices page
-            label = instance[: -len(service) - 1] if instance.lower().endswith("." + service) else instance
+            label = _label(instance, service)
             address = f"{host}:{port}" if port and port not in (80, 443) else host
             found.append(Found(brand, label, address, f"mDNS {service.removesuffix('.local')}", kind, details))
     return found
+
+
+def mdns_heard(packet: bytes, sender: str) -> dict[str, Heard]:
+    """What each host in an mDNS answer offers ("_googlecast._tcp") and calls itself ("Living Room TV")."""
+    parsed = _parse_mdns(packet)
+    heard: dict[str, Heard] = {}
+    for service, names in parsed.instances.items():
+        for instance in names:
+            if service == "_services._dns-sd._udp.local":
+                heard.setdefault(sender, Heard()).services.add(instance.lower().removesuffix(".local"))
+                continue
+            host, _port = parsed.host(instance, sender)
+            said = heard.setdefault(host, Heard())
+            said.services.add(service.removesuffix(".local"))
+            if label := _label(instance, service):
+                said.names.add(label)
+    return heard
+
+
+def _label(instance: str, service: str) -> str:
+    """An instance's own name: "Living Room TV" from "Living Room TV._googlecast._tcp.local"."""
+    return instance[: -len(service) - 1] if instance.lower().endswith("." + service) else instance
 
 
 def _encode_name(name: str) -> bytes:
@@ -326,6 +390,11 @@ def read_ssdp(packet: bytes, sender: str) -> list[Found]:
     return []
 
 
+def ssdp_heard(packet: bytes, sender: str) -> dict[str, Heard]:
+    server = _headers(packet).get("server", "")
+    return {sender: Heard(server=server)} if server else {}
+
+
 def read_yeelight(packet: bytes, sender: str) -> list[Found]:
     headers = _headers(packet)
     address = headers.get("location", "").removeprefix("yeelight://") or sender
@@ -373,13 +442,14 @@ def read_lifx(packet: bytes, sender: str) -> list[Found]:
 
 
 PROBES: tuple[Probe, ...] = (
-    # Also asks which services exist at all, so every mDNS device answers and the others can be counted.
-    Probe("mDNS", mdns_query([*_MDNS_SERVICES, "_services._dns-sd._udp.local"]), ("224.0.0.251", 5353), read_mdns),
+    # Also asks which services exist at all, so every mDNS device answers and says what it offers.
+    Probe("mDNS", mdns_query([*_MDNS_SERVICES, "_services._dns-sd._udp.local"]), _MDNS, read_mdns, heard=mdns_heard),
     Probe(
         "SSDP",
         b'M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: "ssdp:discover"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n',
         ("239.255.255.250", 1900),
         read_ssdp,
+        heard=ssdp_heard,
     ),
     Probe(
         "Yeelight",

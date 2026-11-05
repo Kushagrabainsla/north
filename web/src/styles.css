@@ -1679,6 +1679,9 @@ button:not(:disabled):active { transform: translateY(1px); }
 .lights-scene { text-transform: capitalize; }
 .lights-notice { margin: 0; color: var(--amber); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .add-device .panel-content { display: grid; gap: 12px; }
+/* The groups of Find devices, titled like a form's labels, their rows' buttons on one line. */
+.found-group-title { margin: 4px 0 0; color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.found-group .provider-row > button { flex: 0 0 auto; white-space: nowrap; }
 .lights-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); gap: 12px; }
 .light-card { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); }
 .light-card.is-on { border-color: var(--line); }

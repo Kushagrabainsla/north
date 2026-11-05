@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from config import secret_store
 from tools.base import Tool
-from tools.home_discovery import Scan, discover
+from tools.home_network import NetworkDevice, look
 from tools.models import ToolInput, ToolOutput
 from utils.tasks import spawn
 
@@ -210,10 +210,10 @@ class Home:
         self,
         registry: ToolRegistry,
         idle_seconds: float = 5.0,
-        find_on_network: Callable[[], Awaitable[Scan]] | None = None,
+        find_on_network: Callable[[], Awaitable[list[NetworkDevice]]] | None = None,
     ) -> None:
         self._registry = registry
-        self._find_on_network = find_on_network or discover
+        self._find_on_network = find_on_network or look
         self._problems: list[str] = []
         # The newest change waiting for each device that is being streamed to, and whether it is a beat.
         self._latest: dict[str, tuple[LightChange, bool]] = {}
@@ -256,12 +256,29 @@ class Home:
         return found
 
     async def discover(self) -> dict[str, Any]:
-        """What is on the network that north could control, each saying whether north has a tool for its brand,
-        and how many other devices answered."""
+        """Every device on the network, each saying what north knows of it and whether it is already on the page.
+
+        Kasa devices are matched by address and named as Kasa names them; a recognised brand north already
+        has a tool for is marked with that tool.
+        """
+        kasa = self._kasa()
+        listed, kasa_devices = await asyncio.gather(
+            self._find_on_network(),
+            kasa.devices() if kasa is not None else asyncio.sleep(0, result=[]),
+            return_exceptions=True,
+        )
+        if isinstance(listed, BaseException):
+            raise listed
+        kasa_listed = kasa_devices if isinstance(kasa_devices, list) else []  # Kasa down: listed, just not marked
+        on_page = {device["host"]: device["name"] for device in kasa_listed if device.get("host")}
         brands = self._brands()
-        scan = await self._find_on_network()
-        found = [item.shown() | {"added": any(item.brand.key in name for name in brands)} for item in scan.found]
-        return {"found": found, "others": scan.others}
+        for device in listed:
+            if device.address in on_page:
+                device.here = KASA
+                device.names.insert(0, on_page[device.address])
+            elif device.found is not None:
+                device.here = next((name for name in brands if device.found.brand.key in name), "")
+        return {"devices": [device.shown() for device in listed]}
 
     async def apply(self, device_id: str, change: LightChange, *, confirm: bool = True) -> dict[str, Any]:
         """Make *change* on one device of any brand and return how it is after.

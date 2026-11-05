@@ -47,7 +47,7 @@ export function brandOf(light: Light): string {
 export const addDeviceRequest = (what: string) =>
   `Add this to my Devices page, so I can control it there and from chat: ${what.trim()}`;
 
-/** A device Find devices saw on the network: what it is, where, and how north would reach it. */
+/** A brand Find devices recognised on a device: what it is, how it was found, and how north would reach it. */
 export interface FoundDevice {
   id: string;
   brand: string;
@@ -59,35 +59,59 @@ export interface FoundDevice {
   reach: string;
   cannot: string; // why north cannot connect to it yet; "" when it can
   details: Record<string, string>;
-  added: boolean; // north already has a tool for this brand
 }
 
-/** What Find devices heard: the devices it recognised, and how many others answered that are not for this page. */
+/** One device on your network, with everything Find devices could tell about it. */
+export interface NetworkDevice {
+  id: string;
+  address: string;
+  mac: string;
+  maker: string;
+  hint: string; // what the maker's name alone does not say
+  name: string;
+  names: string[];
+  offers: string[]; // in plain words: "Google Cast", "a web page, \"Shelly 1PM\""
+  role: string; // "this computer" or "your router"
+  found: FoundDevice | null;
+  here: string; // "kasa", or north's tool for it: already on this page
+  connect: "add" | "try" | "here" | "none";
+}
+
 export interface Scan {
-  found: FoundDevice[];
-  others: number;
+  devices: NetworkDevice[];
 }
 
-/**
- * What a scan means in words, so "nothing new" is never a mystery: your Kasa devices are already on the page,
- * other things answered but are not lights or plugs, and what cannot be seen from here at all.
- */
-export function scanSummary(scan: Scan, kasa: number): string {
-  const parts: string[] = [];
-  if (!scan.found.length) parts.push("North found no other lights, plugs or switches it knows on this network.");
-  if (kasa) parts.push(`Your ${kasa} Kasa device${kasa === 1 ? " is" : "s are"} found by North itself and already on this page.`);
-  if (scan.others) parts.push(`${scan.others} other device${scan.others === 1 ? "" : "s"} answered (TVs, speakers, routers and the like): not lights, plugs or switches North knows.`);
-  parts.push("North cannot see a device that talks only to its maker's cloud or to a building's hub, or one on another Wi-Fi network such as a guest network: describe it below.");
-  return parts.join(" ");
-}
-
-/** What north is told when you choose a device Find devices saw: everything discovery learned about it. */
+/** What north is told when you choose a device Find devices recognised: everything discovery learned about it. */
 export function foundRequest(found: FoundDevice): string {
   const details = Object.entries(found.details).filter(([, value]) => value).map(([key, value]) => `${key}=${value}`).join(", ");
   return addDeviceRequest(
     `the ${found.brand} ${found.kind} "${found.name}" at ${found.address}, found on the network by ${found.how}` +
       `${details ? ` (${details})` : ""}. North can reach it through ${found.reach}.`,
   );
+}
+
+/** Everything Find devices learned about a device, as north is told it. */
+export function deviceFacts(device: NetworkDevice): string {
+  const facts = [`address ${device.address}`];
+  if (device.mac) facts.push(`hardware address ${device.mac}`);
+  if (device.maker) facts.push(`network card made by ${device.maker}${device.hint ? ` (${device.hint})` : ""}`);
+  if (device.names.length) facts.push(`it calls itself ${device.names.map((name) => `"${name}"`).join(", ")}`);
+  if (device.offers.length) facts.push(`it offers ${device.offers.join("; ")}`);
+  if (device.found) facts.push(`it announced itself as a ${device.found.brand} ${device.found.kind} by ${device.found.how}${device.found.cannot ? `, which North cannot connect to yet: ${device.found.cannot}` : ""}`);
+  return facts.join("; ");
+}
+
+/** What north is asked when you choose a device: add one it knows the way into, or find a way into any other. */
+export function deviceRequest(device: NetworkDevice): string {
+  if (device.connect === "add" && device.found) return `${foundRequest(device.found)} What else Find devices saw: ${deviceFacts(device)}.`;
+  return `Find out whether North can control this device on my network, and if it can, add it to my Devices page so I can control it there and from chat. If it cannot, tell me plainly why and what it would need. What Find devices saw: ${deviceFacts(device)}.`;
+}
+
+/** What a scan means in words: how many devices answered, and what no scan can see. */
+export function scanSummary(scan: Scan): string {
+  const listed = scan.devices.length;
+  const heard = listed ? `North heard ${listed} device${listed === 1 ? "" : "s"} on your network.` : "North heard no devices on your network.";
+  return `${heard} It cannot see a device that talks only to its maker's cloud or to a building's hub, one on another Wi-Fi network such as a guest network, or one that only uses Bluetooth: describe it below.`;
 }
 
 /** The lights a choice covers: yours, or every one on the network (a friend's too). */

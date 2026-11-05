@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDeviceRequest, brandOf, foundRequest, inScope, kelvinToRgb, latestWins, scanSummary, swatch, type Light } from "./lights";
+import { addDeviceRequest, brandOf, deviceRequest, foundRequest, inScope, kelvinToRgb, latestWins, scanSummary, swatch, type Light } from "./lights";
 
 const light = (over: Partial<Light>): Light => ({
   id: "a", name: "Desk lamp", host: "10.0.0.36", model: "KL130", on: true, kind: "light",
@@ -99,20 +99,26 @@ describe("adding a device Find devices saw", () => {
   });
 });
 
-describe("what a Find devices scan means", () => {
-  it("says why the list is short: Kasa is already here, others are not lights, and what cannot be seen", () => {
-    const text = scanSummary({ found: [], others: 7 }, 4);
-    expect(text).toContain("North found no other lights, plugs or switches it knows on this network.");
-    expect(text).toContain("Your 4 Kasa devices are found by North itself and already on this page.");
-    expect(text).toContain("7 other devices answered (TVs, speakers, routers and the like)");
-    expect(text).toContain("maker's cloud or to a building's hub");
+describe("every device Find devices heard", () => {
+  const espressif = {
+    id: "10.0.0.55", address: "10.0.0.55", mac: "a4:cf:12:aa:bb:cc", maker: "Espressif",
+    hint: "Espressif makes the chip in many smart plugs, bulbs and switches of many brands",
+    name: "ESP_AABBCC", names: ["ESP_AABBCC"], offers: ['a web page, "Tasmota"'], role: "", found: null, here: "",
+    connect: "try" as const,
+  };
+
+  it("asks north to find a way into a device it does not know, with everything the scan saw", () => {
+    const request = deviceRequest(espressif);
+    expect(request).toContain("Find out whether North can control this device on my network");
+    expect(request).toContain("tell me plainly why and what it would need");
+    expect(request).toContain("address 10.0.0.55; hardware address a4:cf:12:aa:bb:cc; network card made by Espressif (Espressif makes the chip");
+    expect(request).toContain('it calls itself "ESP_AABBCC"; it offers a web page, "Tasmota"');
   });
 
-  it("leaves out what does not apply", () => {
-    const one = { id: "wiz@1", brand: "WiZ", key: "wiz", kind: "light", name: "WiZ light", address: "1", how: "WiZ", reach: "", cannot: "", details: {}, added: false };
-    const text = scanSummary({ found: [one], others: 0 }, 0);
-    expect(text).not.toContain("found no other");
-    expect(text).not.toContain("Kasa");
-    expect(text).not.toContain("answered");
+  it("says how many devices answered and what no scan can see", () => {
+    const text = scanSummary({ devices: [espressif, { ...espressif, id: "10.0.0.56", address: "10.0.0.56" }] });
+    expect(text).toContain("North heard 2 devices on your network.");
+    expect(text).toContain("maker's cloud or to a building's hub");
+    expect(text).toContain("only uses Bluetooth");
   });
 });

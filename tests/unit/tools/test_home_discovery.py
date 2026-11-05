@@ -13,9 +13,7 @@ import struct
 import threading
 
 from tools import home_discovery as discovery
-from tools.home import Home
-from tools.home_discovery import GOVEE, HOMEKIT, HUE, LIFX, SHELLY, WEMO, WIZ, YEELIGHT, Found, Probe, Scan
-from tools.registry import ToolRegistry
+from tools.home_discovery import GOVEE, HOMEKIT, HUE, LIFX, SHELLY, WEMO, WIZ, YEELIGHT, Probe
 
 
 class _Answer:
@@ -202,7 +200,8 @@ async def test_one_bridge_announcing_itself_three_ways_is_listed_once_and_what_n
         ("wiz", "192.168.1.60"),
         ("homekit", "192.168.1.50"),  # north cannot reach it: last
     ]
-    assert scan.others == 2  # the router and the TV answered: counted, not listed
+    assert scan.heard["192.168.1.80"].services == {"_googlecast._tcp"}  # a TV: heard, not a light
+    assert scan.heard["192.168.1.1"].server == "Linux UPnP/1.0 miniupnpd/2.0"  # the router
 
 
 async def test_an_answer_that_cannot_be_read_hides_nothing_else() -> None:
@@ -232,19 +231,23 @@ def test_a_probe_is_sent_and_its_answers_are_heard() -> None:
     assert replies == [(_WIZ, "127.0.0.1")]
 
 
-async def test_the_devices_page_says_which_brands_north_already_has_a_tool_for() -> None:
-    from tests.unit.tools.test_home import _Hue
+async def test_names_behind_each_service_are_asked_for_so_a_tv_is_named() -> None:
+    """The first round hears that a host offers Google Cast; the second asks who, and it answers "Living Room TV"."""
+    services = _Answer()
+    services.ptr("_services._dns-sd._udp.local", "_googlecast._tcp.local")
+    named = _Answer()
+    named.ptr("_googlecast._tcp.local", "Living Room TV._googlecast._tcp.local")
+    named.srv("Living Room TV._googlecast._tcp.local", 8009, "tv.local")
+    named.a("tv.local", "192.168.1.80")
+    asked: list[bytes] = []
 
-    registry = ToolRegistry(auto_register=False)
-    registry.register(_Hue())
+    def listen(probe: Probe, _seconds: float) -> list[tuple[bytes, str]]:
+        asked.append(probe.send)
+        if probe.name == "mDNS":
+            return [(services.packet(), "192.168.1.80")]
+        return [(named.packet(), "192.168.1.80")] if probe.name == "mDNS names" else []
 
-    async def on_the_network() -> Scan:
-        found = [Found(HUE, "Hue bridge", "192.168.1.20", "SSDP"), Found(WIZ, "WiZ light", "192.168.1.60", "WiZ")]
-        return Scan(found, others=5)
+    scan = await discovery.discover(listen)
 
-    scan = await Home(registry, find_on_network=on_the_network).discover()
-
-    found = scan["found"]
-    assert [(f["brand"], f["added"]) for f in found] == [("Philips Hue", True), ("WiZ", False)]
-    assert found[1]["id"] == "wiz@192.168.1.60" and found[1]["reach"].startswith("its local UDP API")
-    assert scan["others"] == 5
+    assert b"_googlecast" in asked[-1]  # the second round asked for that service's names
+    assert scan.heard["192.168.1.80"].names == {"Living Room TV"} and scan.found == []

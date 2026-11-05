@@ -228,18 +228,29 @@ async def test_a_brand_added_through_north_shows_here_and_is_yours_to_mark_and_c
     assert route.matches({"type": "http", "path": "/lights/hue_lights/3/mine", "method": "PUT"})[0].name == "FULL"
 
 
-async def test_find_devices_lists_what_is_on_the_network_and_how_north_would_reach_it(home) -> None:
-    from tools.home_discovery import HOMEKIT, WIZ, Found, Scan
+async def test_find_devices_lists_every_device_and_marks_the_kasa_lamps_already_here(home) -> None:
+    """The user's two Kasa lamps were left out of Find devices with nothing saying why."""
+    from tools.home_discovery import HOMEKIT, WIZ, Found
+    from tools.home_network import NetworkDevice
 
-    services, _, _ = home
+    services, bulbs, _ = home
+    desk = bulbs["Desk lamp"]
 
-    async def on_the_network() -> Scan:
-        wiz = Found(WIZ, "WiZ light", "192.168.1.60", "WiZ discovery")
-        return Scan([wiz, Found(HOMEKIT, "Hall Lamp", "192.168.1.50", "mDNS _hap._tcp")], others=3)
+    async def on_the_network() -> list[NetworkDevice]:
+        return [
+            NetworkDevice("192.168.1.60", maker="WiZ", found=Found(WIZ, "WiZ light", "192.168.1.60", "WiZ discovery")),
+            NetworkDevice(desk.host, mac="50:c7:bf:00:00:01", maker="TP-Link"),
+            NetworkDevice("10.0.0.223", found=Found(HOMEKIT, "TSTAT-276BCD", "10.0.0.223", "mDNS _hap._tcp", "bridge")),
+            NetworkDevice("10.0.0.55", mac="a4:cf:12:aa:bb:cc", maker="Espressif"),
+            NetworkDevice("10.0.0.1", role="your router"),
+        ]
 
     services = services.replace(home=Home(services.tool_registry, find_on_network=on_the_network))
     with bind_services(services):
-        scan = await lights.discover_devices()
+        devices = {d["address"]: d for d in (await lights.discover_devices())["devices"]}
 
-    found = [(f["brand"], f["added"], bool(f["cannot"])) for f in scan["found"]]
-    assert found == [("WiZ", False, False), ("HomeKit accessory", False, True)] and scan["others"] == 3
+    assert devices["192.168.1.60"]["connect"] == "add"
+    assert devices[desk.host]["connect"] == "here" and devices[desk.host]["name"] == "Desk lamp"
+    assert devices["10.0.0.223"]["connect"] == "try"  # north cannot pair HomeKit, but may still look
+    assert devices["10.0.0.55"]["connect"] == "try" and devices["10.0.0.55"]["hint"].startswith("Espressif makes")
+    assert devices["10.0.0.1"]["connect"] == "none"

@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, post } from "../api";
 import { Empty, ErrorNotice, Loading, PageHeader, Panel } from "../components";
 import { useResource } from "../hooks";
-import { addDeviceRequest, brandOf, foundRequest, inScope, scanSummary, kelvinToRgb, latestWins, swatch, type Light, type Scan, type LightChange, type LightsOverview, type Scope } from "../lights";
+import { addDeviceRequest, brandOf, deviceRequest, inScope, scanSummary, kelvinToRgb, latestWins, swatch, type Light, type NetworkDevice, type Scan, type LightChange, type LightsOverview, type Scope } from "../lights";
 import { sliceMs, type Levels } from "../listen";
 import listenWorklet from "../listen.worklet.ts?worker&url";
 import { hear, listening, spread, type Frame, type Mode } from "../music";
@@ -76,7 +76,7 @@ export function Lights() {
         <button className="ghost-button" onClick={lookAgain} disabled={looking}>{looking ? "Looking…" : "Look again"}</button>
       </>}
     />
-    {adding && <AddDevice kasa={lights.filter((light) => light.source === "kasa").length} onCancel={() => setAdding(false)}/>}
+    {adding && <AddDevice onCancel={() => setAdding(false)}/>}
     {overview.loading ? <Loading/> : overview.error ? <ErrorNotice message={overview.error}/> : <>
       <section className="lights-bar">
         <div className="session-tabs" role="tablist" aria-label="Which devices">
@@ -106,7 +106,15 @@ export function Lights() {
 // recognises, saying for each how it would reach it or why it cannot yet; choosing one opens a session
 // where north writes what it needs, asking only for what you must do (press a button, a login). What
 // discovery cannot see (a device only its cloud app reaches) is described in your own words below.
-function AddDevice({ kasa, onCancel }: { kasa: number; onCancel: () => void }) {
+// Every device on your network, grouped by what North can do with it: add one it knows the way into,
+// see the ones already here, and try any other, in a session where North works out whether it can.
+const GROUPS: [NetworkDevice["connect"][], string][] = [
+  [["add"], "North can connect"],
+  [["here"], "Already on this page"],
+  [["try", "none"], "Other devices on your network"],
+];
+
+function AddDevice({ onCancel }: { onCancel: () => void }) {
   const navigate = useNavigate();
   const [scan, setScan] = useState<Scan | null>(null);
   const [looking, setLooking] = useState(false);
@@ -131,22 +139,19 @@ function AddDevice({ kasa, onCancel }: { kasa: number; onCancel: () => void }) {
       setSending("");
     }
   };
-  const found = scan?.found ?? [];
+  const devices = scan?.devices ?? [];
   return <Panel title="Add a device" label="Find devices" className="add-device" actions={<button className="ghost-button" type="button" onClick={onCancel}>Close</button>}>
-    <p className="setup-copy">North looks on your network for lights, plugs and switches it can connect to. Choose one and North works out how to control it, in a session you can follow, asking you only for what you need to do: press a button, turn on a setting, or add a login. Once it works, it shows up here with the same controls and music sync.</p>
-    {looking ? <p className="setup-copy">Looking on your network… this takes a few seconds.</p>
+    <p className="setup-copy">North lists every device on your network, named as far as it can tell. Choose one to connect: North works out how to control it in a session you can follow, asking you only for what you need to do, and tells you plainly if it cannot. Once it works, it shows up here with the same controls and music sync.</p>
+    {looking ? <p className="setup-copy">Looking at every address on your network… this takes a few seconds.</p>
       : scan && <>
-        {found.length > 0 && <div className="provider-list">{found.map((device) => <div className="provider-row" key={device.id}>
-          <div>
-            <b>{device.brand} · {device.name}</b>
-            <small>{device.kind} at {device.address} · found by {device.how}</small>
-            <small>{device.cannot ? `North can't connect to it yet: ${device.cannot}.` : `North reaches it through ${device.reach}.`}</small>
-          </div>
-          {device.added ? <span className="provider-state configured">North has a tool for {device.brand}</span>
-            : device.cannot ? null
-            : <button className="primary-button" type="button" disabled={Boolean(sending)} onClick={() => ask(device.id, `${device.brand} ${device.name}`, foundRequest(device))}>{sending === device.id ? "Asking North…" : "Add"}</button>}
-        </div>)}</div>}
-        <p className="setup-copy">{scanSummary(scan, kasa)}</p>
+        {GROUPS.map(([kinds, title]) => {
+          const group = devices.filter((device) => kinds.includes(device.connect));
+          return group.length > 0 && <div className="found-group" key={title}>
+            <p className="found-group-title">{title} ({group.length})</p>
+            <div className="provider-list">{group.map((device) => <DeviceRow key={device.id} device={device} sending={sending} onConnect={() => ask(device.id, device.name, deviceRequest(device))}/>)}</div>
+          </div>;
+        })}
+        <p className="setup-copy">{scanSummary(scan)}</p>
       </>}
     <div className="setup-actions">
       <button className="ghost-button" type="button" onClick={look} disabled={looking}>{looking ? "Looking…" : "Look again"}</button>
@@ -161,6 +166,25 @@ function AddDevice({ kasa, onCancel }: { kasa: number; onCancel: () => void }) {
       </div>
     </div>
   </Panel>;
+}
+
+function DeviceRow({ device, sending, onConnect }: { device: NetworkDevice; sending: string; onConnect: () => void }) {
+  const where = [device.maker, device.address, device.role].filter(Boolean).join(" · ");
+  const about = device.found
+    ? (device.found.cannot ? `A ${device.found.brand} ${device.found.kind}. North can't connect to it directly yet: ${device.found.cannot}.` : `A ${device.found.brand} ${device.found.kind}. North reaches it through ${device.found.reach}.`)
+    : device.offers.length ? `Offers ${device.offers.join(", ")}.` : device.hint ? `${device.hint}.` : "";
+  return <div className="provider-row">
+    <div>
+      <b>{device.name}</b>
+      <small>{where}</small>
+      {about && <small>{about}</small>}
+    </div>
+    {device.connect === "here" ? <span className="provider-state configured">On this page</span>
+      : device.connect === "none" ? null
+      : <button className={device.connect === "add" ? "primary-button" : "ghost-button"} type="button" disabled={Boolean(sending)} onClick={onConnect}>
+        {sending === device.id ? "Asking North…" : device.connect === "add" ? "Add" : "Try to connect"}
+      </button>}
+  </div>;
 }
 
 function LightCard({ light, onChanged, onError, onMine }: {
