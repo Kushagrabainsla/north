@@ -51,6 +51,7 @@ from web.browser_keys import BROWSER_KEY_COOKIE, BROWSER_KEY_MAX_AGE_SECONDS, kn
 
 from . import extensions as _extensions
 from . import lights as _lights
+from . import secrets as _secrets
 from .conversations import ConversationStore, Turn
 
 # Compatibility exports for callers that historically imported skill routes
@@ -116,6 +117,7 @@ router = APIRouter(
 )
 router.include_router(extensions_router)
 router.include_router(_lights.router)
+router.include_router(_secrets.router)
 
 
 @dataclass

@@ -16,7 +16,7 @@ domains: [general, engineering]
 ## Ask once, before writing
 Work out what you can yourself (which public service, its URL, its response format). Then, if anything only the user can decide is still open (which account, which device, what counts as done, whether it may change or send anything), ask it all in **one** `ask_user` call, one item of `questions` each. Do not ask what you can find out, and do not ask again for what the user already said.
 
-North has no place yet to keep a key or password for a custom tool. Prefer a service that needs none (Open-Meteo for weather, for example). If a key is unavoidable, stop and tell the user what is needed; never put a key in the code and never ask for one in chat.
+Prefer a service that needs no key (Open-Meteo for weather, for example). When a key or password is unavoidable, it is one of the user's secrets: choose a short name (`openweather`), and in the same `ask_user` call ask the user to add it on the dashboard, under Settings, Secrets, with that name (`requires_user_action=true`, its own call, if nothing else is open). You only ever see a secret's name: never ask for its value in chat and never write it into the code.
 
 ## What north expects from the file
 North checks most of these itself before the test call, and a draft that misses one comes back with the exact fix to make.
@@ -30,7 +30,7 @@ North checks most of these itself before the test call, and a draft that misses 
 4. Say when a call changes something. A tool that writes files, sends, posts, buys, deletes or switches a device sets `is_mutating = True`, so north asks before it runs. A tool where only some calls change things overrides `mutates(params)` instead (below). A tool that only reads sets neither.
 5. Never freeze north: it is `async`. Use `httpx.AsyncClient(timeout=...)` for the web, `await asyncio.sleep` to wait, and `await asyncio.to_thread(fn, ...)` for a blocking library call. `requests` is not installed.
 6. Only the standard library and what north already installs: `httpx`, `bs4` (BeautifulSoup), `pydantic`, `yaml`, `numpy`, `psutil`, `PIL`, `pypdf`, `docx`. North cannot install packages for a custom tool.
-7. Files the tool keeps live under `settings.north_home / "tool-data" / "<tool name>"` (`from config.settings import settings`). Never write a fixed path to north's home or a user folder (`/Users/...`) into the code: north's home can be anywhere. Never read `os.environ`.
+7. Files the tool keeps live under `settings.north_home / "tool-data" / "<tool name>"` (`from config.settings import settings`). Never write a fixed path to north's home or a user folder (`/Users/...`) into the code: north's home can be anywhere. Never read `os.environ`: a key comes from `secret(name)`, below.
 8. Return what a person or the next step needs, by name, not raw API payloads: `"city": "Paris"`, not `"geo_id": 2988507`. Keep it small; cut long lists and say how many were left out. `format_output(data)` turns `data` into one or two readable lines.
 
 A tool whose calls are mixed says which ones change things:
@@ -38,6 +38,19 @@ A tool whose calls are mixed says which ones change things:
 ```python
     def mutates(self, params: dict | None = None) -> bool:
         return (params or {}).get("action") != "status"  # reading the status changes nothing
+```
+
+A tool that needs a key declares it, and reads it inside `run`. North gives the tool only the secrets it declares, names them on the approval card, and hides their values from anything the tool returns:
+
+```python
+from config.secret_store import secret
+
+
+class GetForecastTool(Tool):
+    uses_secrets = ("openweather",)
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        key = secret("openweather")
 ```
 
 ## A complete example
@@ -116,6 +129,7 @@ class GetWeatherTool(Tool):
 - `requests.get(...)` or `time.sleep(...)`: both freeze north; use `httpx.AsyncClient` and `await asyncio.sleep`.
 - A tool that sends, writes or switches something without `is_mutating = True`: north would run it without asking.
 - Returning a whole API response: pick the fields that answer the question.
+- A key asked for in chat, written into the code, or read from `os.environ`: it is a secret the user adds on the dashboard, and the tool reads it with `secret(name)`.
 - A test call that changes something real when a reading call would prove the same.
 
 ## Done when

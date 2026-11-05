@@ -678,6 +678,33 @@ not to: create_skill was taught (M6), coding_agent was not, so you approved
 asking a Codex that was not installed (M22). A mechanism with two homes drifts,
 and a fix made in one copy leaves the others broken.
 
+### 7.6 The Model Knows a Secret by Its Name Only
+
+A key or password you give north for its tools lives in one store,
+`config/secret_store.py`, in north's home and readable only by you. You add,
+replace and remove secrets on the dashboard (Settings, Secrets); no tool can.
+The model works with a secret's name and never sees, writes or passes its
+value. A tool that needs one declares it, and the approval card says so; it
+reads the value at the last step, inside its own `run()`. North releases a value
+only to a tool that declared it, and takes every stored value back out of what
+any tool returns before the model reads it.
+
+```python
+from config.secret_store import secret
+
+class ForecastTool(Tool):
+    uses_secrets = ("openweather",)  # shown on the card that approves the tool
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        key = secret("openweather")  # refused for a name the tool did not declare
+```
+
+**Why:** the model reads pages, files and tool output that anyone may have
+written, so a value it can see is a value a page can ask it to send elsewhere.
+Meta's Muse works the same way: its agent never sees the user's passwords, and
+a separate agent, Sentinel, approves what leaves the machine. Custom tools had no
+place for a key at all, so the guide told the model to stop and give up.
+
 ---
 
 ## 8. Project Structure

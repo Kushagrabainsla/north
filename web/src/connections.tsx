@@ -463,3 +463,91 @@ function KasaAccountForm({ account, busy, onSave, onForget }: {
     </div>
   </form>;
 }
+
+// Your keys and passwords for North's tools (CODING_STYLE §7.6). North's AI only ever
+// sees a secret's name; nothing here ever shows a value again, not even part of one.
+export interface SavedSecret {
+  name: string;
+  note: string;
+  updated_at: string;
+  used_by: string[];
+}
+
+interface SecretsList {
+  secrets: SavedSecret[];
+  missing: { name: string; used_by: string[] }[];
+}
+
+const SECRET_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+export const SECRET_MIN_LENGTH = 8;
+
+// Why a secret cannot be saved yet, or "" when it can: the same rules north checks.
+export function secretProblem(name: string, value: string): string {
+  if (!name) return "";
+  if (!SECRET_NAME.test(name)) return "A name is lowercase letters, digits and underscores, starting with a letter.";
+  if (value && value.length < SECRET_MIN_LENGTH) return `A secret is at least ${SECRET_MIN_LENGTH} characters.`;
+  return "";
+}
+
+// The line under a secret's name: its note, and which tools use it.
+export function secretDetail(secret: SavedSecret): string {
+  const uses = secret.used_by.length ? `used by ${secret.used_by.join(", ")}` : "no tool uses it yet";
+  return [secret.note, uses].filter(Boolean).join(" · ");
+}
+
+export function Secrets() {
+  const resource = useResource<SecretsList>("/web/api/secrets");
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const saved = resource.data?.secrets ?? [];
+  const missing = resource.data?.missing ?? [];
+  const problem = secretProblem(name.trim(), value);
+  const replacing = saved.some((secret) => secret.name === name.trim());
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    const key = name.trim();
+    setBusy("save"); setError(""); setMessage("");
+    try {
+      await api(`/web/api/secrets/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ value, note: note.trim() }) });
+      setMessage(`Saved ${key}.`);
+      setName(""); setValue(""); setNote("");
+      await resource.reload();
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(""); }
+  };
+  const remove = async (key: string) => {
+    setBusy(key); setError(""); setMessage("");
+    try { await del(`/web/api/secrets/${encodeURIComponent(key)}`); setMessage(`Removed ${key}.`); await resource.reload(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(""); }
+  };
+  return <Panel title="Secrets" label={saved.length ? `${saved.length} saved` : "None yet"}>
+    {message && <div className="notice">{message}</div>}
+    {(error || resource.error) && <ErrorNotice message={error || resource.error}/>}
+    <p className="setup-copy muted">Keys and passwords for the tools North makes for you. North's AI only sees a secret's name: North hands the value to a tool that says it uses it, once you approve that tool, and hides it from anything a tool returns. Kept on this computer, readable only by you.</p>
+    {missing.map((needed) => <div className="notice" key={needed.name}>
+      {needed.used_by.join(", ")} needs the secret <b>{needed.name}</b>.{" "}
+      <button className="link-button" type="button" onClick={() => setName(needed.name)}>Add it</button>
+    </div>)}
+    <div className="provider-list">
+      {saved.map((secret) => <div className="provider-row" key={secret.name}>
+        <div><b>{secret.name}</b><small>{secretDetail(secret)}</small></div>
+        <button className="ghost-button" type="button" disabled={busy === secret.name} onClick={() => remove(secret.name)}>Remove</button>
+      </div>)}
+    </div>
+    <form className="setup-form" onSubmit={save} aria-label="Add a secret">
+      <label>Name<input value={name} autoComplete="off" placeholder="openweather" onChange={(event) => setName(event.target.value)}/></label>
+      <label>Value<input type="password" autoComplete="new-password" value={value}
+        placeholder={replacing ? "Saved · type a new one to replace it" : `at least ${SECRET_MIN_LENGTH} characters`} onChange={(event) => setValue(event.target.value)}/></label>
+      <label>Note<input value={note} autoComplete="off" placeholder="what it is for (optional)" onChange={(event) => setNote(event.target.value)}/></label>
+      {problem && <small className="muted">{problem}</small>}
+      <div className="setup-actions">
+        <button className="primary-button" type="submit" disabled={busy === "save" || !name.trim() || value.length < SECRET_MIN_LENGTH || Boolean(problem)}>{replacing ? "Replace" : "Save"}</button>
+      </div>
+    </form>
+  </Panel>;
+}

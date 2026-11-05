@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from config import secret_store
 from tools._path import target_path
 from tools._schema import conform_params
 from tools.models import ToolInput, ToolOutput
@@ -14,6 +16,8 @@ from utils.workspace_lock import workspace_lock
 
 if TYPE_CHECKING:
     from approval.approvals import Approvals, Decision, Request
+
+logger = logging.getLogger(__name__)
 
 # Arguments north adds to every call itself. Left out of a call's description so
 # "did you approve this before?" matches the same call in a later task.
@@ -46,6 +50,9 @@ class Tool(ABC):
     # A tool that starts runs of its own (a flow's test run, `run_flow`). Those runs' steps take the lock for
     # their own changes, so holding it for the whole tool call left them waiting on their parent for ever.
     starts_runs: bool = False
+    # The names of your secrets this tool reads with `secret(name)` (CODING_STYLE §7.6). North gives a call
+    # only these, and its approval card names them.
+    uses_secrets: tuple[str, ...] = ()
     # Override in subclasses with an OpenAI-compatible JSON Schema for the
     # function parameters.  The default accepts any key/value object.
     parameters_schema: dict = {
@@ -80,7 +87,29 @@ class Tool(ABC):
         A call that changes something is described, decided by the approval
         layer, and only then run - with the approved `Request` on `input.approved`
         so `run()` acts on exactly what was approved.
+
+        The call can read the secrets this tool declared, and no others; every stored
+        secret is taken out of what it returns, or raises, before the model reads it
+        (CODING_STYLE §7.6).
         """
+        secrets = secret_store.store()
+        with secret_store.released_to(self.name, self.uses_secrets):
+            try:
+                output = await self._decided(input)
+            except secret_store.SecretUnavailable as exc:
+                return ToolOutput(success=False, error=str(exc))
+            except Exception as exc:
+                if (shown := secrets.hide(str(exc))) == str(exc):
+                    raise
+                logger.warning("%s raised; its message held a secret, which the agent is not shown", self.name)
+                return ToolOutput(success=False, error=f"{type(exc).__name__}: {shown}")
+        hidden = secrets.hide_in({"data": output.data, "error": output.error})
+        if hidden == {"data": output.data, "error": output.error}:
+            return output
+        return output.model_copy(update=hidden)
+
+    async def _decided(self, input: ToolInput) -> ToolOutput:
+        """`execute` without the secrets: the call conformed, decided where it changes something, then run."""
         input, error, request = await self.prepare(input)
         if error:
             return ToolOutput(success=False, error=error)

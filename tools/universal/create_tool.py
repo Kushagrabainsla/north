@@ -14,10 +14,11 @@ from typing import TYPE_CHECKING, Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
+from config import secret_store
 from policies.self_edit import SelfEditPolicy
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.universal._draft_checks import draft_problems
+from tools.universal._draft_checks import declared_secrets, draft_problems
 
 if TYPE_CHECKING:
     from tools.registry import ToolRegistry
@@ -71,7 +72,9 @@ class CreateToolTool(Tool):
                     "Full Python source for the tool file: one Tool subclass (from tools.base) with name, "
                     "description, parameters_schema and `async def run(self, input)`, which reads the call's "
                     "arguments from the dict `input.params` and returns ToolOutput (never raises). Set "
-                    "`is_mutating = True` if it changes anything. The adding-a-north-tool skill has the full "
+                    "`is_mutating = True` if it changes anything. A key or password is the user's secret: declare "
+                    "`uses_secrets = ('name',)` and read it with `secret('name')` (config.secret_store). "
+                    "The adding-a-north-tool skill has the full "
                     "contract and a complete example. Smallest shape:\n"
                     "from tools.base import Tool\n"
                     "from tools.models import ToolInput, ToolOutput\n"
@@ -215,9 +218,11 @@ class CreateToolTool(Tool):
                 content = candidate.read_text(encoding="utf-8")
         preview = (content[:_PREVIEW_CHARS] + "\n…") if len(content) > _PREVIEW_CHARS else content
         test = json.dumps(params.get("test_params") or {}, sort_keys=True, default=str)
+        uses = declared_secrets(content)
         message = (
             f"Agent wants to {action} the '{name}' tool ({tool_type}). Approving writes it, calls it once with "
             f"`{test}` (anything that call does still asks), and switches it on if that works.\n\n"
+            + (f"It uses your secrets: {', '.join(uses)}. North gives it only those.\n\n" if uses else "")
             + (f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)")
         )
         # The code is part of what you approved. Keyed by the name alone, one
@@ -373,7 +378,7 @@ class CreateToolTool(Tool):
         path = _find_candidate_path(name, self._tools_dir)
         if path is None:
             return ToolOutput(success=False, error=f"No candidate exists for tool '{name}'.")
-        if problems := draft_problems(path.read_text(encoding="utf-8")):
+        if problems := draft_problems(path.read_text(encoding="utf-8"), secret_store.store().names()):
             listed = "\n".join(f"{index}. {problem}" for index, problem in enumerate(problems, 1))
             return ToolOutput(
                 success=False,

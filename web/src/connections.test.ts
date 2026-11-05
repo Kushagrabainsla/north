@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { providerFailing, providerStateLabel, savedKeyMessage } from "./connections";
+import { providerFailing, providerStateLabel, savedKeyMessage, secretDetail, secretProblem } from "./connections";
 
 // Issue #76, M6: "Local embeddings ... Ready" stood beside a model that failed to load (403 Forbidden).
 describe("a provider row says what trying it found", () => {
@@ -30,5 +30,20 @@ describe("saving a key says what trying it found", () => {
     expect(providerStateLabel({ state: "failing", state_detail: "Gemini /models returned 400" }, true)).toBe(
       "Not working: Gemini /models returned 400",
     );
+  });
+});
+
+describe("the Secrets panel", () => {
+  it("says why a name or value cannot be saved, with north's own rules", () => {
+    expect(secretProblem("Open Weather", "")).toMatch(/lowercase/);
+    expect(secretProblem("openweather", "short")).toMatch(/at least 8/);
+    expect(secretProblem("openweather", "owm-1234-abcd")).toBe("");
+    expect(secretProblem("", "")).toBe("");
+  });
+
+  it("names the tools that use a secret, and says when none does", () => {
+    const secret = { name: "openweather", note: "weather", updated_at: "", used_by: ["get_forecast"] };
+    expect(secretDetail(secret)).toBe("weather · used by get_forecast");
+    expect(secretDetail({ ...secret, note: "", used_by: [] })).toBe("no tool uses it yet");
   });
 });

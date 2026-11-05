@@ -173,6 +173,9 @@ class LearnedTool(Tool):
         self.name = inner.name
         self.description = inner.description
         self.parameters_schema = inner.parameters_schema
+        # Declared in the code you approved; a call gets these secrets and no others (CODING_STYLE §7.6).
+        declared = getattr(inner, "uses_secrets", ())
+        self.uses_secrets = (declared,) if isinstance(declared, str) else tuple(str(name) for name in declared)
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
         return True
@@ -181,10 +184,11 @@ class LearnedTool(Tool):
         request = await super().describe(input)
         if request is None:
             return None
+        uses = f"\nIt uses your secrets: {', '.join(self.uses_secrets)}." if self.uses_secrets else ""
         return replace(
             request,
             title=f"Run {self.name} - Approval Required",
-            message=f"Run `{self.name}`, a tool north wrote for itself, with:\n{request.message}",
+            message=f"Run `{self.name}`, a tool north wrote for itself, with:\n{request.message}{uses}",
         )
 
     async def run(self, input: ToolInput) -> ToolOutput:

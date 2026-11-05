@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+from collections.abc import Collection
 
 # What a tool may read off its ToolInput; anything else is a guess at how arguments arrive.
 _INPUT_FIELDS = {"params", "approved", "granted_workspace", "edit_scope", "model_copy"}
@@ -44,17 +45,36 @@ _CHANGING_FUNCTIONS = {
 }
 
 
-def draft_problems(source: str) -> list[str]:
-    """What must change in *source*, a tool draft, before it is worth testing; [] when nothing."""
+def draft_problems(source: str, saved_secrets: Collection[str] | None = None) -> list[str]:
+    """What must change in *source*, a tool draft, before it is worth testing; [] when nothing.
+
+    With *saved_secrets*, the names of the user's secrets, a secret the draft uses that is not
+    saved yet is a problem too.
+    """
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
         return [f"It does not parse: {exc}."]
     problems = _imports(tree)
-    for tool in [node for node in tree.body if isinstance(node, ast.ClassDef) and _is_tool(node)]:
+    for tool in _tools(tree):
         problems += _tool_class(tool)
+        problems += _secrets(tool, saved_secrets)
     problems += _environment_and_paths(tree)
     return problems
+
+
+def declared_secrets(source: str) -> tuple[str, ...]:
+    """The secrets the tool classes in *source* declare in `uses_secrets`; () when it does not parse."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ()
+    names = [name for tool in _tools(tree) for name in _declared(tool) or ()]
+    return tuple(dict.fromkeys(names))
+
+
+def _tools(tree: ast.Module) -> list[ast.ClassDef]:
+    return [node for node in tree.body if isinstance(node, ast.ClassDef) and _is_tool(node)]
 
 
 def _is_tool(node: ast.ClassDef) -> bool:
@@ -118,6 +138,55 @@ def _tool_class(tool: ast.ClassDef) -> list[str]:
     return list(dict.fromkeys(problems))
 
 
+def _declared(tool: ast.ClassDef) -> tuple[str, ...] | None:
+    """The names in the class's `uses_secrets`, () when it has none, None when it is not a tuple of strings."""
+    for node in tool.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "uses_secrets" for target in node.targets
+        ):
+            value = node.value
+            items = value.elts if isinstance(value, (ast.Tuple, ast.List)) else [value]
+            if all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in items):
+                return tuple(item.value for item in items)  # type: ignore[attr-defined]
+            return None
+    return ()
+
+
+def _secrets(tool: ast.ClassDef, saved: Collection[str] | None) -> list[str]:
+    """Each secret the tool reads is declared, named with a literal, and, when *saved* is known, saved."""
+    declared = _declared(tool)
+    if declared is None:
+        return ["`uses_secrets` must be a tuple of the secrets' names as strings, such as `('openweather',)`."]
+    problems: list[str] = []
+    for node in ast.walk(tool):
+        if not (isinstance(node, ast.Call) and _calls_secret(node)):
+            continue
+        name = node.args[0] if node.args else None
+        if not (isinstance(name, ast.Constant) and isinstance(name.value, str)):
+            problems.append("It calls `secret()` without a name: name it with a string, `secret('openweather')`.")
+        elif name.value not in declared:
+            problems.append(
+                f"It reads the secret {name.value!r} but does not declare it: add `uses_secrets = "
+                f"({name.value!r},)` to the class, so the approval card shows it and north gives it to this tool."
+            )
+    if saved is not None:
+        for missing in [name for name in declared if name not in saved]:
+            listed = f" Saved secrets: {', '.join(sorted(saved))}." if saved else " No secrets are saved yet."
+            problems.append(
+                f"It uses the secret {missing!r}, which is not saved yet. Ask the user with ask_user "
+                f"(requires_user_action=true) to add it on the dashboard, Settings, Secrets, named {missing!r}; "
+                f"never ask for its value in chat. Then call create_tool again.{listed}"
+            )
+    return list(dict.fromkeys(problems))
+
+
+def _calls_secret(call: ast.Call) -> bool:
+    func = call.func
+    return (isinstance(func, ast.Name) and func.id == "secret") or (
+        isinstance(func, ast.Attribute) and func.attr == "secret" and _dotted(func.value).endswith("secret_store")
+    )
+
+
 def _own_nodes(function: ast.AST):
     """The nodes of *function*'s own body, not of functions defined inside it."""
     for child in ast.iter_child_nodes(function):
@@ -178,8 +247,8 @@ def _environment_and_paths(tree: ast.Module) -> list[str]:
         ):
             problems.append(
                 "It reads environment variables, which north does not pass its settings through: use "
-                "`from config.settings import settings` for north's own values. North has no place yet for a "
-                "custom tool's key; if one is needed, stop and tell the user."
+                "`from config.settings import settings` for north's own values. For a key or password, declare "
+                "`uses_secrets = ('name',)` and read it with `secret('name')` from `config.secret_store`."
             )
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             text = node.value
