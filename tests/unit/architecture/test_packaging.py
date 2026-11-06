@@ -122,6 +122,7 @@ def test_vendored_frontend_dependencies_stay_out_of_the_sdist() -> None:
         "scripts",
         "tests",
         "web/src",
+        "web/public",
     ):
         assert f"prune {directory}" in manifest
     assert "exclude agents/**/README.md" in manifest
@@ -145,6 +146,23 @@ def test_every_resource_file_is_declared_as_package_data(pyproject: dict) -> Non
     for relative in shipped:
         covered = any(_glob_matches(relative, pattern) for pattern in patterns)
         assert covered, f"resources/{relative} is not covered by [tool.setuptools.package-data].resources"
+
+
+def test_every_dashboard_file_is_declared_as_package_data(pyproject: dict) -> None:
+    """The dashboard's build ships whole: its logo and app icons as much as its code.
+
+    Only .html, .css, .js and .woff2 were declared, so the icons the build copies
+    from web/public would have been served from a checkout and missing, with no
+    error, from an installed north.
+    """
+    patterns = pyproject["tool"]["setuptools"]["package-data"]["web"]
+    web = ROOT / "web"
+    built = [path.relative_to(web).as_posix() for path in (web / "dist").rglob("*") if path.is_file()]
+
+    assert {"dist/index.html", "dist/favicon.svg", "dist/manifest.webmanifest"} <= set(built)
+    for relative in built:
+        covered = any(_glob_matches(relative, pattern) for pattern in patterns)
+        assert covered, f"web/{relative} is not covered by [tool.setuptools.package-data].web"
 
 
 def _is_data(path: Path) -> bool:

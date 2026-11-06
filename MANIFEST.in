@@ -12,6 +12,7 @@ prune experiments
 prune scripts
 prune tests
 prune web/src
+prune web/public
 exclude web/index.html
 exclude web/vite.config.js
 exclude skills/README.md

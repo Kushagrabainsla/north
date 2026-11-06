@@ -105,6 +105,11 @@ web = [
     "dist/**/*.css",
     "dist/**/*.js",
     "dist/**/*.woff2",
+    # The logo and app icons, copied from web/public by the build.
+    "dist/*.ico",
+    "dist/*.png",
+    "dist/*.svg",
+    "dist/*.webmanifest",
 ]
 
 [tool.setuptools.exclude-package-data]
