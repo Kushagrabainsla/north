@@ -46,3 +46,24 @@ def test_the_devices_page_lines_up_with_its_header_like_every_other_page() -> No
         assert not re.search(r"\b(margin|padding)\s*:\s*0 \d+px", body), selector
     assert not re.search(r"\.(lights-bar|lights-notice|music-sync|add-device)[^{]*\{[^}]*margin-(left|right)", CSS)
     assert ".add-device {" not in CSS  # the shared Panel, as in Settings
+
+
+def _winning(selector: str, prop: str) -> str:
+    """The value of *prop* in the last top-level rule for exactly *selector* that sets it: the one that applies."""
+    values = [
+        match.group(1).strip()
+        for body in re.findall(rf"(?:^|}})\s*{re.escape(selector)}\s*\{{([^}}]*)\}}", CSS, re.M)
+        if (match := re.search(rf"(?:^|[;\s]){re.escape(prop)}\s*:\s*([^;]+)", body))
+    ]
+    return values[-1] if values else ""
+
+
+def test_the_dashboard_grid_has_no_grey_holes_and_a_notice_cannot_stretch_it() -> None:
+    """The user's dashboard: the Attention panel held a whole briefing, hundreds of lines, and the System panel
+    beside it was a tall empty box; cells no panel filled were solid grey, the lines' colour showing through."""
+    assert _winning(".cockpit-grid", "background") == "var(--surface)"
+    assert _winning(".cockpit-grid", "grid-auto-flow") == "dense"
+    assert _winning(".cockpit-grid > .panel", "box-shadow").startswith("0 0 0 1px")
+    assert _winning(".conversation-strip", "background") == "var(--surface)"
+    assert ".notice-row small { white-space: pre-wrap" not in CSS  # the whole message, every line kept
+    assert "-webkit-line-clamp: 2" in _rule(".notice-row .notice-preview")

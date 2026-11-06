@@ -630,6 +630,9 @@ def _produced(run: FlowRun) -> str:
         named = (data.get("result") or {}).get("file")
         if isinstance(named, str) and named:
             files.append(named)
+        # A step whose answer is the JSON naming what it saved: delivered, the JSON itself reached the
+        # dashboard as the news briefing's text, {"artifacts": ["/Users/…/2026-11-06.md"]}.
+        files.extend(_artifacts_in(data.get("summary") or data.get("output")))
     for path in reversed(files):
         try:
             text = Path(path).expanduser().read_text(encoding="utf-8").strip()
@@ -639,11 +642,25 @@ def _produced(run: FlowRun) -> str:
             if len(text) > _MAX_DELIVERED_CHARS:
                 text = text[:_MAX_DELIVERED_CHARS].rstrip() + "\n\n[cut short]"
             return f"{text}\n\n_Saved at {path}_"
+    if files:  # named, but none could be read here: say where they are rather than nothing
+        return f"Finished, and saved {Path(files[-1]).name}.\n\n_Saved at {files[-1]}_"
     last = (run.outputs[-1].get("data") or {}) if run.outputs else {}
     summary = str(last.get("summary") or last.get("output") or "").strip()
     if summary and summary not in ("{}", "[]"):
         return summary
     return "Finished. The Flows page shows what it did."
+
+
+def _artifacts_in(answer: Any) -> list[str]:
+    """The files a step's JSON answer says it saved: {"artifacts": [...]}; [] for any other answer."""
+    if not isinstance(answer, str) or not answer.strip().startswith("{"):
+        return []
+    try:
+        parsed = json.loads(answer)
+    except ValueError:
+        return []
+    named = parsed.get("artifacts") if isinstance(parsed, dict) else None
+    return [str(path) for path in named if isinstance(path, str) and path] if isinstance(named, list) else []
 
 
 def _step_prompt(

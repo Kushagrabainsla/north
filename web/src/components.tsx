@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { post } from "./api";
+import { fileName, noticeBody, noticePreview, savedFile } from "./notices";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
 import type { AgentRun, Conversation, InferenceCategory, Notice } from "./types";
 import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Bot, Lightbulb, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
@@ -156,17 +157,27 @@ export function unpricedNote(count: unknown): string {
 }
 
 /** What north delivered to you, newest first, each until you dismiss it. */
-export function NoticeList({ notices, onDismissed }: { notices: Notice[]; onDismissed: () => void }) {
+// What north delivered: a reminder, or how a scheduled run ended. `compact` is the dashboard's view, one
+// short row each with a link to the rest; without it, each notice reads in full, a long one opened on demand.
+export function NoticeList({ notices, onDismissed, compact = false }: { notices: Notice[]; onDismissed: () => void; compact?: boolean }) {
   const dismiss = async (id: string) => {
     await post(`/web/api/notices/${id}/dismiss`, {});
     onDismissed();
   };
-  return <>{notices.map(notice =>
-    <div className="list-row notice-row" key={notice.id}>
-      <div><b>{notice.title}</b><small>{notice.message}</small><small>{timeAgo(notice.created_at)}</small></div>
+  return <>{notices.map(notice => {
+    const file = savedFile(notice.message);
+    const body = noticeBody(notice.message);
+    const preview = noticePreview(notice.message);
+    const when = <small>{timeAgo(notice.created_at)}{file && <> · saved as <span title={file}>{fileName(file)}</span></>}</small>;
+    return <div className={`list-row notice-row ${compact ? "compact-notice" : ""}`} key={notice.id}>
+      {compact
+        ? <div><b>{notice.title}</b>{preview && <small className="notice-preview">{preview}</small>}{when}{body.length > preview.length && <NavLink className="notice-more" to="/approvals">Read it all →</NavLink>}</div>
+        : <div><b>{notice.title}</b>{body && (body.length > 600
+            ? <details className="notice-body"><summary>{preview}</summary><Markdown>{body}</Markdown></details>
+            : <div className="notice-body"><Markdown>{body}</Markdown></div>)}{when}</div>}
       <button className="ghost-button" onClick={() => void dismiss(notice.id)}>Dismiss</button>
-    </div>
-  )}</>;
+    </div>;
+  })}</>;
 }
 
 export function InferenceCategories({ categories }: { categories: InferenceCategory[] }) {

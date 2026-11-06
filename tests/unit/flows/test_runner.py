@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -1031,6 +1032,42 @@ async def test_a_scheduled_run_sends_the_user_what_it_wrote(tmp_path):
     assert card["title"] == "demo is ready"
     assert "PWM: Personalized World Models" in card["message"]
     assert str(tmp_path / "2026-10-07.md") in card["message"]
+
+
+class JsonAnsweringAgent(FakeAgent):
+    """Writes the briefing and answers with the JSON naming it, as the user's news briefing skill did."""
+
+    def __init__(self, path) -> None:
+        super().__init__()
+        self._path = path
+
+    async def run(self, payload):
+        if self._path.parent.exists():
+            self._path.write_text("# News\n\n- Markets rose.\n", encoding="utf-8")
+        answer = json.dumps({"artifacts": [str(self._path)]})
+        return AgentResult(output=answer, summary=answer, tools_used=["write_file"])
+
+
+@pytest.mark.parametrize("written", [True, False])
+async def test_a_step_that_answers_with_the_json_naming_its_file_delivers_the_file_not_the_json(tmp_path, written):
+    """The dashboard showed the news briefing as {"artifacts": ["/Users/…/2026-11-06.md"]}."""
+    path = (tmp_path if written else tmp_path / "gone") / "2026-11-06.md"
+    interaction = RecordingInteraction()
+    runner = FlowRunner(
+        _users_flow(tmp_path, _ONE_STEP),
+        FakeAgents(JsonAnsweringAgent(path)),
+        _skills(tmp_path),
+        FlowRunStore(tmp_path / "runs.db"),
+        interaction,
+    )
+
+    await runner.run("demo", trigger="schedule")
+
+    [card] = interaction.delivered
+    assert "artifacts" not in card["message"] and f"_Saved at {path}_" in card["message"]
+    assert ("Markets rose." in card["message"]) is written
+    if not written:
+        assert card["message"].startswith("Finished, and saved 2026-11-06.md.")
 
 
 class AllowEverything:

@@ -42,7 +42,7 @@ export function Dashboard() {
         <div className="hero-status"><HealthIndicator variant="panel"/><div><p>{dialsLine(data.system)}<YoloBadge mode={data.system.autonomy}/></p></div></div>
       </Panel>
       <Panel title="Attention" label={`${data.attention.length + data.notices.length} items`} to="/approvals" className={data.attention.length + data.notices.length ? "attention-panel" : ""}>
-        <NoticeList notices={data.notices.slice(0, 3)} onDismissed={() => void reload()}/>
+        <NoticeList compact notices={data.notices.slice(0, 3)} onDismissed={() => void reload()}/>
         {data.attention.length ? data.attention.slice(0, 3).map(item => <NavLink className="list-row" to="/approvals" key={item.id}><div><b>{item.title}</b><small>{item.agent} needs a decision</small></div><ChevronRight size={15}/></NavLink>) : !data.notices.length && <Empty>Nothing needs you right now.</Empty>}
       </Panel>
       <Panel title="Active now" label={`${data.active_tasks.length} tasks`} to="/tasks">

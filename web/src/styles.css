@@ -913,13 +913,17 @@ button:not(:disabled):active { transform: translateY(1px); }
 .panel > header h2 { margin-top: 3px; font-size: 14px; }
 .panel > header a { color: var(--muted); font-size: 10px; }
 .panel-content { min-height: 76px; padding: 11px 15px 14px; }
+/* Each panel draws its own 1px outline, and the gaps fill with the panels' colour: with the lines
+   drawn by a grey background showing through the gaps, every cell no panel filled was a grey block
+   (beside Active now, beside Agents). `dense` lets a later panel fill a hole where one fits. */
 .cockpit-grid {
   gap: 1px;
+  grid-auto-flow: dense;
   border-color: var(--line-strong);
   border-radius: 10px;
-  background: var(--line-strong);
+  background: var(--surface);
 }
-.cockpit-grid > .panel { background: var(--surface); }
+.cockpit-grid > .panel { background: var(--surface); box-shadow: 0 0 0 1px var(--line-strong); }
 .system-panel, .briefing-panel, .system-hero, .approval-card { background: var(--surface); }
 .attention-panel { border-color: rgba(233,199,111,.48) !important; }
 .system-panel .online-orb, .sun-mark { border-radius: 8px; box-shadow: none; }
@@ -978,8 +982,8 @@ button:not(:disabled):active { transform: translateY(1px); }
 .metric-cards span { color: var(--faint); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
 .metric-cards strong { margin-top: 8px; font-size: 23px; }
 .metric strong { font-size: 22px; }
-.conversation-strip { gap: 1px; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: var(--line-strong); }
-.conversation-card { padding: 13px; border: 0; border-radius: 0; background: var(--surface); }
+.conversation-strip { gap: 1px; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.conversation-card { padding: 13px; border: 0; border-radius: 0; background: var(--surface); box-shadow: 0 0 0 1px var(--line-strong); }
 .conversation-card:hover { background: var(--surface-2); }
 .conversation-card b { font-size: 11px; }
 .conversation-card small { font-size: 9px; }
@@ -1667,8 +1671,17 @@ button:not(:disabled):active { transform: translateY(1px); }
   .setup-form { max-width: none; }
 }
 .artifact-run h3 a { color: var(--text); text-decoration: none; font-family: inherit; }.artifact-run h3 a:hover { color: var(--accent); }.artifact-owner-kind { color: var(--accent); text-transform: uppercase; letter-spacing: .12em; font-size: 9px; }
-/* A notice's message is what it says, so it wraps instead of being cut to one line. */
-.notice-row small { white-space: pre-wrap !important; }
+/* A notice: on the dashboard one short row, its preview two lines at most; on Approvals the whole text,
+   formatted, a long one opened on demand. Shown whole on the dashboard, a briefing stretched the
+   Attention panel to hundreds of lines and the panels beside it into empty boxes. */
+.notice-row { align-items: flex-start; }
+.table-list > .notice-row { padding: 12px 16px; }
+.notice-row > div { min-width: 0; }
+.notice-row .notice-preview { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; line-height: 1.5; }
+.notice-more { display: inline-block; margin-top: 4px; color: var(--accent); font-size: 10px; text-decoration: none; }
+.notice-body { margin: 6px 0 2px; color: var(--text); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.notice-body summary { color: var(--muted); cursor: pointer; line-height: 1.5; }
+.notice-body[open] summary { margin-bottom: 8px; }
 
 /* Devices: a card per device of any brand, its controls only what it can do. Its blocks line up with the
    page header and are spaced by the page's one gap, like every other page's. */
