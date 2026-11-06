@@ -9,6 +9,7 @@ frontend dependencies stay out of the source distribution.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -98,6 +99,7 @@ def test_runtime_package_data_is_explicit(pyproject: dict) -> None:
         "policies/*.md",
         "builtin-skills/**/*.md",
         "builtin-flows/**/*.yaml",
+        "network-makers.json.gz",
         "taskwindow/LICENSE",
         "taskwindow/package*.json",
         "taskwindow/extension/**/*",
@@ -127,27 +129,40 @@ def test_vendored_frontend_dependencies_stay_out_of_the_sdist() -> None:
     assert "exclude web/vite.config.js" in manifest
 
 
-def test_every_built_in_flow_and_skill_file_is_declared_as_package_data(pyproject: dict) -> None:
-    """A built-in that is not package data works from a checkout and vanishes from an install.
+def test_every_resource_file_is_declared_as_package_data(pyproject: dict) -> None:
+    """A resource that is not package data works from a checkout and vanishes from an install.
 
     The daily news briefing shipped as a built-in flow without being listed here,
-    so an installed north had a schedule pointing at a flow that did not exist.
+    so an installed north had a schedule pointing at a flow that did not exist; the
+    table of network-card makers was left out the same way, so an installed north
+    named no device's maker on the Devices page.
     """
     patterns = pyproject["tool"]["setuptools"]["package-data"]["resources"]
     resources = ROOT / "resources"
+    shipped = [path.relative_to(resources).as_posix() for path in resources.rglob("*") if _is_data(path)]
 
-    for directory, suffix in (("builtin-flows", "*.yaml"), ("builtin-skills", "*.md")):
-        shipped = [path for path in (resources / directory).rglob(suffix) if path.is_file()]
-        assert shipped, f"resources/{directory} has nothing to ship"
-        for path in shipped:
-            relative = path.relative_to(resources).as_posix()
-            covered = any(_glob_matches(relative, pattern) for pattern in patterns)
-            assert covered, f"{relative} is not covered by [tool.setuptools.package-data].resources"
+    assert {"builtin-flows/nightly-check/FLOW.yaml", "builtin-skills/adding-a-home-device/SKILL.md"} <= set(shipped)
+    for relative in shipped:
+        covered = any(_glob_matches(relative, pattern) for pattern in patterns)
+        assert covered, f"resources/{relative} is not covered by [tool.setuptools.package-data].resources"
+
+
+def _is_data(path: Path) -> bool:
+    """A file a package reads at run time: not its code, which ships as a module, nor Python's cache."""
+    return path.is_file() and path.suffix not in {".py", ".pyc"} and "__pycache__" not in path.parts
+
+
+def test_the_glob_matcher_reads_patterns_the_way_setuptools_does() -> None:
+    assert _glob_matches("builtin-flows/news.yaml", "builtin-flows/**/*.yaml")
+    assert _glob_matches("builtin-flows/a/b/news.yaml", "builtin-flows/**/*.yaml")
+    assert _glob_matches("network-makers.json.gz", "network-makers.json.gz")
+    assert _glob_matches("taskwindow/package-lock.json", "taskwindow/package*.json")
+    assert not _glob_matches("prompts/sub/x.md", "prompts/*.md")
+    assert not _glob_matches("builtin-flows/news.yml", "builtin-flows/**/*.yaml")
 
 
 def _glob_matches(relative: str, pattern: str) -> bool:
-    """setuptools globs are relative to the package: `dir/**/*.ext` also matches `dir/x.ext`."""
-    from fnmatch import fnmatch
-
-    head, _, tail = pattern.partition("**/")
-    return relative.startswith(head) and fnmatch(relative.rsplit("/", 1)[-1], tail)
+    """setuptools globs are relative to the package: `*` stays in one folder, `**/` spans none or several."""
+    parts = re.split(r"(\*\*/|\*|\?)", pattern)
+    wildcards = {"**/": "(?:.+/)?", "*": "[^/]*", "?": "[^/]"}
+    return re.fullmatch("".join(wildcards.get(part, re.escape(part)) for part in parts), relative) is not None

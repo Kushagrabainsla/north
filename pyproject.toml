@@ -93,6 +93,7 @@ resources = [
     "policies/*.md",
     "builtin-skills/**/*.md",
     "builtin-flows/**/*.yaml",
+    "network-makers.json.gz",
     # Existing-profile browser bridge: the audited TaskWindow extension, loaded
     # unpacked so it never auto-updates, and its daemon pinned by npm lockfile.
     "taskwindow/LICENSE",
