@@ -81,6 +81,18 @@ async def test_a_control_action_still_needs_a_device() -> None:
     assert "device' is required" in (out.error or "")
 
 
+async def test_a_call_the_tool_would_refuse_raises_no_card() -> None:
+    """GLM named the lamp `alias`, which this tool does not take: the card offered "`off` on all
+    discovered lights", and once it was approved the tool refused, as it always does without a device."""
+    tool = kasa_tool.KasaTool()
+
+    _, why, request = await tool.prepare(ToolInput(params={"action": "off", "alias": "Desk lamp"}))
+    _, fine, card = await tool.prepare(ToolInput(params={"action": "off", "device": "Desk lamp"}))
+
+    assert "device' is required" in why and request is None
+    assert fine == "" and card is not None and "Desk lamp" in card.message
+
+
 async def test_a_device_is_found_by_its_name_whatever_its_case() -> None:
     desk, floor = FakeBulb("10.0.0.36", "Desk lamp"), FakeBulb("10.0.0.47", "Floor lamp")
 

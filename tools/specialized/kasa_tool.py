@@ -129,6 +129,36 @@ def _change_for(action: str, params: dict[str, Any]) -> LightChange:
     return LightChange()
 
 
+# Actions that may name no device and apply to every light found; power actions always name one,
+# so a command can never switch the whole house on or off.
+_BROAD_ACTIONS = frozenset({"brightness", "color", "color_temp", "scene"})
+
+
+def _refusal(params: dict[str, Any]) -> str:
+    """Why this call cannot run as asked, in words the model can act on; "" when it can."""
+    action = _action_of(params)
+    if not action:
+        return "Parameter 'action' is required."
+    # An action nobody defined is that, and saying so: the device guard below ran first
+    # and answered "device is required" for `dim`, `banana` and every other unknown word.
+    if action not in _KNOWN_ACTIONS:
+        return f"Unknown action {action!r}. Valid actions: {', '.join(sorted(_KNOWN_ACTIONS))}."
+    # `list` names nothing because it changes nothing, and it is the action the error below
+    # tells the reader to run.
+    if action != "list" and action not in _BROAD_ACTIONS and not str(params.get("device", "")).strip():
+        return (
+            "Parameter 'device' is required for control actions. "
+            "Use action='list' to see available devices, then target one by alias or IP."
+        )
+    if action == "scene" and str(params.get("scene", "")).strip().lower() not in SCENES:
+        return f"Unknown scene {params.get('scene')!r}. Available: {', '.join(sorted(SCENES))}."
+    try:
+        _change_for(action, params)
+    except ValueError as exc:
+        return str(exc)
+    return ""
+
+
 def _summary(action: str, params: dict[str, Any], results: list[dict[str, Any]]) -> str:
     """What was done, to whom, for the result."""
     names = ", ".join(r["name"] for r in results)
@@ -278,48 +308,21 @@ class KasaTool(Tool):
             declined="Device action cancelled by user.",
         )
 
+    async def unavailable(self, input: ToolInput) -> str:
+        """Why this call cannot run as asked, so no card is raised for it (CODING_STYLE §7.5).
+
+        Asked to switch a lamp off with the lamp named in a parameter this tool does not have,
+        north showed "`off` on **all discovered lights**", and once that was approved the tool
+        refused it: a power action always names its device.
+        """
+        return _refusal(input.params)
+
     async def run(self, input: ToolInput) -> ToolOutput:
+        if why := _refusal(input.params):
+            return ToolOutput(success=False, error=why)
         action = _action_of(input.params)
-        if not action:
-            return ToolOutput(success=False, error="Parameter 'action' is required.")
-
-        # An action nobody defined is that, and saying so: the device guard below
-        # runs first and answered "device is required" for `dim`, `banana` and
-        # every other unknown word alike.
-        if action not in _KNOWN_ACTIONS:
-            return ToolOutput(
-                success=False,
-                error=f"Unknown action {action!r}. Valid actions: {', '.join(sorted(_KNOWN_ACTIONS))}.",
-            )
-
         target = str(input.params.get("device", "")).strip().lower()
-        # Broad lighting requests are common in natural language. Allow
-        # feature controls without a target to apply to all discovered
-        # devices; keep power actions target-specific to avoid surprises with
-        # plugs and switches.
-        broad_actions = {"brightness", "color", "color_temp", "scene"}
-        # `list` names nothing because it changes nothing - and it is the action
-        # the error below tells the reader to run, so requiring a device for it
-        # made the only route out of the error the error itself.
-        if action != "list" and action not in broad_actions and not target:
-            # Require an explicit target so a control action can never fan out
-            # to every device on the network.
-            return ToolOutput(
-                success=False,
-                error=(
-                    "Parameter 'device' is required for control actions. "
-                    "Use action='list' to see available devices, then target one by alias or IP."
-                ),
-            )
-        if action == "scene" and str(input.params.get("scene", "")).strip().lower() not in SCENES:
-            return ToolOutput(
-                success=False,
-                error=f"Unknown scene {input.params.get('scene')!r}. Available: {', '.join(sorted(SCENES))}.",
-            )
-        try:
-            change = _change_for(action, input.params)
-        except ValueError as exc:
-            return ToolOutput(success=False, error=str(exc))
+        change = _change_for(action, input.params)
 
         found = await self.devices.devices()
         if not found:
