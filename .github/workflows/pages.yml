@@ -1,0 +1,44 @@
+# north's landing page on GitHub Pages: https://kushagrabainsla.github.io/north/
+# It is site/ with the icons and font north already keeps, put together by
+# scripts/build_site.sh. Pages must be set to deploy from GitHub Actions (Settings, Pages).
+name: Landing page
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "web/public/**"
+      - "web/src/fonts/**"
+      - "scripts/build_site.sh"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/build_site.sh _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

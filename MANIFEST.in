@@ -10,6 +10,7 @@ prune docs
 prune evals
 prune experiments
 prune scripts
+prune site
 prune tests
 prune web/src
 prune web/public

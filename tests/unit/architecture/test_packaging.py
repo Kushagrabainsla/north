@@ -120,6 +120,7 @@ def test_vendored_frontend_dependencies_stay_out_of_the_sdist() -> None:
         "evals",
         "experiments",
         "scripts",
+        "site",
         "tests",
         "web/src",
         "web/public",

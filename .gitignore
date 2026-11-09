@@ -42,3 +42,6 @@ web/vite.config.d.ts
 # The compiled web client is shipped with the Python package.
 !web/dist/
 !web/dist/**
+
+# The landing page as scripts/build_site.sh assembles it
+_site/

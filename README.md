@@ -4,6 +4,8 @@
 
 <p align="center">A digital version of you that learns how you think and earns autonomy over time.</p>
 
+<p align="center"><a href="https://kushagrabainsla.github.io/north/">kushagrabainsla.github.io/north</a></p>
+
 ## Install
 
 ```bash
