@@ -364,3 +364,18 @@ async def test_every_connection_is_released_when_north_stops() -> None:
     await devices.aclose()
 
     assert all(bulb.closed for bulb in bulbs)
+
+
+async def test_a_bulb_that_logs_in_the_newer_way_is_answered_that_way() -> None:
+    """Kasa bulbs of the older kind (KL125, KL135) on newer firmware announce login version 2.
+    python-kasa 0.10 answered them with the version 1 handshake, which they refuse; 0.11 fixed it
+    (python-kasa #1731), and pyproject.toml asks for 0.12 so an install never goes back."""
+    from kasa import DeviceConfig, DeviceConnectionParameters, DeviceEncryptionType, DeviceFamily
+    from kasa.device_factory import get_protocol
+
+    newer = DeviceConnectionParameters(DeviceFamily.IotSmartBulb, DeviceEncryptionType.Klap, login_version=2)
+    protocol = get_protocol(DeviceConfig(host="10.0.0.47", connection_type=newer))
+    try:
+        assert type(protocol._transport).__name__ == "KlapTransportV2"
+    finally:
+        await protocol.close()
