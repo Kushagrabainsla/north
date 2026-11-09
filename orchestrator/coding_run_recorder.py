@@ -57,6 +57,9 @@ class AgentRunRecorder:
     async def remember(self, run_id: str, state: Mapping[str, Any]) -> None:
         await self._store.merge_provider_state(run_id, dict(state))
 
+    async def branches(self, task_id: str) -> list[WorkTree]:
+        return [tree for run in await self._store.list_for_task(task_id) if (tree := _worktree(run.provider_state))]
+
     async def record(self, run_id: str, task_id: str, event: str, data: Mapping[str, Any]) -> None:
         await self._store.record_event(run_id, task_id, event, dict(data))
 

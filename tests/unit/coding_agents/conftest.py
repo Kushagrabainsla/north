@@ -77,6 +77,12 @@ class MemoryRecorder:
         self.calls.append("finish")
         self.finished.append((run_id, outcome))
 
+    async def branches(self, task_id: str) -> list[WorkTree]:
+        runs = [run.run_id for run in self.started if run.task_id == task_id]
+        keys = ("worktree", "branch", "base_sha", "base")
+        trees = [[self.state.get(run_id, {}).get(key) for key in keys] for run_id in runs]
+        return [WorkTree(*tree) for tree in trees if all(tree)]
+
 
 @pytest.fixture
 def recorder() -> MemoryRecorder:
@@ -94,6 +100,7 @@ class MemoryWorkspaces:
         self.finish_error: Exception | None = None
         self.in_place: set[str] = set()  # branches whose changes are already in the working tree
         self.dropped: list[str] = []
+        self.gone: set[str] = set()  # branches deleted: applied, or with nothing on them
 
     async def create(self, workspace: str, label: str) -> WorkTree:
         path = self._root / label
@@ -106,10 +113,16 @@ class MemoryWorkspaces:
         self.finished.append(tree)
         if self.finish_error:
             raise self.finish_error
-        return WorkChange(tree, self.change_files) if self.change_files else None
+        if not self.change_files:
+            self.gone.add(tree.branch)
+            return None
+        return WorkChange(tree, self.change_files)
 
     async def drop_if_in_place(self, tree: WorkTree) -> bool:
+        if tree.branch in self.gone:
+            return True
         if tree.branch in self.in_place:
+            self.gone.add(tree.branch)
             self.dropped.append(tree.branch)
             return True
         return False

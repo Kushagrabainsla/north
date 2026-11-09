@@ -238,3 +238,17 @@ class TestAfterARestart:
         await recorder.reconcile()
 
         assert (await recorder.live_run("t1", AGENT, "plan")).session_id == "s"
+
+
+async def test_a_tasks_copies_are_listed_from_the_store_oldest_first(store, tmp_path) -> None:
+    """Which branches a task's rounds left was kept in memory, and lost when north restarted."""
+    copy = {"provider": "claude_code", "mode": "edit", "base_sha": "abc", "base": "/repo"}
+    recorder = AgentRunRecorder(store)
+    for run_id, task_id in (("run-1", "t1"), ("run-2", "t2"), ("run-3", "t1")):
+        await recorder.start(_start(run_id, task_id))
+        await recorder.remember(run_id, copy | {"worktree": f"/wt/{run_id}", "branch": f"north/wt-{run_id}"})
+    await recorder.start(_start("run-4", "t1"))  # a plan run: no copy
+
+    after_a_restart = AgentRunRecorder(AgentRunStore(tmp_path / "tasks.db"))  # the file the fixture opened
+
+    assert [tree.branch for tree in await after_a_restart.branches("t1")] == ["north/wt-run-1", "north/wt-run-3"]

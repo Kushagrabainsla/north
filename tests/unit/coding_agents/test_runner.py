@@ -409,12 +409,15 @@ class ScriptedLander:
         self.calls: list = []
         self.hang = hang
         self.state = state
+        self.workspaces: MemoryWorkspaces | None = None  # told an applied branch is gone, as LandingDesk deletes it
 
     async def land(self, change, verification, task_id, review=None):
         self.calls.append((change, verification, task_id))
         self.review = review
         if self.hang:
             await asyncio.sleep(3600)
+        if self.state is LandingState.APPLIED and self.workspaces is not None:
+            self.workspaces.gone.add(change.tree.branch)
         return Landing(self.state)
 
 
@@ -718,6 +721,7 @@ class TestAskingNorth:
 class TestBranchesLeftByEarlierRounds:
     def _setup(self, tmp_path, recorder, lander):
         workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
+        lander.workspaces = workspaces
         backend = ScriptedBackend()
         backend.recorder = recorder
         runner = CodingRunner(
@@ -778,6 +782,22 @@ class TestBranchesLeftByEarlierRounds:
         other = await self._edit(runner, task_id="t2")
 
         assert other.earlier_branches == ()
+
+    async def test_a_restart_between_rounds_forgets_no_branch(self, tmp_path, recorder) -> None:
+        """Which branches a task's rounds left was kept in the runner's memory: after north restarted,
+        the next round named none of them, and the ones already in place were never deleted."""
+        lander = ScriptedLander(state=LandingState.KEPT)
+        before, workspaces = self._setup(tmp_path, recorder, lander)
+        first = await self._edit(before)
+        kept = await self._edit(before)
+        workspaces.in_place.add(first.change.tree.branch)
+
+        after, _ = self._setup(tmp_path, recorder, lander)  # north restarted; the run record is what remains
+        after._workspaces = workspaces
+        third = await self._edit(after)
+
+        assert workspaces.dropped == [first.change.tree.branch]
+        assert third.earlier_branches == (kept.change.tree.branch,)
 
 
 async def test_the_runner_says_why_no_agent_can_take_a_run(recorder: MemoryRecorder) -> None:
