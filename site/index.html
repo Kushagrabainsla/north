@@ -122,6 +122,17 @@
     ol.steps p { color: var(--muted); font-size: 13.5px; margin: 0 0 12px; }
     pre { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; font: inherit; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+    /* The command reference */
+    .commands { columns: 2; column-gap: 14px; }
+    .commands-group { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 22px; min-width: 0; break-inside: avoid; margin-bottom: 14px; }
+    .commands-group h3 { color: var(--accent); font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 16px; }
+    .commands-group dl { margin: 0; display: grid; gap: 4px 0; }
+    .commands-group dt { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+    .commands-group dt:not(:first-child) { margin-top: 12px; }
+    .commands-group dd { margin: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    dd code { white-space: nowrap; }
+    p code, dd code, li code { color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: .95em; }
+
     footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--faint); font-size: 12.5px; }
     footer .bar { height: auto; flex-wrap: wrap; gap: 14px; }
     footer a { color: var(--muted); }
@@ -132,6 +143,7 @@
       .mode:nth-child(n + 3) { border-top: 1px solid var(--line); }
       .split { grid-template-columns: 1fr; gap: 32px; }
       ol.steps { grid-template-columns: 1fr; }
+      .commands { columns: 1; }
     }
     @media (max-width: 560px) {
       :root { --gutter: 16px; }
@@ -153,6 +165,7 @@
         <a href="#what">What it does</a>
         <a href="#control">You decide</a>
         <a href="#start">Get started</a>
+        <a href="#commands">Commands</a>
         <a class="github" href="https://github.com/Kushagrabainsla/north">GitHub</a>
       </nav>
     </div>
@@ -236,10 +249,89 @@
         <h2>Running in a few minutes.</h2>
         <p class="intro">north is built for macOS, and most of it runs on Linux too. The installer brings everything it needs.</p>
         <ol class="steps">
-          <li><h3>Install</h3><p>The installer sets up <code>uv</code> and installs north from GitHub.</p><pre>curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash</pre></li>
-          <li><h3>Open the dashboard</h3><p>Setup walks you through each connection: AI providers, coding agents, browser profiles and Telegram.</p><pre>north web</pre></li>
+          <li><h3>Install</h3><p>The installer sets up <code>uv</code>, installs north from GitHub, and asks for an OpenRouter key, which you can skip.</p><pre>curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash</pre></li>
+          <li><h3>Open the dashboard</h3><p>Setup walks you through each connection: AI providers, coding agents, browser profiles and Telegram. They all stay in Settings, Connections.</p><pre>north web</pre></li>
           <li><h3>Or stay in the terminal</h3><p>The same north, in a terminal interface. Type <code>/help</code> for its commands.</p><pre>north</pre></li>
         </ol>
+      </div>
+    </section>
+
+    <section id="commands">
+      <div class="wrap">
+        <p class="eyebrow">Commands</p>
+        <h2>Everything, from the terminal.</h2>
+        <p class="intro">What the dashboard does, the <code>north</code> command does too. In the terminal interface, type <code>/help</code> for its own commands.</p>
+        <div class="commands">
+          <div class="commands-group">
+            <h3>Run north</h3>
+            <dl>
+            <dt><code>north</code></dt><dd>Open the terminal UI (starts the server if needed)</dd>
+            <dt><code>north --yolo</code></dt><dd>Switch north to yolo: every approval is yes, until you set another mode</dd>
+            <dt><code>north start</code></dt><dd>Start the server and the terminal UI (<code>--no-chat</code> for the server only, <code>-w &lt;dir&gt;</code>, <code>--host</code>, <code>--port</code>, <code>--docker</code>)</dd>
+            <dt><code>north web</code></dt><dd>Start the server if needed and open the dashboard (<code>--no-open</code>, <code>-w &lt;dir&gt;</code>)</dd>
+            <dt><code>north stop</code></dt><dd>Stop the server (<code>--all</code> stops every north process, <code>--docker</code>)</dd>
+            <dt><code>north status</code></dt><dd>Server health, approval mode, models, providers, browser and agents</dd>
+            <dt><code>north setup</code></dt><dd>Enter OpenRouter, Groq and Gemini keys and Telegram in the terminal</dd>
+            <dt><code>north update</code></dt><dd>Install the latest north from GitHub main and restart it (<code>--source local --path &lt;dir&gt;</code> for a checkout, <code>--no-restart</code>)</dd>
+            <dt><code>north reset</code></dt><dd>Wipe north&#x27;s data, keeping keys and logins (<code>--all</code> removes those too)</dd>
+            </dl>
+          </div>
+          <div class="commands-group">
+            <h3>Work</h3>
+            <dl>
+            <dt><code>north task &quot;...&quot;</code></dt><dd>Submit a task and stream it live (<code>-w &lt;dir&gt;</code>)</dd>
+            <dt><code>north tasks</code></dt><dd>List active tasks</dd>
+            <dt><code>north stream &lt;id&gt;</code></dt><dd>Raw events for a task</dd>
+            <dt><code>north cancel &lt;id&gt;</code></dt><dd>Stop a task or job (<code>--all</code> stops everything)</dd>
+            <dt><code>north dictate</code></dt><dd>Push-to-talk: hold Right Option+Space, speak, release (<code>--hotkey</code>)</dd>
+            <dt><code>north agents</code> / <code>north agent list</code></dt><dd>List agents</dd>
+            <dt><code>north agent run &lt;name&gt; &quot;&lt;task&gt;&quot;</code></dt><dd>Run one agent directly, without the planner</dd>
+            <dt><code>north agent create</code></dt><dd>Scaffold a new agent</dd>
+            </dl>
+          </div>
+          <div class="commands-group">
+            <h3>Schedules and history</h3>
+            <dl>
+            <dt><code>north cron</code> / <code>north cron list</code></dt><dd>List schedules</dd>
+            <dt><code>north cron add &lt;flow&gt; --hour 7</code></dt><dd>Run a flow on a schedule, in local time (<code>--minute</code>, <code>--days weekdays</code>, <code>--name</code>, <code>--label</code>)</dd>
+            <dt><code>north cron set &lt;name&gt;</code></dt><dd>Change a schedule (<code>--hour</code>, <code>--minute</code>, <code>--days</code>, <code>--flow</code>, <code>--pause</code>, <code>--resume</code>)</dd>
+            <dt><code>north cron rm &lt;name&gt;</code></dt><dd>Remove a schedule</dd>
+            <dt><code>north jobs</code></dt><dd>List jobs (<code>--status</code>, <code>-n</code>)</dd>
+            <dt><code>north job cancel &lt;id&gt;</code></dt><dd>Cancel a job</dd>
+            <dt><code>north ledger</code></dt><dd>Recent audit log entries (<code>--task &lt;id&gt;</code>, <code>--agent</code>, <code>-n</code>)</dd>
+            <dt><code>north ledger search &quot;&lt;text&gt;&quot;</code></dt><dd>Search the audit log</dd>
+            <dt><code>north metrics</code></dt><dd>Performance metrics (<code>-p &lt;days&gt;</code>)</dd>
+            </dl>
+          </div>
+          <div class="commands-group">
+            <h3>Memory</h3>
+            <dl>
+            <dt><code>north context show &lt;doc&gt;</code></dt><dd>Show a context document (<code>user</code>, <code>north_stars</code>, <code>judgement_rules</code>, <code>soul</code>)</dd>
+            <dt><code>north context edit &lt;doc&gt;</code></dt><dd>Edit it in <code>$EDITOR</code> and save it to North (<code>north_stars</code>, <code>judgement_rules</code>, <code>soul</code>; <code>user</code> is built from your facts)</dd>
+            <dt><code>north context add --text &quot;...&quot;</code></dt><dd>Add to your context (<code>--file &lt;path&gt;</code>, <code>--url &lt;url&gt;</code>)</dd>
+            </dl>
+          </div>
+          <div class="commands-group">
+            <h3>Models</h3>
+            <dl>
+            <dt><code>north auth login</code></dt><dd>Sign in to OpenAI Codex in the browser (<code>north auth status</code>, <code>north auth logout</code>)</dd>
+            <dt><code>north models</code></dt><dd>Models north can reach</dd>
+            <dt><code>north routing</code></dt><dd>Why each part of a task ran on its model (<code>--task &lt;id&gt;</code>)</dd>
+            <dt><code>north speed</code></dt><dd>Measured speed of each model</dd>
+            <dt><code>north limits</code></dt><dd>Rate limits and cooldowns, with reset times</dd>
+            <dt><code>north inference costs</code></dt><dd>Cost summary (<code>--period day|week|month</code>)</dd>
+            </dl>
+          </div>
+          <div class="commands-group">
+            <h3>Settings</h3>
+            <dl>
+            <dt><code>north config list</code></dt><dd>All settings and their values</dd>
+            <dt><code>north config get &lt;key&gt;</code></dt><dd>Read one</dd>
+            <dt><code>north config set &lt;key&gt; &lt;value&gt;</code></dt><dd>Change one, saved to <code>~/.north/.env</code></dd>
+            <dt><code>north tools confidence</code></dt><dd>Tool confidence per agent</dd>
+            </dl>
+          </div>
+        </div>
       </div>
     </section>
   </main>
