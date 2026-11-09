@@ -36,7 +36,7 @@ _TIMEOUT_SECONDS = 12.0
 # How long a found set of devices is trusted before discovery runs again: a bulb that
 # moved to another address, or one plugged in since, is found within this.
 _STALE_SECONDS = 300.0
-_NOTHING_FOUND = "kasa discover found nothing on this network"
+_NOTHING_FOUND = "No Kasa device answers on this network. Is this computer on the same Wi-Fi as your lights?"
 
 
 class NotAnswering(Exception):
@@ -61,13 +61,20 @@ class KasaDevices:
         self._found_at: float | None = None
         self._heard: set[str] = set()  # the addresses that answered the last look round the network
         self._looked = ""  # what that look said when it heard nothing: the network was empty, or it failed
+        self._answered_at = 0.0  # when a device last answered a read or a change
         self._problem = ""
         self._locked: list[str] = []  # devices found that refused every TP-Link login north has
         self._finding = asyncio.Lock()
 
     @property
     def problem(self) -> str:
-        """Why devices could not be found or reached, or "" when nothing is wrong."""
+        """Why devices could not be found or reached, or "" when nothing is wrong.
+
+        A look that heard nothing is forgotten once a device answers again: back on the network,
+        the lamp switched off and the page still said no Kasa device answered.
+        """
+        if not self._heard and self._found_at is not None and self._answered_at > self._found_at:
+            return ""
         return self._problem
 
     @property
@@ -102,10 +109,13 @@ class KasaDevices:
         sending = time.monotonic()
         try:
             await asyncio.wait_for(_send(dev, sent), _TIMEOUT_SECONDS)
-        except (TimeoutError, OSError, ConnectionError) as first:
+        except Exception as first:
+            if not _not_reached(first):
+                raise
             logger.info("kasa: %s did not answer at %s (%s); looking for it on the network", device_id, dev.host, first)
             dev = await self._reach_again(device_id, since=sending)
             await asyncio.wait_for(_send(dev, sent), _TIMEOUT_SECONDS)
+        self._answered_at = time.monotonic()
         if not confirm:
             return describe(device_id, dev, self._names.get(device_id))
         await asyncio.wait_for(dev.update(), _TIMEOUT_SECONDS)
@@ -176,10 +186,11 @@ class KasaDevices:
             raise NotAnswering(f"not heard on the network (it was at {stale.host}). Is it switched on at the wall?")
         if self._looked and self._looked != _NOTHING_FOUND:
             raise NotAnswering(f"did not answer at {stale.host}, and north could not look for it: {self._looked}")
-        raise NotAnswering("no Kasa device answers on this network. Is this computer on the same Wi-Fi as your lights?")
+        raise NotAnswering(_NOTHING_FOUND)
 
     async def _read(self, device_id: str) -> None:
         await asyncio.wait_for(self._devices[device_id].update(), _TIMEOUT_SECONDS)
+        self._answered_at = time.monotonic()
 
     async def _reconnect(self, device_id: str) -> Any:
         stale = self._devices[device_id]
@@ -315,6 +326,26 @@ def _why_not(pairs: list[tuple[str, str]], diagnostic: str, errors: list[str], l
     if errors:
         parts.append(f"Not answering: {'; '.join(errors)}")
     return " ".join(parts)
+
+
+def _not_reached(error: BaseException) -> bool:
+    """Whether *error* means the device was not reached, rather than that it answered and refused.
+
+    python-kasa wraps every failed request to an older bulb in its own KasaException ("Communication
+    error on smartlife.iot.smartbulb.lightingservice:transition_light_state"), a refused connection
+    too, so catching only Python's own errors let those through and north never looked for the bulb.
+    A device error anywhere beneath it is the device answering.
+    """
+    from kasa.exceptions import DeviceError, KasaException
+
+    chain: list[BaseException] = []
+    cause: BaseException | None = error
+    while cause is not None and cause not in chain:
+        chain.append(cause)
+        cause = cause.__cause__
+    if any(isinstance(link, DeviceError) for link in chain):
+        return False
+    return isinstance(error, (TimeoutError, OSError, ConnectionError, KasaException))
 
 
 def _refused_login(error: BaseException) -> bool:

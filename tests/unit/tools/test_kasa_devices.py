@@ -10,6 +10,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from kasa.exceptions import DeviceError, KasaException
 
 from config import secret_store
 from tests.unit.tools.kasa_fakes import FakeBulb, FakeNetwork
@@ -206,7 +207,7 @@ async def test_a_bulb_given_a_new_address_is_reached_there() -> None:
     ("others", "why"),
     [
         (True, r"not heard on the network \(it was at 10\.0\.0\.36\)\. Is it switched on at the wall\?"),
-        (False, r"no Kasa device answers on this network\. Is this computer on the same Wi-Fi as your lights\?"),
+        (False, r"No Kasa device answers on this network\. Is this computer on the same Wi-Fi as your lights\?"),
     ],
 )
 async def test_a_bulb_heard_nowhere_says_what_to_check(others: bool, why: str) -> None:
@@ -220,6 +221,61 @@ async def test_a_bulb_heard_nowhere_says_what_to_check(others: bool, why: str) -
 
     with pytest.raises(kasa_devices.NotAnswering, match=f"^{why}$"):
         await devices.apply(entries["Desk lamp"]["id"], LightChange(on=True))
+
+
+def _wrapped(cause: Exception):
+    """A request as python-kasa fails it for an older bulb: its own error, with what happened beneath."""
+
+    async def send(state):
+        try:
+            raise cause
+        except Exception as error:
+            raise KasaException("Communication error on smartlife.iot.smartbulb.lightingservice") from error
+
+    return send
+
+
+async def test_a_refused_connection_python_kasa_reports_as_its_own_error_is_looked_for_too() -> None:
+    """Live, with the bulb gone, the page said "Communication error on ...", and north never looked for it."""
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    network = FakeNetwork(lamp)
+    devices = _devices(network)
+    [entry] = await devices.devices()
+    lamp.light.set_state = _wrapped(ConnectionRefusedError(61, "Connection refused"))
+    network.bulbs = {}
+
+    with pytest.raises(kasa_devices.NotAnswering, match="^No Kasa device answers on this network"):
+        await devices.apply(entry["id"], LightChange(on=True))
+    assert network.discoveries == 2
+
+
+async def test_a_bulb_that_answers_with_an_error_is_not_looked_for() -> None:
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    network = FakeNetwork(lamp)
+    devices = _devices(network)
+    [entry] = await devices.devices()
+    lamp.light.set_state = _wrapped(DeviceError("the bulb says no"))
+
+    with pytest.raises(KasaException, match="Communication error"):
+        await devices.apply(entry["id"], LightChange(on=True))
+    assert network.discoveries == 1
+
+
+async def test_a_look_that_heard_nothing_is_forgotten_once_a_bulb_answers_again() -> None:
+    """Back on the network, the lamp switched off, and the page still said no Kasa device answered."""
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    network = FakeNetwork(lamp)
+    devices = _devices(network)
+    [entry] = await devices.devices()
+    lamp.down, network.bulbs, network.diagnostic = True, {}, kasa_devices._NOTHING_FOUND
+    with pytest.raises(kasa_devices.NotAnswering):
+        await devices.apply(entry["id"], LightChange(on=True))
+    away = devices.problem
+    lamp.down = False  # the old connection answers again
+
+    await devices.apply(entry["id"], LightChange(on=False))
+
+    assert away.startswith("No Kasa device answers") and devices.problem == ""
 
 
 async def test_bulbs_that_stop_answering_together_share_one_look() -> None:
