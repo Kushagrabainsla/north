@@ -10,7 +10,9 @@ apart from the user's passwords.
 
 from __future__ import annotations
 
+import re
 import stat
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -123,6 +125,17 @@ def test_a_name_or_value_north_cannot_keep_is_refused_with_why() -> None:
     assert "lowercase" in secret_store.unusable("Open Weather", KEY)
     assert "at least 6" in secret_store.unusable("openweather", "short")
     assert secret_store.unusable("openweather", KEY) == ""
+
+
+def test_the_shortest_secret_is_said_as_the_store_takes_it() -> None:
+    """The changelog said 8 characters after the store came to take 6, as short as a TP-Link password."""
+    root = Path(__file__).parents[3]
+    form = re.search(r"SECRET_MIN_LENGTH = (\d+);", (root / "web/src/connections.tsx").read_text(encoding="utf-8"))
+    unreleased = (root / "CHANGELOG.md").read_text(encoding="utf-8").split("\n## [", 2)[1]
+    said = {int(n) for n in re.findall(r"A secret is at least (\d+) characters", unreleased)}
+
+    assert form is not None and int(form[1]) == secret_store.MIN_VALUE_LENGTH
+    assert said == {secret_store.MIN_VALUE_LENGTH}
 
 
 async def test_a_tool_north_wrote_gets_its_declared_secrets_and_its_card_names_them(saved) -> None:
