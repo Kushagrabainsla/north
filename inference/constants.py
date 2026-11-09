@@ -7,6 +7,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
+MISTRAL_BASE_URL = "https://api.mistral.ai/v1"
 
 # HTTP timeouts
 DEFAULT_TIMEOUT_SECONDS = 60.0

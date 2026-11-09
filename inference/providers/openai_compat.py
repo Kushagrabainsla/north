@@ -80,6 +80,40 @@ async def _aiter_sse_chunks(response: httpx.Response) -> AsyncIterator[dict]:
 _UPSTREAM_ERROR_REASONS = frozenset({"network_error", "error", "failed", "upstream_error"})
 
 
+def _parts(content: object) -> tuple[str, str]:
+    """An answer's text and its reasoning, from a string or from a list of parts.
+
+    The OpenAI format allows a message's content to be a list of parts, and Mistral sends a
+    reasoning model's answer that way: ``{"type": "thinking", "thinking": [{"type": "text", ...}]}``
+    and then ``{"type": "text", "text": ...}``. Read only as a string, a streamed list could not be
+    joined (TypeError) and a whole answer reached the caller as a list.
+    """
+    if isinstance(content, str):
+        return content, ""
+    if not isinstance(content, list):
+        return "", ""
+    text: list[str] = []
+    reasoning: list[str] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "thinking":
+            thought = part.get("thinking")
+            reasoning.append(thought if isinstance(thought, str) else _parts(thought)[0])
+        elif isinstance(part.get("text"), str):
+            text.append(part["text"])
+    return "".join(text), "".join(reasoning)
+
+
+def _split_parts(delta: dict) -> dict:
+    """*delta* with content sent as a list of parts split into its text and its reasoning."""
+    content = delta.get("content")
+    if not isinstance(content, list):
+        return delta
+    text, reasoning = _parts(content)
+    return {**delta, "content": text, "reasoning": (delta.get("reasoning") or "") + reasoning}
+
+
 def _parse_json_args(raw: str) -> dict:
     if not raw:
         return {}
@@ -183,7 +217,7 @@ class _ToolCallStream:
         if not choices:
             return
         choice = choices[0]
-        delta = choice.get("delta", {})
+        delta = _split_parts(choice.get("delta", {}))
         self._raise_if_upstream_failed(choice, delta)
         await self._add_reasoning(delta)
         await self._add_text(delta)
@@ -679,8 +713,11 @@ class OpenAICompatibleProvider:
     def _answer_of(self, choice: dict, model_id: str) -> tuple[str, str | None]:
         """The text and reasoning of a finished completion, one of which must be there."""
         message = choice.get("message", {})
-        reasoning = message.get("reasoning") or message.get("reasoning_content") or message.get("thought") or None
-        content = message.get("content") or reasoning or ""
+        text, thought = _parts(message.get("content"))
+        reasoning = (
+            message.get("reasoning") or message.get("reasoning_content") or message.get("thought") or thought or None
+        )
+        content = text or reasoning or ""
         if not content:
             raise ModelDegenerateError(model_id, self.name, reason="empty completion text and reasoning")
         return content, reasoning

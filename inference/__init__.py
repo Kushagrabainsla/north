@@ -37,6 +37,7 @@ from inference.models import (
 from inference.provider import Provider
 from inference.providers.gemini import GeminiRouter
 from inference.providers.groq import GroqRouter
+from inference.providers.mistral import MistralRouter
 from inference.providers.openrouter import OpenRouterRouter
 
 __all__ = [
@@ -51,6 +52,7 @@ __all__ = [
     "EmbedResponse",
     "GeminiRouter",
     "GroqRouter",
+    "MistralRouter",
     "InferenceError",
     "InferenceRecord",
     "InferenceRouter",

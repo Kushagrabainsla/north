@@ -15,6 +15,7 @@ from inference.providers.anthropic_provider import AnthropicProvider
 from inference.providers.gemini import GeminiRouter
 from inference.providers.groq import GroqRouter
 from inference.providers.local_embeddings import LocalEmbeddingProvider
+from inference.providers.mistral import MistralRouter
 from inference.providers.openai_codex import OpenAICodexProvider
 from inference.providers.opencode_zen import OpenCodeZenRouter
 from inference.providers.openrouter import OpenRouterRouter
@@ -138,6 +139,18 @@ PROVIDER_DEFINITIONS: tuple[ProviderDefinition, ...] = (
         setup_url="https://opencode.ai/auth",
         fallback_order=30,
         factory=OpenCodeZenRouter,
+    ),
+    ProviderDefinition(
+        id="mistral",
+        display_name="Mistral",
+        description="Mistral's models, and open-weight models it hosts such as GLM and DeepSeek",
+        auth_kind=AuthKind.API_KEY,
+        settings_field="mistral_api_key",
+        env_key="NORTH_MISTRAL_API_KEY",
+        # A console key: Mistral advises it over a Vibe plan key for programs like north.
+        setup_url="https://console.mistral.ai/api-keys",
+        fallback_order=32,
+        factory=MistralRouter,
     ),
     ProviderDefinition(
         id="openai_codex",
