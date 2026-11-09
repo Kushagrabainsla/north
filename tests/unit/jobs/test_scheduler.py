@@ -15,6 +15,19 @@ import jobs.scheduler as scheduler_module
 from jobs import CronEntry, CronScheduler, JobType, next_due_entry, next_firing, previous_firing
 from jobs.sqlite_processor import SQLiteJobProcessor
 
+
+async def _no_wait(_seconds: float) -> None:
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _no_real_waits(monkeypatch) -> None:
+    """The scheduler waits up to a minute for a slot to come due. These tests set the clock, so a real
+    wait only cost time: one test waited 10 s and another twice 60 s, two of the suite's four and a half minutes.
+    """
+    monkeypatch.setattr(scheduler_module.asyncio, "sleep", _no_wait)
+
+
 # CronEntry validation
 
 
@@ -263,17 +276,12 @@ async def test_slots_that_came_due_while_the_mac_slept_all_fire_on_wake(tmp_path
     assert len(await processor.list_jobs()) == 3  # waking twice never fires a slot twice
 
 
-async def _no_wait(_seconds: float) -> None:
-    return None
-
-
 def _late_reasons(jobs) -> dict[str, str]:
     return {(j.payload or {}).get("cron_entry"): (j.payload or {}).get("late_because", "") for j in jobs}
 
 
-async def test_a_slot_missed_while_the_computer_slept_says_so(tmp_path, monkeypatch) -> None:
+async def test_a_slot_missed_while_the_computer_slept_says_so(tmp_path) -> None:
     """Lid closed 01:16-08:58: the 07:00 briefing ran at 08:58 and was listed at 07:00, as if on time."""
-    monkeypatch.setattr(scheduler_module.asyncio, "sleep", _no_wait)
     processor = SQLiteJobProcessor(tmp_path / "jobs.db")
     news = CronEntry(name="news", agent="general", task="brief", hour=7, minute=0, tz="UTC")
     went_to_sleep = datetime(2026, 10, 17, 1, 16, tzinfo=UTC)
@@ -287,8 +295,7 @@ async def test_a_slot_missed_while_the_computer_slept_says_so(tmp_path, monkeypa
     assert _late_reasons(await processor.list_jobs()) == {"news": scheduler_module.ASLEEP}
 
 
-async def test_a_slot_fired_awake_and_on_time_gives_no_reason(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(scheduler_module.asyncio, "sleep", _no_wait)
+async def test_a_slot_fired_awake_and_on_time_gives_no_reason(tmp_path) -> None:
     processor = SQLiteJobProcessor(tmp_path / "jobs.db")
     news = CronEntry(name="news", agent="general", task="brief", hour=7, minute=0, tz="UTC")
     just_before = datetime(2026, 10, 15, 6, 59, 30, tzinfo=UTC)
