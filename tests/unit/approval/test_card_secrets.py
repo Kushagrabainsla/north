@@ -73,3 +73,46 @@ def test_a_secret_in_the_message_or_context_is_redacted() -> None:
     scrubbed = card.scrubbed()
     assert "abcdef123456" not in scrubbed.message
     assert "ghp_abcdefghijkl" not in scrubbed.context
+
+
+_TOOL_CODE = """import os
+
+import httpx
+
+from config.secret_store import secret
+
+
+class WeatherTool(Tool):
+    uses_secrets = ("openweather",)
+
+    def fetch(self, city: str, api_key: str) -> dict:
+        token = secret("openweather")
+        headers = {"Authorization": f"Bearer {token}"}
+        password: str = os.environ["WEATHER_PASSWORD"]
+        url = f"https://api.example.com/data?q={city}&api_key={api_key}"
+        return httpx.get(url, headers=headers, auth=("me", password)).json()"""
+
+
+def test_a_tools_code_on_its_card_is_shown_as_it_was_written() -> None:
+    """The card for a tool north wrote read `def fetch(self, city: str, api_key: [redacted] -> dict:` and
+    `headers = {"Authorization": [redacted]] {token}"}`: code that reads a secret is not one."""
+    message = f"Agent wants to create the 'weather' tool.\n\n```python\n{_TOOL_CODE}\n```"
+
+    assert _card(message=message).scrubbed().message == message
+
+
+def test_a_literal_secret_in_code_is_still_taken_out_and_the_code_still_reads() -> None:
+    code = (
+        'api_key = "sk_live_abcdef123456"\n'
+        'headers = {"Authorization": "Bearer abcdef1234567890"}\n'
+        'url = "https://api.example.com/data?api_key=abc123def456"'
+    )
+    arguments = '{"city": "Paris", "password": "hunter2000"}'
+    shell = "password: hunter2000"  # in YAML, the value is the password itself
+    card = _card(message=f"```python\n{code}\n```", context=f"```json\n{arguments}\n```\n```yaml\n{shell}\n```")
+
+    scrubbed = card.scrubbed()
+
+    assert "abcdef123456" not in scrubbed.message and "abc123def456" not in scrubbed.message
+    assert 'url = "https://api.example.com/data?api_key=[redacted]"' in scrubbed.message
+    assert "hunter2000" not in scrubbed.context and '"city": "Paris"' in scrubbed.context

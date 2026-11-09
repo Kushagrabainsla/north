@@ -68,8 +68,13 @@ _AUTH_HEADER_RE = re.compile(
     r"(?:(?:bearer|basic)\s+)?(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}\]]+)"
 )
 _SENSITIVE_QUERY_RE = re.compile(
-    r"(?ix)([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|pwd|secret|client[_-]?secret)=)[^&#\s]+"
+    r"(?ix)([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|pwd|secret|client[_-]?secret)=)[^&#\s\"']+"
 )
+# A fenced block of code, and its language.
+_FENCE_RE = re.compile(r"(```[ \t]*([\w+-]*)[^\n]*\n)(.*?)(\n```)", re.DOTALL)
+# Languages where a value without quotes is code - a name, a call, a type - and never a literal:
+# `api_key: str`, `token = os.environ["KEY"]`. In YAML or a shell, `password: hunter2` is the password.
+_EXPRESSION_LANGUAGES = frozenset({"python", "py", "json", "javascript", "js", "typescript", "ts", "tsx", "jsx"})
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
     r"""(?ix)
     (?P<prefix>
@@ -137,22 +142,48 @@ def redact(text: str) -> str:
     Keeps the surrounding text: "the api_key is abc123def" reads as
     "the [redacted]", which still tells a person what the sentence was about
     while leaving nothing to steal.
-    """
 
-    def assignment_replacement(match: re.Match[str]) -> str:
-        if REDACTED in match.group(0).lower():
+    In a fenced block of Python, JavaScript, TypeScript or JSON, only literal values
+    are taken out: there `api_key: str` and `f"Bearer {token}"` are code that reads a
+    secret, and redacting them made a tool's code on its approval card unreadable.
+    """
+    parts: list[str] = []
+    end = 0
+    for fence in _FENCE_RE.finditer(text):
+        opening, language, body, closing = fence.groups()
+        parts += [_redact(text[end : fence.start()], code=False), opening]
+        parts += [_redact(body, code=language.lower() in _EXPRESSION_LANGUAGES), closing]
+        end = fence.end()
+    return "".join([*parts, _redact(text[end:], code=False)])
+
+
+def _redact(text: str, *, code: bool) -> str:
+    """*text* with its secrets replaced; with *code*, a value that is not a literal stays, as code."""
+
+    def assignment(match: re.Match[str]) -> str:
+        expression = match.group("plain") is not None or "{" in (match.group("quoted") or "")
+        if REDACTED in match.group(0).lower() or (code and expression):
             return match.group(0)
         quote = match.group("quote") or ""
         return f"{match.group('prefix')}{quote}{REDACTED}{quote}"
 
+    def header(match: re.Match[str]) -> str:
+        value = match.group(0)[len(match.group(1)) :]
+        return match.group(0) if code and not value.startswith(("'", '"')) else f"{match.group(1)}{REDACTED}"
+
+    def query(match: re.Match[str]) -> str:
+        return match.group(0) if code and "{" in match.group(0) else f"{match.group(1)}{REDACTED}"
+
     text = _PRIVATE_KEY_RE.sub(REDACTED, text)
     text = _TELEGRAM_BOT_URL_RE.sub(r"\1[redacted]", text)
     text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]\2", text)
-    text = _SENSITIVE_QUERY_RE.sub(r"\1[redacted]", text)
-    text = _AUTH_HEADER_RE.sub(r"\1[redacted]", text)
+    text = _SENSITIVE_QUERY_RE.sub(query, text)
+    text = _AUTH_HEADER_RE.sub(header, text)
     text = _BEARER_RE.sub(r"\1\2[redacted]", text)
-    text = _SENSITIVE_ASSIGNMENT_RE.sub(assignment_replacement, text)
-    return CC_RE.sub(REDACTED, TOKEN_RE.sub(REDACTED, SECRET_RE.sub(REDACTED, text)))
+    text = _SENSITIVE_ASSIGNMENT_RE.sub(assignment, text)
+    if not code:  # a label followed by a bare value: in code, that value is a name
+        text = SECRET_RE.sub(REDACTED, text)
+    return CC_RE.sub(REDACTED, TOKEN_RE.sub(REDACTED, text))
 
 
 def redact_for_logging(value: object, *, key: str = "") -> object:
