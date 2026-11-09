@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import fnmatch
 import importlib.util
 import json
 import os
@@ -2169,22 +2170,72 @@ def stop(
     typer.secho("✓ Stopped.", fg=typer.colors.GREEN)
 
 
-def _move_entries(source: Path, names: tuple[str, ...], destination: Path) -> tuple[str, ...]:
-    """Move each named entry from *source* into *destination*; return those moved.
+_STOP_WAIT_SECONDS = 10
+# What a plain `north reset` keeps: the things that identify you to a provider.
+_RESET_KEEPS = frozenset({".env", "credentials", "secrets.json"})
+# What it deletes, by name. Anything named in neither survives and is listed. A list of what to
+# keep lost the new secrets.json: when this list is out of date, a stale file stays instead.
+_RESET_WIPES = (
+    "*.db",
+    "*.db-shm",
+    "*.db-wal",
+    "*.db.*",
+    "north.log*",
+    "north.pid",
+    "secret.key",
+    "settings.json",
+    "mcp.json",
+    "cooldowns.json",
+    "rate_limit_status.json",
+    "telegram_waits.json",
+    "docker-compose.yml",
+    "*.txt",
+    ".DS_Store",
+    "agents",
+    "backups",
+    "bin",
+    "browser",
+    "cache",
+    "context",
+    "context_archive",
+    "context_backup",
+    "flows",
+    "interview",
+    "learned",
+    "mutations",
+    "news",
+    "run",
+    "runtime",
+    "skills",
+    "smoke",
+    "tasks",
+    "tui_history",
+)
 
-    Moved rather than copied so restrictive file permissions - credentials are
-    written 0600 - survive the round trip. Names that are not present are
-    skipped, so a fresh install with no credentials is not an error.
-    """
-    destination.mkdir(parents=True, exist_ok=True)
-    moved: list[str] = []
-    for name in names:
-        entry = source / name
-        if not entry.exists():
+
+def _wipe_data(home: Path) -> list[str]:
+    """Delete north's data from *home*, keeping your keys; return the names of what it did not recognise."""
+    unrecognised = []
+    for entry in sorted(home.iterdir()):
+        if entry.name in _RESET_KEEPS:
             continue
-        shutil.move(str(entry), str(destination / name))
-        moved.append(name)
-    return tuple(moved)
+        if not any(fnmatch.fnmatch(entry.name, pattern) for pattern in _RESET_WIPES):
+            unrecognised.append(entry.name)
+        elif entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    return unrecognised
+
+
+def _stop_server(pid: int) -> None:
+    """Stop the server and wait for it, so it does not write files back while they are being wiped."""
+    import psutil
+
+    process = psutil.Process(pid)
+    process.terminate()
+    with contextlib.suppress(psutil.TimeoutExpired):
+        process.wait(timeout=_STOP_WAIT_SECONDS)
 
 
 @app.command("reset")
@@ -2200,15 +2251,8 @@ def reset(
     pass --all.
     """
     from config.settings import settings
-    from inference.codex_auth import CREDENTIALS_DIR_NAME
 
     north_home = settings.north_home
-
-    # What a plain reset keeps: the things that identify you to a provider.
-    # Everything else under north's home is data, which is what reset exists to
-    # wipe. `credentials/` is kept whole, so a provider added later survives
-    # without anyone having to remember to update this list.
-    preserved = (".env", CREDENTIALS_DIR_NAME)
 
     # What gets wiped
     if all:
@@ -2221,16 +2265,14 @@ def reset(
         typer.confirm("Are you sure?", abort=True)
 
     # Stop the server first
-    import signal
+    import psutil
 
     pid_path = north_home / "north.pid"
     if pid_path.exists():
-        try:
+        with contextlib.suppress(psutil.NoSuchProcess):
             pid = int(pid_path.read_text(encoding="utf-8").strip())
-            os.kill(pid, signal.SIGTERM)
+            _stop_server(pid)
             typer.echo(f"  Stopped server (pid {pid})")
-        except ProcessLookupError:
-            pass
 
     if all:
         shutil.rmtree(north_home, ignore_errors=True)
@@ -2238,17 +2280,13 @@ def reset(
         return
 
     # Selective wipe: keep what identifies you to a provider, delete the data.
-    staging = Path(tempfile.mkdtemp(dir=north_home.parent, prefix=".north-reset-"))
     try:
-        moved = _move_entries(north_home, preserved, staging)
-        shutil.rmtree(north_home, ignore_errors=True)
-        north_home.mkdir(parents=True, exist_ok=True)
-        _move_entries(staging, moved, north_home)
+        unrecognised = _wipe_data(north_home) if north_home.is_dir() else []
     except OSError as exc:
         typer.secho(f"Reset failed: {exc}", fg=typer.colors.RED, err=True)
-        typer.secho(f"Your credentials are safe in {staging} - move them back to {north_home}.", fg=typer.colors.YELLOW)
         raise typer.Exit(1) from exc
-    shutil.rmtree(staging, ignore_errors=True)
+    if unrecognised:
+        typer.echo(f"  Left in place, not north's data as far as it knows: {', '.join(unrecognised)}")
 
     typer.secho(
         "✓ Data wiped. API keys and provider logins kept. Run north start to begin fresh.", fg=typer.colors.GREEN

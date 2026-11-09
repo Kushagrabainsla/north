@@ -269,7 +269,8 @@ class UserInteraction:
         return card
 
     async def _surface(self, card: Card, event: CardEvent | None) -> None:
-        """Register *card* as waiting and show it on every channel that is wired."""
+        """Register *card* as waiting and show it on every channel that is wired, all from one scrubbed copy."""
+        card = card.scrubbed()
         self._store.add(card)
         if event is not None:
             await self._emit(card, event)

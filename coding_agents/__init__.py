@@ -24,6 +24,7 @@ from coding_agents.discovery import discover_backends
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
 from coding_agents.gate import Decision, Gate, GateSession, GateSessions, Judge, ToolRequest, Verdict
 from coding_agents.models import (
+    PAUSING_FAILURES,
     AskAccess,
     Availability,
     Denial,
@@ -67,6 +68,7 @@ __all__ = [
     "EventKind",
     "EventSink",
     "FailureKind",
+    "PAUSING_FAILURES",
     "FileDelta",
     "Gate",
     "GateAccess",

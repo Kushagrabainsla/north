@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from coding_agents.constants import DEFAULT_MAX_BUDGET_USD, DEFAULT_MAX_TURNS
@@ -36,6 +37,10 @@ class FailureKind(StrEnum):
     LIMIT = "limit"  # ran out of turns, budget or time
     CANCELLED = "cancelled"
     ERROR = "error"
+
+
+# Missing resources freeze a run; they do not fail it (CODING_STYLE 13.5). Its session and copy stay.
+PAUSING_FAILURES = frozenset({FailureKind.RESOURCE, FailureKind.AUTH})
 
 
 @dataclass(frozen=True)
@@ -85,7 +90,13 @@ class WorkTree:
     path: str
     branch: str
     base_sha: str
-    base: str  # the repository it was made from
+    base: str  # the top level of the repository it was made from
+    left_out: tuple[str, ...] = ()  # repositories nested in the folder, which the copy does not have
+
+    def start_in(self, chosen: str) -> str:
+        """Where in this copy the agent works: the folder of the repository the user chose."""
+        folder = Path(chosen).resolve()
+        return str(Path(self.path) / folder.relative_to(self.base)) if folder.is_relative_to(self.base) else self.path
 
 
 @dataclass(frozen=True)

@@ -28,7 +28,9 @@ class GitWorkspaces:
             tree = await manager.create(label)
         except WorktreeError as exc:
             raise CodingAgentError(str(exc)) from exc
-        return WorkTree(tree.path, tree.branch, tree.base_sha, tree.base)
+        made = WorkTree(tree.path, tree.branch, tree.base_sha, tree.base, tree.left_out)
+        Path(made.start_in(workspace)).mkdir(parents=True, exist_ok=True)  # git does not track an empty folder
+        return made
 
     async def diff(self, tree: WorkTree) -> str:
         manager = GitWorktreeManager(tree.base)
@@ -37,8 +39,12 @@ class GitWorkspaces:
         except WorktreeError as exc:
             raise CodingAgentError(str(exc)) from exc
 
-    async def finish(self, tree: WorkTree) -> WorkChange | None:
-        """Commit what the agent changed; when it changed nothing, remove the copy and its branch."""
+    async def finish(self, tree: WorkTree, *, keep_empty: bool = False) -> WorkChange | None:
+        """Commit what the agent changed; when the branch holds nothing, remove the copy and its branch.
+
+        Decided from the branch, not this attempt: a resumed run that adds nothing still has what the
+        earlier attempts committed. With *keep_empty* (a paused run) a copy with nothing on it stays too.
+        """
         manager = GitWorktreeManager(tree.base)
         copy = Worktree(base=tree.base, path=tree.path, branch=tree.branch, base_sha=tree.base_sha)
         try:
@@ -47,8 +53,10 @@ class GitWorkspaces:
                     f"the agent's isolated copy at {tree.path} was damaged ({reason}), so its changes could not be "
                     "saved. Its files are still there."
                 )
-            if not await manager.commit_changes(copy):
-                await manager.remove(copy, keep_branch=False)
+            await manager.commit_changes(copy)
+            if not await manager.has_changes(copy):
+                if not keep_empty:
+                    await manager.remove(copy, keep_branch=False)
                 return None
             files = await manager.changes(copy)
             diff = await manager.diff_text(copy)

@@ -11,7 +11,7 @@ import pytest
 from approval.approval_memory import ApprovalMemory
 from approval.approvals import Request
 from approval.interaction import UserInteraction
-from approval.models import Card, CardType
+from approval.models import Card, CardType, action_fingerprint
 from approval.policy import Action, ActionKind, ApprovalPolicy
 from approval.store import ApprovalStore
 from config.approval_mode import ApprovalMode
@@ -28,7 +28,9 @@ async def test_a_tool_card_carries_its_actions_identity(tmp_path: Path) -> None:
         await asyncio.sleep(0.01)
     waiting.cancel()
 
-    assert store.all()[0].action_key == action.describe()
+    card = store.all()[0]
+    assert card.action_key == action_fingerprint(action.agent, action.describe())
+    assert card.action_label == action.describe()
 
 
 @pytest.mark.asyncio

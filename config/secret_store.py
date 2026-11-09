@@ -12,6 +12,7 @@ agents' file tools never reach (CODING_STYLE §16.1.1).
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import re
 from collections.abc import Iterator
@@ -20,10 +21,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+
+from dotenv import dotenv_values
 
 from config.settings import settings
 
 FILE_NAME = "secrets.json"
+# The other places in north's home that hold a credential, named by a key ending like these.
+_ENV_FILE_NAME = ".env"
+_SERVER_KEY_NAME = "secret.key"
+_LOGINS_DIR_NAME = "credentials"
+_CREDENTIAL_KEY_RE = re.compile(r"(?i)(?:api[_-]?key|token|secret|password|passwd)$")
+_MIN_CREDENTIAL_LENGTH = 8
 # A name the model and the user can both say: lowercase letters, digits and underscores.
 NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 # As short as a TP-Link password may be. Images are left alone when values are taken out of
@@ -54,7 +64,9 @@ class SecretStore:
     """The secrets kept in *home*. Every read and write of `secrets.json` goes through here."""
 
     def __init__(self, home: Path) -> None:
+        self._home = home
         self._path = home / FILE_NAME
+        self._mask = _Mask((), None, {})
 
     def saved(self) -> list[SavedSecret]:
         """Every secret's name, note and when it was last set, by name."""
@@ -94,13 +106,54 @@ class SecretStore:
         return self.hide_in(text)
 
     def hide_in(self, value: Any) -> Any:
-        """*value* with every stored value taken out of each string in it, at any depth; the same object when none."""
-        known = [
-            (str(entry["value"]), f"[secret {name}]")
+        """*value* with every known credential taken out of each string in it, at any depth; the same object when none.
+
+        Known means your secrets, and the keys and logins in north's home: an error from a
+        provider's client quotes the key it sent, and the model and the log must not read it.
+        """
+        mask = self._current_mask()
+        return _hidden(value, mask) if mask.pattern else value
+
+    def _current_mask(self) -> _Mask:
+        """The mask for what the files hold now, rebuilt only when one of them changed: logs call this per line."""
+        stamp = self._stamp()
+        if stamp != self._mask.stamp:
+            self._mask = _Mask.of(stamp, self._known())
+        return self._mask
+
+    def _credential_files(self) -> list[Path]:
+        return [
+            self._path,
+            self._home / _ENV_FILE_NAME,
+            self._home / _SERVER_KEY_NAME,
+            *sorted((self._home / _LOGINS_DIR_NAME).glob("*")),
+        ]
+
+    def _stamp(self) -> tuple[tuple[str, int, int], ...]:
+        stamps = []
+        for path in self._credential_files():
+            with contextlib.suppress(OSError):
+                status = path.stat()
+                stamps.append((str(path), status.st_mtime_ns, status.st_size))
+        return tuple(stamps)
+
+    def _known(self) -> dict[str, str]:
+        """Every credential north holds, as {value: the label that replaces it}."""
+        known = {
+            str(entry["value"]): f"[secret {name}]"
             for name, entry in self._entries().items()
             if len(str(entry["value"])) >= MIN_VALUE_LENGTH
-        ]
-        return _hidden(value, known) if known else value
+        }
+        found = list(_labelled(dotenv_values(self._home / _ENV_FILE_NAME)))
+        with contextlib.suppress(OSError):
+            found.append(("north_server_key", (self._home / _SERVER_KEY_NAME).read_text(encoding="utf-8").strip()))
+        for path in sorted((self._home / _LOGINS_DIR_NAME).glob("*")):
+            with contextlib.suppress(OSError, ValueError):
+                found.extend(_labelled(json.loads(path.read_text(encoding="utf-8"))))
+        for name, value in found:
+            if len(value) >= _MIN_CREDENTIAL_LENGTH:
+                known.setdefault(value, f"[secret {name}]")
+        return known
 
     def _entries(self) -> dict[str, dict[str, Any]]:
         try:
@@ -119,15 +172,67 @@ class SecretStore:
         partial.replace(self._path)
 
 
-def _hidden(value: Any, known: list[tuple[str, str]]) -> Any:
+@dataclass(frozen=True)
+class _Mask:
+    """One pattern for every known credential, in each form it reaches text in."""
+
+    stamp: tuple[tuple[str, int, int], ...]
+    pattern: re.Pattern[str] | None
+    labels: dict[str, str]
+
+    @classmethod
+    def of(cls, stamp: tuple[tuple[str, int, int], ...], known: dict[str, str]) -> _Mask:
+        # Longest first: a credential inside a longer one must not leave the longer one's tail behind.
+        ordered = sorted(known, key=len, reverse=True)
+        labels = {f"s{index}": known[value] for index, value in enumerate(ordered)}
+        alternatives = (f"(?P<s{index}>{_any_form(value)})" for index, value in enumerate(ordered))
+        return cls(stamp, re.compile("|".join(alternatives)) if ordered else None, labels)
+
+    def hide(self, text: str) -> str:
+        if self.pattern is None:
+            return text
+        return self.pattern.sub(lambda match: self.labels[str(match.lastgroup)], text)
+
+
+def _any_form(value: str) -> str:
+    """A pattern for *value* as written, URL-encoded (either hex case) or JSON-escaped.
+
+    Exact-text matching missed a key with `+` or `/` once httpx quoted it in an error's URL, and
+    which characters a URL leaves alone depends on the part of the URL, so each one is optional.
+    """
+    return "".join(_char_forms(char) for char in value)
+
+
+def _char_forms(char: str) -> str:
+    forms = {re.escape(char), re.escape(json.dumps(char)[1:-1])}
+    encoded = quote(char, safe="")
+    if encoded != char:
+        forms.add(f"(?i:{encoded})")
+    if char == " ":
+        forms.add(r"\+")
+    return f"(?:{'|'.join(sorted(forms))})" if len(forms) > 1 else forms.pop()
+
+
+def _labelled(data: Any) -> Iterator[tuple[str, str]]:
+    """Each (key, value) in *data*, at any depth, whose key names a credential."""
+    if isinstance(data, list):
+        for item in data:
+            yield from _labelled(item)
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, str) and _CREDENTIAL_KEY_RE.search(str(key)):
+                yield str(key), value
+            else:
+                yield from _labelled(value)
+
+
+def _hidden(value: Any, mask: _Mask) -> Any:
     if isinstance(value, str):
-        for secret_value, label in known:
-            value = value.replace(secret_value, label)
-        return value
+        return mask.hide(value)
     if isinstance(value, dict):
-        return {key: item if key in _IMAGE_KEYS else _hidden(item, known) for key, item in value.items()}
+        return {key: item if key in _IMAGE_KEYS else _hidden(item, mask) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return type(value)(_hidden(item, known) for item in value)
+        return type(value)(_hidden(item, mask) for item in value)
     return value
 
 
@@ -142,9 +247,14 @@ def unusable(name: str, value: str) -> str:
     return ""
 
 
+@functools.lru_cache(maxsize=8)
+def _store_at(home: Path) -> SecretStore:
+    return SecretStore(home)
+
+
 def store() -> SecretStore:
-    """The secrets of this north, in its home."""
-    return SecretStore(settings.north_home)
+    """The secrets of this north, in its home. One object per home, so its mask is built once."""
+    return _store_at(settings.north_home)
 
 
 @contextlib.contextmanager

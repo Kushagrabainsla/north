@@ -7,6 +7,7 @@ too slow for a slider on the dashboard and far too slow to follow music.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -96,19 +97,30 @@ def test_the_login_is_passed_to_discovery() -> None:
     secret_store.store().save("kasa_email", "me@example.com")
     secret_store.store().save("kasa_password", "hunter2")
 
-    assert kasa_devices.credential_args() == ["--username", "me@example.com", "--password", "hunter2"]
+    assert kasa_devices.credential_env() == {"KASA_USERNAME": "me@example.com", "KASA_PASSWORD": "hunter2"}
 
 
 def test_no_login_configured_passes_none() -> None:
-    assert kasa_devices.credential_args() == []
+    assert kasa_devices.credential_env() == {}
 
 
-def test_the_password_never_reaches_an_error_message() -> None:
-    """Diagnostics quote the command they ran, and one of its arguments is a secret."""
-    redacted = kasa_devices.redacted(["kasa", "--username", "me@example.com", "--password", "hunter2", "discover"])
-    assert "hunter2" not in redacted
-    assert redacted[4] == "***"
-    assert "me@example.com" in redacted  # only the password is a secret
+def test_the_password_goes_by_the_environment_not_the_command_line(monkeypatch) -> None:
+    """Any program on the Mac can read a command's arguments with `ps`."""
+    secret_store.store().save("kasa_email", "me@example.com")
+    secret_store.store().save("kasa_password", "hunter2")
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs["env"]))
+        return subprocess.CompletedProcess(cmd, 1, "", "boom")
+
+    monkeypatch.setattr(kasa_devices.subprocess, "run", fake_run)
+
+    _, diagnostic = kasa_devices.run_discovery()
+
+    assert calls and all("hunter2" not in " ".join(cmd) for cmd, _ in calls)
+    assert all(env["KASA_PASSWORD"] == "hunter2" for _, env in calls)
+    assert "hunter2" not in diagnostic
 
 
 def test_unparseable_output_is_not_a_device() -> None:

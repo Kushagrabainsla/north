@@ -7,8 +7,41 @@ import logging
 import sys
 from io import StringIO
 
-from utils.logging import _JSONFormatter, _redact_existing_handlers, _RedactingFormatter
+from config import secret_store
+from utils.logging import _JSONFormatter, _redact_existing_handlers, _RedactingFormatter, configure_structured_logging
 from utils.secrets import REDACTED, redact, redact_for_logging
+
+
+def _logged(message: str) -> str:
+    record = logging.LogRecord("test", logging.WARNING, __file__, 1, message, None, None)
+    return _RedactingFormatter(_JSONFormatter(), secret_store.store().hide).format(record)
+
+
+def test_a_saved_secret_is_out_of_the_log_in_a_url_path_or_encoded() -> None:
+    secret_store.store().save("hue_key", "Ab+/cd=EF@hij")
+
+    logged = _logged("GET http://192.168.1.20/api/Ab%2B%2Fcd%3DEF%40hij/lights failed")
+
+    assert "Ab%2B" not in logged
+    assert "[secret hue_key]" in logged
+
+
+def test_every_query_value_is_out_of_the_log_and_the_names_stay() -> None:
+    logged = _logged("GET https://api.example.test/w?appid=plainvalue&units=metric failed")
+
+    assert "plainvalue" not in logged and "metric" not in logged
+    assert "appid=" in logged and "units=" in logged
+
+
+def test_libraries_that_log_whole_urls_are_quiet_below_a_warning(monkeypatch) -> None:
+    monkeypatch.setattr(logging.getLogger(), "handlers", list(logging.getLogger().handlers))
+    level = logging.getLogger().level
+
+    configure_structured_logging()
+
+    logging.getLogger().setLevel(level)
+    assert logging.getLogger("httpx").getEffectiveLevel() == logging.WARNING
+    assert logging.getLogger("httpcore").getEffectiveLevel() == logging.WARNING
 
 
 def test_telegram_bot_token_is_removed_from_exception_url() -> None:

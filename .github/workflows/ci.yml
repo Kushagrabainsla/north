@@ -242,3 +242,33 @@ jobs:
           NORTH_ENV: test
           NORTH_OPENROUTER_API_KEY: ci-dummy-key
         run: uv run pytest -x -q --tb=short -m "not integration"
+
+  test-macos:
+    # north runs on macOS and macOS answers some system calls differently: a
+    # cancel crashed there for 11 days and only the Linux suite was watching.
+    name: Test (pytest, macOS)
+    runs-on: macos-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run tests
+        env:
+          NORTH_HOME: /tmp/north-ci
+          NORTH_ENV: test
+          NORTH_OPENROUTER_API_KEY: ci-dummy-key
+        run: uv run pytest -q --tb=short -m "not integration"

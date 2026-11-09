@@ -18,8 +18,9 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,7 @@ class Worktree:
     path: str
     branch: str
     base_sha: str
+    left_out: tuple[str, ...] = ()  # repositories nested in the folder, which the copy does not have
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,11 @@ def _slug(label: str) -> str:
 
 _MAX_UNTRACKED_BYTES = 5_000_000
 
+# Before a branch with work on it goes, a hidden ref keeps that work reachable for a while: `git log` and
+# `git branch` do not show it, and it survives `branch -D` and garbage collection until it expires.
+_KEPT_REFS = "refs/north/kept"
+_KEPT_SECONDS = 14 * 24 * 3600
+
 # Pathspecs leaving out the caches an agent's runs write, which are never its change. A folder north had
 # set up with `git init` has no .gitignore, and the `__pycache__` of a test run was applied to it (#76, M24).
 _LEAVING_CACHES = tuple(f":(exclude,glob)**/{name}/**" for name in sorted(CACHE_DIRS))
@@ -121,14 +128,21 @@ async def _stage_agent_work(path: str) -> None:
     await _run_git(["add", "-A", "--", ".", *_LEAVING_CACHES], path)
 
 
-def _copy_untracked(base: Path, copy: Path, name: str) -> None:
-    """One untracked file of the user's into the copy, unless it is inside a `.git` or too big to carry."""
+def _copy_untracked(base: Path, copy: Path, name: str) -> bool:
+    """One untracked file of the user's into the copy, unless it is inside a `.git` or too big to carry.
+
+    False for a whole git repository nested in the folder, which git lists as one directory: it is
+    not north's to copy, and copying it as a file failed every edit run in that folder.
+    """
     source = base / name
+    if source.is_dir() and not source.is_symlink():
+        return False
     if ".git" in Path(name).parts or (not source.is_symlink() and source.stat().st_size > _MAX_UNTRACKED_BYTES):
-        return
+        return True
     target = copy / name
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target, follow_symlinks=False)
+    return True
 
 
 class GitWorktreeManager:
@@ -157,10 +171,18 @@ class GitWorktreeManager:
         return code == 0
 
     async def create(self, label: str) -> Worktree:
-        """Add a linked worktree on a fresh ``north/wt-<label>-<rand>`` branch."""
-        code, sha, err = await _run_git(["rev-parse", "HEAD"], self._base)
+        """Add a linked worktree on a fresh ``north/wt-<label>-<rand>`` branch.
+
+        The worktree's ``base`` is the repository's top level, whichever folder of it was chosen:
+        git commands run in a subfolder see only part of it, and `git apply` silently skips the rest.
+        """
+        code, top, err = await _run_git(["rev-parse", "--show-toplevel"], self._base)
         if code != 0:
-            raise WorktreeError(f"cannot resolve HEAD of {self._base}: {err.strip()}")
+            raise WorktreeError(f"cannot find the repository of {self._base}: {err.strip()}")
+        base = top.strip()
+        code, sha, err = await _run_git(["rev-parse", "HEAD"], base)
+        if code != 0:
+            raise WorktreeError(f"cannot resolve HEAD of {base}: {err.strip()}")
         base_sha = sha.strip()
 
         slug = _slug(label)
@@ -169,35 +191,47 @@ class GitWorktreeManager:
         await asyncio.to_thread(self._root.mkdir, parents=True, exist_ok=True)
         path = str((self._root / f"{slug}-{uniq}").resolve())
 
-        code, _, err = await _run_git(["worktree", "add", "-b", branch, path, base_sha], self._base)
+        code, _, err = await _run_git(["worktree", "add", "-b", branch, path, base_sha], base)
         if code != 0:
             raise WorktreeError(f"git worktree add failed: {err.strip()}")
-        base_sha = await self._seed(path, base_sha)
-        return Worktree(base=self._base, path=path, branch=branch, base_sha=base_sha)
+        created = Worktree(base=base, path=path, branch=branch, base_sha=base_sha)
+        try:
+            seeded_sha, left_out = await self._seed(created)
+        except BaseException as exc:
+            await self.remove(created, keep_branch=False)
+            if isinstance(exc, OSError):
+                raise WorktreeError(f"your files could not be carried into the copy: {exc}") from exc
+            raise
+        return replace(created, base_sha=seeded_sha, left_out=left_out)
 
-    async def _seed(self, path: str, base_sha: str) -> str:
-        """Start the copy from what the user's working tree holds now, not only from the last commit.
+    async def _seed(self, wt: Worktree) -> tuple[str, tuple[str, ...]]:
+        """Start the copy from what the user's working tree holds now; return its start and what was left out.
+
+        Not only from the last commit.
 
         A change an earlier run applied is uncommitted there. Without it a later run on the same task would
         be working on code that no longer matches, and could not see the fix it was asked to build on. What is
         carried over is committed as the copy's first commit, and that commit is the base the agent's own work
         is measured and applied against, so only the agent's edits ever go back.
         """
-        code, patch, err = await _run_git(["diff", "--binary", "HEAD"], self._base, binary=True)
+        path = wt.path
+        code, patch, err = await _run_git(["diff", "--binary", "HEAD"], wt.base, binary=True)
         if code != 0:
             raise WorktreeError(f"git diff failed: {err.strip()}")
-        code, listed, err = await _run_git(["ls-files", "--others", "--exclude-standard", "-z"], self._base)
+        code, listed, err = await _run_git(["ls-files", "--others", "--exclude-standard", "-z"], wt.base)
         if code != 0:
             raise WorktreeError(f"git ls-files failed: {err.strip()}")
         untracked = [name for name in listed.split("\0") if name]
         if not patch.strip() and not untracked:
-            return base_sha
+            return wt.base_sha, ()
         if patch.strip():
             code, _, err = await _run_git(["apply", "--binary", "--whitespace=nowarn"], path, input_data=patch)
             if code != 0:
                 raise WorktreeError(f"your uncommitted changes could not be carried into the copy: {err.strip()}")
+        left_out = []
         for name in untracked:
-            await asyncio.to_thread(_copy_untracked, Path(self._base), Path(path), name)
+            if not await asyncio.to_thread(_copy_untracked, Path(wt.base), Path(path), name):
+                left_out.append(name.rstrip("/"))
         await _run_git(["add", "-A"], path)
         code, _, err = await _run_git(
             [*_COMMIT_CONFIG, "commit", "--no-verify", "--allow-empty", "-m", "north: your uncommitted changes"], path
@@ -207,7 +241,7 @@ class GitWorktreeManager:
         code, sha, err = await _run_git(["rev-parse", "HEAD"], path)
         if code != 0:
             raise WorktreeError(f"cannot resolve the copy's start: {err.strip()}")
-        return sha.strip()
+        return sha.strip(), tuple(left_out)
 
     async def integrate(self, wt: Worktree, *, lock: asyncio.Lock | None = None) -> IntegrationResult:
         """Commit the worktree's changes and apply them back onto the base tree.
@@ -221,8 +255,7 @@ class GitWorktreeManager:
         await self.commit_changes(wt)
 
         # Nothing actually diverged from base -> clean up, report no change.
-        code, _, _ = await _run_git(["diff", "--quiet", wt.base_sha, "HEAD"], wt.path)
-        if code == 0:
+        if not await self.has_changes(wt):
             await self.remove(wt, keep_branch=False)
             return IntegrationResult(applied=False, changed=False, conflicted=False, branch=wt.branch, path=wt.path)
 
@@ -288,6 +321,11 @@ class GitWorktreeManager:
             raise WorktreeError(f"git commit in worktree failed: {err.strip()}")
         return True
 
+    async def has_changes(self, wt: Worktree) -> bool:
+        """Whether *wt*'s branch differs from the commit it branched from, however many attempts made it so."""
+        code, _, _ = await _run_git(["diff", "--quiet", wt.base_sha, "HEAD"], wt.path)
+        return code != 0
+
     async def changes(self, wt: Worktree) -> tuple[FileChange, ...]:
         """The files that differ between *wt*'s branch tip and the commit it branched from."""
         code, out, _ = await _run_git(["diff", "--numstat", wt.base_sha, "HEAD"], wt.path)
@@ -312,8 +350,11 @@ class GitWorktreeManager:
 
     async def _apply_checked(self, wt: Worktree, patch: bytes) -> bool:
         # Dry-run first so a conflict never leaves half-applied hunks or markers.
-        code, _, err = await _run_git(["apply", "--check", "--whitespace=nowarn"], wt.base, input_data=patch)
-        if code != 0:
+        # `--verbose` because a patch outside the current folder is skipped silently, and git still exits 0.
+        code, _, err = await _run_git(
+            ["apply", "--check", "--verbose", "--whitespace=nowarn"], wt.base, input_data=patch
+        )
+        if code != 0 or "Skipped patch" in err:
             logger.info(
                 "worktree integrate: patch from %s does not apply cleanly to %s (%s)",
                 wt.branch,
@@ -333,7 +374,24 @@ class GitWorktreeManager:
             logger.warning("worktree remove failed for %s: %s", wt.path, err.strip())
             await _run_git(["worktree", "prune"], wt.base)
         if not keep_branch:
+            await self._keep_way_back(wt)
             await _run_git(["branch", "-D", wt.branch], wt.base)
+
+    async def _keep_way_back(self, wt: Worktree) -> None:
+        """Leave a hidden ref at *wt*'s work before its branch goes, and expire old ones."""
+        code, _, _ = await _run_git(["diff", "--quiet", wt.base_sha, wt.branch], wt.base)
+        if code != 1:
+            return
+        await _run_git(["update-ref", f"{_KEPT_REFS}/{wt.branch.removeprefix('north/')}", wt.branch], wt.base)
+        listing = ["for-each-ref", "--format=%(refname) %(committerdate:unix)", _KEPT_REFS]
+        code, out, _ = await _run_git(listing, wt.base)
+        if code != 0:
+            return
+        oldest_kept = time.time() - _KEPT_SECONDS
+        for line in out.splitlines():
+            ref, committed = line.rsplit(" ", 1)
+            if int(committed) < oldest_kept:
+                await _run_git(["update-ref", "-d", ref], wt.base)
 
     async def drop_branch_if_in_place(self, branch: str, base_sha: str) -> bool:
         """Delete *branch* when everything it changed is already in the working tree; True when it is gone.

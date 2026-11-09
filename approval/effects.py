@@ -14,11 +14,13 @@ the same page, the same command. What counts as reaching someone or spending is
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
 from utils.db import open_db_connection
+from utils.secrets import redact
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,11 @@ CREATE TABLE IF NOT EXISTS completed_effects (
 """
 
 
+def _digest(action_key: str) -> str:
+    """What is stored for an action: it only has to match again, and its text can hold a credential."""
+    return hashlib.sha256(action_key.encode()).hexdigest()
+
+
 class EffectLog:
     """The irreversible actions each task has already carried out."""
 
@@ -45,7 +52,7 @@ class EffectLog:
     def done(self, task_id: str, action_key: str) -> bool:
         with open_db_connection(self._db_path) as conn:
             row = conn.execute(
-                "SELECT 1 FROM completed_effects WHERE task_id = ? AND action_key = ?", (task_id, action_key)
+                "SELECT 1 FROM completed_effects WHERE task_id = ? AND action_key = ?", (task_id, _digest(action_key))
             ).fetchone()
         return row is not None
 
@@ -55,7 +62,7 @@ class EffectLog:
                 conn.execute(
                     "INSERT OR IGNORE INTO completed_effects (task_id, action_key, summary, done_at) "
                     "VALUES (?, ?, ?, ?)",
-                    (task_id, action_key, summary[:500], datetime.now(UTC).isoformat()),
+                    (task_id, _digest(action_key), redact(summary)[:500], datetime.now(UTC).isoformat()),
                 )
         except Exception:
             # The action has already happened; failing it now because the

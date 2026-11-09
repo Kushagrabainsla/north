@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from orchestrator.worktree import GitWorktreeManager
+from orchestrator.worktree import GitWorktreeManager, WorktreeError
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -44,6 +45,76 @@ def repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def manager(repo: Path, tmp_path: Path) -> GitWorktreeManager:
     return GitWorktreeManager(str(repo), root=tmp_path / "worktrees")
+
+
+async def test_landing_from_a_subfolder_applies_edits_outside_it(repo: Path, tmp_path: Path) -> None:
+    """From a subfolder `git apply` skips other paths and exits 0, so the edit was lost and called applied."""
+    (repo / "sub").mkdir()
+    (repo / "sub" / "b.txt").write_text("two\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "sub"], repo)
+    manager = GitWorktreeManager(str(repo / "sub"), root=tmp_path / "worktrees")
+    wt = await manager.create("sub")
+    Path(wt.path, "README.md").write_text("edited at the root\n")
+    Path(wt.path, "sub", "b.txt").write_text("edited in the subfolder\n")
+
+    result = await GitWorktreeManager(wt.base).integrate(wt)
+
+    assert result.applied
+    assert (repo / "README.md").read_text() == "edited at the root\n"
+    assert (repo / "sub" / "b.txt").read_text() == "edited in the subfolder\n"
+
+
+async def test_a_patch_git_would_skip_is_not_called_applied(repo: Path, tmp_path: Path) -> None:
+    (repo / "sub").mkdir()
+    (repo / "sub" / "b.txt").write_text("two\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "sub"], repo)
+    manager = GitWorktreeManager(str(repo), root=tmp_path / "worktrees")
+    wt = await manager.create("x")
+    Path(wt.path, "README.md").write_text("edited\n")
+    await manager.commit_changes(wt)
+
+    applied = await manager.apply_back(replace(wt, base=str(repo / "sub")))
+
+    assert not applied
+
+
+async def test_a_copy_that_cannot_be_set_up_leaves_nothing_behind(
+    manager: GitWorktreeManager, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (repo / "untracked.txt").write_text("x")
+
+    def broken(*args: object) -> bool:
+        raise PermissionError("no")
+
+    monkeypatch.setattr("orchestrator.worktree._copy_untracked", broken)
+
+    with pytest.raises(WorktreeError, match="could not be carried"):
+        await manager.create("broken")
+
+    assert "north/wt-broken" not in _branches(repo)
+    assert not list((tmp_path / "worktrees").iterdir())
+
+
+async def test_work_on_a_deleted_branch_stays_reachable_for_a_while(manager: GitWorktreeManager, repo: Path) -> None:
+    wt = await manager.create("kept")
+    Path(wt.path, "README.md").write_text("work\n")
+    await manager.commit_changes(wt)
+
+    await manager.remove(wt, keep_branch=False)
+
+    refs = _git(["for-each-ref", "--format=%(refname)", "refs/north/kept"], repo).stdout
+    assert wt.branch.removeprefix("north/") in refs
+    assert wt.branch not in _branches(repo)
+
+
+async def test_a_copy_with_no_work_leaves_no_hidden_ref(manager: GitWorktreeManager, repo: Path) -> None:
+    wt = await manager.create("empty")
+
+    await manager.remove(wt, keep_branch=False)
+
+    assert _git(["for-each-ref", "refs/north/kept"], repo).stdout == ""
 
 
 async def test_is_git_repo_true_for_repo_with_commit(manager: GitWorktreeManager) -> None:

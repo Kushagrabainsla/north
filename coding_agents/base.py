@@ -76,8 +76,11 @@ class Workspaces(Protocol):
         """A fresh copy on a throwaway branch; raises `CodingAgentError` when *workspace* is not a git repository."""
         ...
 
-    async def finish(self, tree: WorkTree) -> WorkChange | None:
-        """Commit what the agent changed onto the branch; None, and the copy removed, when nothing changed."""
+    async def finish(self, tree: WorkTree, *, keep_empty: bool = False) -> WorkChange | None:
+        """Commit what the agent changed onto the branch; None, and the copy removed, when the branch holds nothing.
+
+        With *keep_empty*, for a paused run, a copy with nothing on it is left for the run to resume in.
+        """
         ...
 
     async def diff(self, tree: WorkTree) -> str:

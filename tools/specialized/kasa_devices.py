@@ -429,17 +429,18 @@ def move_logins_to_secrets(home: Path) -> list[str]:
     return moved
 
 
-def credential_args() -> list[str]:
-    """The TP-Link login, when one is configured. Empty otherwise.
+def credential_env() -> dict[str, str]:
+    """The TP-Link login for the `kasa` command's environment, when one is configured. Empty otherwise.
 
     Devices speaking KLAP - most firmware since 2023 - answer discovery without a
     credential and then refuse everything else, so this is the difference between
-    seeing a bulb and being able to switch it on.
+    seeing a bulb and being able to switch it on. The environment, because any
+    program on the Mac can read a command's arguments with `ps`.
     """
     if not (logins := accounts()):
-        return []
+        return {}
     username, password = logins[0]
-    return ["--username", username, "--password", password]
+    return {"KASA_USERNAME": username, "KASA_PASSWORD": password}
 
 
 def parse_discovery(payload: str) -> list[tuple[str, str]]:
@@ -487,22 +488,24 @@ def run_discovery() -> tuple[list[tuple[str, str]], str]:
     instead of a silent "no devices found".
     """
     kasa_bin = shutil.which("kasa") or f"{sys.executable.rsplit('/', 1)[0]}/kasa"
-    credentials = credential_args()
+    environment = {**os.environ, **credential_env()}
     last_err = ""
     for attempt in ("binary", "module"):
         base = [kasa_bin] if attempt == "binary" else [sys.executable, "-m", "kasa"]
-        cmd = [*base, "--json", *credentials, "discover"]
+        cmd = [*base, "--json", "discover"]
         try:
             # North is commonly launched detached, where stdin may be closed.
             # Explicitly detach all standard input so Python-based CLIs cannot
             # fail during interpreter startup with EBADF (Errno 9).
-            result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
+            result = subprocess.run(
+                cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20, env=environment
+            )
             output = result.stdout
             last_err = (result.stderr or "").strip()
             if result.returncode != 0:
                 # A broken/missing binary should not prevent the module fallback.
                 # Preserve the diagnostic if both discovery methods fail.
-                last_err = f"`{' '.join(redacted(cmd))}` exited {result.returncode}: {last_err or 'no output'}"
+                last_err = f"`{' '.join(cmd)}` exited {result.returncode}: {last_err or 'no output'}"
                 continue
         except FileNotFoundError:
             last_err = f"kasa executable not found at {kasa_bin}"
@@ -526,15 +529,6 @@ def run_discovery() -> tuple[list[tuple[str, str]], str]:
         return [], last_err or _NOTHING_FOUND
 
     return [], last_err or "kasa discovery produced no output"
-
-
-def redacted(cmd: list[str]) -> list[str]:
-    """The command with the password blanked, for logs and error messages."""
-    out = list(cmd)
-    for index, token in enumerate(out):
-        if token == "--password" and index + 1 < len(out):
-            out[index + 1] = "***"
-    return out
 
 
 async def open_device_at(host: str) -> Any:

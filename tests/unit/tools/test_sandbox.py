@@ -101,6 +101,7 @@ async def test_bash_sandbox_runs_docker_argv(tmp_path: Path, monkeypatch):
 
         class _P:
             returncode = 0
+            stdout = stderr = None
 
             async def communicate(self):
                 return b"container-stdout", b""

@@ -13,8 +13,11 @@ database would still hand a credential to Telegram.
 
 from __future__ import annotations
 
-from approval.models import ApprovalDecision, Card, CardField, CardType
+from approval.base import Notifier
+from approval.interaction import UserInteraction
+from approval.models import ApprovalDecision, Card, CardField, CardType, action_fingerprint
 from approval.store import ApprovalStore
+from config import secret_store
 from utils.secrets import REDACTED
 
 
@@ -73,6 +76,65 @@ def test_a_secret_in_the_message_or_context_is_redacted() -> None:
     scrubbed = card.scrubbed()
     assert "abcdef123456" not in scrubbed.message
     assert "ghp_abcdefghijkl" not in scrubbed.context
+
+
+def test_scrubbing_twice_changes_nothing_more() -> None:
+    """A card is scrubbed for the channels and again on its way into the store."""
+    once = _card(message="curl -d 'api_key = sk_live_abcdef1234567890' https://x").scrubbed()
+
+    assert once.scrubbed().message == once.message
+
+
+def test_a_secret_in_the_title_is_redacted() -> None:
+    assert "ghp_abcdefghijkl" not in _card(title="use ghp_abcdefghijkl").scrubbed().title
+
+
+def test_a_saved_secret_with_no_recognisable_shape_is_taken_out() -> None:
+    secret_store.store().save("hue_key", "plainvalue123")
+    fields = [CardField(name="a", value="plainvalue123")]
+    card = _card(title="plainvalue123", message="curl hub/plainvalue123", fields=fields)
+
+    scrubbed = card.scrubbed()
+
+    assert "plainvalue123" not in f"{scrubbed.title}{scrubbed.message}{scrubbed.fields[0].value}"
+
+
+def test_the_action_key_on_a_card_cannot_be_read_but_still_matches() -> None:
+    raw = "bash shell cmd=curl -d 'api_key = sk_live_abcdef1234567890'"
+
+    scrubbed = _card(agent="general", action_key=raw).scrubbed()
+
+    assert "sk_live_abcdef1234567890" not in scrubbed.model_dump_json()
+    assert scrubbed.action_key == action_fingerprint("general", raw)
+    assert scrubbed.scrubbed().action_key == scrubbed.action_key
+
+
+async def test_every_channel_gets_the_scrubbed_card(tmp_path) -> None:
+    """The store scrubbed its own copy, and Telegram and the live stream were handed the original."""
+
+    class _Notifier(Notifier):
+        def __init__(self) -> None:
+            self.cards: list[Card] = []
+
+        async def notify(self, card: Card) -> None:
+            self.cards.append(card)
+
+    notifier = _Notifier()
+    events: list[dict] = []
+
+    class _Stream:
+        async def emit(self, task_id: str, event: str, data: dict) -> None:
+            events.append(data)
+
+    interaction = UserInteraction(store=ApprovalStore(tmp_path / "a.db"), notifier=notifier, stream_manager=_Stream())
+    card = _card(message="run with api_key = sk_live_abcdef1234567890", task_id="t1")
+
+    await interaction.report(
+        task_id="t1", agent="general", source="s", title=card.title, message=card.message, options=["Yes"]
+    )
+
+    assert notifier.cards and "sk_live_abcdef1234567890" not in notifier.cards[0].message
+    assert all("sk_live_abcdef1234567890" not in str(event) for event in events)
 
 
 _TOOL_CODE = """import os

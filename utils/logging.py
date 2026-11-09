@@ -25,16 +25,18 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
-from utils.secrets import redact, redact_for_logging
+from utils.secrets import blank_query_values, redact, redact_for_logging
 
 # ---------------------------------------------------------------------------
 # Context variable - holds the active task_id for the current async context.
 # ---------------------------------------------------------------------------
 
 _task_id_var: ContextVar[str] = ContextVar("task_id", default="")
+_URL_LOGGING_LIBRARIES = ("httpx", "httpcore")
 
 
 def bind_task_id(task_id: str) -> None:
@@ -104,15 +106,16 @@ class _RedactingFormatter(logging.Formatter):
     existing formatters closes the gap without replacing their presentation.
     """
 
-    def __init__(self, wrapped: logging.Formatter) -> None:
+    def __init__(self, wrapped: logging.Formatter, hide: Callable[[str], str] = str) -> None:
         super().__init__()
         self._wrapped = wrapped
+        self._hide = hide
 
     def format(self, record: logging.LogRecord) -> str:
-        return redact(self._wrapped.format(record))
+        return self._hide(blank_query_values(redact(self._wrapped.format(record))))
 
 
-def _redact_existing_handlers() -> None:
+def _redact_existing_handlers(hide: Callable[[str], str] = str) -> None:
     """Wrap handlers already installed by servers or libraries."""
     loggers = [logging.getLogger()]
     loggers.extend(logger for logger in logging.root.manager.loggerDict.values() if isinstance(logger, logging.Logger))
@@ -124,7 +127,7 @@ def _redact_existing_handlers() -> None:
             seen.add(id(handler))
             formatter = handler.formatter or logging.Formatter()
             if not isinstance(formatter, _RedactingFormatter):
-                handler.setFormatter(_RedactingFormatter(formatter))
+                handler.setFormatter(_RedactingFormatter(formatter, hide))
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +135,7 @@ def _redact_existing_handlers() -> None:
 # ---------------------------------------------------------------------------
 
 
-def configure_structured_logging(level: int = logging.INFO) -> None:
+def configure_structured_logging(level: int = logging.INFO, *, hide: Callable[[str], str] = str) -> None:
     """Install the JSON formatter on the root logger.
 
     Call this once at application startup (``orchestrator/app.py``) before
@@ -141,6 +144,9 @@ def configure_structured_logging(level: int = logging.INFO) -> None:
 
     When NORTH_LOG_FILE is set, logs go to that file instead of stdout so the
     interactive chat REPL isn't polluted by server output.
+
+    *hide* takes known credentials out of each line; the caller supplies it, because
+    only the app knows where they are kept.
     """
 
     root = logging.getLogger()
@@ -150,6 +156,9 @@ def configure_structured_logging(level: int = logging.INFO) -> None:
         root.removeHandler(h)
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(_RedactingFormatter(_JSONFormatter()))
+    handler.setFormatter(_RedactingFormatter(_JSONFormatter(), hide))
     root.addHandler(handler)
-    _redact_existing_handlers()
+    _redact_existing_handlers(hide)
+    # These log every request's full URL at INFO, where a tool's key can sit.
+    for name in _URL_LOGGING_LIBRARIES:
+        logging.getLogger(name).setLevel(logging.WARNING)

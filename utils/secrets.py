@@ -162,7 +162,8 @@ def _redact(text: str, *, code: bool) -> str:
 
     def assignment(match: re.Match[str]) -> str:
         expression = match.group("plain") is not None or "{" in (match.group("quoted") or "")
-        if REDACTED in match.group(0).lower() or (code and expression):
+        # Without its closing bracket: the plain-value form of the pattern stops before a `]`.
+        if REDACTED[:-1] in match.group(0).lower() or (code and expression):
             return match.group(0)
         quote = match.group("quote") or ""
         return f"{match.group('prefix')}{quote}{REDACTED}{quote}"
@@ -184,6 +185,17 @@ def _redact(text: str, *, code: bool) -> str:
     if not code:  # a label followed by a bare value: in code, that value is a name
         text = SECRET_RE.sub(REDACTED, text)
     return CC_RE.sub(REDACTED, TOKEN_RE.sub(REDACTED, text))
+
+
+_URL_QUERY_RE = re.compile(r"(?i)(\bhttps?://[^\s?#\"'\\]+\?)([^\s#\"'\\]+)")
+
+
+def blank_query_values(text: str) -> str:
+    """*text* with every URL's query values removed and their names kept. For logs, where a value is never needed.
+
+    A list of names known to be secret misses a tool's `appid=` or `key=`.
+    """
+    return _URL_QUERY_RE.sub(lambda match: match[1] + re.sub(r"=[^&]*", f"={REDACTED}", match[2]), text)
 
 
 def redact_for_logging(value: object, *, key: str = "") -> object:

@@ -5,6 +5,7 @@ See docs/CODING_STYLE.md Section 7.4 and README Section 9.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from config import secret_store
 from utils.ids import generate_id
 from utils.secrets import REDACTED, contains_secret, is_secret_field_name, redact
 
@@ -181,7 +183,10 @@ class Card(BaseModel):
     # the answer is learned under the same key the policy recalls it by. Set by
     # the server when the card is raised; empty for a card that asks about no
     # action, which is then never learned from.
+    # Which action this card is about. `scrubbed` turns it into the action's fingerprint and
+    # keeps a redacted `action_label`: the raw text can hold the very key the command sends.
     action_key: str = ""
+    action_label: str = ""
     # Who decided it (a `DecidedBy`), why, and what memory led there. Empty while
     # the card waits. `reason` is also yours when you give one.
     decided_by: str = ""
@@ -301,23 +306,40 @@ class Card(BaseModel):
         evidence.
         """
 
+        hide = secret_store.store().hide
+
+        def clean(text: str) -> str:
+            return hide(redact(text))
+
         def is_secret(name: str, value: Any) -> bool:
-            return is_secret_field_name(name) or (isinstance(value, str) and contains_secret(value))
+            if is_secret_field_name(name):
+                return True
+            return isinstance(value, str) and (contains_secret(value) or hide(value) != value)
 
         fields = [
             field.model_copy(update={"value": REDACTED}) if is_secret(field.name, field.value) else field
             for field in self.fields
         ]
-        response = {name: REDACTED if is_secret(name, value) else value for name, value in self.response.items()}
-        message, context = redact(self.message), redact(self.context)
+        update: dict[str, Any] = {
+            "fields": fields,
+            "response": {name: REDACTED if is_secret(name, value) else value for name, value in self.response.items()},
+            "title": clean(self.title),
+            "message": clean(self.message),
+            "context": clean(self.context),
+        }
+        if self.action_key and not _FINGERPRINT_RE.fullmatch(self.action_key):
+            update |= {
+                "action_key": action_fingerprint(self.agent, self.action_key),
+                "action_label": clean(self.action_key),
+            }
 
         # Most cards carry no secret, and every card passes through here on the
         # way into the queue. Returning self keeps that case free - and keeps a
         # card's identity, which callers holding the object they just added rely
         # on.
-        if fields == self.fields and response == self.response and message == self.message and context == self.context:
+        if all(value == getattr(self, name) for name, value in update.items()):
             return self
-        return self.model_copy(update={"fields": fields, "response": response, "message": message, "context": context})
+        return self.model_copy(update=update)
 
     def field_values(self) -> dict[str, Any]:
         """The values as north filled them in, before the user touched anything."""
@@ -346,6 +368,33 @@ class Card(BaseModel):
 
 # "1. " or "2) " in front of an answer in a one-message reply; "2026-11-05" and "1.5 hours" keep their digits.
 _NUMBERED = re.compile(r"^\s*\d+[.)]\s+")
+_FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def action_fingerprint(agent: str, message: str) -> str:
+    """Identity of an action: its whole text, exactly as given.
+
+    *message* is `Action.describe()`. Nothing is normalized away: case and
+    backticks change what an action does (`Report.txt` is another file,
+    `` `touch f` `` runs a command), so both are part of the identity.
+
+    This used to hash only the first 80 characters, which made any two actions
+    sharing a long prefix the same action. A `cd`-and-activate preamble is
+    routinely longer than that, so "run the tests" and "delete the data
+    directory" could carry one fingerprint - and approving the first taught
+    north to replay that approval for the second.
+
+    Hashing everything makes a fingerprint narrower, not wider: a volatile tail
+    (a diff hunk, a commit message) now makes an action look unique, so north
+    asks again instead of replaying. That is the safe direction to be wrong in -
+    an extra question costs a moment, a false match acts without being asked.
+
+    A *message* that is already a fingerprint is returned as it is: a stored card holds
+    only that, because the action's text can contain the very key a command sends.
+    """
+    if _FINGERPRINT_RE.fullmatch(message):
+        return message
+    return hashlib.sha256(f"{agent}::{message}".encode()).hexdigest()
 
 
 def _picked(field: CardField, answer: str) -> str:

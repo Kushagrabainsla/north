@@ -13,6 +13,7 @@ from coding_agents.base import CodingBackend, Lander, LiveRun, RunRecorder, RunS
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
 from coding_agents.gate import GateSessions
 from coding_agents.models import (
+    PAUSING_FAILURES,
     AskAccess,
     EventKind,
     FailureKind,
@@ -117,8 +118,8 @@ class CodingRunner:
         run_id = live.run_id if live else generate_id()
         tree = await self._tree(live, workspace, run_id) if mode is Mode.EDIT else None
         spec = RunSpec(
-            task=task,
-            workspace=tree.path if tree else workspace,
+            task=_in_chosen_folder(task, tree, workspace),
+            workspace=tree.path if tree else workspace,  # the copy's top: its git and its sandbox rules start there
             session_id=live.session_id if live else str(uuid.uuid4()),
             mode=mode,
             resume=live is not None,
@@ -235,7 +236,7 @@ class CodingRunner:
         finally:
             if session and self._sessions:
                 self._sessions.revoke(session.token)
-        change, problem = await self._finish_tree(run_id, task_id, tree)
+        change, problem = await self._finish_tree(run_id, task_id, tree, keep_empty=outcome.failure in PAUSING_FAILURES)
         return outcome, change, problem
 
     async def _land(
@@ -299,7 +300,9 @@ class CodingRunner:
                 return name
         return None
 
-    async def _finish_tree(self, run_id: str, task_id: str, tree: WorkTree | None) -> tuple[WorkChange | None, str]:
+    async def _finish_tree(
+        self, run_id: str, task_id: str, tree: WorkTree | None, *, keep_empty: bool = False
+    ) -> tuple[WorkChange | None, str]:
         """Commit what the agent changed, even when the run failed: partial work is still worth seeing.
 
         Returns the change, and why it could not be saved when it could not: "no changes" and "changes that
@@ -308,7 +311,7 @@ class CodingRunner:
         if tree is None or self._workspaces is None:
             return None, ""
         try:
-            change = await self._workspaces.finish(tree)
+            change = await self._workspaces.finish(tree, keep_empty=keep_empty)
         except Exception as exc:
             logger.exception("could not commit the changes of coding run %s; the copy is left as it is", run_id)
             problem = str(exc) if isinstance(exc, CodingAgentError) else f"could not save the changes: {exc}"
@@ -329,6 +332,14 @@ class CodingRunner:
                 },
             )
         return change, ""
+
+
+def _in_chosen_folder(task: str, tree: WorkTree | None, workspace: str) -> str:
+    """*task*, saying where to work when the user chose a subfolder of the repository."""
+    if tree is None or tree.start_in(workspace) == tree.path:
+        return task
+    folder = Path(tree.start_in(workspace)).relative_to(tree.path)
+    return f"{task}\n\nThe user chose the folder `{folder}` of this repository. Work there."
 
 
 def _state(backend: CodingBackend, spec: RunSpec, version: str, tree: WorkTree | None) -> dict[str, object]:

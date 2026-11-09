@@ -141,7 +141,12 @@ def test_every_resource_file_is_declared_as_package_data(pyproject: dict) -> Non
     """
     patterns = pyproject["tool"]["setuptools"]["package-data"]["resources"]
     resources = ROOT / "resources"
-    shipped = [path.relative_to(resources).as_posix() for path in resources.rglob("*") if _is_data(path)]
+    # Finder drops .DS_Store files on a Mac; they are ignored by git and never shipped.
+    shipped = [
+        path.relative_to(resources).as_posix()
+        for path in resources.rglob("*")
+        if _is_data(path) and path.name != ".DS_Store"
+    ]
 
     assert {"builtin-flows/nightly-check/FLOW.yaml", "builtin-skills/adding-a-home-device/SKILL.md"} <= set(shipped)
     for relative in shipped:

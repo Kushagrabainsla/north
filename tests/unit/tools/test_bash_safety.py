@@ -172,6 +172,7 @@ class TestBashAllowDangerous:
         async def fake_exec_shell(cmd, **kwargs):
             class _P:
                 returncode = 0
+                stdout = stderr = None
 
                 async def communicate(self):
                     return b"", b""

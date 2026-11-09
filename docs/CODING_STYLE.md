@@ -1926,6 +1926,8 @@ the number. `web/package.json` versions the frontend bundle independently and is
 
 ## 22. What Not to Build
 
+**Reuse first.** If a free open-source project solves it, use that instead of building it. If it is better than north's own code, delete ours. Check its licence, activity and fit (macOS, local, one process); build only what nothing covers, and say why.
+
 Do not add the following unless the spec explicitly requires it. If it feels necessary, re-read the spec first.
 
 - Caching layers

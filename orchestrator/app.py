@@ -38,6 +38,7 @@ from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import bootstrap_paused, run_bootstrap_if_needed
 from coding_agents import CodingRunner, CommandVerifier, Gate, GateSessions, discover_backends
 from coding_agents.runner import AGENT_PREFIX as CODING_AGENT_PREFIX
+from config import secret_store
 from config.dependencies import build_production_dependencies
 from config.run_file import remove_run_file, write_run_file
 from config.security import keep_home_private, load_secret
@@ -1007,7 +1008,10 @@ def _warn_unknown_cron_agents(agent_registry: AgentRegistry) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     started_at = utcnow()
-    configure_structured_logging(logging.getLevelNamesMapping().get(settings.log_level.upper(), logging.INFO))
+    configure_structured_logging(
+        logging.getLevelNamesMapping().get(settings.log_level.upper(), logging.INFO),
+        hide=secret_store.store().hide,
+    )
 
     _step("loading secret")
     load_secret()

@@ -109,12 +109,13 @@ class MemoryWorkspaces:
         self.created.append(tree)
         return tree
 
-    async def finish(self, tree: WorkTree) -> WorkChange | None:
+    async def finish(self, tree: WorkTree, *, keep_empty: bool = False) -> WorkChange | None:
         self.finished.append(tree)
         if self.finish_error:
             raise self.finish_error
         if not self.change_files:
-            self.gone.add(tree.branch)
+            if not keep_empty:
+                self.gone.add(tree.branch)
             return None
         return WorkChange(tree, self.change_files)
 

@@ -35,6 +35,53 @@ from web import secrets_panel as secrets_routes
 KEY = "owm-1234-abcd-5678"
 
 
+@pytest.mark.parametrize(
+    "shown",
+    [
+        "Ab+/cd=EF@hij",
+        "Ab%2B%2Fcd%3DEF%40hij",
+        "Ab%2b%2fcd%3dEF%40hij",
+        "Ab+%2Fcd=EF%40hij",
+    ],
+)
+def test_a_secret_is_hidden_in_every_form_a_url_writes_it(shown: str) -> None:
+    secret_store.store().save("weather", "Ab+/cd=EF@hij")
+
+    assert "[secret weather]" in secret_store.store().hide(f"401 for url 'https://x.test/w?appid={shown}'")
+
+
+def test_a_secret_inside_a_longer_one_leaves_no_tail() -> None:
+    secret_store.store().save("short", "abcdefgh")
+    secret_store.store().save("long", "abcdefgh12345678")
+
+    assert secret_store.store().hide("x abcdefgh12345678 y") == "x [secret long] y"
+
+
+def test_provider_keys_and_logins_are_hidden_too() -> None:
+    home = settings.north_home
+    (home / ".env").write_text("NORTH_GROQ_API_KEY=gsk-abcdef123456\nNORTH_MAX_TOKENS=409612345\n", encoding="utf-8")
+    (home / "secret.key").write_text("server-key-abcdef\n", encoding="utf-8")
+    (home / "credentials").mkdir()
+    login = '{"tokens": {"access_token": "at-abcdef123456"}}'
+    (home / "credentials" / "codex.json").write_text(login, encoding="utf-8")
+
+    shown = secret_store.store().hide("gsk-abcdef123456 server-key-abcdef at-abcdef123456 409612345")
+
+    assert "gsk-abcdef123456" not in shown
+    assert "server-key-abcdef" not in shown
+    assert "at-abcdef123456" not in shown
+    assert "409612345" in shown, "a setting is not a credential"
+
+
+def test_the_mask_follows_the_file() -> None:
+    secret_store.store().save("first", "firstvalue123")
+    assert "firstvalue123" not in secret_store.store().hide("firstvalue123")
+
+    secret_store.store().remove("first")
+
+    assert "firstvalue123" in secret_store.store().hide("firstvalue123")
+
+
 class _Forecast(Tool):
     name = "forecast"
     description = "the weather"

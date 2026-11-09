@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coding_agents import CodingAgentError
+from coding_agents.runner import _in_chosen_folder
 from orchestrator.coding_workspaces import GitWorkspaces
 
 
@@ -65,6 +66,73 @@ async def test_finishing_with_no_change_removes_the_copy_and_its_branch(repo, tm
 
     assert not Path(tree.path).exists()
     assert tree.branch not in _git(["branch", "--list"], repo)
+
+
+async def test_a_resumed_run_that_adds_nothing_keeps_what_earlier_attempts_committed(repo, tmp_path) -> None:
+    workspaces = GitWorkspaces(tmp_path / "copies")
+    tree = await workspaces.create(str(repo), "coding-resumed")
+    Path(tree.path, "calc.py").write_text("# partial work\n")
+    await workspaces.finish(tree)
+
+    change = await workspaces.finish(tree)  # the resumed attempt changed nothing new
+
+    assert change is not None and [f.path for f in change.files] == ["calc.py"]
+    assert Path(tree.path).is_dir()
+    assert tree.branch in _git(["branch", "--list"], repo)
+
+
+async def test_a_paused_run_with_nothing_on_it_keeps_its_copy_to_resume_in(repo, tmp_path) -> None:
+    workspaces = GitWorkspaces(tmp_path / "copies")
+    tree = await workspaces.create(str(repo), "coding-paused")
+
+    assert await workspaces.finish(tree, keep_empty=True) is None
+
+    assert Path(tree.path).is_dir()
+
+
+async def test_a_copy_of_a_subfolder_starts_there_and_knows_the_repository(repo, tmp_path) -> None:
+    sub = repo / "sub"
+    sub.mkdir()
+    (sub / "b.txt").write_text("two\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "sub"], repo)
+    (sub / "untracked.txt").write_text("mine\n")
+
+    tree = await GitWorkspaces(tmp_path / "copies").create(str(sub), "coding-sub")
+
+    assert tree.base == str(repo.resolve())
+    assert tree.start_in(str(sub)) == str(Path(tree.path) / "sub")
+    assert Path(tree.path, "sub", "untracked.txt").is_file()
+    assert not Path(tree.path, "untracked.txt").exists()
+
+
+async def test_the_agent_is_told_which_subfolder_was_chosen(repo, tmp_path) -> None:
+    sub = repo / "sub"
+    sub.mkdir()
+    tree = await GitWorkspaces(tmp_path / "copies").create(str(sub), "coding-told")
+
+    assert "`sub`" in _in_chosen_folder("Fix it.", tree, str(sub))
+    assert _in_chosen_folder("Fix it.", tree, str(repo)) == "Fix it."
+
+
+async def test_a_chosen_folder_git_does_not_track_exists_in_the_copy(repo, tmp_path) -> None:
+    empty = repo / "empty"
+    empty.mkdir()
+
+    tree = await GitWorkspaces(tmp_path / "copies").create(str(empty), "coding-empty")
+
+    assert Path(tree.start_in(str(empty))).is_dir()
+
+
+async def test_a_repository_nested_in_the_folder_is_left_out_and_named(repo, tmp_path) -> None:
+    nested = repo / "vendor" / "lib"
+    nested.mkdir(parents=True)
+    _git(["init", "-q"], nested)
+
+    tree = await GitWorkspaces(tmp_path / "copies").create(str(repo), "coding-nested")
+
+    assert tree.left_out == ("vendor/lib",)
+    assert not Path(tree.path, "vendor", "lib").exists()
 
 
 async def test_copies_are_made_outside_the_temp_directory_by_default() -> None:

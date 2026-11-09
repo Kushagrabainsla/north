@@ -161,7 +161,12 @@ class CodingAgentTool(Tool):
     def format_output(self, data: dict) -> str:
         text = str(data.get("answer") or "")
         if data.get("mode") == Mode.EDIT.value:
-            text = _edit_summary(data) + _earlier_branches_note(data) + ("\n\n" + text if text else "")
+            text = (
+                _edit_summary(data)
+                + _left_out_note(data)
+                + _earlier_branches_note(data)
+                + ("\n\n" + text if text else "")
+            )
         denied = data.get("denied") or []
         if denied:
             tried = "; ".join(f"{item['tool']} {item['detail']}".strip() for item in denied[:5])
@@ -238,6 +243,8 @@ def _output(report: RunReport) -> ToolOutput:
             "reason": report.landing.reason,
             "by_policy": report.landing.by_policy,
         }
+    if report.change is not None and report.change.tree.left_out:
+        data["left_out"] = list(report.change.tree.left_out)
     if report.earlier_branches:
         data["earlier_branches"] = list(report.earlier_branches)
     if report.problem:  # the agent finished, but what it did could not be saved: that is not "no changes"
@@ -251,6 +258,15 @@ def _output(report: RunReport) -> ToolOutput:
     if outcome.failure in _PAUSED_FAILURES:
         error = f"{error} {_PAUSED_NOTE[outcome.failure]}"
     return ToolOutput(success=False, data=data, error=error)
+
+
+def _left_out_note(data: dict) -> str:
+    """The repositories nested in the folder, which the agent's copy did not have."""
+    names = data.get("left_out") or []
+    if not names:
+        return ""
+    named = ", ".join(f"`{name}`" for name in names)
+    return f"\n\nNot copied for the agent, because each is a git repository of its own inside the folder: {named}."
 
 
 def _earlier_branches_note(data: dict) -> str:

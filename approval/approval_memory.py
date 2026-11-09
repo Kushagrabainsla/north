@@ -14,7 +14,6 @@ decision north took for you is derived, not new signal.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -24,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from approval.decisions import card_summary, ensure_decisions_table
 from approval.models import ApprovalDecision, DecidedBy
+from approval.models import action_fingerprint as _fingerprint
 from utils.db import open_db_connection
 from utils.secrets import redact
 
@@ -164,27 +164,6 @@ def _display_signature(message: str) -> str:
     return f"{text[: keep // 2]}…{text[-(keep - keep // 2) :]}"
 
 
-def _fingerprint(agent: str, message: str) -> str:
-    """Identity of an action: its whole text, exactly as given.
-
-    *message* is `Action.describe()`. Nothing is normalized away: case and
-    backticks change what an action does (`Report.txt` is another file,
-    `` `touch f` `` runs a command), so both are part of the identity.
-
-    This used to hash only the first 80 characters, which made any two actions
-    sharing a long prefix the same action. A `cd`-and-activate preamble is
-    routinely longer than that, so "run the tests" and "delete the data
-    directory" could carry one fingerprint - and approving the first taught
-    north to replay that approval for the second.
-
-    Hashing everything makes a fingerprint narrower, not wider: a volatile tail
-    (a diff hunk, a commit message) now makes an action look unique, so north
-    asks again instead of replaying. That is the safe direction to be wrong in -
-    an extra question costs a moment, a false match acts without being asked.
-    """
-    return hashlib.sha256(f"{agent}::{message}".encode()).hexdigest()
-
-
 class ApprovalMemory:
     """Records every decision of yours, and recalls your past approve/reject by action fingerprint."""
 
@@ -289,11 +268,12 @@ class ApprovalMemory:
     ) -> None:
         """Persist one decision as one row. The latest approve/reject for an action is what replays.
 
-        *message* is the action's identity (`Action.describe()`); "" when the
-        decision is not about an action, such as an answered question, which is
+        *message* is the action's identity (`Action.describe()`, or a card's fingerprint of it);
+        "" when the decision is not about an action, such as an answered question, which is
         then recorded but never replayed.
         """
         fp = _fingerprint(agent, message) if message else ""
+        label = card.action_label if card and card.action_label else message
         try:
             with open_db_connection(self._db_path) as conn:
                 conn.execute(
@@ -304,7 +284,7 @@ class ApprovalMemory:
                         card.id if card else "",
                         fp,
                         agent,
-                        _display_signature(message),
+                        _display_signature(redact(label)),
                         decision,
                         chosen_option,
                         redact(reason),

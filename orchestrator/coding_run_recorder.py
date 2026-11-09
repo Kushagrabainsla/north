@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from agents.models import AgentPayload, AgentResult
-from coding_agents import AGENT_PREFIX, FailureKind, LiveRun, RunOutcome, RunStart, WorkTree
+from coding_agents import AGENT_PREFIX, PAUSING_FAILURES, FailureKind, LiveRun, RunOutcome, RunStart, WorkTree
 from orchestrator.agent_runs import AgentRunStore, RunStatus
 from utils.execution_context import current_execution
 
@@ -17,8 +17,7 @@ _UNFINISHED = frozenset(status.value for status in RunStatus)
 _SUMMARY_CHARS = 300
 # Only these can still have a process; a paused or interrupted run has none, whatever a recycled pid says.
 _MAY_BE_ALIVE = frozenset({RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL})
-# Missing resources freeze work; they do not fail it (CODING_STYLE 13.5).
-_FROZEN_BY = frozenset({FailureKind.RESOURCE, FailureKind.AUTH})
+_FROZEN_BY = PAUSING_FAILURES
 
 
 class AgentRunRecorder:
