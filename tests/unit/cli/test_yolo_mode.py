@@ -10,6 +10,7 @@ from __future__ import annotations
 from typer.testing import CliRunner
 
 import cli.main as main
+from tools.universal import browser
 
 runner = CliRunner()
 
@@ -81,10 +82,14 @@ def test_status_shows_the_yolo_badge(monkeypatch) -> None:
 
 def test_a_degraded_server_reads_degraded_and_names_the_failing_check(monkeypatch) -> None:
     health = {"status": "degraded", "checks": {"api": {"status": "ok"}, "inference": {"status": "failed"}}}
+    # As on a machine whose browser comes through npx, CI's among them: that line says "downloaded",
+    # which a check for "down" anywhere in the output took for the server (CI red from 2026-11-06).
+    monkeypatch.setattr(browser, "browser_availability", lambda: ("on demand", "via npx; downloaded on first use"))
 
     output = _status_with(monkeypatch, "safe", health)
 
-    assert "degraded: inference" in output and "down" not in output
+    server = next(line for line in output.splitlines() if " server " in line)
+    assert "degraded: inference" in server and "down" not in server
     assert "autonomy: safe" in output  # the rest of the snapshot is still shown
 
 
