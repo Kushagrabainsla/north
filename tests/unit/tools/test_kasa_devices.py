@@ -6,6 +6,7 @@ too slow for a slider on the dashboard and far too slow to follow music.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -182,6 +183,56 @@ async def test_a_dropped_connection_is_opened_again_once() -> None:
     state = await devices.apply(entry["id"], LightChange(brightness=70))
 
     assert state["brightness"] == 70 and network.opened == ["10.0.0.36", "10.0.0.36"]
+
+
+async def test_a_bulb_given_a_new_address_is_reached_there() -> None:
+    """A router gave the lamp a new address: north asked only the old one, and every change failed
+    until its next look round the network, up to five minutes later."""
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    network = FakeNetwork(lamp)
+    devices = _devices(network)
+    [entry] = await devices.devices()
+    lamp.down = True
+    moved = FakeBulb("10.0.0.52", "Desk lamp")
+    network.bulbs = {"10.0.0.52": moved}
+
+    state = await devices.apply(entry["id"], LightChange(on=True))
+
+    assert state["host"] == "10.0.0.52" and moved.is_on and lamp.closed
+    assert network.opened == ["10.0.0.36", "10.0.0.52"]
+
+
+@pytest.mark.parametrize(
+    ("others", "why"),
+    [
+        (True, r"not heard on the network \(it was at 10\.0\.0\.36\)\. Is it switched on at the wall\?"),
+        (False, r"no Kasa device answers on this network\. Is this computer on the same Wi-Fi as your lights\?"),
+    ],
+)
+async def test_a_bulb_heard_nowhere_says_what_to_check(others: bool, why: str) -> None:
+    """On another Wi-Fi, the page said "78:20:51:59:45:36: Timed out getting discovery response for 10.0.0.47"."""
+    lamp, porch = FakeBulb("10.0.0.36", "Desk lamp"), FakeBulb("10.0.0.40", "Porch light")
+    network = FakeNetwork(lamp, porch)
+    devices = _devices(network)
+    entries = {d["name"]: d for d in await devices.devices()}
+    lamp.down = True
+    network.bulbs = {"10.0.0.40": porch} if others else {}
+
+    with pytest.raises(kasa_devices.NotAnswering, match=f"^{why}$"):
+        await devices.apply(entries["Desk lamp"]["id"], LightChange(on=True))
+
+
+async def test_bulbs_that_stop_answering_together_share_one_look() -> None:
+    lamp, porch = FakeBulb("10.0.0.36", "Desk lamp"), FakeBulb("10.0.0.40", "Porch light")
+    network = FakeNetwork(lamp, porch)
+    devices = _devices(network)
+    entries = await devices.devices()
+    lamp.down = porch.down = True
+    network.bulbs = {"10.0.0.52": FakeBulb("10.0.0.52", "Desk lamp"), "10.0.0.53": FakeBulb("10.0.0.53", "Porch light")}
+
+    states = await asyncio.gather(*(devices.apply(entry["id"], LightChange(on=False)) for entry in entries))
+
+    assert [s["host"] for s in states] == ["10.0.0.52", "10.0.0.53"] and network.discoveries == 2
 
 
 async def test_done_is_what_the_device_reports() -> None:

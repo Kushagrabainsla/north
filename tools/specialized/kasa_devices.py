@@ -36,6 +36,14 @@ _TIMEOUT_SECONDS = 12.0
 # How long a found set of devices is trusted before discovery runs again: a bulb that
 # moved to another address, or one plugged in since, is found within this.
 _STALE_SECONDS = 300.0
+_NOTHING_FOUND = "kasa discover found nothing on this network"
+
+
+class NotAnswering(Exception):
+    """A device that did not answer where it was, and was not heard anywhere else on the network.
+
+    Its message says why in plain words, without the device's name: the page and chat put that in front.
+    """
 
 
 class KasaDevices:
@@ -51,6 +59,8 @@ class KasaDevices:
         self._devices: dict[str, Any] = {}  # device id -> a connected python-kasa Device
         self._names: dict[str, str] = {}  # device id -> the name discovery reported
         self._found_at: float | None = None
+        self._heard: set[str] = set()  # the addresses that answered the last look round the network
+        self._looked = ""  # what that look said when it heard nothing: the network was empty, or it failed
         self._problem = ""
         self._locked: list[str] = []  # devices found that refused every TP-Link login north has
         self._finding = asyncio.Lock()
@@ -81,19 +91,20 @@ class KasaDevices:
 
         Only what the device can do is sent, a white temperature within its own range.
         With *confirm* the device is read back, and a state it does not report raises:
-        "done" is what the device says, not what was asked. A dropped connection is
-        opened again once before giving up.
+        "done" is what the device says, not what was asked. A device that does not
+        answer is looked for on the network and tried once more where it is now.
         """
-        await self._find(False)
+        await self._find()
         if device_id not in self._devices:
             raise LookupError(f"No device {device_id!r} on this network now.")
         dev = self._devices[device_id]
         sent = fit(dev, change)
+        sending = time.monotonic()
         try:
             await asyncio.wait_for(_send(dev, sent), _TIMEOUT_SECONDS)
         except (TimeoutError, OSError, ConnectionError) as first:
-            logger.info("kasa: %s did not answer (%s); connecting again", device_id, first)
-            dev = await self._reconnect(device_id)
+            logger.info("kasa: %s did not answer at %s (%s); looking for it on the network", device_id, dev.host, first)
+            dev = await self._reach_again(device_id, since=sending)
             await asyncio.wait_for(_send(dev, sent), _TIMEOUT_SECONDS)
         if not confirm:
             return describe(device_id, dev, self._names.get(device_id))
@@ -109,12 +120,18 @@ class KasaDevices:
         self._devices.clear()
         self._found_at = None
 
-    async def _find(self, look_again: bool) -> None:
+    async def _find(self, look_again: bool = False, *, since: float | None = None) -> None:
+        """Look round the network for devices, unless the last look is recent enough.
+
+        Recent enough is within `_STALE_SECONDS`, or after *since*: bulbs that stop answering
+        together share one look. With *look_again* north always looks.
+        """
         async with self._finding:
-            fresh = self._found_at is not None and time.monotonic() - self._found_at < _STALE_SECONDS
-            if fresh and not look_again:
+            recent = since if since is not None else time.monotonic() - _STALE_SECONDS
+            if self._found_at is not None and self._found_at > recent and not look_again:
                 return
             pairs, diagnostic = await asyncio.to_thread(self._discover)
+            self._heard, self._looked = {host for host, _ in pairs}, diagnostic
             known = {getattr(dev, "host", ""): device_id for device_id, dev in self._devices.items()}
             errors: list[str] = []
             locked: list[str] = []
@@ -140,6 +157,26 @@ class KasaDevices:
             self._found_at = time.monotonic()
             self._locked = locked
             self._problem = _why_not(pairs, diagnostic, errors, locked)
+
+    async def _reach_again(self, device_id: str, since: float) -> Any:
+        """The device connected again, wherever the network says it is now.
+
+        A router can give a bulb a new address, and asking only the old one failed every change
+        until the next look round the network, up to five minutes later. Raises NotAnswering,
+        saying what to check, when the device is not heard anywhere.
+        """
+        stale = self._devices[device_id]
+        await self._find(since=since)
+        dev = self._devices[device_id]
+        if dev is not stale:
+            return dev  # heard at a new address, and connected there
+        if stale.host in self._heard:
+            return await self._reconnect(device_id)
+        if self._heard:
+            raise NotAnswering(f"not heard on the network (it was at {stale.host}). Is it switched on at the wall?")
+        if self._looked and self._looked != _NOTHING_FOUND:
+            raise NotAnswering(f"did not answer at {stale.host}, and north could not look for it: {self._looked}")
+        raise NotAnswering("no Kasa device answers on this network. Is this computer on the same Wi-Fi as your lights?")
 
     async def _read(self, device_id: str) -> None:
         await asyncio.wait_for(self._devices[device_id].update(), _TIMEOUT_SECONDS)
@@ -442,7 +479,7 @@ def run_discovery() -> tuple[list[tuple[str, str]], str]:
                 f"{refused} device(s) refused authentication. Newer Kasa firmware needs a TP-Link "
                 f"account: add it in {_WHERE}."
             )
-        return [], last_err or "kasa discover found nothing on this network"
+        return [], last_err or _NOTHING_FOUND
 
     return [], last_err or "kasa discovery produced no output"
 
