@@ -130,7 +130,7 @@ async def test_every_channel_gets_the_scrubbed_card(tmp_path) -> None:
     card = _card(message="run with api_key = sk_live_abcdef1234567890", task_id="t1")
 
     await interaction.report(
-        task_id="t1", agent="general", source="s", title=card.title, message=card.message, options=["Yes"]
+        task_id="t1", agent="general", source="s", title=card.title, message=card.message, options=["Yes"], rejecting=[]
     )
 
     assert notifier.cards and "sk_live_abcdef1234567890" not in notifier.cards[0].message

@@ -50,7 +50,8 @@ async def test_a_failed_firing_is_retried_on_the_next_startup(tmp_path) -> None:
     await processor.mark_failed(job.job_id)  # the planner found no model
 
     await scheduler._catch_up([briefing()], MORNING)
-    assert len(await fired_jobs(processor)) == 2
+    (again,) = await fired_jobs(processor)
+    assert again.status is JobStatus.PENDING
 
 
 async def test_a_completed_firing_is_still_not_repeated(tmp_path) -> None:

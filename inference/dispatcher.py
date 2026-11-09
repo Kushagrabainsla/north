@@ -742,6 +742,11 @@ class ModelDispatcher(InferenceRouter):
             if hasattr(provider, "aclose"):
                 await provider.aclose()
 
+    @property
+    def provider_errors(self) -> dict[str, str]:
+        """Each provider whose last catalog refresh failed, and why."""
+        return dict(self._provider_errors)
+
     async def refresh_catalog(self) -> None:
         """Concurrently fetch model lists from all providers and atomically rebuild registry."""
         results = await asyncio.gather(
@@ -750,14 +755,15 @@ class ModelDispatcher(InferenceRouter):
         )
         for provider, res in zip(self._providers, results, strict=False):
             if isinstance(res, Exception):
+                if provider.name not in self._provider_errors:  # once per outage, not every three minutes
+                    logger.warning(
+                        "Pool refresh failed for provider %s: %s (retaining existing catalog)",
+                        provider.name,
+                        res,
+                    )
                 self._provider_errors[provider.name] = str(res) or type(res).__name__
-                logger.warning(
-                    "Pool refresh failed for provider %s: %s (retaining existing catalog)",
-                    provider.name,
-                    res,
-                )
-            else:
-                self._provider_errors.pop(provider.name, None)
+            elif self._provider_errors.pop(provider.name, None) is not None:
+                logger.info("Pool refresh recovered for provider %s", provider.name)
         self._build_registry()
         # The first refresh has now finished, whether or not any provider
         # answered. An empty catalogue from here on is a real fault, not a

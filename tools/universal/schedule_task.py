@@ -12,7 +12,7 @@ from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal._schedules import TIMEZONE_INPUT_ERROR, entry_view, parse_weekdays
 from utils.ids import generate_id
-from utils.time import format_local, from_epoch, local_timezone_name, now_epoch, parse_local
+from utils.time import format_local, from_epoch, now_epoch, parse_local
 
 if TYPE_CHECKING:
     from agents.registry import AgentRegistry
@@ -277,7 +277,6 @@ class ScheduleTaskTool(Tool):
         # from a cached description of this tool is not simply refused.
         days = params.get("days", params.get("weekday"))
         try:
-            tz = local_timezone_name()
             label = str(params.get("label", "")).strip()
             entry = CronEntry(
                 name=await self._cron_store.unique_name(label or task),
@@ -287,7 +286,6 @@ class ScheduleTaskTool(Tool):
                 hour=_whole_number(params, "hour", 23),
                 minute=_whole_number(params, "minute", 59, default=0),
                 weekdays=parse_weekdays(days),
-                tz=tz,
                 skill=skill,
                 flow=flow,
                 message=message,

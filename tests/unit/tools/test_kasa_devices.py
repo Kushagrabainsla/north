@@ -303,6 +303,46 @@ async def test_bulbs_that_stop_answering_together_share_one_look() -> None:
     assert [s["host"] for s in states] == ["10.0.0.52", "10.0.0.53"] and network.discoveries == 2
 
 
+async def test_a_dead_bulb_does_not_hold_up_the_others_in_a_live_stream() -> None:
+    """One bulb switched off at the wall froze music sync: each frame to it started a look round the network."""
+    lamp, dead = FakeBulb("10.0.0.36", "Desk lamp"), FakeBulb("10.0.0.40", "Porch light")
+    network = FakeNetwork(lamp, dead)
+    devices = _devices(network)
+    entries = {entry["host"]: entry["id"] for entry in await devices.devices()}
+    dead.down = True
+    looks_before = network.discoveries
+
+    for _ in range(20):
+        with pytest.raises(Exception):  # noqa: B017, PT011 - a lost frame is logged by the caller
+            await devices.apply(entries["10.0.0.40"], LightChange(on=True), confirm=False)
+        await devices.apply(entries["10.0.0.36"], LightChange(brightness=40), confirm=False)
+    await asyncio.sleep(0)
+    if devices._looking is not None:
+        await devices._looking
+
+    assert len(lamp.light.sent) == 20, "every frame reached the bulb that answers"
+    assert network.discoveries <= looks_before + 1, "at most one look, shared"
+    await devices.aclose()
+
+
+async def test_a_bulb_that_answers_again_gets_frames_again() -> None:
+    lamp = FakeBulb("10.0.0.36", "Desk lamp")
+    devices = _devices(FakeNetwork(lamp))
+    device_id = (await devices.devices())[0]["id"]
+    lamp.down = True
+    with pytest.raises(Exception):  # noqa: B017, PT011
+        await devices.apply(device_id, LightChange(on=True), confirm=False)
+    if devices._looking is not None:
+        await devices._looking
+    lamp.down = False
+    devices._retry_at[device_id] = (0.0, 5.0)  # the wait is over
+
+    await devices.apply(device_id, LightChange(on=True), confirm=False)
+
+    assert device_id not in devices._retry_at
+    await devices.aclose()
+
+
 async def test_done_is_what_the_device_reports() -> None:
     lamp = FakeBulb("10.0.0.36", "Desk lamp")
     devices = _devices(FakeNetwork(lamp))

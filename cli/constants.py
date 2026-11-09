@@ -134,7 +134,6 @@ _CONFIG_KEYS = {
     "log.level": ("log_level", str),
     "jobs.poll_interval_seconds": ("job_poll_interval_seconds", int),
     "agent.read_timeout_seconds": ("agent_read_timeout_seconds", int),
-    "inference.pool_refresh_hours": ("inference_pool_refresh_interval_hours", int),
 }
 
 

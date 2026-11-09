@@ -102,7 +102,7 @@ Actual candidate ranking within each strategy blends `base_quality` with a live 
 
 **Why:** a 404 from a retired model ID is a signal that the local pool cache is stale. Refreshing immediately means the next call uses current model IDs rather than continuing to hammer dead endpoints. The cooldown prevents a storm of refresh calls if many models fail in quick succession.
 
-**Pool refresh on startup + loop:** `orchestrator/app.py` calls `refresh_catalog()` once explicitly during the lifespan startup before yielding to the server.  A background loop then sleeps for `inference_pool_refresh_interval_hours` (default 6 h) between subsequent refreshes:
+**Pool refresh on startup + loop:** `orchestrator/app.py` calls `refresh_catalog()` once explicitly during the lifespan startup before yielding to the server.  A background loop then sleeps for `inference_pool_refresh_interval_seconds` (default 180 s) between subsequent refreshes:
 
 ```python
 # lifespan startup (orchestrator/app.py)
@@ -110,7 +110,7 @@ await deps.inference_router.refresh_catalog()   # immediate, before first reques
 
 # background loop (_pool_refresh_loop)
 async def _pool_refresh_loop(deps) -> None:
-    interval = settings.inference_pool_refresh_interval_hours * 3600
+    interval = settings.inference_pool_refresh_interval_seconds
     while True:
         await asyncio.sleep(interval)         # sleep first, then refresh
         await deps.inference_router.refresh_catalog()

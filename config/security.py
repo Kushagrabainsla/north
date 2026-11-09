@@ -134,6 +134,11 @@ def load_secret() -> str:
     return secret
 
 
+def effective_secret() -> str:
+    """This home's secret as it is now, for the server and the CLI alike: the environment, then the key file."""
+    return settings.north_secret or load_secret()
+
+
 # Domain-separated, so an answer to a proof request is never usable as anything else.
 _PROOF_CONTEXT = b"north-server-proof:"
 
@@ -144,7 +149,7 @@ def server_proof(nonce: str, secret: str | None = None) -> str:
     The CLI sends a fresh nonce and checks the answer before it sends the secret
     itself: a listener that is not this north cannot answer, and gets nothing.
     """
-    key = (secret or settings.secret or load_secret()).encode("utf-8")
+    key = (secret or effective_secret()).encode("utf-8")
     return hmac.new(key, _PROOF_CONTEXT + nonce.encode("utf-8"), hashlib.sha256).hexdigest()
 
 

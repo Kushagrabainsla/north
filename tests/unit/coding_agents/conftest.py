@@ -56,6 +56,7 @@ class MemoryRecorder:
         self.state: dict[str, dict[str, Any]] = {}
         self.events: list[tuple[str, Mapping[str, Any]]] = []
         self.finished: list[tuple[str, RunOutcome]] = []
+        self.paused_tasks: set[str] = set()
 
     async def live_run(self, task_id: str, agent: str, mode: str) -> LiveRun | None:
         self.live_asked = (task_id, agent, mode)
@@ -72,6 +73,9 @@ class MemoryRecorder:
     async def record(self, run_id: str, task_id: str, event: str, data: Mapping[str, Any]) -> None:
         self.calls.append("record")
         self.events.append((event, data))
+
+    async def task_is_paused(self, task_id: str) -> bool:
+        return task_id in self.paused_tasks
 
     async def finish(self, run_id: str, outcome: RunOutcome) -> None:
         self.calls.append("finish")

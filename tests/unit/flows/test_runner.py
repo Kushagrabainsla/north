@@ -910,6 +910,66 @@ async def test_a_waiting_test_run_is_not_replaced_by_a_schedule(tmp_path):
     assert store.get(test_run.run_id).status == "waiting"
 
 
+async def test_a_firing_that_comes_back_continues_its_own_run(tmp_path):
+    """A job comes back after north stopped: starting over repeated done steps and left the old run for good."""
+    runner, store, agent = _waiting_runner(tmp_path)
+    tool = RunFlowTool(runner)
+    first = await tool.run_scheduled("demo", "job-1")
+
+    agent.models_back = True
+    again = await tool.run_scheduled("demo", "job-1")
+
+    assert again.data["run_id"] == first.data["run_id"]
+    assert again.data["status"] == "completed"
+    assert len(store.list_runs("demo")) == 1
+
+
+async def test_a_firing_whose_run_finished_does_not_run_again(tmp_path):
+    runner, _, agent = _waiting_runner(tmp_path)
+    agent.models_back = True
+    tool = RunFlowTool(runner)
+    first = await tool.run_scheduled("demo", "job-1")
+    calls = len(agent.payloads)
+
+    again = await tool.run_scheduled("demo", "job-1")
+
+    assert again.success and again.data["run_id"] == first.data["run_id"]
+    assert len(agent.payloads) == calls
+
+
+def _stopped_by_schedule(store: FlowRunStore, run_id: str) -> None:
+    store.create(run_id=run_id, flow_name="demo", task_id=f"task-{run_id}", trigger="schedule")
+    store.update(run_id, status="paused", current_step=0, outputs=[], error="stopped")
+
+
+async def test_a_stopped_scheduled_run_nobody_was_asked_about_does_not_pile_up(tmp_path):
+    runner, store, _ = _waiting_runner(tmp_path)
+    _stopped_by_schedule(store, "unasked")
+    _stopped_by_schedule(store, "asked")
+    runner._interaction = SimpleNamespace(is_waiting=lambda task_id, source: task_id == "task-asked")
+
+    replaced = runner.replace_waiting("demo")
+
+    assert [run.run_id for run in replaced] == ["unasked"]
+    assert store.get("asked").status == "paused", "you have been asked about this one"
+
+
+async def test_old_stopped_runs_are_cleared_and_you_are_told(tmp_path):
+    from datetime import timedelta
+    from unittest.mock import AsyncMock, MagicMock
+
+    runner, store, _ = _waiting_runner(tmp_path)
+    runner._interaction = MagicMock(deliver=AsyncMock())
+    _stopped_by_schedule(store, "stopped")
+
+    assert await runner.discard_old_stopped(localnow() - timedelta(days=14)) == 0
+    assert store.get("stopped").status == "paused", "too recent to clear"
+
+    assert await runner.discard_old_stopped(localnow() + timedelta(days=1)) == 1
+    assert store.get("stopped").status == "cancelled"
+    assert "demo" in runner._interaction.deliver.await_args.kwargs["message"]
+
+
 class GatedAgent(OutOfModelsAgent):
     """Once models are back, each call waits at ``gate``, so a test can act while a step runs."""
 

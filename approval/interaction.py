@@ -133,6 +133,7 @@ class UserInteraction:
         title: str,
         message: str,
         options: list[str],
+        rejecting: list[str],
     ) -> Card:
         """Leave a problem only you can act on, and return at once; it waits until you choose an option.
 
@@ -145,10 +146,14 @@ class UserInteraction:
         footed "no rush, nothing is blocked".
         """
         card = self._build(CardType.APPROVAL, task_id, agent, title, message, options).model_copy(
-            update={"blocking": True, "source": source}
+            update={"blocking": True, "source": source, "rejecting": rejecting}
         )
         await self._surface(card, CardEvent.APPROVAL)
         return card
+
+    def is_waiting(self, task_id: str, source: str) -> bool:
+        """Whether a card *source* raised for *task_id* still waits for you."""
+        return any(card.task_id == task_id and card.source == source for card in self._store.pending())
 
     def withdraw(self, *, task_id: str, source: str) -> None:
         """Close what *source* reported for *task_id*: it was handled another way, such as on the Flows page."""
@@ -165,17 +170,24 @@ class UserInteraction:
         card = self._build(CardType.INFORMATION, task_id, agent, title, message, [])
         await self.notify(card)
 
-    async def deliver(self, *, title: str, message: str, source: str, task_id: str | None = None) -> Notice | None:
+    async def deliver(
+        self, *, title: str, message: str, source: str, task_id: str | None = None, key: str | None = None
+    ) -> Notice | None:
         """Bring *message* to the user, and record that it was delivered. Never blocks.
 
         It waits on the dashboard until dismissed - the one channel every install
         has - and goes to every other wired channel (TUI, Telegram, macOS) too.
         The stored notice and a ledger entry are the record. Returns the notice,
         or None when no notice store is wired.
+
+        *key* names the problem: while its notice is unread nothing more is sent, so a
+        broken flow does not say so every night. `clear_notice` closes it on recovery.
         """
         notice = None
         if self._notices is not None:
-            notice = self._notices.add(title=title, message=message, source=source, task_id=task_id)
+            if key is not None and (open_notice := self._notices.open_with(key)) is not None:
+                return open_notice
+            notice = self._notices.add(title=title, message=message, source=source, task_id=task_id, key=key)
         await self.notify(self._build(CardType.INFORMATION, task_id, source, title, message, []))
         if self._ledger is not None:
             await self._ledger.write(
@@ -192,6 +204,11 @@ class UserInteraction:
             )
         return notice
 
+    def clear_notice(self, key: str) -> None:
+        """The problem *key* named is over: its notice stops waiting."""
+        if self._notices is not None:
+            self._notices.clear(key)
+
     async def remind_waiting(self) -> str:
         """Tell the user what is still waiting on them. Cards never expire, so they are reminded instead."""
         waiting = sorted(self._store.pending(), key=lambda card: card.created_at)
@@ -199,9 +216,8 @@ class UserInteraction:
             return "nothing is waiting for you"
         now = datetime.now(UTC)
         lines = [f"- {card.title} ({card.agent}), waiting {_waited(now - card.created_at)}" for card in waiting]
-        await self.inform(
-            task_id=None,
-            agent="north",
+        await self.deliver(
+            source="north",
             title=f"{len(waiting)} waiting for you",
             message="\n".join(lines),
         )

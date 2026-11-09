@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -109,8 +110,10 @@ class ApprovalStore:
         try:
             with open_db_connection(db_path) as conn:
                 rows = conn.execute(
-                    "SELECT payload FROM approval_cards ORDER BY created_at DESC LIMIT ?",
-                    (_MAX_RESOLVED,),
+                    "SELECT payload FROM approval_cards WHERE status = ? UNION ALL "
+                    "SELECT payload FROM (SELECT payload FROM approval_cards WHERE status != ? "
+                    "ORDER BY created_at DESC LIMIT ?)",
+                    (_PENDING, _PENDING, _MAX_RESOLVED),
                 ).fetchall()
         except Exception:
             logger.warning("ApprovalStore: failed to read stored cards", exc_info=True)
@@ -172,7 +175,7 @@ class ApprovalStore:
         """
         resolved = sorted(
             (c for c in self._cards.values() if c.status != _PENDING),
-            key=lambda c: c.created_at,
+            key=lambda c: c.decided_at or c.created_at,
         )
         overflow = len(resolved) - _MAX_RESOLVED
         if overflow <= 0:
@@ -242,7 +245,7 @@ class ApprovalStore:
         card = self._cards.get(card_id)
         if card is None or card.status != _PENDING:
             return False
-        update: dict[str, Any] = {"status": status, "chosen_option": chosen_option}
+        update: dict[str, Any] = {"status": status, "chosen_option": chosen_option, "decided_at": datetime.now(UTC)}
         if decided_by:
             update["decided_by"] = decided_by
         if card.asks_several and not values:
@@ -362,9 +365,9 @@ class ApprovalStore:
         return sorted(decided, key=lambda card: card.created_at)
 
     def all(self, limit: int = 100) -> list[Card]:
-        cards = list(self._cards.values())
-        cards.sort(key=lambda c: c.created_at, reverse=True)
-        return cards[:limit]
+        """Every card still waiting, however many, then the latest *limit* decided, newest first."""
+        cards = sorted(self._cards.values(), key=lambda c: c.created_at, reverse=True)
+        return [c for c in cards if c.status == _PENDING] + [c for c in cards if c.status != _PENDING][:limit]
 
 
 def _check_fits(card: Card, status: str, chosen_option: str) -> None:

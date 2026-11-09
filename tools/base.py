@@ -119,16 +119,26 @@ class Tool(ABC):
                 return ToolOutput(success=False, failure_kind="refused", error=f"Blocked: {said_no}.")
             return await self.run(input)
         if request is None:
-            return await self._change(input)
+            return await self._noted_change(input, None)
         approvals = self._approvals()
         task_id = input.params.get("task_id")
         decision = await approvals.decide(request, task_id=task_id)
         if not decision.allowed:
             return _refused(decision, request)
-        output = await self._change(input.model_copy(update={"approved": request}))
+        output = await self._noted_change(input.model_copy(update={"approved": request}), request)
         if output.success:
             approvals.completed(request, task_id)
         return output
+
+    def changes_nothing(self, input: ToolInput, request: Request | None) -> bool:
+        """Whether this call, of a kind that can change things, is known not to."""
+        return request is not None and request.action.read_only
+
+    async def _noted_change(self, input: ToolInput, request: Request | None) -> ToolOutput:
+        """Say the task is acting, then act. Recorded after the fact, a stop in between looked like no action."""
+        if input.before_change is not None and not self.changes_nothing(input, request):
+            await input.before_change()
+        return await self._change(input)
 
     async def prepare(self, input: ToolInput) -> tuple[ToolInput, str, Request | None]:
         """This call as `execute` acts on it: its inputs as declared, why it cannot run ("" when it can),

@@ -136,8 +136,10 @@ async def test_flow_schedule_uses_live_settings_for_listing_and_firing(store, fl
         assert previous_firing(entry, datetime(2030, 1, 1, 6, 0, tzinfo=UTC)).astimezone(UTC) == datetime(
             2030, 1, 1, 4, 0, tzinfo=UTC
         )
-        # Settings changes do not rewrite the stored local time or legacy metadata.
-        assert await store.get(created.name) == row
+        # Settings changes do not rewrite the stored local time; they only say when the slots moved.
+        moved = await store.get(created.name)
+        assert moved["effective_epoch"] is not None
+        assert {**moved, "effective_epoch": None} == row
 
 
 @pytest.mark.asyncio

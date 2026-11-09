@@ -15,6 +15,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 from agents.capabilities import build_platform_capabilities_summary
@@ -41,7 +42,7 @@ from agents.tool_results import extract_success as _extract_success
 from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
 from agents.tool_results import is_delegation_failure as _is_delegation_failure
-from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent
+from approval.interaction import CardEvent
 from approval.models import Card, CardField, CardType, DecidedBy
 from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import AllModelsRateLimitedError, ContextTooLargeError, is_model_unavailable_error
@@ -492,33 +493,19 @@ class AgenticLLMAgent(LLMAgent):
                     results[index] = await self._safe_execute_call(call, payload, tool_map)
 
         ordered = [results[index] for index in range(len(calls))]
-        # Recorded once for the whole turn: the flag is a per-task boolean, so
-        # marking it per mutating call as well was a duplicate write.
-        await self._record_side_effects(payload, ordered, tool_map)
         return ordered
 
-    async def _record_side_effects(
-        self,
-        payload: AgentPayload,
-        results: list[tuple[ToolCall, str, bool, list[tuple[str, str]]] | tuple[ToolCall, str, bool]],
-        tool_map: dict[str, Tool],
-    ) -> None:
-        """Flag the task as side-effecting when a mutating tool call succeeds.
+    def _before_change(self, payload: AgentPayload) -> Callable[[], Awaitable[None]] | None:
+        """What a tool awaits just before it changes something: the task is marked as having acted.
 
-        Lets crash recovery avoid blindly re-running a task that already acted.
-        delegate_task is excluded: a delegated sub-agent runs under the same
-        task_id and marks its own mutations.
+        Before, not after, and it is allowed to fail the call: marked after a whole turn,
+        a restart in the middle of one looked like a task that had done nothing, and ran it again.
+        A delegated sub-agent's tools mark the same task, so delegating marks nothing itself.
         """
         store = self._deps.running_task_store
         if store is None or not payload.task_id:
-            return
-        mutated = any(item[2] and self._is_mutating_call(item[0], tool_map) for item in results)
-        if not mutated:
-            return
-        try:
-            await store.mark_side_effect(payload.task_id)
-        except Exception:
-            logger.debug("failed to mark side effect for task %s", payload.task_id, exc_info=True)
+            return None
+        return partial(store.mark_side_effect, payload.task_id)
 
     async def _safe_execute_call(
         self,
@@ -1274,8 +1261,15 @@ class AgenticLLMAgent(LLMAgent):
                         "attempt": result.attempt,
                     },
                 )
+            blocked = isinstance(result.data, dict) and result.data.get("outcome_status") == "blocked"
             return json.dumps(
-                {"success": True, "run_id": result.run_id, "output": result.output, "summary": result.summary}
+                {
+                    "success": not blocked,
+                    **({"blocked": True} if blocked else {}),
+                    "run_id": result.run_id,
+                    "output": result.output,
+                    "summary": result.summary,
+                }
             )
         except Exception as exc:
             if self._deps.stream_manager is not None:
@@ -1437,7 +1431,6 @@ class AgenticLLMAgent(LLMAgent):
             message=str(params.get("message", "Ready for your review.")),
             fields=[CardField.model_validate(item) for item in raw_fields],
             context=str(params.get("context") or "")[:50_000],
-            options=list(params.get("options", list(APPROVAL_DEFAULT_OPTIONS))),
         )
         if offered is not None:
             await asyncio.to_thread(offered.remember, scope, *keys)
@@ -1531,7 +1524,7 @@ class AgenticLLMAgent(LLMAgent):
     ) -> tuple[str, list[tuple[str, str]]]:
         if tool_name not in tool_map:
             return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}"), []
-        tool_input = _tool_input(payload, params)
+        tool_input = _tool_input(payload, params).model_copy(update={"before_change": self._before_change(payload)})
         try:
             result = await tool_map[tool_name].execute(tool_input)
             images: list[tuple[str, str]] = []

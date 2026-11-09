@@ -28,6 +28,8 @@ import sys
 from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from utils.secrets import blank_query_values, redact, redact_for_logging
 
@@ -36,7 +38,13 @@ from utils.secrets import blank_query_values, redact, redact_for_logging
 # ---------------------------------------------------------------------------
 
 _task_id_var: ContextVar[str] = ContextVar("task_id", default="")
-_URL_LOGGING_LIBRARIES = ("httpx", "httpcore")
+_CHATTY_LIBRARIES = ("httpx", "httpcore", "aiogram.event")
+
+# Set by `north start`, which leaves the server to write north.log itself so it can rotate it.
+LOG_TO_HOME_ENV = "NORTH_LOG_TO_HOME"
+_LOG_BYTES = 10 * 1024 * 1024
+_LOG_BACKUPS = 5
+_UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
 
 def bind_task_id(task_id: str) -> None:
@@ -135,7 +143,9 @@ def _redact_existing_handlers(hide: Callable[[str], str] = str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def configure_structured_logging(level: int = logging.INFO, *, hide: Callable[[str], str] = str) -> None:
+def configure_structured_logging(
+    level: int = logging.INFO, *, hide: Callable[[str], str] = str, log_file: Path | None = None
+) -> None:
     """Install the JSON formatter on the root logger.
 
     Call this once at application startup (``orchestrator/app.py``) before
@@ -147,6 +157,8 @@ def configure_structured_logging(level: int = logging.INFO, *, hide: Callable[[s
 
     *hide* takes known credentials out of each line; the caller supplies it, because
     only the app knows where they are kept.
+
+    With *log_file* the log rotates there, uvicorn's lines included.
     """
 
     root = logging.getLogger()
@@ -155,10 +167,17 @@ def configure_structured_logging(level: int = logging.INFO, *, hide: Callable[[s
     for h in root.handlers[:]:
         root.removeHandler(h)
 
-    handler = logging.StreamHandler(sys.stdout)
+    handler: logging.Handler
+    if log_file is None:
+        handler = logging.StreamHandler(sys.stdout)
+    else:
+        handler = RotatingFileHandler(log_file, maxBytes=_LOG_BYTES, backupCount=_LOG_BACKUPS, encoding="utf-8")
+        for name in _UVICORN_LOGGERS:
+            logging.getLogger(name).handlers.clear()
+            logging.getLogger(name).propagate = True
     handler.setFormatter(_RedactingFormatter(_JSONFormatter(), hide))
     root.addHandler(handler)
     _redact_existing_handlers(hide)
-    # These log every request's full URL at INFO, where a tool's key can sit.
-    for name in _URL_LOGGING_LIBRARIES:
+    # These log every request at INFO, httpx with its full URL, where a tool's key can sit.
+    for name in _CHATTY_LIBRARIES:
         logging.getLogger(name).setLevel(logging.WARNING)

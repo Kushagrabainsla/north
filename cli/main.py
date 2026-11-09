@@ -57,10 +57,12 @@ from rich.text import Text
 
 from cli._client import NotThisNorth, _api, _headers, base_url, pairing_url, running_port
 from cli._server import (
+    CRASH_LOG_NAME,
     _docker_available,
     _find_compose_file,
     _find_project_root,
     _is_north_server,
+    _is_other_north,
     _kill_port,
     _listens_on,
     _port_in_use,
@@ -68,6 +70,7 @@ from cli._server import (
     _start_server_process,
     _sync_docker_secret,
 )
+from cli._server import url_host as _url_host
 from cli._task_stream import TaskStream, follow_task
 from cli.constants import (
     _CONFIG_KEYS,
@@ -271,7 +274,7 @@ def _launch_tui(
         _wait_for_server(host, port, proc=proc)
         workspace = resolved_workspace
 
-    base_url = f"http://{host}:{port}"
+    base_url = f"http://{_url_host(host)}:{port}"
     try:
         headers = _headers(base_url)
     except NotThisNorth:
@@ -1864,11 +1867,12 @@ def _report_startup_failure(what: str) -> None:
     from config.settings import settings
 
     _err_console.print(f"  [red]{what}[/red]")
-    log = settings.north_home / "north.log"
-    if log.exists():
-        _err_console.print(f"  [dim]the reason is at the end of {log}[/dim]")
-        for line in _last_error_lines(log):
-            _err_console.print(f"  [red]{line}[/red]")
+    for log in (settings.north_home / CRASH_LOG_NAME, settings.north_home / "north.log"):
+        if lines := _last_error_lines(log):
+            _err_console.print(f"  [dim]the reason is at the end of {log}[/dim]")
+            for line in lines:
+                _err_console.print(f"  [red]{line}[/red]")
+            break
     raise typer.Exit(1) from None
 
 
@@ -1892,6 +1896,17 @@ def _print_start_header(mode: str, rows: list[tuple[str, str]]) -> None:
     _console.print()
 
 
+def _wait_for_any_answer(host: str, port: int, timeout: int = 90) -> None:
+    """Poll until the server answers at all, before it can prove anything."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with contextlib.suppress(httpx.HTTPError):
+            httpx.get(f"http://{_url_host(host)}:{port}/health", timeout=2)
+            return
+        time.sleep(0.25)
+    _report_startup_failure("server did not respond in time")
+
+
 def _start_with_docker(options: _StartOptions, compose_file: Path) -> None:
     _print_start_header(
         "docker",
@@ -1910,8 +1925,10 @@ def _start_with_docker(options: _StartOptions, compose_file: Path) -> None:
         typer.secho("Docker Compose failed to start.", fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from None
 
-    _wait_for_server("127.0.0.1", options.port)
+    # The container makes its own secret, so it can prove itself only after this home has a copy.
+    _wait_for_any_answer("127.0.0.1", options.port)
     _sync_docker_secret(compose_file)
+    _wait_for_server("127.0.0.1", options.port)
     if options.chat:
         _launch_tui(host="127.0.0.1", port=options.port, workspace=options.workspace)
 
@@ -1922,6 +1939,14 @@ def _free_the_port(options: _StartOptions) -> bool:
         return True
     if _is_north_server(options.host, options.port):
         return False
+    if _is_other_north(options.host, options.port):
+        typer.secho(
+            f"Another north, with a different secret, is running on port {options.port}. "
+            "Stop it from the home it runs from, or start this one on another port with --port.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
 
     typer.secho(f"Port {options.port} is in use by another application.", fg=typer.colors.YELLOW)
     if not typer.confirm("Kill the existing process and restart?", default=False):
@@ -1957,7 +1982,7 @@ def _start_locally(options: _StartOptions) -> None:
     _print_start_header(
         "local",
         [
-            ("address", f"http://{options.host}:{options.port}"),
+            ("address", f"http://{_url_host(options.host)}:{options.port}"),
             ("workspace", options.workspace),
             ("home", str(settings.north_home)),
             ("logs", str(settings.north_home / "north.log")),
@@ -2090,7 +2115,7 @@ def web(
         # how `north web` came to run uvicorn with --reload over the home folder.
         start(host=host, port=port, reload=False, docker=docker, no_chat=True, workspace=workspace)
     try:
-        url = pairing_url(f"http://{host}:{port}")
+        url = pairing_url(f"http://{_url_host(host)}:{port}")
     except NotThisNorth:
         typer.secho(
             f"ERROR: The server on port {port} is not your north, so no sign-in link was asked for. "
@@ -2107,7 +2132,7 @@ def web(
         _console.print(f"  [dim]web cockpit [/dim]  {url}")
         return
     signed_in = "[dim](this browser is signed in through a one-time link)[/dim]"
-    _console.print(f"  [dim]web cockpit [/dim]  http://{host}:{port}/app/  {signed_in}")
+    _console.print(f"  [dim]web cockpit [/dim]  http://{_url_host(host)}:{port}/app/  {signed_in}")
     webbrowser.open(url)
 
 

@@ -53,6 +53,31 @@ All notable changes to north are documented here.
 - Memory's Documents tab lists only north stars, judgement rules and soul. Your profile is rebuilt from your facts, so its pointer row is gone, and an approval that used your profile now links to the Facts tab.
 
 ### Fixed
+- An open dashboard or TUI no longer stops a blocking card reaching Telegram: connected is not the same as seen.
+- What a card's options mean is declared when it is made. "Discard" and "Stop" were recorded as approvals because any word not on a list counted as yes. The dashboard now draws a card's own options, so Resume or Discard on a stopped run works, and a reply that fits none of them is refused.
+- Telegram replies reach the right question. A reply to any question answers it, whichever task asked; an answer starting with `/` is not read as a command; a number picks the option on a one-question card.
+- A failed step no longer tells the chat "Task failed" and ends its wait while the task carries on. Only the task's own end does.
+- Telegram polling uses aiogram, which backs off during an outage. It retried with no delay, up to 2,700 times a second. A refused bot token now waits for a new one.
+- Waiting cards are never trimmed, from lists or at a restart, and a late answer on an old card is no longer thrown away and read as a refusal.
+- A scheduled flow that cannot start says so, once while the problem lasts, and a provider that refuses its key gets one notice, cleared on recovery. The same failure no longer logs every three minutes. The waiting-cards reminder now reaches the dashboard.
+- `north_config set` says what really happened: applied, or waiting for a restart. Unknown keys and bad values are refused before anything is written, and the approval mode goes to its one live setting. `inference.pool_refresh_hours`, which nothing read, is gone.
+- The CLI and server use one secret, the environment and then the key file, read fresh. `NORTH_SECRET` works from `.env`. A north holding a different secret is named as one and is never offered for killing. `north start --docker` works on a fresh home, and `--host ::1` no longer crashes.
+- One bulb going off no longer freezes music sync for the others: a live stream never looks round the network, and a silent bulb is left alone for up to ten minutes. Starting music sync twice, or leaving the page while it starts, no longer leaves the microphone on. A light's card goes back to the real state when a change fails.
+- `north.log` rotates at 10 MB and keeps five files. What cannot be logged goes to `north.log.crash`.
+- A sub-agent that stopped blocked is no longer reported to its caller as a success.
+- A flow step's file check reads the agent's final answer. It accepted the run's own bookkeeping, so the news briefing's check never ran, and a step that promises files but gives an unreadable answer now pauses.
+- A correction pass is judged on everything the task did, not only its own tool calls.
+- A read-only command, or a plan-only coding run, no longer makes a restart fail the task.
+- Pausing a task keeps its coding session and copy instead of starting over, and a coding process left from before a restart is stopped so a resume cannot run a second agent beside it.
+- A message Telegram cannot take now is kept in `telegram_outbox.db` and sent when Telegram is back, with waits growing to five minutes. It covers cards and a task's final answer, which were sent once and lost. A card answered in the meantime is not sent, and a message Telegram refuses for good is not tried again.
+- A task is marked as having acted before a tool acts, not after the turn. A restart in between looked like a task that had done nothing, and ran it again. If the mark cannot be written, the tool does not run. A task that acted is no longer retried or queued for a model: it stops and says so, and you send it again if you want it re-run.
+- One schedule slot is one job: firing it twice, or at every restart, gives one job and one run. A job that comes back continues its own run from the step it reached, and one that already finished is not run again.
+- A firing that could not start is recorded as failed, so it can fire again. It was recorded as completed, and the slot counted as spent.
+- Retiming a schedule, or switching it back on, no longer runs a slot from before the change at the next start. Neither does changing the Settings time zone.
+- Every schedule follows the Settings time zone, including ones made before the zone changed.
+- Two schedules with the same work no longer block each other, and a one-off waiting for next week no longer counts as running.
+- One unreadable schedule no longer stops all the others, and `/health` names it.
+- Scheduled runs that stopped with no card no longer pile up: the next firing replaces them. Any stopped scheduled run is cleared after 14 days, and you are told.
 - Cancelling or timing out a browser command, or the nightly check, no longer crashes on macOS with `PermissionError` (`utils/processes.py`). macOS answers "not permitted" for a process group whose members have all exited. Only Linux CI was watching, so a macOS CI job now runs the suite too.
 - A cancel or timeout now stops a background child that still holds a command's output after its shell has exited. A server a finished command left on purpose stays running.
 - Your secrets, provider keys and logins are taken out of tool output and the log in every form they appear, percent-encoded included (`config/secret_store.py`). httpx no longer logs every request's URL, and logs show query names without their values.

@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from agents.inbox import TaskInbox
 from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, UserInteraction
 from approval.approval_memory import ApprovalMemory
+from approval.interaction import APPROVAL_DEFAULT_OPTIONS
 from approval.models import DecidedBy
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
@@ -80,7 +82,6 @@ from utils.tools import (
     ToolDispatchRegistryPort,
     ToolInputFactory,
     ToolNotFoundError,
-    tool_mutates,
 )
 
 logger = logging.getLogger(__name__)
@@ -946,16 +947,30 @@ class Orchestrator:
             await self._stream_manager.emit_done(task_id)
             return
 
-        if await self._queue_for_model_recovery(task_id, error):
+        acted = await self._has_acted(task_id)
+        if not acted and await self._queue_for_model_recovery(task_id, error):
             return
 
-        logger.error("Task %s needs attention: nowhere to queue it while it waits: %s", task_id, error)
+        reason = (
+            f"{_MODEL_SCARCITY_MESSAGE}. This task had already acted, so north stopped rather than run it "
+            "again and repeat what it did. Send it again if you want it re-run."
+            if acted
+            else f"{_MODEL_SCARCITY_MESSAGE}; no queue to wait in"
+        )
+        logger.error("Task %s needs attention: %s: %s", task_id, reason, error)
         await self._record_task_needs_attention(
             task_id,
-            f"{_MODEL_SCARCITY_MESSAGE}; no queue to wait in",
+            reason,
             error_type=error_type,
             duration_ms=int((time.monotonic() - task_start) * 1000),
         )
+
+    async def _has_acted(self, task_id: str) -> bool:
+        """Whether *task_id* has begun to change something, so running it again could repeat that."""
+        if self._running_task_store is None:
+            return False
+        running = await self._running_task_store.get(task_id)
+        return running is not None and running.has_side_effects
 
     async def _mark_task_failed(self, task_id: str) -> None:
         with contextlib.suppress(Exception):
@@ -1128,6 +1143,7 @@ class Orchestrator:
             title="North Star Conflict Detected",
             message=tension or "This task conflicts with one of your active goals. Proceed?",
             options=["Proceed anyway", "Cancel"],
+            rejecting=["Cancel"],
         )
         # Emit the conflict event before surfacing so the UI can show context.
         await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
@@ -1515,8 +1531,14 @@ class Orchestrator:
                 params["workspace"] = run.workspace
             if task_id and "task_id" not in params:
                 params["task_id"] = task_id
+            acting = self._running_task_store
             result = await tool.execute(
-                self._tool_input_factory(params=params, edit_scope=edit_scope, granted_workspace=run.workspace or None)
+                self._tool_input_factory(
+                    params=params,
+                    edit_scope=edit_scope,
+                    granted_workspace=run.workspace or None,
+                    before_change=partial(acting.mark_side_effect, task_id) if acting is not None else None,
+                )
             )
         except ToolNotFoundError:
             logger.warning("single_tool fallback: tool %r not found, re-routing to agent", name)
@@ -1536,8 +1558,6 @@ class Orchestrator:
         # image to the model as a proper image message. A second synthesis path
         # here would be unreachable and worse.
         output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
-        if result.success and tool_mutates(tool, params) and self._running_task_store is not None:
-            await self._running_task_store.mark_side_effect(task_id)
         if not result.success:
             self._blocked_tasks.add(task_id)  # you refused the change: the task is blocked, as an agent's would be
         await self._end_direct_run(
@@ -1940,7 +1960,8 @@ class Orchestrator:
                 raise
             except Exception as exc:
                 should_retry = await self._failure_handler.handle_failure(task_id, agent.name, exc)
-                if not should_retry:
+                if not should_retry or await self._has_acted(task_id):  # a new attempt would do it all again
+                    self._failure_handler.clear_retry_count(task_id, agent.name)
                     await self._stream_manager.emit(
                         task_id,
                         "agent_failed",
@@ -2041,7 +2062,7 @@ class Orchestrator:
 # Ledger actions that carry an answer to the task: each agent's, and the one combining them.
 _ANSWER_ACTIONS = frozenset({"agent_completed", "task_synthesis"})
 _DECISIONS = frozenset(ApprovalDecision)
-_NO_WORDS = frozenset({"reject", "deny", "no", "decline", "cancel", "skip", "keep on branch"})
+_PLAIN_YES_NO = frozenset(APPROVAL_DEFAULT_OPTIONS)
 
 
 def _decision_from_reply(card: Card, decision: str, chosen_option: str) -> tuple[str, str]:
@@ -2049,14 +2070,24 @@ def _decision_from_reply(card: Card, decision: str, chosen_option: str) -> tuple
 
     The web UI sends a decision ("approved") and the option. A Telegram button sends only the option it
     shows ("Approve"), and stored as the decision that read as "not approved": a tap on Approve was a no.
-    An option of the card is read here; anything else is refused rather than stored.
+    An option of the card is read here; anything else is refused rather than stored. What an option
+    means is what the card declared when it was made, never what its words sound like.
     """
     if decision in _DECISIONS:
+        answers_an_option = decision in (ApprovalDecision.APPROVED, ApprovalDecision.REJECTED)
+        no_with_a_reason = decision == ApprovalDecision.REJECTED and chosen_option  # the TUI's "Reject: why"
+        if (
+            answers_an_option
+            and set(card.options) - _PLAIN_YES_NO
+            and chosen_option not in card.options
+            and not no_with_a_reason
+        ):
+            # A Resume/Discard card answered with a bare Approve closed and did nothing.
+            raise ValueError(f"Card {card.id!r} needs one of its own options: {', '.join(card.options)}.")
         return decision, chosen_option
     option = next((o for o in card.options if o.lower() == decision.strip().lower()), None)
     if option is None:
         raise ValueError(f"{decision!r} is not a decision or an option of card {card.id!r}.")
     if card.type is CardType.QUESTION:
         return ApprovalDecision.ANSWERED, option
-    no = option.lower() in _NO_WORDS
-    return (ApprovalDecision.REJECTED if no else ApprovalDecision.APPROVED), option
+    return (ApprovalDecision.REJECTED if option in card.rejecting else ApprovalDecision.APPROVED), option

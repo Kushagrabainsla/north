@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from jobs.base import JobProcessor
-from jobs.exceptions import JobCancelled, JobNeedsAttention, JobProcessingError
+from jobs.exceptions import JobCancelled, JobNeedsAttention, JobNeverStarted, JobProcessingError
 from jobs.models import Job, JobPriority, JobStatus, JobType
 from utils.db import open_db_connection
 from utils.time import from_epoch, now_epoch, to_epoch
@@ -134,6 +134,10 @@ class SQLiteJobProcessor(JobProcessor):
                     scheduled_epoch, started_epoch, completed_epoch,
                     retry_count, max_retries, retry_epoch, created_epoch
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    status = excluded.status, payload = excluded.payload, started_epoch = NULL,
+                    completed_epoch = NULL, retry_count = 0, retry_epoch = NULL
+                WHERE job_queue.status = 'failed'
                 """,
                 (
                     job.job_id,
@@ -254,14 +258,16 @@ class SQLiteJobProcessor(JobProcessor):
                 (status.value, now_epoch(), job_id),
             )
 
-    async def has_active_job(self, agent: str, task: str) -> bool:
-        return await asyncio.to_thread(self._has_active_job_sync, agent, task)
+    async def has_active_firing(self, entry_name: str) -> bool:
+        """Whether a firing of this schedule is due or running. A one-off waiting for next week is neither."""
+        return await asyncio.to_thread(self._has_active_firing_sync, entry_name)
 
-    def _has_active_job_sync(self, agent: str, task: str) -> bool:
+    def _has_active_firing_sync(self, entry_name: str) -> bool:
         with open_db_connection(self._db_path) as conn:
             row = conn.execute(
-                "SELECT 1 FROM job_queue WHERE agent = ? AND task = ? AND status IN (?, ?) LIMIT 1",
-                (agent, task, JobStatus.PENDING.value, JobStatus.RUNNING.value),
+                "SELECT 1 FROM job_queue WHERE json_extract(payload, '$.cron_entry') = ? "
+                "AND status IN (?, ?) AND scheduled_epoch <= ? LIMIT 1",
+                (entry_name, JobStatus.PENDING.value, JobStatus.RUNNING.value, now_epoch()),
             ).fetchone()
             return row is not None
 
@@ -276,7 +282,7 @@ class SQLiteJobProcessor(JobProcessor):
         slow, not stranded, and requeueing it would run it twice at once.
 
         A RUNNING job whose worker died never reaches a terminal state and, via
-        has_active_job(), blocks its cron entry from ever scheduling again. Each
+        has_active_firing(), blocks its cron entry from ever scheduling again. Each
         reaped job goes back to PENDING with an incremented retry_count (so a job
         that keeps killing its worker eventually needs attention, not an endless retry).
         Returns the number of jobs reaped.
@@ -382,6 +388,9 @@ class SQLiteJobProcessor(JobProcessor):
             raise
         except JobCancelled:
             await self.cancel(job.job_id)
+        except JobNeverStarted:
+            logger.warning("JobProcessor: job %s could not start", job.job_id, exc_info=True)
+            await self.mark_failed(job.job_id)
         except JobNeedsAttention:
             logger.warning("JobProcessor: job %s needs attention", job.job_id, exc_info=True)
             await self.mark_needs_attention(job.job_id)

@@ -224,9 +224,12 @@ class CodingRunner:
         try:
             outcome = await backend.run(spec, sink)
         except asyncio.CancelledError:
-            cancelled = RunOutcome(False, "", spec.session_id, failure=FailureKind.CANCELLED, error="Run cancelled.")
-            await asyncio.shield(self._finish_tree(run_id, task_id, tree))
-            await asyncio.shield(self._recorder.finish(run_id, cancelled))
+            # A pause and a cancel arrive the same way. Recorded as cancelled, a paused run started over.
+            paused = await asyncio.shield(self._recorder.task_is_paused(task_id))
+            kind, why = (FailureKind.PAUSED, "Run paused.") if paused else (FailureKind.CANCELLED, "Run cancelled.")
+            stopped = RunOutcome(False, "", spec.session_id, failure=kind, error=why)
+            await asyncio.shield(self._finish_tree(run_id, task_id, tree, keep_empty=paused))
+            await asyncio.shield(self._recorder.finish(run_id, stopped))
             raise
         except Exception as exc:
             logger.exception("coding run %s failed unexpectedly", run_id)

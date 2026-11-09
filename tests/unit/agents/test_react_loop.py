@@ -811,32 +811,23 @@ def _tool_map():
     return {"write_file": mutating, "read_file": readonly}
 
 
-async def test_record_side_effects_marks_on_successful_mutation(tmp_path):
+async def test_a_tool_is_given_the_way_to_mark_its_task_as_acting(tmp_path):
     agent = _load_agent("general", tmp_path)
     store = _RecordingStore()
     agent._deps.running_task_store = store
 
-    results = [
-        (ToolCall(name="read_file", call_id="1"), "data", True),
-        (ToolCall(name="write_file", call_id="2"), "ok", True),
-    ]
-    await agent._record_side_effects(AgentPayload(task_id="t1", prompt="p"), results, _tool_map())
+    before_change = agent._before_change(AgentPayload(task_id="t1", prompt="p"))
+    assert store.marked == [], "being able to act is not acting"
 
+    await before_change()
     assert store.marked == ["t1"]
 
 
-async def test_record_side_effects_ignores_readonly_and_failed_mutations(tmp_path):
+async def test_nothing_to_mark_without_a_store(tmp_path):
     agent = _load_agent("general", tmp_path)
-    store = _RecordingStore()
-    agent._deps.running_task_store = store
+    agent._deps.running_task_store = None
 
-    results = [
-        (ToolCall(name="read_file", call_id="1"), "data", True),  # read-only success
-        (ToolCall(name="write_file", call_id="2"), "err", False),  # mutation FAILED
-    ]
-    await agent._record_side_effects(AgentPayload(task_id="t1", prompt="p"), results, _tool_map())
-
-    assert store.marked == []
+    assert agent._before_change(AgentPayload(task_id="t1", prompt="p")) is None
 
 
 # ---------------------------------------------------------------------------

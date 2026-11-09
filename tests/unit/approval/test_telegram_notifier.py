@@ -18,7 +18,6 @@ import pytest
 from approval.base import Notifier
 from approval.models import Card, CardField, CardType
 from approval.telegram import TelegramNotifier
-from approval.tui import TUIAwareNotifier
 from gateways.telegram_api import parse_approval_callback
 
 
@@ -151,38 +150,3 @@ async def test_a_card_that_reached_no_chat_falls_back() -> None:
     await TelegramNotifier(fallback=fallback, http=_FakeHttp(fail=True)).notify(_card())
 
     assert len(fallback.cards) == 1
-
-
-# ── The bug this issue was actually about ────────────────────────────────────
-
-
-class _ConnectedTUI:
-    tui_connected = True
-
-
-@pytest.mark.asyncio
-async def test_an_open_tui_no_longer_swallows_a_card_from_an_unattended_task() -> None:
-    """A cron job at 03:00 is not a task anyone is watching.
-
-    TUIAwareNotifier stayed silent whenever a TUI was connected, on the reasoning
-    that SSE carries the card inline. That holds for the task you are looking at
-    and fails for one raised by a schedule while a TUI happens to be left open.
-    """
-    fallback = _Recorder()
-    notifier = TUIAwareNotifier(stream_manager=_ConnectedTUI(), fallback=fallback)
-
-    await notifier.notify(_card(source="nightly_backup"))
-    await notifier.notify(_card(blocking=False))
-
-    assert len(fallback.cards) == 2, "a card the TUI is not showing must still be delivered"
-
-
-@pytest.mark.asyncio
-async def test_an_open_tui_still_suppresses_the_card_it_is_showing() -> None:
-    """The original behaviour has to survive: no double alert for a live approval."""
-    fallback = _Recorder()
-    notifier = TUIAwareNotifier(stream_manager=_ConnectedTUI(), fallback=fallback)
-
-    await notifier.notify(_card(task_id="t1"))
-
-    assert not fallback.cards

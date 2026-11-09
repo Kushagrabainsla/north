@@ -44,7 +44,7 @@ from coding_agents.models import (
     RunOutcome,
     RunSpec,
 )
-from coding_agents.process import tail
+from coding_agents.process import process_identity, tail
 from utils.processes import stop_process_group
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ class ClaudeBackend(CodingBackend):
             start_new_session=True,  # its own process group, so stopping it stops what it started
             limit=STREAM_LINE_LIMIT_BYTES,
         )
-        await on_event(RunEvent(EventKind.STARTED, {"pid": process.pid}))
+        await on_event(RunEvent(EventKind.STARTED, process_identity(process.pid)))
         stream = _Stream(spec.session_id)
         timed_out = False
         exit_code, stderr = -1, ""

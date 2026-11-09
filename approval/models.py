@@ -12,11 +12,14 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from config import secret_store
 from utils.ids import generate_id
 from utils.secrets import REDACTED, contains_secret, is_secret_field_name, redact
+
+DEFAULT_APPROVE_OPTION = "Approve"
+DEFAULT_REJECT_OPTION = "Reject"
 
 
 class CardType(StrEnum):
@@ -187,6 +190,11 @@ class Card(BaseModel):
     # keeps a redacted `action_label`: the raw text can hold the very key the command sends.
     action_key: str = ""
     action_label: str = ""
+    # Which of `options` mean no. Declared when the card is made: read from the
+    # words, "Discard" and "Don't send" were recorded as approvals.
+    rejecting: list[str] = Field(default_factory=list)
+    # When it was decided; trimming history by creation time evicted a late answer at once.
+    decided_at: datetime | None = None
     # Who decided it (a `DecidedBy`), why, and what memory led there. Empty while
     # the card waits. `reason` is also yours when you give one.
     decided_by: str = ""
@@ -194,6 +202,13 @@ class Card(BaseModel):
     memory_used: list[MemoryRef] = Field(default_factory=list)
     # North's decision, when you overruled it. The card keeps both.
     overruled: PriorDecision | None = None
+
+    @model_validator(mode="after")
+    def _reject_means_no(self) -> Card:
+        """The plain Approve/Reject pair declares itself, for every way a card is made or read back."""
+        if not self.rejecting and DEFAULT_REJECT_OPTION in self.options:
+            self.rejecting = [DEFAULT_REJECT_OPTION]
+        return self
 
     @field_validator("memory_used", mode="before")
     @classmethod
@@ -219,6 +234,7 @@ class Card(BaseModel):
         requires_user_action: bool = False,
         source: str = "",
         action_key: str = "",
+        rejecting: Sequence[str] | None = None,
     ) -> Card:
         """Build a card with a fresh id and the defaults every caller wants.
 
@@ -234,6 +250,7 @@ class Card(BaseModel):
             title=title,
             message=message,
             options=list(options),
+            rejecting=list(rejecting or ()),
             fields=list(fields),
             context=context,
             # Information is a one-way notification, not a decision. Keep that
@@ -264,7 +281,7 @@ class Card(BaseModel):
         reads it whole.
         """
         if len(self.fields) == 1:
-            return {self.fields[0].name: reply.strip()} if reply.strip() else {}
+            return {self.fields[0].name: _picked(self.fields[0], reply.strip())} if reply.strip() else {}
         lines = [line for line in reply.splitlines() if line.strip()]
         if len(lines) == 1:
             lines = lines[0].split(";")

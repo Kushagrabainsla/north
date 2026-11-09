@@ -223,4 +223,4 @@ async def test_north_config_apply_runtime_non_inference_key(monkeypatch):
     monkeypatch.setattr("config.settings.reload_settings", lambda: None)
     tool = NorthConfigTool()
     note = tool._apply_runtime("NORTH_SOME_NON_INFERENCE_KEY")
-    assert note == "\n✅ Settings reloaded from disk."
+    assert note == "\n⏳ Saved. It takes effect when north restarts."

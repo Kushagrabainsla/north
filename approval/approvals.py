@@ -47,6 +47,7 @@ class Request:
     title: str
     message: str
     options: tuple[str, ...] = APPROVAL_DEFAULT_OPTIONS
+    rejecting: tuple[str, ...] | None = None  # which options mean no, when they are not the default ones
     declined: str = "Action cancelled by user."
     refused_hint: str = ""
     prepared: Any = None
@@ -277,6 +278,7 @@ class Approvals:
             title=request.title,
             message=request.message,
             options=list(request.options),
+            rejecting=request.rejecting,
             action_key=request.action.describe(),
         )
 

@@ -50,6 +50,7 @@ dependencies = [
     # Messages API is not OpenAI-compatible, so unlike the other providers this
     # one is not hand-rolled over httpx - it uses the official SDK.
     "anthropic>=1.0.0",
+    "aiogram>=3.31,<4",
 ]
 
 [project.scripts]

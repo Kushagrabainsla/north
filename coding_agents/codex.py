@@ -48,7 +48,7 @@ from coding_agents.models import (
     RunOutcome,
     RunSpec,
 )
-from coding_agents.process import tail
+from coding_agents.process import process_identity, tail
 from utils.processes import stop_process_group
 
 logger = logging.getLogger(__name__)
@@ -139,7 +139,7 @@ class CodexBackend(CodingBackend):
             limit=STREAM_LINE_LIMIT_BYTES,
         )
         assert process.stderr is not None
-        await on_event(RunEvent(EventKind.STARTED, {"pid": process.pid}))
+        await on_event(RunEvent(EventKind.STARTED, process_identity(process.pid)))
         server = AppServer(process)
         stderr = asyncio.create_task(tail(process.stderr))
         run = _Run(spec.session_id)

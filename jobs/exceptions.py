@@ -21,5 +21,9 @@ class JobNeedsAttention(JobError):
     """Raised when retrying a job automatically would be unsafe or exhausted."""
 
 
+class JobNeverStarted(JobError):
+    """Raised when a job did nothing before it failed, so trying it again repeats nothing."""
+
+
 class JobCancelled(JobError):
     """Raised when the work behind a running job was deliberately cancelled."""

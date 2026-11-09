@@ -7,6 +7,7 @@ import logging
 import sys
 from io import StringIO
 
+import utils.logging as logging_module
 from config import secret_store
 from utils.logging import _JSONFormatter, _redact_existing_handlers, _RedactingFormatter, configure_structured_logging
 from utils.secrets import REDACTED, redact, redact_for_logging
@@ -42,6 +43,25 @@ def test_libraries_that_log_whole_urls_are_quiet_below_a_warning(monkeypatch) ->
     logging.getLogger().setLevel(level)
     assert logging.getLogger("httpx").getEffectiveLevel() == logging.WARNING
     assert logging.getLogger("httpcore").getEffectiveLevel() == logging.WARNING
+
+
+def test_the_log_rotates_when_the_server_writes_it(tmp_path, monkeypatch) -> None:
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(logging_module, "_LOG_BYTES", 400)
+    level = root.level
+    log_file = tmp_path / "north.log"
+
+    configure_structured_logging(log_file=log_file)
+    for number in range(40):
+        logging.getLogger("uvicorn.error").info("line %d", number)
+    for handler in root.handlers:
+        handler.close()
+    root.setLevel(level)
+
+    assert log_file.exists() and (tmp_path / "north.log.1").exists()
+    assert log_file.stat().st_size <= 800
+    assert len(list(tmp_path.glob("north.log*"))) <= 6
 
 
 def test_telegram_bot_token_is_removed_from_exception_url() -> None:

@@ -15,7 +15,7 @@ import typer
 
 from cli.constants import _TIMEOUT
 from config.run_file import read_run_file
-from config.security import load_secret, server_proof
+from config.security import effective_secret, server_proof
 from config.settings import settings
 
 # Servers that answered this process's proof request correctly.
@@ -24,6 +24,10 @@ _genuine: set[str] = set()
 
 class NotThisNorth(Exception):
     """The server at a URL did not prove it holds this home's secret."""
+
+
+class OtherNorth(NotThisNorth):
+    """A north answers at the URL, holding a different secret: another home's, or one set in its environment."""
 
 
 def base_url() -> str:
@@ -57,15 +61,17 @@ def _check_genuine(url: str) -> None:
         proof = response.json().get("proof", "") if response.status_code == 200 else ""
     except ValueError:
         proof = ""
-    if not isinstance(proof, str) or not secrets.compare_digest(proof, server_proof(nonce, load_secret())):
+    if not isinstance(proof, str) or not proof:
         raise NotThisNorth(url)
+    if not secrets.compare_digest(proof, server_proof(nonce)):
+        raise OtherNorth(url)
     _genuine.add(url)
 
 
 def _headers(url: str | None = None) -> dict[str, str]:
     """The secret header, for a server at *url* (this home's north by default) that proved it is north."""
     _check_genuine((url or base_url()).rstrip("/"))
-    return {"X-North-Secret": load_secret()}
+    return {"X-North-Secret": effective_secret()}
 
 
 def pairing_url(url: str) -> str:

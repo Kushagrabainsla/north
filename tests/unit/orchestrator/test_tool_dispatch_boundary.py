@@ -48,6 +48,8 @@ class _RecordingTool:
     async def execute(self, tool_input):
         self.captured["edit_scope"] = tool_input.edit_scope
         self.captured["params"] = dict(tool_input.params)
+        if self.is_mutating and tool_input.before_change is not None:
+            await tool_input.before_change()
         return MagicMock(success=True, data={"k": "v"}, error=None)
 
     def format_output(self, _data):

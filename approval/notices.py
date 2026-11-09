@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS notices (
     source        TEXT NOT NULL,
     task_id       TEXT,
     created_at    TEXT NOT NULL,
-    dismissed_at  TEXT
+    dismissed_at  TEXT,
+    key           TEXT
 )
 """
 # Undismissed notices shown at once; older ones stay stored.
@@ -47,6 +48,7 @@ class Notice:
     task_id: str | None
     created_at: str
     dismissed_at: str | None = None
+    key: str | None = None  # names a problem, so it is told once while it lasts
 
     def as_dict(self) -> dict[str, str | None]:
         return asdict(self)
@@ -63,8 +65,13 @@ class NoticeStore:
             db_path.parent.mkdir(parents=True, exist_ok=True)
             with open_db_connection(db_path) as conn:
                 conn.execute(_SCHEMA)
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(notices)").fetchall()}
+                if "key" not in columns:
+                    conn.execute("ALTER TABLE notices ADD COLUMN key TEXT")
 
-    def add(self, *, title: str, message: str, source: str, task_id: str | None = None) -> Notice:
+    def add(
+        self, *, title: str, message: str, source: str, task_id: str | None = None, key: str | None = None
+    ) -> Notice:
         notice = Notice(
             id=generate_id(),
             title=title,
@@ -72,6 +79,7 @@ class NoticeStore:
             source=source,
             task_id=task_id,
             created_at=datetime.now(UTC).isoformat(),
+            key=key,
         )
         if self._db_path is None:
             with self._lock:
@@ -79,10 +87,26 @@ class NoticeStore:
             return notice
         with open_db_connection(self._db_path) as conn:
             conn.execute(
-                "INSERT INTO notices (id, title, message, source, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (notice.id, title, message, source, task_id, notice.created_at),
+                "INSERT INTO notices (id, title, message, source, task_id, created_at, key) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (notice.id, title, message, source, task_id, notice.created_at, key),
             )
         return notice
+
+    def open_with(self, key: str) -> Notice | None:
+        """The undismissed notice for the problem *key*, if there is one."""
+        if self._db_path is None:
+            with self._lock:
+                return next((n for n in self._memory.values() if n.key == key and n.dismissed_at is None), None)
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute("SELECT * FROM notices WHERE key = ? AND dismissed_at IS NULL", (key,)).fetchone()
+        return Notice(**dict(row)) if row is not None else None
+
+    def clear(self, key: str) -> None:
+        """Dismiss the notice for the problem *key*, which is over."""
+        notice = self.open_with(key)
+        if notice is not None:
+            self.dismiss(notice.id)
 
     def waiting(self) -> list[Notice]:
         """Undismissed notices, newest first."""

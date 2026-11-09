@@ -84,6 +84,7 @@ class WriteFileTool(Tool):
             title="File Write - Approval Required",
             message=f"Write `{call.path}`?\n```diff\n{unified_diff(call.path, old, call.content)}\n```",
             options=("Write", "Cancel"),
+            rejecting=("Cancel",),
             declined="Write cancelled by user.",
             prepared=call,
         )

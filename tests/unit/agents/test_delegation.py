@@ -141,6 +141,22 @@ async def test_empty_task_param_returns_failure(tmp_path: Path) -> None:
     assert "task" in result["error"].lower()
 
 
+async def test_a_sub_agent_that_stopped_blocked_is_not_reported_as_a_success(tmp_path: Path) -> None:
+    from unittest.mock import AsyncMock
+
+    from agents.registry import AgentRegistry
+
+    deps = _make_deps(tmp_path)
+    deps.agent_registry = AgentRegistry(agents_dir=AGENTS_DIR, deps=deps)
+    blocked = AgentResult(output="I could not", summary="stuck", data={"outcome_status": "blocked"})
+    deps.agent_registry.get("general").run = AsyncMock(return_value=blocked)
+    agent = GeneralAgent(AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml"), deps)
+
+    result = json.loads(await agent._delegate_task(_payload(), {"agent": "general", "task": "look it up"}))
+
+    assert result["success"] is False and result["blocked"] is True
+
+
 # ---------------------------------------------------------------------------
 # Engineering agent fallback prevention
 # ---------------------------------------------------------------------------

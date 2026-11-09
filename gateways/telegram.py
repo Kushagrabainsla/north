@@ -15,11 +15,16 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
+from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramUnauthorizedError
+from aiogram.types import CallbackQuery, Message
+from aiogram.utils.backoff import BackoffConfig
 
 from config.approval_mode import ApprovalMode, require_approval_mode
 from config.settings import settings
@@ -31,14 +36,18 @@ from gateways.telegram_api import (
     bot_url,
     is_option_choice,
     parse_approval_callback,
+    referenced_card,
     send_message,
     tapped_label,
     within_telegram_limit,
 )
+from gateways.telegram_outbox import TelegramOutbox
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 2.0  # seconds between long-poll requests
+_POLL_INTERVAL = 2.0  # seconds before listening again after polling itself stopped
+_LONG_POLL_SECONDS = 25
+_BACKOFF = BackoffConfig(min_delay=1.0, max_delay=30.0, factor=1.5, jitter=0.1)
 # How often a gateway that is not set up looks again. The dashboard saves the bot
 # into the in-memory settings, so the check is cheap and needs no restart.
 _SETUP_RECHECK_S = 5.0
@@ -106,9 +115,9 @@ _LEDGER_POLL_LIMIT = 50
 # Ledger actions that carry a finished task's answer, most authoritative first.
 _COMPLETED_ACTIONS = ("task_synthesis", "task_completed", "task_completed_with_failures")
 _TERMINAL_STATUSES = ("failed", "cancelled")
-# The task's own end, which ends the wait with or without output: a cancel
-# carries none, so three cancelled tasks kept the chat "typing" for a day.
-_ENDED_ACTIONS = ("task_cancelled", "task_failed")
+# The task's own end, the only thing besides its answer that ends the wait. A failed
+# step on the way is not one: the task carries on, and the chat was told it had failed.
+_ENDED_ACTIONS = ("task_cancelled", "task_failed", "task_needs_attention")
 
 
 class _TaskNotFound(Exception):
@@ -134,7 +143,7 @@ def _finished_output(entries: list[dict], task_id: str, poll: int) -> str | None
     for entry in entries:
         status = (entry.get("status") or "").lower()
         output = entry.get("output")
-        if status in _TERMINAL_STATUSES and (output or entry.get("action") in _ENDED_ACTIONS):
+        if status in _TERMINAL_STATUSES and entry.get("action") in _ENDED_ACTIONS:
             logger.warning("Task %s terminal status=%s at poll %d", task_id, status, poll)
             return f"Task {status}: {output}" if output else f"Task {status}."
 
@@ -167,7 +176,7 @@ class TelegramGateway:
 
     def __init__(self, orchestrator_base: str = "http://127.0.0.1:8000") -> None:
         self._orchestrator_base = orchestrator_base
-        self._offset: int = 0
+        self._outbox = TelegramOutbox()
         self._pending: dict[tuple[int, int], dict] = {}  # (chat_id, message_id) -> {message_id, text, task_id}
         self._tasks: set[asyncio.Task] = set()
         self._http = httpx.AsyncClient(timeout=_HTTP_TIMEOUT)
@@ -190,26 +199,41 @@ class TelegramGateway:
         await self._http.aclose()
         logger.info("Telegram gateway stopped")
 
-    async def _get_updates(self) -> list[dict]:
-        """Long-poll Telegram for new messages and callback queries."""
+    def _track(self, work: Coroutine[Any, Any, None]) -> None:
+        """Run *work* in its own task so one message cannot hold up the next, keeping a strong reference."""
+        task = asyncio.create_task(work)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _on_message(self, message: Message) -> None:
+        self._track(self._process_message(message.model_dump(mode="json", by_alias=True, exclude_none=True)))
+
+    async def _on_callback(self, callback: CallbackQuery) -> None:
+        self._track(self._process_callback_query(callback.model_dump(mode="json", by_alias=True, exclude_none=True)))
+
+    async def _stop_when_bot_changes(self, dispatcher: Dispatcher, token: str) -> None:
+        """End polling once this bot is no longer the one set up, or the gateway is stopping."""
+        while self._running and settings.telegram_ready and settings.telegram_bot_token == token:
+            await asyncio.sleep(_SETUP_RECHECK_S)
+        with contextlib.suppress(RuntimeError):  # it was not polling yet
+            await dispatcher.stop_polling()
+
+    async def _poll(self, token: str) -> None:
+        """Listen for this bot's messages. aiogram long-polls and backs off while Telegram cannot be reached."""
+        dispatcher = Dispatcher()
+        dispatcher.message.register(self._on_message)
+        dispatcher.callback_query.register(self._on_callback)
+        watcher = asyncio.create_task(self._stop_when_bot_changes(dispatcher, token))
         try:
-            resp = await self._http.post(
-                bot_url("getUpdates"),
-                json={
-                    "offset": self._offset,
-                    "timeout": 25,  # long-poll (seconds)
-                    "allowed_updates": ["message", "callback_query"],
-                },
+            await dispatcher.start_polling(
+                Bot(token),
+                polling_timeout=_LONG_POLL_SECONDS,
+                backoff_config=_BACKOFF,
+                allowed_updates=["message", "callback_query"],
+                handle_signals=False,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("ok"):
-                logger.warning("Telegram API returned ok=false: %s", data.get("description", ""))
-                return []
-            return data.get("result", [])
-        except httpx.RequestError as exc:
-            logger.debug("Telegram poll error: %s", exc)
-            return []
+        finally:
+            watcher.cancel()
 
     async def _send_message(
         self,
@@ -349,21 +373,28 @@ class TelegramGateway:
             logger.error("Failed to submit task to north: %s", exc)
             return None
 
-    async def _question_waiting_in(self, task_id: str) -> str | None:
-        """The id of the question *task_id* is waiting for you to answer, or None."""
+    async def _waiting_questions(self) -> list[dict]:
+        """Every question waiting for you to answer."""
         try:
             resp = await self._http.get(f"{self._orchestrator_base}/web/api/approvals", headers=_headers())
         except httpx.RequestError as exc:
             logger.error("Failed to read the cards waiting on you: %s", exc)
-            return None
+            return []
         if resp.status_code != 200:
-            return None
-        waiting = [
-            card
-            for card in resp.json()
-            if card.get("task_id") == task_id and card.get("status") == "pending" and card.get("type") == "question"
-        ]
+            return []
+        return [card for card in resp.json() if card.get("status") == "pending" and card.get("type") == "question"]
+
+    async def _question_waiting_in(self, task_id: str) -> str | None:
+        """The id of the question *task_id* is waiting for you to answer, or None."""
+        waiting = [card for card in await self._waiting_questions() if card.get("task_id") == task_id]
         return max(waiting, key=lambda card: card.get("created_at") or "")["id"] if waiting else None
+
+    async def _question_replied_to(self, msg: dict) -> str | None:
+        """The waiting question this message is a reply to, or None."""
+        reference = referenced_card((msg.get("reply_to_message") or {}).get("text") or "")
+        if not reference:
+            return None
+        return next((card["id"] for card in await self._waiting_questions() if card["id"].startswith(reference)), None)
 
     async def _send_into_task(self, task_id: str, text: str) -> bool:
         """Send *text* into a running task; False when it has finished or north cannot be reached."""
@@ -523,10 +554,25 @@ class TelegramGateway:
         text = await self._spoken_or_written_text(chat, msg)
         if not text:
             return
-        if text.startswith("/"):
+        # A reply to a question answers it, whichever task asked and however the answer starts.
+        replied_to = await self._question_replied_to(msg)
+        if replied_to is not None and await self._respond_approval(replied_to, "answered", text):
+            await self._reply(chat, f"✅ Answered: {text}")
+            return
+        if text.startswith("/") and not await self._is_answer(chat, text):
             await self._run_command(chat, text)
             return
         await self._run_task(chat, text)
+
+    async def _is_answer(self, chat: _Reply, text: str) -> bool:
+        """Whether *text*, which starts with a slash, answers the question this chat's task is asking.
+
+        `/Users/me/notes` is an answer to "which folder?". A real command is always a command.
+        """
+        if text.split()[0] in _COMMAND_HANDLERS:
+            return False
+        running = self._pending_task_for(chat.chat_id)
+        return bool(running) and await self._question_waiting_in(running) is not None
 
     async def _reply(self, chat: _Reply, text: str) -> None:
         await self._send_message(chat.chat_id, text, reply_to=chat.message_id)
@@ -742,10 +788,9 @@ class TelegramGateway:
         finally:
             self._pending.pop(pending_key, None)
 
-        if output:
-            await self._reply(chat, within_telegram_limit(output))
-        else:
-            await self._reply(chat, f"✅ Task submitted (ID: `{task_id}`). Check north for results.")
+        text = within_telegram_limit(output or f"✅ Task submitted (ID: `{task_id}`). Check north for results.")
+        if await self._send_message(chat.chat_id, text, reply_to=chat.message_id) is None:
+            await self._outbox.add(chat.chat_id, text, reply_to=chat.message_id)  # goes out when Telegram is back
         _forget_wait(chat)
 
     def resume_waits(self) -> int:
@@ -798,41 +843,28 @@ class TelegramGateway:
         await self._wait_until_ready()
         await self.start()
         self.resume_waits()
-        token = settings.telegram_bot_token
         logger.info("Telegram gateway polling loop started")
 
         while self._running:
+            token = ""
             try:
-                if not settings.telegram_ready:
-                    await self._wait_until_ready()
-                if settings.telegram_bot_token != token:  # another bot: its updates are numbered afresh
-                    token, self._offset = settings.telegram_bot_token, 0
-                updates = await self._get_updates()
-                for update in updates:
-                    self._offset = update["update_id"] + 1
-                    if "message" in update:
-                        msg = update["message"]
-                        # Process in its own task so we don't block the poller, retaining a strong ref
-                        task = asyncio.create_task(self._process_message(msg))
-                        self._tasks.add(task)
-                        task.add_done_callback(self._tasks.discard)
-                    elif "callback_query" in update:
-                        cb = update["callback_query"]
-                        task = asyncio.create_task(self._process_callback_query(cb))
-                        self._tasks.add(task)
-                        task.add_done_callback(self._tasks.discard)
+                await self._wait_until_ready()
+                token = settings.telegram_bot_token
+                await self._poll(token)
             except asyncio.CancelledError:
                 break
+            except TelegramUnauthorizedError:
+                logger.error("Telegram refused the bot token; waiting for a new one. Set it in Settings.")
+                await self._wait_for_another_bot(token)
             except Exception:
-                logger.exception("Telegram poll iteration failed")
+                logger.exception("Telegram polling stopped")
                 await asyncio.sleep(_POLL_INTERVAL)
-            else:
-                if not updates:  # no updates means long-poll timed out — poll again immediately
-                    continue
-                # Brief pause between batches to avoid busy-wait
-                await asyncio.sleep(0.1)
 
         await self.stop()
+
+    async def _wait_for_another_bot(self, token: str) -> None:
+        while self._running and settings.telegram_bot_token == token:
+            await asyncio.sleep(_SETUP_RECHECK_S)
 
 
 # Every slash command the gateway answers. Anything else is left to north itself

@@ -13,6 +13,8 @@ So the wire format lives here once, and neither caller writes it.
 from __future__ import annotations
 
 import logging
+import re
+from typing import NamedTuple
 
 import httpx
 
@@ -30,6 +32,20 @@ MAX_MESSAGE_CHARS = 3900
 # `callback_data` layout for an approval button: approval:<decision>:<card_id>.
 # Telegram caps callback_data at 64 bytes, which a card id fits inside.
 _CALLBACK_PREFIX = "approval"
+
+
+_CARD_REFERENCE_RE = re.compile(r"\bref ([0-9a-f]{8})\b")
+
+
+def card_reference(card_id: str) -> str:
+    """The short mark on a card's message that lets a reply to it name the card."""
+    return f"ref {card_id[:8]}"
+
+
+def referenced_card(text: str) -> str:
+    """The card reference in *text*, the message being replied to, or ""."""
+    match = _CARD_REFERENCE_RE.search(text)
+    return match.group(1) if match else ""
 
 
 def bot_url(method: str) -> str:
@@ -113,20 +129,29 @@ def approval_keyboard(card_id: str, options: list[str] | None = None) -> dict:
     }
 
 
-async def send_message(
+class SendResult(NamedTuple):
+    """How a send ended: Telegram's response, or None and whether trying again could help."""
+
+    response: dict | None
+    worth_retrying: bool = False
+
+
+def _failed(exc: Exception, chat_id: int) -> SendResult:
+    logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return SendResult(None, status == 429 or status >= 500)
+    return SendResult(None, True)  # it never got an answer
+
+
+async def deliver(
     http: httpx.AsyncClient,
     chat_id: int,
     text: str,
     reply_to: int | None = None,
     reply_markup: dict | None = None,
-) -> dict | None:
-    """Send one message, retrying without Markdown if Telegram rejects it.
-
-    Returns the API response, or None when the send failed - callers decide
-    whether that is worth reporting. A failed notification must never raise into
-    the caller: north is telling you something, and losing the telling is not a
-    reason to also lose whatever produced it.
-    """
+) -> SendResult:
+    """Send one message, retrying without Markdown if Telegram rejects it. Never raises."""
     payload: dict = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     if reply_to:
         payload["reply_to_message_id"] = reply_to
@@ -135,19 +160,32 @@ async def send_message(
     try:
         resp = await http.post(bot_url("sendMessage"), json=payload)
         resp.raise_for_status()
-        return resp.json()
+        return SendResult(resp.json())
     except httpx.HTTPStatusError as exc:
         # Markdown parsing failed (e.g. unescaped code characters), retry as plain text
-        if exc.response.status_code == 400 and payload.get("parse_mode"):
-            payload.pop("parse_mode", None)
-            try:
-                resp = await http.post(bot_url("sendMessage"), json=payload)
-                resp.raise_for_status()
-                return resp.json()
-            except (httpx.RequestError, httpx.HTTPStatusError) as retry_exc:
-                logger.error("Failed to send Telegram plain message to %s: %s", chat_id, retry_exc)
-                return None
-        logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
+        if exc.response.status_code != 400:
+            return _failed(exc, chat_id)
+        payload.pop("parse_mode", None)
+        try:
+            resp = await http.post(bot_url("sendMessage"), json=payload)
+            resp.raise_for_status()
+            return SendResult(resp.json())
+        except (httpx.RequestError, httpx.HTTPStatusError) as retry_exc:
+            return _failed(retry_exc, chat_id)
     except httpx.RequestError as exc:
-        logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
-    return None
+        return _failed(exc, chat_id)
+
+
+async def send_message(
+    http: httpx.AsyncClient,
+    chat_id: int,
+    text: str,
+    reply_to: int | None = None,
+    reply_markup: dict | None = None,
+) -> dict | None:
+    """Send one message; its API response, or None when the send failed.
+
+    A failed notification must never raise into the caller: north is telling you
+    something, and losing the telling is not a reason to also lose whatever produced it.
+    """
+    return (await deliver(http, chat_id, text, reply_to, reply_markup)).response

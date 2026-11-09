@@ -24,7 +24,7 @@ from jobs.scheduler import (
 )
 from orchestrator.api.deps import _get_cron_store, router
 from orchestrator.api_context import current_services
-from utils.time import format_local, local_timezone_name, now_epoch
+from utils.time import format_local, now_epoch
 from utils.weekdays import parse_weekdays
 
 
@@ -213,7 +213,7 @@ async def _ensure_editable_row(store, name: str) -> None:
         hour=default.hour,
         minute=default.minute,
         weekdays=default.weekdays,
-        tz=default.zone_name,
+        tz=default.tz,
         enabled=default.enabled,
         label=default.label,
         interval_minutes=default.interval_minutes,
@@ -266,7 +266,6 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
         hour=body.hour or 0,
         minute=0 if body.interval_minutes is not None else body.minute,
         weekdays=_days(body.days),
-        tz=local_timezone_name(),
         enabled=body.enabled,
         label=body.label,
         interval_minutes=body.interval_minutes,

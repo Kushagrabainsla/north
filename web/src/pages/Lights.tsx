@@ -198,11 +198,19 @@ function LightCard({ light, onChanged, onNotice, onMine }: {
   const holding = useRef(false);
   // While a slider is held, what the light reports back must not pull it from under your finger.
   useEffect(() => { if (!holding.current) setDraft(light); }, [light]);
+  const reported = useRef(light);
+  reported.current = light;
   const send = useMemo(
     () => latestWins(
       (change: LightChange) => post<Applied>("/web/api/lights/apply", { ids: [light.id], ...change }),
-      (out) => { onChanged(out.lights); if (out.errors.length) onNotice(failures(out.errors, () => light.name)); },
-      (error) => onNotice(`${light.name}: ${message(error)}`),
+      (out) => {
+        onChanged(out.lights);
+        if (out.errors.length) {
+          onNotice(failures(out.errors, () => light.name));
+          setDraft(reported.current); // the card shows what the light is doing, not what was asked
+        }
+      },
+      (error) => { onNotice(`${light.name}: ${message(error)}`); setDraft(reported.current); },
     ),
     [light.id],
   );
@@ -271,7 +279,9 @@ type LiveSend = { frames: (Frame & { id: string })[]; beat: boolean };
 function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope; onStopped: () => void }) {
   const [mode, setMode] = useState<Mode>("beat");
   const [strength, setStrength] = useState(0.6);
-  const [running, setRunning] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "starting" | "running" | "stopping">("idle");
+  const running = phase === "running";
+  const attempt = useRef(0); // a start finding this moved on was stopped or left while it waited
   const [level, setLevel] = useState(0);
   const [beats, setBeats] = useState(0);
   const [note, setNote] = useState("");
@@ -281,25 +291,36 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
   const colourful = lights.filter((light) => light.can.color && !light.unreachable);
 
   const stop = async () => {
-    const running = session.current;
+    const ending = session.current;
     session.current = null;
-    setRunning(false);
+    attempt.current += 1;
+    setPhase("stopping");
     setLevel(0);
-    if (running) {
-      await running.stop();
+    if (ending) {
+      await ending.stop();
       onStopped();
     }
+    setPhase("idle");
   };
-  useEffect(() => () => { void session.current?.stop(); }, []);
+  useEffect(() => () => { attempt.current += 1; void session.current?.stop(); }, []);
 
   const start = async () => {
+    attempt.current += 1;
+    const mine = attempt.current;
+    const stale = () => attempt.current !== mine;
     setNote("");
+    setPhase("starting");
+    await listen(stale);
+  };
+
+  const listen = async (stale: () => boolean) => {
+    const giveUp = (why: string) => { setNote(why); setPhase("idle"); };
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-      setNote("Browsers allow the microphone only on a secure page: open the dashboard on the computer running north (http://127.0.0.1…), or over HTTPS.");
+      giveUp("Browsers allow the microphone only on a secure page: open the dashboard on the computer running north (http://127.0.0.1…), or over HTTPS.");
       return;
     }
     if (!colourful.length) {
-      setNote("None of these lights can show colour.");
+      giveUp("None of these lights can show colour.");
       return;
     }
     let stream: MediaStream;
@@ -307,8 +328,12 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     } catch (error) {
       const name = error instanceof DOMException ? error.name : "";
-      setNote(name === "NotAllowedError" ? "The microphone was not allowed. Allow it for this page in your browser, then press Start."
+      giveUp(name === "NotAllowedError" ? "The microphone was not allowed. Allow it for this page in your browser, then press Start."
         : name === "NotFoundError" ? "No microphone was found on this device." : `The microphone could not start: ${message(error)}`);
+      return;
+    }
+    if (stale()) { // the prompt can sit open for as long as you like
+      stream.getTracks().forEach((track) => track.stop());
       return;
     }
     const context = new AudioContext();
@@ -325,7 +350,12 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
       following = (await post<{ following: string[] }>("/web/api/lights/live/start", { ids: colourful.map((light) => light.id) })).following;
     } catch (error) {
       await release();
-      setNote(message(error));
+      if (!stale()) giveUp(message(error));
+      return;
+    }
+    if (stale()) {
+      await release();
+      await post("/web/api/lights/live/stop", {}).catch(() => undefined);
       return;
     }
     const send = latestWins(
@@ -350,7 +380,7 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
       }
     };
     session.current = { stop: async () => { listener.port.onmessage = null; await release(); await post("/web/api/lights/live/stop", {}).catch(() => undefined); } };
-    setRunning(true);
+    setPhase("running");
   };
 
   const chosen = MODES.find((entry) => entry.mode === mode) ?? MODES[0];
@@ -374,7 +404,7 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
       <span key={beats} className={`music-beat ${running && beats ? "on" : ""}`} title="Lights up on each beat it hears"/>
       <span className="music-meter" aria-hidden="true"><span style={{ width: `${level}%` }}/></span>
     </span>
-    <button type="button" className={`light-power ${running ? "" : "music-start"}`} aria-pressed={running} onClick={() => (running ? void stop() : void start())}>{running ? "Stop" : "Start"}</button>
+    <button type="button" className={`light-power ${running ? "" : "music-start"}`} aria-pressed={running} disabled={phase === "starting" || phase === "stopping"} onClick={() => (running ? void stop() : void start())}>{phase === "starting" ? "Starting…" : running ? "Stop" : "Start"}</button>
     {note && <p className="lights-notice music-note" role="status">{note}</p>}
   </section>;
 }

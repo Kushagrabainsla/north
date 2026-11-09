@@ -15,6 +15,10 @@ from pathlib import Path
 
 import httpx
 
+from utils.logging import LOG_TO_HOME_ENV
+
+CRASH_LOG_NAME = "north.log.crash"
+
 
 def _detached_process_kwargs() -> dict:
     """Popen kwargs that fully detach a child so it outlives the launching shell.
@@ -29,10 +33,17 @@ def _detached_process_kwargs() -> dict:
     return {"start_new_session": True}
 
 
+def url_host(host: str) -> str:
+    """*host* as it goes in a URL: an IPv6 address needs brackets."""
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
 def _port_in_use(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        return s.connect_ex((host, port)) == 0
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def _is_north_server(host: str, port: int) -> bool:
@@ -40,10 +51,23 @@ def _is_north_server(host: str, port: int) -> bool:
     from cli._client import NotThisNorth, _check_genuine
 
     try:
-        _check_genuine(f"http://{host}:{port}")
+        _check_genuine(f"http://{url_host(host)}:{port}")
     except (NotThisNorth, httpx.HTTPError):
         return False
     return True
+
+
+def _is_other_north(host: str, port: int) -> bool:
+    """Whether a north serves *port* with a different secret: it can be stopped, but it is not a stray process."""
+    from cli._client import OtherNorth, _check_genuine
+
+    try:
+        _check_genuine(f"http://{url_host(host)}:{port}")
+    except OtherNorth:
+        return True
+    except Exception:  # noqa: BLE001 - anything else means no north answered
+        return False
+    return False
 
 
 def _sync_docker_secret(compose_file: Path) -> None:
@@ -232,10 +256,13 @@ def _start_server_process(
         # Where a coding agent's hook reaches this server. It was always port 8000,
         # so on any other port every action the agent took was refused.
         "NORTH_NORTH_ORCHESTRATOR_URL": f"http://127.0.0.1:{port}",
+        LOG_TO_HOME_ENV: "1",
     }
+    # The server writes and rotates north.log itself. What it cannot log (a crash before
+    # logging starts, a raw print) lands here, started afresh each time so it stays small.
     # The child gets its own dup of the fd, so closing the parent's copy on the
-    # way out of the with-block leaves the server's logging intact.
-    with open(settings.north_home / "north.log", "a", encoding="utf-8") as log_file:
-        proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
+    # way out of the with-block leaves the server's output intact.
+    with open(settings.north_home / CRASH_LOG_NAME, "w", encoding="utf-8") as crash_log:
+        proc = subprocess.Popen(cmd, stdout=crash_log, stderr=crash_log, env=server_env, **_detached_process_kwargs())
     (settings.north_home / "north.pid").write_text(str(proc.pid), encoding="utf-8")
     return proc

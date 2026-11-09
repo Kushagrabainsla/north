@@ -127,20 +127,52 @@ class FlowRunner:
             started.append(run.run_id)
         return started
 
-    def replace_waiting(self, flow_name: str) -> list[FlowRun]:
-        """End the runs of *flow_name* still waiting on a resource, for a newer run to replace; return them.
+    def run_of_firing(self, job_id: str) -> FlowRun | None:
+        """The run a scheduled firing already began, if it began one."""
+        return self._store.latest_for_task(job_id)
+
+    def replace_waiting(self, flow_name: str, *, keeping: str = "") -> list[FlowRun]:
+        """End the runs of *flow_name* a newer scheduled run makes pointless; return them.
 
         A waiting run would do the newer run's work for a time that has passed:
         the Oct 23 briefings waited 23 hours for a model and arrived on Oct 24,
-        and kept that day's from running at all. A test run is evidence for
+        and kept that day's from running at all. A scheduled run paused with no card
+        is the same: nothing waits on it, and it was only piling up. One with a card
+        stays, because you have been asked about it. A test run is evidence for
         activation, not the same work, so it stays, and so does a run being
-        tried again right now, which is running.
+        tried again right now, which is running, and the firing's own run (*keeping*).
         """
         return [
             self._store.discard(run.run_id, reason="Replaced by a newer run while it waited")
             for run in self._store.list_runs(flow_name, limit=None)
-            if run.status == "waiting" and not run.test_mode and run.run_id not in self._resuming
+            if run.run_id != keeping
+            and not run.test_mode
+            and run.run_id not in self._resuming
+            and (run.status == "waiting" or (run.status == "paused" and self._unasked_scheduled(run)))
         ]
+
+    def _unasked_scheduled(self, run: FlowRun) -> bool:
+        """Whether *run* came from a schedule and has no card waiting on you."""
+        if run.trigger != "schedule":
+            return False
+        return self._interaction is None or not self._interaction.is_waiting(run.task_id, STOPPED_RUN_SOURCE)
+
+    async def discard_old_stopped(self, before: datetime) -> int:
+        """End scheduled runs stopped since before *before*, and their cards; say so, and return how many.
+
+        A stopped run is kept for you to resume, and nothing ever ended one you did not.
+        """
+        old = self._store.stopped_before(before)
+        for run in old:
+            self.discard(run.run_id)
+        if old and self._interaction is not None:
+            names = ", ".join(sorted({run.flow_name for run in old}))
+            await self._interaction.deliver(
+                source="flow",
+                title=f"Cleared {len(old)} old stopped run(s)",
+                message=f"They had waited more than two weeks: {names}. Their finished steps stay on record.",
+            )
+        return len(old)
 
     async def _resume(self, run: FlowRun) -> None:
         try:
@@ -271,6 +303,7 @@ class FlowRunner:
                     message=f"{run.error or 'It did not finish.'}\n\n"
                     f"{RESUME_OPTION} runs the step it stopped on again. {DISCARD_OPTION} ends the run.",
                     options=[RESUME_OPTION, DISCARD_OPTION],
+                    rejecting=[DISCARD_OPTION],
                 )
             else:
                 await self._interaction.deliver(
@@ -281,6 +314,18 @@ class FlowRunner:
                 )
         except Exception:
             logger.warning("Could not tell the user how scheduled flow %s ended", run.flow_name, exc_info=True)
+
+    async def tell_could_not_start(self, flow_name: str, problem: str) -> None:
+        """Say that a schedule fired and its flow could not begin. Once, while it lasts."""
+        if self._interaction is not None:
+            await self._interaction.deliver(
+                source="flow", title=f"{flow_name} did not start", message=problem, key=_could_not_start(flow_name)
+            )
+
+    def started(self, flow_name: str) -> None:
+        """The flow began: a notice that it could not is over."""
+        if self._interaction is not None:
+            self._interaction.clear_notice(_could_not_start(flow_name))
 
     def _is_norths_own(self, flow_name: str) -> bool:
         try:
@@ -557,6 +602,15 @@ class FlowRunner:
                 # prose and schema-valid paths are not evidence of saved work.
                 artifact_schema = output_schema.get("properties", {}).get("artifacts", {})
                 if artifact_schema.get("type") == "array" and artifact_schema.get("items", {}).get("type") == "string":
+                    if "artifacts" not in contract_output and _final_json(result) is None:
+                        return self._store.update(
+                            run.run_id,
+                            status="paused",
+                            current_step=index,
+                            outputs=outputs,
+                            error=f"Skill step '{step.name}' promises files, and its answer could not be read "
+                            "to see which.",
+                        )
                     reported = contract_output.get("artifacts", [])
                     # A relative path is the step's folder's; the daemon's working directory never counts.
                     paths = [str(Path(folder) / path) for path in reported]
@@ -618,6 +672,13 @@ class FlowRunner:
 
 
 _ENDED = frozenset({"completed", "failed", "paused", "rejected"})
+
+
+def _could_not_start(flow_name: str) -> str:
+    """The name of the problem "this flow's schedule fired and it could not begin"."""
+    return f"flow-start:{flow_name}"
+
+
 _MAX_DELIVERED_CHARS = 3_500  # Telegram takes 4,096 per message, with the card's own lines around it
 
 
@@ -704,12 +765,8 @@ def _step_prompt(
     )
 
 
-def _contract_output(result, schema: dict[str, Any]) -> dict[str, Any]:
-    """Normalize an agent result into the object validated and handed forward."""
-    data = result.data if isinstance(result.data, dict) else {}
-    if not schema_errors(data, schema, path="output"):
-        return data
-
+def _final_json(result) -> dict[str, Any] | None:
+    """The JSON object the agent ended with, or None when its final answer is not one."""
     text = str(result.output or "").strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -721,8 +778,23 @@ def _contract_output(result, schema: dict[str, Any]) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except (json.JSONDecodeError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _contract_output(result, schema: dict[str, Any]) -> dict[str, Any]:
+    """Normalize an agent result into the object validated and handed forward.
+
+    The agent's final JSON comes first. `result.data` is the run's own bookkeeping, which
+    passed any schema with no required field, and the answer was then never read at all.
+    """
+    data = result.data if isinstance(result.data, dict) else {}
+    parsed = _final_json(result)
+    if parsed and not schema_errors(parsed, schema, path="output"):
+        return parsed
+    if not schema_errors(data, schema, path="output"):
         return data
-    return parsed if isinstance(parsed, dict) else data
+    return parsed if parsed is not None else data
 
 
 _PLACEHOLDER = re.compile(r"\$\{(?:inputs|steps)\.[A-Za-z0-9_.-]+\}")

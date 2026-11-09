@@ -145,6 +145,17 @@ class FlowRunStore:
             rows = connection.execute(query, params).fetchall()
         return [_from_row(row) for row in rows]
 
+    def stopped_before(self, before: datetime) -> list[FlowRun]:
+        """Scheduled runs paused or waiting, last touched before *before*."""
+        with sqlite3.connect(self._path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT * FROM flow_runs WHERE status IN ('paused', 'waiting') AND trigger = 'schedule' "
+                "AND test_mode = 0 AND updated_at < ?",
+                (before.isoformat(),),
+            ).fetchall()
+        return [_from_row(row) for row in rows]
+
     def flow_names_for_tasks(self, task_ids: list[str]) -> dict[str, str]:
         """The flow each of *task_ids* ran for, where one did."""
         if not task_ids:

@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import asyncio
 
+import psutil
+
 from coding_agents.constants import MAX_STDERR_CHARS
+
+
+def process_identity(pid: int) -> dict[str, float | int]:
+    """A process's number and when it began. A number alone can come to mean another process later."""
+    try:
+        return {"pid": pid, "started_at": psutil.Process(pid).create_time()}
+    except psutil.Error:
+        return {"pid": pid}
 
 
 async def tail(reader: asyncio.StreamReader) -> str:

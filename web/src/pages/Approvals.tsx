@@ -311,6 +311,22 @@ export function ApprovalCard({
                 Answer
               </button>
             </>
+          ) : hasOwnOptions(card.options) ? (
+            // A card with options of its own acts on the one you choose. Plain
+            // Approve and Reject closed a Resume/Discard card and did nothing.
+            <>
+              {card.options.map((option) => (
+                <button
+                  key={option}
+                  className={card.rejecting.includes(option) ? "danger-button" : "primary-button"}
+                  onClick={() =>
+                    onDecide(card.rejecting.includes(option) ? "rejected" : "approved", option, values)
+                  }
+                >
+                  {option}
+                </button>
+              ))}
+            </>
           ) : (
             <>
               <button
@@ -531,6 +547,10 @@ export function memoryLink(ref: MemoryRef): string {
   }
   if (ref.text) params.set("find", ref.text);
   return `/memory?${params.toString()}`;
+}
+
+export function hasOwnOptions(options: string[]): boolean {
+  return options.some((option) => option !== "Approve" && option !== "Reject");
 }
 
 export function approveLabel(options: string[]): string {

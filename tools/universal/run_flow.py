@@ -9,6 +9,7 @@ from tools.models import ToolInput, ToolOutput
 from tools.universal.flow_runner import FlowRunner
 
 _NEEDS_YOU = frozenset({"failed", "needs_approval", "rejected", "paused"})
+_SCHEDULED = "schedule"
 
 
 class RunFlowTool(Tool):
@@ -68,9 +69,16 @@ class RunFlowTool(Tool):
         instead (#34) made a briefing that waited a day arrive a day late, and
         that day's never run. If the resource is still missing, this run waits
         in its place: one run per flow still waits.
+
+        The job's own run is another matter. A job comes back only after north
+        was stopped, and its run continues at the step it stopped on: starting
+        over repeated the finished steps and left the old run paused for good.
         """
-        self._runner.replace_waiting(name)
-        return await self._start(name, task_id=job_id, trigger="schedule")
+        own = self._runner.run_of_firing(job_id)
+        if own is not None and own.status == "completed":
+            return ToolOutput(success=True, data=_view(own))
+        self._runner.replace_waiting(name, keeping=own.run_id if own else "")
+        return await self._start(name, run_id=own.run_id if own else None, task_id=job_id, trigger=_SCHEDULED)
 
     async def _start(
         self,
@@ -91,10 +99,14 @@ class RunFlowTool(Tool):
                 test_mode=test_mode,
                 trigger=trigger,
             )
+            if trigger == _SCHEDULED:
+                self._runner.started(name)
             # A paused run stopped on something only you can resolve - an error
             # to look at, a card - so it is not a success. It waits, resumable.
             return ToolOutput(success=run.status not in _NEEDS_YOU, data=_view(run))
         except Exception as exc:
+            if trigger == _SCHEDULED:  # nobody is watching a schedule, and no run row records this
+                await self._runner.tell_could_not_start(name, str(exc))
             return ToolOutput(success=False, error=str(exc))
 
     def format_output(self, data: dict[str, Any]) -> str:

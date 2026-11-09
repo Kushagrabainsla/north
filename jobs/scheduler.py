@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -17,7 +18,6 @@ from typing import TYPE_CHECKING, Any
 
 from jobs.base import JobProcessor
 from jobs.models import Job, JobPriority, JobStatus, JobType
-from utils.ids import generate_id
 from utils.time import awake_seconds, from_epoch, local_timezone_name, now_epoch, resolve_timezone, to_epoch
 
 if TYPE_CHECKING:
@@ -111,6 +111,8 @@ class CronEntry:
     # missed: a 03:30 check added at 11:06 ran at 15:16, when north restarted
     # and caught up "today's 03:30". None for the built-ins, which ship with north.
     created_epoch: float | None = None
+    # When it last changed what it runs on, or was switched back on.
+    effective_epoch: float | None = None
 
     def __post_init__(self) -> None:
         if not (0 <= self.hour <= 23):
@@ -146,6 +148,7 @@ class CronEntry:
             flow=row.get("flow") or "",
             message=row.get("message") or "",
             created_epoch=row.get("created_epoch"),
+            effective_epoch=row.get("effective_epoch"),
         )
 
     @property
@@ -328,7 +331,7 @@ class CronScheduler:
         *late_because* is why the firing is late (`ASLEEP`, `NORTH_WAS_OFF`), when it is.
         """
         return Job(
-            job_id=generate_id(),
+            job_id=_firing_id(entry.name, scheduled_at),
             type=JobType.CRON,
             agent=entry.agent,
             task=entry.task,
@@ -388,9 +391,9 @@ class CronScheduler:
             await self._processor.enqueue(self.build_job(entry, slot, late_because=NORTH_WAS_OFF))
 
     async def _is_already_running(self, entry: CronEntry) -> bool:
-        """Return True if a prior firing of this entry is still pending or running."""
+        """Return True if a prior firing of this entry is still due or running."""
         try:
-            return await self._processor.has_active_job(entry.agent, entry.task)
+            return await self._processor.has_active_firing(entry.name)
         except Exception:
             logger.warning("CronScheduler: could not check for running jobs, proceeding")
         return False
@@ -449,8 +452,18 @@ class CronScheduler:
 
 
 def _existed_at(entry: CronEntry, slot: datetime) -> bool:
-    """Whether *entry* was there at *slot*: a run can only be missed by a schedule that existed."""
-    return entry.created_epoch is None or to_epoch(slot) >= entry.created_epoch
+    """Whether *entry*, as it is now, was there at *slot*: only a schedule that existed can miss a run.
+
+    Its effective time moves when it is retimed or switched back on. A 09:00 moved to 10:30, and
+    a slot passed while paused, used to run at the next start as if north had been off.
+    """
+    since = entry.effective_epoch if entry.effective_epoch is not None else entry.created_epoch
+    return since is None or to_epoch(slot) >= since
+
+
+def _firing_id(name: str, slot: datetime) -> str:
+    """The one job id for this schedule's firing at *slot*, so firing it twice is the same job."""
+    return hashlib.sha256(f"{name}:{to_epoch(slot)}".encode()).hexdigest()[:32]
 
 
 # See docs/ARCHITECTURE.md Section 11.3 and docs/design/schedule-provisioning.md.
@@ -542,9 +555,24 @@ def merge_entries(builtins: list[CronEntry], user_rows: list[Mapping[str, Any]])
     """
     by_name = {entry.name: entry for entry in builtins}
     for row in user_rows:
-        stored = apply_shipped_defaults(CronEntry.from_row(row))
+        try:
+            stored = apply_shipped_defaults(CronEntry.from_row(row))
+        except (ValueError, TypeError, KeyError) as error:
+            logger.error("Schedule %r is unreadable and will not run: %s", row.get("name"), error)
+            continue
         by_name[stored.name] = stored
     return list(by_name.values())
+
+
+def broken_schedules(user_rows: list[Mapping[str, Any]]) -> list[str]:
+    """The names of stored schedules that cannot be read, so cannot run."""
+    broken = []
+    for row in user_rows:
+        try:
+            CronEntry.from_row(row)
+        except (ValueError, TypeError, KeyError):
+            broken.append(str(row.get("name")))
+    return broken
 
 
 def apply_shipped_defaults(entry: CronEntry) -> CronEntry:

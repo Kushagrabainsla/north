@@ -35,12 +35,13 @@ class FailureKind(StrEnum):
     AUTH = "auth"  # the agent is logged out
     CONFIG = "config"  # a model or setting the agent does not accept
     LIMIT = "limit"  # ran out of turns, budget or time
+    PAUSED = "paused"  # you paused the task: the session and the copy wait for it
     CANCELLED = "cancelled"
     ERROR = "error"
 
 
 # Missing resources freeze a run; they do not fail it (CODING_STYLE 13.5). Its session and copy stay.
-PAUSING_FAILURES = frozenset({FailureKind.RESOURCE, FailureKind.AUTH})
+PAUSING_FAILURES = frozenset({FailureKind.RESOURCE, FailureKind.AUTH, FailureKind.PAUSED})
 
 
 @dataclass(frozen=True)

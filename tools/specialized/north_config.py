@@ -18,6 +18,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import TypeAdapter, ValidationError
+
 from config.approval_mode import ApprovalMode, require_approval_mode
 from inference.registry import PROVIDER_DEFINITIONS
 from tools.base import Tool
@@ -62,6 +64,30 @@ _KEY_PREFIX = "NORTH_"
 # Shorthand a user is likely to type for a key north stores under its own prefix.
 _KEY_ALIASES = {"FAL_KEY": "NORTH_FAL_KEY"}
 _SHOWED_CURRENT = " (no value given -> showed current)"
+_APPROVAL_MODE_KEY = "NORTH_APPROVAL_MODE"
+# What the running server re-reads each time it needs it. Most settings are read once at
+# startup, and saying "reloaded" for those was false, so anything not listed says it waits.
+_LIVE_KEYS = frozenset({"NORTH_TELEGRAM_BOT_TOKEN", "NORTH_TELEGRAM_ALLOWED_CHAT_IDS"})
+
+
+def _settings_fields() -> dict[str, Any]:
+    """Each setting north reads from .env, by the key that sets it."""
+    from config.settings import Settings
+
+    return {f"{_KEY_PREFIX}{name.upper()}": field for name, field in Settings.model_fields.items()}
+
+
+def _why_not_settable(key: str, value: str) -> str:
+    """Why *value* cannot be saved under *key*, or "" when it can. Asked before anything is written."""
+    field = _settings_fields().get(key)
+    if field is None:
+        known = key in _SECRET_KEYS or key in _KEY_ALIASES.values()
+        return "" if known else f"North has no setting {key!r}; a typo here would be saved and do nothing."
+    try:
+        TypeAdapter(field.annotation).validate_strings(value)
+    except ValidationError as error:
+        return f"{value!r} is not a valid value for {key}: {error.errors()[0]['msg']}"
+    return ""
 
 
 def _dial_output(dial: str, value: str, note: str = "") -> ToolOutput:
@@ -76,10 +102,9 @@ class NorthConfigTool(Tool):
       ``get <key>`` — show a single config value.
       ``set <key>=<value>`` — add or update a config key. Requires approval.
 
-    Keys use the ``NORTH_`` prefix convention. Values are written to the .env
-    file and take effect immediately: settings are reloaded from disk and — for
-    inference keys — the live router is rebuilt in place, so no restart is
-    required.
+    Keys use the ``NORTH_`` prefix convention. Values are checked, then written
+    to the .env file. Inference keys take effect at once, because the live router
+    is rebuilt in place; the reply says when any other key waits for a restart.
     """
 
     name = "north_config"
@@ -89,7 +114,8 @@ class NorthConfigTool(Tool):
         "Use 'list' to show all settings, 'get <key>' to read one, "
         "'set <key>=<value>' to add/update a setting. "
         "Example: set NORTH_OPENCODE_ZEN_API_KEY=abc123 will write it to the "
-        ".env file and north starts using that provider immediately."
+        ".env file and north starts using that provider immediately. "
+        "The reply says if a setting waits for a restart; tell the user."
     )
     parameters_schema = {
         "type": "object",
@@ -214,7 +240,9 @@ class NorthConfigTool(Tool):
             deps.cost_tracker.set_inner(new_router)
             providers = ", ".join(p.name for p in new_router._providers)  # type: ignore[attr-defined]
             return f"\n✅ Inference reloaded — providers: {providers}"
-        return "\n✅ Settings reloaded from disk."
+        if key in _LIVE_KEYS:
+            return "\n✅ Applied."
+        return "\n⏳ Saved. It takes effect when north restarts."
 
     def format_output(self, data: dict[str, Any]) -> str:
         action = data.get("action", "")
@@ -275,6 +303,10 @@ class NorthConfigTool(Tool):
         key = _KEY_ALIASES.get(key, key)
         if not key.startswith(_KEY_PREFIX):
             return ToolOutput(success=False, error=f"Config keys must start with {_KEY_PREFIX}. Got: {key!r}")
+        if key == _APPROVAL_MODE_KEY:  # one home: the same live setting the dashboard changes
+            return await self._autonomy({"value": value})
+        if problem := _why_not_settable(key, value):
+            return ToolOutput(success=False, error=problem)
 
         # Upsert the key in .env off-thread (CODING_STYLE §10.3).
         await asyncio.to_thread(_upsert_env_key, self._env_path(), key, value)

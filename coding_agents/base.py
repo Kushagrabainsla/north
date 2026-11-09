@@ -135,6 +135,10 @@ class RunRecorder(Protocol):
 
     async def finish(self, run_id: str, outcome: RunOutcome) -> None: ...
 
+    async def task_is_paused(self, task_id: str) -> bool:
+        """Whether *task_id* was paused rather than cancelled: a cancellation does not carry its reason."""
+        ...
+
     async def branches(self, task_id: str) -> list[WorkTree]:
         """The copy each edit run of *task_id* made, oldest first, whatever has become of its branch since."""
         ...

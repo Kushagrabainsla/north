@@ -153,6 +153,8 @@ export interface Approval {
   title: string;
   message: string;
   options: string[];
+  // Which of `options` mean no, as the card declared when it was made.
+  rejecting: string[];
   status: string;
   chosen_option: string;
   created_at: string;

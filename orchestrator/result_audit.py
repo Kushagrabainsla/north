@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 
 from agents.base import Agent
 from agents.models import AgentPayload, AgentResult
@@ -159,6 +160,7 @@ class ResultAuditor:
             return violations
         if repaired.successful_tools is None:
             return violations
+        _carry_earlier_evidence(repaired, result)
 
         remaining = await asyncio.to_thread(
             verify_claims,
@@ -240,6 +242,21 @@ class ResultAuditor:
         """Attach a note to the answer and stream it, so a live reader sees it too."""
         result.output = f"{result.output}{note}"
         await self._journal.stream_note(task_id, note)
+
+
+def _carry_earlier_evidence(repaired: AgentResult, earlier: AgentResult) -> None:
+    """Count what the first run did as evidence for the correction too.
+
+    The pass is told not to repeat that work, then was judged on its own tools alone,
+    so an answer restating a commit the first run made was flagged and thrown away.
+    """
+    counts = Counter(_evidence_counts(earlier))
+    counts.update(_evidence_counts(repaired))
+    actions = Counter(_evidence_actions(earlier))
+    actions.update(_evidence_actions(repaired))
+    data = repaired.data if isinstance(repaired.data, dict) else {}
+    repaired.data = {**data, "evidence_counts": dict(counts), "evidence_actions": dict(actions)}
+    repaired.successful_tools = sorted({*(earlier.successful_tools or []), *(repaired.successful_tools or [])})
 
 
 def _adopt_repaired_answer(result: AgentResult, repaired: AgentResult) -> None:

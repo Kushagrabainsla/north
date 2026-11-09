@@ -158,6 +158,10 @@ class CodingAgentTool(Tool):
             logger.warning("could not brief the coding agent; running it without north's context", exc_info=True)
             return ""
 
+    def changes_nothing(self, input: ToolInput, request: Request | None) -> bool:
+        """A plan run's sandbox is read-only, whatever the agent tries."""
+        return str(input.params.get("mode") or Mode.PLAN.value) == Mode.PLAN.value
+
     def format_output(self, data: dict) -> str:
         text = str(data.get("answer") or "")
         if data.get("mode") == Mode.EDIT.value:
@@ -196,6 +200,7 @@ class CodingAgentTool(Tool):
 _PAUSED_NOTE = {
     FailureKind.RESOURCE: "The run is PAUSED, not failed: this is the agent's usage limit or an outage. "
     "Its progress is kept. Tell the user, and call coding_agent again with the same task later to continue it.",
+    FailureKind.PAUSED: "The run is PAUSED: the user paused this task. Its progress is kept.",
     FailureKind.AUTH: "The run is PAUSED, not failed: the agent is not logged in. "
     "Its progress is kept. Ask the user to log in to it, then call coding_agent again with the same task.",
 }

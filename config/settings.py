@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     north_workspace: str = ""
 
     # Pre-shared secret override - set NORTH_SECRET in Docker instead of using a key file
-    north_secret: str = os.environ.get("NORTH_SECRET", "")
+    north_secret: str = Field(default="", validation_alias="NORTH_SECRET")
 
     # Base URL for the main orchestrator server - override in Docker/multi-host deployments.
     north_orchestrator_url: str = "http://127.0.0.1:8000"
@@ -119,7 +119,6 @@ class Settings(BaseSettings):
     # normal logs cannot - which prompt tokens a provider served from cache, for
     # one - and those were unreachable while this was hardcoded to INFO.
     log_level: str = Field(default="INFO")
-    inference_pool_refresh_interval_hours: int = Field(default=6, ge=1)
     inference_pool_refresh_interval_seconds: int = Field(default=180, ge=10)
     # Tool-call rounds one agent may take before it is cut off. This is a runaway
     # guard, not a budget (compaction and the cost ledger are the budget), so it is

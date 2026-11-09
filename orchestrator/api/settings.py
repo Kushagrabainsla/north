@@ -81,6 +81,8 @@ async def update_settings(body: SettingsUpdate) -> SettingsOut:
                 configure_timezone(settings_obj.timezone)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
+        if (cron_store := current_services().cron_store) is not None:
+            await cron_store.zone_changed()
     if body.power is not None:
         try:
             mode = StrategyMode(body.power)

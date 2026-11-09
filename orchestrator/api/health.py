@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import Query, Request
 
 from config.security import server_proof
+from jobs.scheduler import broken_schedules
 from ledger.base import LedgerFilters
 from memory.models import ContextDocument
 from orchestrator.api.deps import health_router
@@ -52,6 +53,8 @@ async def health_check(request: Request = None) -> dict:  # noqa: RUF013 - calla
     # and is waiting to start again makes north degraded, not "ok".
     if services.background_loops is not None:
         checks["background_loops"] = services.background_loops.report()
+    if services.cron_store is not None and (broken := broken_schedules(await services.cron_store.list())):
+        checks["schedules"] = {"status": "failed", "detail": f"Cannot be read, so will not run: {', '.join(broken)}"}
 
     if services.inference_router is None:
         checks["inference"] = {"status": "failed", "detail": "not configured"}

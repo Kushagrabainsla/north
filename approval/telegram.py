@@ -28,9 +28,11 @@ from config.settings import settings
 from gateways.telegram_api import (
     HTTP_TIMEOUT,
     approval_keyboard,
+    card_reference,
     send_message,
     within_telegram_limit,
 )
+from gateways.telegram_outbox import TelegramOutbox
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +56,12 @@ class TelegramNotifier(Notifier):
     Telegram behaves exactly as it did before.
     """
 
-    def __init__(self, fallback: Notifier, http: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self, fallback: Notifier, http: httpx.AsyncClient | None = None, outbox: TelegramOutbox | None = None
+    ) -> None:
         self._fallback = fallback
         self._http = http or httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+        self._outbox = outbox
 
     @property
     def configured(self) -> bool:
@@ -77,6 +82,10 @@ class TelegramNotifier(Notifier):
         for chat_id in sorted(settings.parsed_telegram_allowed_chat_ids):
             if await send_message(self._http, chat_id, text, reply_markup=markup) is not None:
                 delivered = True
+            elif self._outbox is not None:
+                # An information card is not in the approval store, so nothing can answer it first.
+                card_id = "" if card.type is CardType.INFORMATION else card.id
+                await self._outbox.add(chat_id, text, reply_markup=markup, card_id=card_id)
 
         if not delivered:
             # Telegram was configured and still did not take it. Falling through
@@ -120,6 +129,10 @@ class TelegramNotifier(Notifier):
             lines.extend(["", "Reply with one line per question, in order. An option's number picks it."])
         elif card.type is CardType.QUESTION:
             lines.extend(["", "Tap an answer, or reply with your own." if card.options else "Reply with your answer."])
+
+        if card.type is CardType.QUESTION:
+            # Telegram repeats this text in a reply to it, which is how the reply finds this card.
+            lines.extend(["", card_reference(card.id)])
 
         footer = f"_{card.agent}_" if card.agent else ""
         if not card.blocking:

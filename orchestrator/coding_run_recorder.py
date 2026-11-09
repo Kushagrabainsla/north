@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import signal
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
+
+import psutil
 
 from agents.models import AgentPayload, AgentResult
 from coding_agents import AGENT_PREFIX, PAUSING_FAILURES, FailureKind, LiveRun, RunOutcome, RunStart, WorkTree
@@ -15,6 +18,7 @@ from utils.execution_context import current_execution
 # Runs that have not finished: the ones a re-planned task may pick back up.
 _UNFINISHED = frozenset(status.value for status in RunStatus)
 _SUMMARY_CHARS = 300
+_SAME_PROCESS_SECONDS = 1.0  # how far two readings of one process's start time can differ
 # Only these can still have a process; a paused or interrupted run has none, whatever a recycled pid says.
 _MAY_BE_ALIVE = frozenset({RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL})
 _FROZEN_BY = PAUSING_FAILURES
@@ -23,10 +27,20 @@ _FROZEN_BY = PAUSING_FAILURES
 class AgentRunRecorder:
     """A coding run is a child row of the agent run that asked for it."""
 
-    def __init__(self, store: AgentRunStore, *, pid_alive: Callable[[int], bool] | None = None) -> None:
+    def __init__(
+        self,
+        store: AgentRunStore,
+        *,
+        pid_alive: Callable[[int], bool] | None = None,
+        task_paused: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> None:
         self._store = store
         self._pid_alive = pid_alive or _pid_alive
+        self._task_paused = task_paused
         self._started_at: dict[str, float] = {}
+
+    async def task_is_paused(self, task_id: str) -> bool:
+        return await self._task_paused(task_id) if self._task_paused is not None else False
 
     async def live_run(self, task_id: str, agent: str, mode: str) -> LiveRun | None:
         """The newest unfinished *mode* run of *agent* for this task whose process is gone, if it left a session."""
@@ -69,15 +83,16 @@ class AgentRunRecorder:
     async def reconcile(self) -> int:
         """After a restart, mark coding runs that say they are running but whose process is gone as interrupted.
 
-        Without this a dead run reads as running on the dashboard for ever. Only a process that is really gone
-        counts: one still alive is left alone, so a resume never starts a second agent beside it.
+        Without this a dead run reads as running on the dashboard for ever. A process still running from before
+        the restart can no longer be heard, since its output went to the north that stopped. It is stopped, if
+        it is really that run's (a pid can be reused), so a resume never starts a second agent beside it.
         """
         marked = 0
         for run in await self._store.list_unfinished(AGENT_PREFIX):
             if run.status not in (RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL):
                 continue
-            pid = _latest(run.provider_state, "pid")
-            if pid and self._pid_alive(int(pid)):
+            pid, started = _latest(run.provider_state, "pid"), _latest(run.provider_state, "started_at")
+            if pid and self._pid_alive(int(pid)) and not (started and _stop_if_same(int(pid), float(started))):
                 continue
             marked += await self._store.set_status(run.run_id, RunStatus.INTERRUPTED)
         return marked
@@ -118,6 +133,19 @@ def _latest(provider_state: Mapping[str, Any], key: str) -> Any:
 def _worktree(provider_state: Mapping[str, Any]) -> WorkTree | None:
     path, branch, sha, base = (_latest(provider_state, key) for key in ("worktree", "branch", "base_sha", "base"))
     return WorkTree(str(path), str(branch), str(sha), str(base)) if path and branch and sha and base else None
+
+
+def _stop_if_same(pid: int, started_at: float) -> bool:
+    """Stop process *pid*'s group if it is the one that started at *started_at*; True when that run is over."""
+    try:
+        if abs(psutil.Process(pid).create_time() - started_at) > _SAME_PROCESS_SECONDS:
+            return True  # the number was given to another process: that run is gone
+        os.killpg(pid, signal.SIGKILL)
+    except (psutil.NoSuchProcess, ProcessLookupError):
+        return True
+    except (psutil.Error, PermissionError):
+        return False
+    return True
 
 
 def _pid_alive(pid: int) -> bool:

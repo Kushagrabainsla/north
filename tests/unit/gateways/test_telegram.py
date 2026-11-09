@@ -8,9 +8,12 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.exceptions import TelegramUnauthorizedError
+from aiogram.types import CallbackQuery, Message
 
 from config.settings import Settings
-from gateways.telegram import TelegramGateway
+from gateways.telegram import TelegramGateway, _finished_output
+from gateways.telegram_api import card_reference, tapped_label
 
 
 def test_parsed_telegram_allowed_chat_ids() -> None:
@@ -93,7 +96,12 @@ async def test_telegram_gateway_tracks_and_cleans_tasks(monkeypatch: pytest.Monk
         processed.set()
 
     gw._process_message = mock_process  # type: ignore[method-assign]
-    gw._get_updates = AsyncMock(return_value=[{"update_id": 1, "message": {"text": "hi"}}])  # type: ignore[method-assign]
+
+    async def poll(token: str) -> None:
+        await gw._on_message(_message("hi"))
+        await asyncio.sleep(30)
+
+    gw._poll = poll  # type: ignore[method-assign]
 
     run_task = asyncio.create_task(gw.run())
     await asyncio.wait_for(processed.wait(), timeout=3.0)
@@ -101,9 +109,149 @@ async def test_telegram_gateway_tracks_and_cleans_tasks(monkeypatch: pytest.Monk
 
     await gw.stop()
     run_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await run_task
+    await asyncio.wait_for(run_task, timeout=1)
     assert len(gw._tasks) == 0
+
+
+def _message(text: str, **extra: object) -> Message:
+    """A message as aiogram hands it over."""
+    return Message.model_validate(
+        {
+            "message_id": 7,
+            "date": 1,
+            "chat": {"id": 12345, "type": "private"},
+            "from": {"id": 12345, "is_bot": False, "first_name": "K"},
+            "text": text,
+            **extra,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_message_reaches_north_in_the_shape_it_reads() -> None:
+    gw = TelegramGateway()
+    seen: list[dict] = []
+
+    async def record(msg: dict) -> None:
+        seen.append(msg)
+
+    gw._process_message = record  # type: ignore[method-assign]
+
+    await gw._on_message(_message("hi"))
+    await asyncio.gather(*gw._tasks)
+
+    assert seen[0]["chat"]["id"] == 12345 and seen[0]["from"]["id"] == 12345 and seen[0]["text"] == "hi"
+    await gw._http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_tap_reaches_north_with_its_buttons() -> None:
+    gw = TelegramGateway()
+    seen: list[dict] = []
+
+    async def record(callback: dict) -> None:
+        seen.append(callback)
+
+    gw._process_callback_query = record  # type: ignore[method-assign]
+    keyboard = {"inline_keyboard": [[{"text": "Resume", "callback_data": "approval:#0:c1"}]]}
+    callback = CallbackQuery.model_validate(
+        {
+            "id": "9",
+            "from": {"id": 12345, "is_bot": False, "first_name": "K"},
+            "chat_instance": "x",
+            "data": "approval:#0:c1",
+            "message": _message("card", reply_markup=keyboard).model_dump(by_alias=True, exclude_none=True),
+        }
+    )
+
+    await gw._on_callback(callback)
+    await asyncio.gather(*gw._tasks)
+
+    assert seen[0]["from"]["id"] == 12345
+    assert tapped_label(seen[0]["message"], "approval:#0:c1") == "Resume"
+    await gw._http.aclose()
+
+
+def _gateway_with_questions(monkeypatch: pytest.MonkeyPatch, *cards: dict) -> tuple[TelegramGateway, list, list]:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+    gw = TelegramGateway()
+    answers: list[tuple[str, str, str]] = []
+    replies: list[str] = []
+
+    async def waiting() -> list[dict]:
+        return list(cards)
+
+    async def respond(card_id: str, decision: str, chosen: str = "") -> bool:
+        answers.append((card_id, decision, chosen))
+        return True
+
+    async def reply(chat, text: str) -> None:
+        replies.append(text)
+
+    gw._waiting_questions = waiting  # type: ignore[method-assign]
+    gw._respond_approval = respond  # type: ignore[method-assign]
+    gw._reply = reply  # type: ignore[method-assign]
+    return gw, answers, replies
+
+
+def _as_dict(message: Message) -> dict:
+    return message.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+CARD_ID = "abcd1234" + "0" * 24
+
+
+@pytest.mark.asyncio
+async def test_a_reply_to_a_question_answers_it_whichever_task_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    gw, answers, _ = _gateway_with_questions(monkeypatch, {"id": CARD_ID, "task_id": "cron-task"})
+    gw._run_task = AsyncMock()  # type: ignore[method-assign]
+    quoted = _as_dict(_message(f"Which folder?\n\n{card_reference(CARD_ID)}"))
+
+    await gw._process_message(_as_dict(_message("/Users/me/notes", reply_to_message=quoted)))
+
+    assert answers == [(CARD_ID, "answered", "/Users/me/notes")]
+    gw._run_task.assert_not_awaited()
+    await gw._http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_slash_answer_to_this_chats_question_is_not_a_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    gw, _, replies = _gateway_with_questions(monkeypatch, {"id": CARD_ID, "task_id": "t1"})
+    gw._pending[(12345, 1)] = {"task_id": "t1"}
+    gw._run_task = AsyncMock()  # type: ignore[method-assign]
+
+    await gw._process_message(_as_dict(_message("/Users/me/notes")))
+
+    gw._run_task.assert_awaited_once()
+    assert not any("not a north command" in text for text in replies)
+    await gw._http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_real_command_stays_a_command_while_a_question_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    gw, answers, _ = _gateway_with_questions(monkeypatch, {"id": CARD_ID, "task_id": "t1"})
+    gw._pending[(12345, 1)] = {"task_id": "t1"}
+    gw._run_command = AsyncMock()  # type: ignore[method-assign]
+
+    await gw._process_message(_as_dict(_message("/status")))
+
+    gw._run_command.assert_awaited_once()
+    assert not answers
+    await gw._http.aclose()
+
+
+def test_a_failed_step_does_not_end_the_wait_but_the_tasks_end_does() -> None:
+    step = {"action": "agent_execution_failed", "status": "failed", "output": "one try failed"}
+
+    assert _finished_output([step], "t1", 1) is None
+    assert _finished_output([{"action": "task_failed", "status": "failed", "output": "gave up"}, step], "t1", 1) == (
+        "Task failed: gave up"
+    )
+    assert "No model" in (
+        _finished_output([{"action": "task_needs_attention", "status": "failed", "output": "No model"}], "t1", 1) or ""
+    )
 
 
 @pytest.mark.asyncio
@@ -298,12 +446,11 @@ async def test_gateway_waits_without_a_valid_allowlist_and_starts_once_it_is_set
     gw = TelegramGateway()
     polled = asyncio.Event()
 
-    async def first_poll() -> list[dict]:
+    async def first_poll(token: str) -> None:
         polled.set()
         gw._running = False
-        return []
 
-    gw._get_updates = first_poll  # type: ignore[method-assign]
+    gw._poll = first_poll  # type: ignore[method-assign]
     gw.resume_waits = MagicMock(return_value=0)  # type: ignore[method-assign]
     run = asyncio.create_task(gw.run())
     await asyncio.sleep(0.05)
@@ -317,27 +464,55 @@ async def test_gateway_waits_without_a_valid_allowlist_and_starts_once_it_is_set
 
 
 @pytest.mark.asyncio
-async def test_a_new_bot_token_starts_its_updates_afresh(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_new_bot_token_is_polled_as_a_new_bot(monkeypatch: pytest.MonkeyPatch) -> None:
     from config.settings import settings
 
     monkeypatch.setattr(settings, "telegram_bot_token", "111:old")
     monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
     gw = TelegramGateway()
     gw.resume_waits = MagicMock(return_value=0)  # type: ignore[method-assign]
-    offsets: list[int] = []
+    tokens: list[str] = []
 
-    async def poll() -> list[dict]:
-        offsets.append(gw._offset)
-        if len(offsets) == 1:
+    async def poll(token: str) -> None:
+        tokens.append(token)
+        if len(tokens) == 1:
             settings.telegram_bot_token = "222:new"
-            return [{"update_id": 41}]
+            return
         gw._running = False
-        return []
 
-    gw._get_updates = poll  # type: ignore[method-assign]
+    gw._poll = poll  # type: ignore[method-assign]
     await asyncio.wait_for(gw.run(), timeout=1)
 
-    assert offsets == [0, 0]
+    assert tokens == ["111:old", "222:new"]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_token_waits_for_a_new_one_without_retrying(monkeypatch: pytest.MonkeyPatch) -> None:
+    import gateways.telegram as telegram
+    from config.settings import settings
+
+    monkeypatch.setattr(telegram, "_SETUP_RECHECK_S", 0.01)
+    monkeypatch.setattr(settings, "telegram_bot_token", "111:old")
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+    gw = TelegramGateway()
+    gw.resume_waits = MagicMock(return_value=0)  # type: ignore[method-assign]
+    tries: list[str] = []
+
+    async def poll(token: str) -> None:
+        tries.append(token)
+        if token == "111:old":
+            raise TelegramUnauthorizedError(method=MagicMock(), message="Unauthorized")
+        gw._running = False
+
+    gw._poll = poll  # type: ignore[method-assign]
+    run = asyncio.create_task(gw.run())
+    await asyncio.sleep(0.05)
+    assert tries == ["111:old"], "a refused token must not be tried again and again"
+
+    monkeypatch.setattr(settings, "telegram_bot_token", "222:new")
+    await asyncio.wait_for(run, timeout=1)
+
+    assert tries == ["111:old", "222:new"]
 
 
 @pytest.mark.asyncio

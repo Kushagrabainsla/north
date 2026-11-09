@@ -294,8 +294,7 @@ memory/base.py         ContextStore      <- FileContextStore (v1), DBContextStor
 memory/base.py         MemoryGateway     <- LocalMemoryGateway (single gated read path)
 ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
 inference/base.py      InferenceRouter   <- ModelDispatcher (multi-provider)
-approval/base.py       Notifier          <- TerminalNotifier (default), MacOSNotifier (optional);
-                                            wrapped at runtime by TUIAwareNotifier
+approval/base.py       Notifier          <- TerminalNotifier (default), MacOSNotifier (optional)
 tools/base.py          Tool              <- WebSearchTool, ReadFileTool, BashTool, GitTool, etc.
 agents/base.py         Agent             <- LLMAgent / AgenticLLMAgent (subclassed per domain:
                                             ArchitectAgent, CoderAgent, TesterAgent, ResearcherAgent,
@@ -545,7 +544,6 @@ approval/
   exceptions.py       <- NotificationError
   macos.py            <- MacOSNotifier (optional native macOS alerts)
   terminal.py         <- TerminalNotifier (default)
-  tui.py              <- TUIAwareNotifier (wraps a Notifier; silent while the TUI is attached)
   batching.py         <- BatchingNotifier (one alert per batch of prepared work)
   interaction.py      <- UserInteraction (single path for approval/question/information cards)
   callback_server.py  <- FastAPI app on port 8001
@@ -1512,7 +1510,7 @@ class Settings(BaseSettings):
     confidence_increase_per_helpful_use: float = 0.05
     confidence_decrease_per_unhelpful_use: float = 0.03
     confidence_auto_approve_threshold: float = 0.8
-    inference_pool_refresh_interval_hours: int = 6
+    inference_pool_refresh_interval_seconds: int = 180
 
     @property
     def secret(self) -> str:

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.db import open_db_connection
-from utils.time import local_timezone_name, now_epoch
+from utils.time import now_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,11 @@ _ADDED_COLUMNS = {
     "anchor_epoch": "REAL",
     # A reminder: the text delivered as it is when the schedule fires, instead of a flow.
     "message": "TEXT",
+    # When the schedule last changed when it runs, or was switched back on.
+    "effective_epoch": "REAL",
 }
+# Changing any of these changes which slots are this schedule's.
+_MOVES_THE_SLOTS = frozenset({"hour", "minute", "weekdays", "tz", "enabled", "interval_minutes", "anchor_epoch"})
 
 # User-created entries carry this prefix so a listing can tell them apart from
 # the built-in schedules north ships with.
@@ -141,6 +145,10 @@ class UserCronStore:
             for column, decl in _ADDED_COLUMNS.items():
                 if column not in existing:
                     conn.execute(f"ALTER TABLE user_cron_entries ADD COLUMN {column} {decl}")
+            if "effective_epoch" not in existing:
+                # Every stored zone was only the Settings zone at the time it was made. Empty now means
+                # "follow Settings", so a reminder made before the zone changed moves with it.
+                conn.execute("UPDATE user_cron_entries SET tz = NULL")
 
     async def add(
         self,
@@ -209,7 +217,7 @@ class UserCronStore:
                     hour,
                     minute,
                     encode_weekdays(weekdays),
-                    tz or local_timezone_name(),
+                    tz,
                     int(enabled),
                     label,
                     skill,
@@ -249,7 +257,17 @@ class UserCronStore:
             changes["enabled"] = int(bool(changes["enabled"]))
         if not changes:
             return await self.get(name) is not None
+        if changes.keys() & _MOVES_THE_SLOTS:
+            changes["effective_epoch"] = now_epoch()
         return await asyncio.to_thread(self._update_sync, name, changes)
+
+    async def zone_changed(self) -> None:
+        """The Settings zone moved, and every slot with it: what came due before now was not missed."""
+        await asyncio.to_thread(self._zone_changed_sync)
+
+    def _zone_changed_sync(self) -> None:
+        with open_db_connection(self._db_path) as conn:
+            conn.execute("UPDATE user_cron_entries SET effective_epoch = ?", (now_epoch(),))
 
     def _update_sync(self, name: str, changes: dict[str, object]) -> bool:
         assignments = ", ".join(f"{column} = ?" for column in changes)
@@ -344,4 +362,5 @@ def _row_to_entry(row: sqlite3.Row) -> dict:
         "interval_minutes": row["interval_minutes"],
         "anchor_epoch": row["anchor_epoch"],
         "created_epoch": row["created_epoch"],
+        "effective_epoch": row["effective_epoch"],
     }

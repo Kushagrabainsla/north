@@ -14,7 +14,6 @@ from jobs import (
     JobCancelled,
     JobNeedsAttention,
     JobPriority,
-    JobProcessingError,
     JobStatus,
     JobType,
     SQLiteJobProcessor,
@@ -64,10 +63,10 @@ async def test_get_returns_none_for_missing(processor: SQLiteJobProcessor) -> No
     assert await processor.get("does-not-exist") is None
 
 
-async def test_enqueue_rejects_duplicate_id(processor: SQLiteJobProcessor) -> None:
+async def test_enqueueing_the_same_id_again_is_the_same_job(processor: SQLiteJobProcessor) -> None:
     await processor.enqueue(_job("dup"))
-    with pytest.raises(JobProcessingError):
-        await processor.enqueue(_job("dup"))
+    await processor.enqueue(_job("dup"))
+    assert len(await processor.list_jobs()) == 1
 
 
 async def test_claim_next_returns_none_when_queue_empty(

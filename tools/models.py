@@ -40,6 +40,8 @@ class ToolInput(BaseModel):
     edit_scope: EditAuthorizer | None = Field(default=None, exclude=True)
     granted_workspace: str | None = Field(default=None, exclude=True)
     approved: Any = Field(default=None, exclude=True)
+    # Awaited just before the call changes anything, so a stop in the middle knows it may have.
+    before_change: Any = Field(default=None, exclude=True)
 
 
 class ToolOutput(BaseModel):

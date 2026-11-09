@@ -9,6 +9,7 @@ import asyncio
 import datetime
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -31,8 +32,8 @@ from approval.effects import EffectLog
 from approval.interaction import UserInteraction
 from approval.policy import ApprovalPolicy
 from approval.rejections import RejectionLog
+from approval.store import ApprovalStore
 from approval.telegram import TelegramNotifier
-from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
 from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import bootstrap_paused, run_bootstrap_if_needed
@@ -47,7 +48,8 @@ from config.settings import settings
 from flows import FlowRegistry, FlowRunStore
 from gateways.telegram import TelegramGateway
 from gateways.telegram_api import bot_username as telegram_bot_username
-from jobs.exceptions import JobCancelled, JobNeedsAttention
+from gateways.telegram_outbox import TelegramOutbox
+from jobs.exceptions import JobCancelled, JobNeedsAttention, JobNeverStarted
 from jobs.models import Job, JobStatus, late_note
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
 from jobs.seen import SeenStore
@@ -119,7 +121,7 @@ from tools.universal.update_plan import UpdatePlanTool
 from tools.universal.update_schedule import UpdateScheduleTool
 from tools.universal.use_flow import UseFlowTool
 from tools.universal.use_skill import UseSkillTool
-from utils.logging import configure_structured_logging
+from utils.logging import LOG_TO_HOME_ENV, configure_structured_logging
 from utils.runtime_resources import builtin_skills_dir, web_dist_dir
 from utils.tasks import drain
 from utils.time import localnow, utcnow
@@ -159,18 +161,13 @@ def _attach_tui_notifier(deps) -> None:
     # The chain, outermost first:
     #
     #   BatchingNotifier   coalesce a burst of prepared work into one alert
-    #   TUIAwareNotifier   stay quiet only for a card the TUI is already showing
     #   TelegramNotifier   reach the operator when they are not at the keyboard
     #   TerminalNotifier   last resort, and what an unconfigured install uses
     #
     # Telegram sits inside the batcher deliberately: north finishing eight job
     # applications is one event in the user's day, not eight phone buzzes.
-    deps.notifier = BatchingNotifier(
-        TUIAwareNotifier(
-            stream_manager=deps.stream_manager,
-            fallback=TelegramNotifier(fallback=deps.notifier),
-        )
-    )
+    # An open page or TUI does not silence it: connected is not the same as seen.
+    deps.notifier = BatchingNotifier(TelegramNotifier(fallback=deps.notifier, outbox=TelegramOutbox()))
 
 
 def _attach_embedding_index(deps) -> None:
@@ -200,7 +197,12 @@ def _register_coding_agent(
     backends = discover_backends(protected_paths=[str(settings.north_home)])
     if not backends:
         return
-    recorder = AgentRunRecorder(deps.agent_run_store)
+
+    async def task_is_paused(task_id: str) -> bool:
+        running = await deps.running_task_store.get(task_id) if deps.running_task_store is not None else None
+        return running is not None and running.status == "paused"
+
+    recorder = AgentRunRecorder(deps.agent_run_store, task_paused=task_is_paused)
     runner = CodingRunner(backends, recorder)
     if approvals is not None:
         deps.coding_sessions = GateSessions()
@@ -604,7 +606,10 @@ def _build_codex_credentials(*, authorization_callback=None):
 
 
 def _build_callback_server() -> uvicorn.Server:
-    config = uvicorn.Config(callback_app, host="127.0.0.1", port=settings.callback_port, log_level="warning")
+    # No log_config: uvicorn would reset its own loggers, undoing where north sends them.
+    config = uvicorn.Config(
+        callback_app, host="127.0.0.1", port=settings.callback_port, log_level="warning", log_config=None
+    )
     server = uvicorn.Server(config)
     # Prevents the nested uvicorn from overriding the outer server's SIGTERM/SIGINT handlers on macOS.
     server.install_signal_handlers = lambda: None
@@ -644,13 +649,39 @@ async def _resume_waiting_flows_loop(flow_runner: FlowRunner, poll_seconds: floa
             logger.warning("Could not resume waiting flow runs", exc_info=True)
 
 
-async def _pool_refresh_loop(deps, orchestrator: Orchestrator | None = None) -> None:
+_KEY_REFUSED_RE = re.compile(r"\b40[13]\b")
+_OLD_STOPPED_RUN = datetime.timedelta(days=14)
+
+
+async def _say_which_keys_are_rejected(router, interaction: UserInteraction | None, told: set[str]) -> None:
+    """Tell the user, once, about a provider that refused its key; a log line reaches nobody."""
+    if interaction is None:
+        return
+    rejected = {name for name, why in router.provider_errors.items() if _KEY_REFUSED_RE.search(why)}
+    for name in sorted(rejected):
+        await interaction.deliver(
+            source="inference",
+            title=f"{name} refused its key",
+            message=f"North could not use {name}: {router.provider_errors[name]}. Check its key in Settings.",
+            key=f"provider-key:{name}",
+        )
+    for name in told - rejected:
+        interaction.clear_notice(f"provider-key:{name}")
+    told.clear()
+    told.update(rejected)
+
+
+async def _pool_refresh_loop(
+    deps, orchestrator: Orchestrator | None = None, interaction: UserInteraction | None = None
+) -> None:
     interval = settings.inference_pool_refresh_interval_seconds
+    told: set[str] = set()
     while True:
         await asyncio.sleep(interval)
         try:
             await deps.inference_router.refresh_catalog()
             logger.info("Inference pool refreshed successfully")
+            await _say_which_keys_are_rejected(deps.inference_router, interaction, told)
             if orchestrator is not None:
                 orchestrator.notify_model_recovery()
         except Exception:
@@ -825,10 +856,15 @@ def _launch_background_tasks(
         retired = await skill_retirement.sweep(deps.ledger, settings.north_home / "skills")
         if retired:
             skill_distiller.reload_registry()
+        stopped_runs = (
+            await flow_runner.discard_old_stopped(datetime.datetime.now(datetime.UTC) - _OLD_STOPPED_RUN)
+            if flow_runner is not None
+            else 0
+        )
         summary = (
             f"removed {n} stale rows, pruned {pruned} ledger entries"
-            f", {pruned_runs} agent runs, {pruned_flow_runs} flow runs, {decisions} routing decisions"
-            f", {handoffs} handoff directories"
+            f", {pruned_runs} agent runs, {pruned_flow_runs} flow runs, {stopped_runs} old stopped runs"
+            f", {decisions} routing decisions, {handoffs} handoff directories"
             f"{f', retired {len(retired)} learned skill(s)' if retired else ''}"
         )
         await deps.ledger.write(
@@ -865,7 +901,10 @@ def _launch_background_tasks(
                     flow_runner.cancel_running(job.job_id)
                 raise
             if not result.success:
-                raise JobNeedsAttention(result.error or f"scheduled flow '{flow}' failed")
+                problem = result.error or f"scheduled flow '{flow}' failed"
+                if result.data is None:  # it never began: nothing to repeat, so the next start may try again
+                    raise JobNeverStarted(problem)
+                raise JobNeedsAttention(problem)
             return
         skill = str((job.payload or {}).get("skill") or "").strip()
         skill_hint = f" Use the '{skill}' skill before acting." if skill else ""
@@ -902,13 +941,19 @@ def _launch_background_tasks(
         loops.start("episode_consolidator", episode_consolidator.run),
         loops.start("skill_distiller", skill_distiller.run),
         asyncio.create_task(_guarded(callback_server.serve(), "callback_server"), name="callback_server"),
-        loops.start("pool_refresh", lambda: _pool_refresh_loop(deps, orchestrator)),
+        loops.start(
+            "pool_refresh",
+            lambda: _pool_refresh_loop(deps, orchestrator, approvals.interaction if approvals is not None else None),
+        ),
         *(
             [loops.start("flow_resume", lambda: _resume_waiting_flows_loop(flow_runner))]
             if flow_runner is not None
             else []
         ),
         loops.start("task_queue_drainer", orchestrator.drain_queued_tasks_loop),
+        loops.start(
+            "telegram_outbox", TelegramOutbox(still_wanted=lambda card: _card_waits(deps.approval_store, card)).run
+        ),
         loops.start(
             "stuck_task_watchdog",
             lambda: watch_stuck_tasks(
@@ -938,6 +983,12 @@ async def _serve_mcp(manager: McpManager, tool_registry: ToolRegistry, tool_inde
         logger.info("Registered %d MCP tool(s)", registered)
         if tool_index is not None:
             await _populate_tool_index(tool_index, tool_registry)
+
+
+def _card_waits(store: ApprovalStore, card_id: str) -> bool:
+    """Whether a card is still unanswered, so a message asking for it is still worth sending."""
+    card = store.get(card_id)
+    return card is not None and card.status == "pending"
 
 
 async def _close_runs_cut_off(store: AgentRunStore, *, before: datetime.datetime) -> int:
@@ -1011,6 +1062,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_structured_logging(
         logging.getLevelNamesMapping().get(settings.log_level.upper(), logging.INFO),
         hide=secret_store.store().hide,
+        log_file=settings.north_home / "north.log" if os.environ.get(LOG_TO_HOME_ENV) else None,
     )
 
     _step("loading secret")

@@ -140,6 +140,7 @@ def _registry(tmp: Path, mode: ApprovalMode, store: ApprovalStore):
 async def _dispatch(tool_name: str, params: dict[str, Any], workspace: Path, registry) -> None:
     """Run one model tool call through the agent loop's own dispatch."""
     agent = object.__new__(AgenticLLMAgent)
+    agent._deps = SimpleNamespace(running_task_store=None)
     # Built the way `Orchestrator._run_agents` builds it: the task's workspace, granted.
     payload = AgentPayload(task_id="bench", prompt="bench", workspace=str(workspace), granted_workspace=str(workspace))
     tool_map = {tool.name: tool for tool in registry.all_tools()}

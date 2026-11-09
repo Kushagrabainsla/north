@@ -15,9 +15,11 @@ each device it finds stays connected until north stops.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -36,6 +38,10 @@ _TIMEOUT_SECONDS = 12.0
 # How long a found set of devices is trusted before discovery runs again: a bulb that
 # moved to another address, or one plugged in since, is found within this.
 _STALE_SECONDS = 300.0
+# A live stream's frames: a slow answer is worth less than the next frame.
+_FRAME_TIMEOUT_SECONDS = 2.0
+_RETRY_MIN_SECONDS = 5.0
+_RETRY_MAX_SECONDS = 600.0
 _NOTHING_FOUND = "No Kasa device answers on this network. Is this computer on the same Wi-Fi as your lights?"
 
 
@@ -65,6 +71,8 @@ class KasaDevices:
         self._problem = ""
         self._locked: list[str] = []  # devices found that refused every TP-Link login north has
         self._finding = asyncio.Lock()
+        self._retry_at: dict[str, tuple[float, float]] = {}  # device id -> (not before, the delay that set it)
+        self._looking: asyncio.Task[None] | None = None
 
     @property
     def problem(self) -> str:
@@ -100,7 +108,10 @@ class KasaDevices:
         With *confirm* the device is read back, and a state it does not report raises:
         "done" is what the device says, not what was asked. A device that does not
         answer is looked for on the network and tried once more where it is now.
+        Without *confirm* this is a frame of a live stream, which never waits on the network.
         """
+        if not confirm:
+            return await self._send_frame(device_id, change)
         await self._find()
         if device_id not in self._devices:
             raise LookupError(f"No device {device_id!r} on this network now.")
@@ -116,16 +127,51 @@ class KasaDevices:
             dev = await self._reach_again(device_id, since=sending)
             await asyncio.wait_for(_send(dev, sent), _TIMEOUT_SECONDS)
         self._answered_at = time.monotonic()
-        if not confirm:
-            return describe(device_id, dev, self._names.get(device_id))
         await asyncio.wait_for(dev.update(), _TIMEOUT_SECONDS)
         state = describe(device_id, dev, self._names.get(device_id))
         if not _reports(state, sent):
             raise RuntimeError("did not confirm the change")
         return state
 
+    async def _send_frame(self, device_id: str, change: LightChange) -> dict[str, Any]:
+        """One frame of a live stream. A bulb that stopped answering is left alone for a growing while.
+
+        Each frame to a dead bulb used to start a look round the network, and every other bulb's
+        frames waited behind that look, so one bulb switched off at the wall froze them all.
+        """
+        if device_id not in self._devices:
+            raise LookupError(f"No device {device_id!r} on this network now.")
+        if time.monotonic() < self._retry_at.get(device_id, (0.0, 0.0))[0]:
+            raise NotAnswering("still not answering, and left alone for now")
+        dev = self._devices[device_id]
+        try:
+            await asyncio.wait_for(_send(dev, fit(dev, change)), _FRAME_TIMEOUT_SECONDS)
+        except Exception as error:
+            if _not_reached(error):
+                self._back_off(device_id)
+                self._look_round_soon()
+            raise
+        self._retry_at.pop(device_id, None)
+        self._answered_at = time.monotonic()
+        return describe(device_id, dev, self._names.get(device_id))
+
+    def _back_off(self, device_id: str) -> None:
+        delay = min(self._retry_at.get(device_id, (0.0, _RETRY_MIN_SECONDS / 2))[1] * 2, _RETRY_MAX_SECONDS)
+        self._retry_at[device_id] = (time.monotonic() + delay * random.uniform(0.9, 1.1), delay)
+
+    def _look_round_soon(self) -> None:
+        """One look round the network, in the background, shared by every bulb that went quiet."""
+        if self._looking is None or self._looking.done():
+            self._looking = asyncio.create_task(self._look_round())
+
+    async def _look_round(self) -> None:
+        with contextlib.suppress(Exception):
+            await self._find(since=time.monotonic() - _RETRY_MIN_SECONDS)
+
     async def aclose(self) -> None:
         """Release every connection: a KLAP device holds an HTTP session until it is closed."""
+        if self._looking is not None:
+            self._looking.cancel()
         await close_devices(self._devices.values())
         self._devices.clear()
         self._found_at = None
@@ -136,9 +182,11 @@ class KasaDevices:
         Recent enough is within `_STALE_SECONDS`, or after *since*: bulbs that stop answering
         together share one look. With *look_again* north always looks.
         """
+        recent = since if since is not None else time.monotonic() - _STALE_SECONDS
+        if self._is_recent(recent) and not look_again:  # checked outside the lock: reading needs no waiting
+            return
         async with self._finding:
-            recent = since if since is not None else time.monotonic() - _STALE_SECONDS
-            if self._found_at is not None and self._found_at > recent and not look_again:
+            if self._is_recent(recent) and not look_again:  # another caller looked while this one waited
                 return
             pairs, diagnostic = await asyncio.to_thread(self._discover)
             self._heard, self._looked = {host for host, _ in pairs}, diagnostic
@@ -167,6 +215,9 @@ class KasaDevices:
             self._found_at = time.monotonic()
             self._locked = locked
             self._problem = _why_not(pairs, diagnostic, errors, locked)
+
+    def _is_recent(self, recent: float) -> bool:
+        return self._found_at is not None and self._found_at > recent
 
     async def _reach_again(self, device_id: str, since: float) -> Any:
         """The device connected again, wherever the network says it is now.

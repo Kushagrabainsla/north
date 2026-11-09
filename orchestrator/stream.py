@@ -125,15 +125,6 @@ class EventStreamManager:
         self._token_tail[task_id] = merged
         history.append(message)
 
-    @property
-    def tui_connected(self) -> bool:
-        """True while at least one TUI session is subscribed to the global stream.
-
-        Derived directly from the subscriber list so it can never get stuck
-        True after an abrupt client disconnect.
-        """
-        return bool(self._global_subs)
-
     async def emit(self, task_id: str, event: str, data: dict[str, Any]) -> None:
         """Publish an event to all subscribers for task_id.
 
