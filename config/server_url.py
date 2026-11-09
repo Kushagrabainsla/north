@@ -59,6 +59,17 @@ def _listening_address() -> tuple[str, int] | None:
     return addresses.pop()
 
 
+def is_this_computer(host: str) -> bool:
+    """Whether *host* names this computer and nothing else: a loopback address, or `localhost` (CODING_STYLE §12.6)."""
+    host = host.strip().strip("[]")
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _reachable_host(ip: str) -> str:
     """A host a local caller can connect to for a socket bound to ``ip``."""
     try:

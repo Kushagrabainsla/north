@@ -1076,6 +1076,14 @@ raise HTTPException(status_code=500, detail="Something went wrong.")
 raise HTTPException(status_code=400, detail="Bad request.")
 ```
 
+### 12.6 North Serves This Computer Only
+
+`north start` and `north web` listen on this computer (`127.0.0.1`, `::1`, `localhost`) and refuse any other
+`--host`, saying why. The API is guarded by one shared secret and speaks plain HTTP, so `0.0.0.0` would hand it to
+everyone on the same network. A non-local address becomes possible only with TLS and per-client tokens (issue #40);
+until both exist there is no flag to get round the refusal. Inside a container the server listens on `0.0.0.0` and
+the port mapping decides who reaches it: publish it as `127.0.0.1:8000:8000`.
+
 ---
 
 ## 13. Error Handling

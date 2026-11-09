@@ -89,6 +89,7 @@ from cli.update_spec import pinned_git_spec as _pinned_git_spec
 from cli.web_build import web_build_is_stale as _web_build_is_stale
 from config.approval_mode import ApprovalMode
 from config.security import load_secret
+from config.server_url import is_this_computer
 from utils.time import configure_timezone, local_timezone, local_timezone_name, system_timezone_name
 from utils.version import NORTH_VERSION
 
@@ -1972,7 +1973,9 @@ def _start_locally(options: _StartOptions) -> None:
 
 @app.command("start")
 def start(
-    host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="Address to listen on: this computer only (127.0.0.1, ::1, localhost)."
+    ),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (local mode only)."),
     docker: bool = typer.Option(False, "--docker", help="Run via Docker Compose (for server/headless deployments)."),
@@ -1993,6 +1996,7 @@ def start(
     on your own machine. Pass --docker for server or headless deployments.
     Pass --no-chat to start the server without entering the chat REPL.
     """
+    _only_this_computer(host)
     options = _StartOptions(
         host=host,
         port=port,
@@ -2016,6 +2020,20 @@ def start(
         )
         raise typer.Exit(1) from None
     _start_with_docker(options, compose_file)
+
+
+def _only_this_computer(host: str) -> None:
+    """Refuse to serve north, or ask it for a sign-in link, beyond this computer (CODING_STYLE §12.6)."""
+    if is_this_computer(host):
+        return
+    typer.secho(
+        f"ERROR: north will not listen on {host}: anyone on your network could reach it there, and its API has "
+        "one shared secret and no encryption yet. Leave out --host to use this computer (127.0.0.1). In Docker, "
+        "publish the port as 127.0.0.1:8000:8000.",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    raise typer.Exit(1)
 
 
 def _ensure_web_build() -> None:
@@ -2045,7 +2063,9 @@ def _ensure_web_build() -> None:
 
 @app.command("web")
 def web(
-    host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="Address to listen on: this computer only (127.0.0.1, ::1, localhost)."
+    ),
     port: int | None = typer.Option(None, "--port", "-p", help="North server port (default: the running one)."),
     workspace: str | None = typer.Option(
         None,
@@ -2060,6 +2080,7 @@ def web(
     no_open: bool = typer.Option(False, "--no-open", help="Start the server without opening a browser."),
 ) -> None:
     """Start North's web cockpit and open it in the default browser."""
+    _only_this_computer(host)
     port = port or running_port()
     _ensure_web_build()
     if not _port_in_use(host, port) or not _is_north_server(host, port):
