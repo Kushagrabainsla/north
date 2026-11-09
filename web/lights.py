@@ -101,7 +101,11 @@ async def discover_devices() -> dict[str, Any]:
 
 @router.post("/lights/apply")
 async def apply_lights(body: LightsApply) -> dict[str, Any]:
-    """Change the lights you chose, together; each one that will not answer is named with why."""
+    """Change the lights you chose, together; each one that will not answer is listed by id with why.
+
+    Even when none answers: a single error of ids and reasons was all the page could show, so it said
+    "78:20:51:59:45:36: Timed out ..." where it knows the light as "Desk lamp".
+    """
     home = _home()
     change = body.change()
     outcomes = await asyncio.gather(*(home.apply(i, change) for i in body.ids), return_exceptions=True)
@@ -113,8 +117,6 @@ async def apply_lights(body: LightsApply) -> dict[str, Any]:
         else:
             lights.append(outcome | {"mine": device_id in mine})
     logger.info("Lights: you set %s on %s", body.model_dump(exclude_none=True, exclude={"ids"}), body.ids)
-    if errors and not lights:
-        raise HTTPException(status_code=502, detail="; ".join(f"{e['id']}: {e['error']}" for e in errors))
     return {"lights": lights, "errors": errors}
 
 

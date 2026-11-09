@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDeviceRequest, brandOf, deviceRequest, foundRequest, inScope, kelvinToRgb, latestWins, scanSummary, swatch, type Light } from "./lights";
+import { addDeviceRequest, brandOf, deviceRequest, failures, foundRequest, inScope, kelvinToRgb, latestWins, scanSummary, swatch, type Light } from "./lights";
 
 const light = (over: Partial<Light>): Light => ({
   id: "a", name: "Desk lamp", host: "10.0.0.36", model: "KL130", on: true, kind: "light",
@@ -120,5 +120,19 @@ describe("every device Find devices heard", () => {
     expect(text).toContain("North heard 2 devices on your network.");
     expect(text).toContain("maker's cloud or to a building's hub");
     expect(text).toContain("only uses Bluetooth");
+  });
+});
+
+describe("lights that did not change", () => {
+  it("are named, with each reason said once for every light it stopped", () => {
+    const names: Record<string, string> = { "78:20:51:59:45:36": "Desk lamp", "78:20:51:59:3e:5c": "Bed lamp", "hue_lights/3": "Strip" };
+    const away = "no Kasa device answers on this network. Is this computer on the same Wi-Fi as your lights?";
+    const said = failures(
+      [{ id: "78:20:51:59:45:36", error: away }, { id: "78:20:51:59:3e:5c", error: away }, { id: "hue_lights/3", error: "HTTP 503" }],
+      (id) => names[id],
+    );
+    expect(said).toBe(`Desk lamp, Bed lamp: ${away} · Strip: HTTP 503`);
+    expect(said).not.toContain("78:20");
+    expect(failures([], (id) => id)).toBe("");
   });
 });

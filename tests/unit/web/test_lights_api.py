@@ -92,11 +92,12 @@ async def test_a_light_that_will_not_answer_is_named_and_the_rest_still_change(h
         found = await lights.list_lights()
         bulbs["Bed lamp"].light.set_state = _refuses
         changed = await lights.apply_lights(lights.LightsApply(ids=_ids(found, MINE), on=True))
-        with pytest.raises(HTTPException) as nobody:
-            await lights.apply_lights(lights.LightsApply(ids=_ids(found, ["Bed lamp"]), on=True))
+        nobody = await lights.apply_lights(lights.LightsApply(ids=_ids(found, ["Bed lamp"]), on=True))
 
     assert [light["name"] for light in changed["lights"]] == ["Desk lamp"]
-    assert "unplugged" in changed["errors"][0]["error"] and nobody.value.status_code == 502
+    assert "unplugged" in changed["errors"][0]["error"]
+    # Even when no light answers, each one comes back by id, for the page to name: one error of ids was all it had.
+    assert nobody["lights"] == [] and nobody["errors"] == [{"id": _ids(found, ["Bed lamp"])[0], "error": "unplugged"}]
 
 
 @pytest.mark.parametrize(

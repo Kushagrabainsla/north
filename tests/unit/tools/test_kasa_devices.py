@@ -244,7 +244,7 @@ async def test_done_is_what_the_device_reports() -> None:
         return {}
 
     lamp.light.set_state = ignores
-    with pytest.raises(RuntimeError, match="did not confirm"):
+    with pytest.raises(RuntimeError, match="^did not confirm the change$"):  # the page and chat name the lamp
         await devices.apply(entry["id"], LightChange(brightness=70))
 
 

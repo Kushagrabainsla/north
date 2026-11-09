@@ -111,7 +111,7 @@ class KasaDevices:
         await asyncio.wait_for(dev.update(), _TIMEOUT_SECONDS)
         state = describe(device_id, dev, self._names.get(device_id))
         if not _reports(state, sent):
-            raise RuntimeError(f"{state['name']} did not confirm the change")
+            raise RuntimeError("did not confirm the change")
         return state
 
     async def aclose(self) -> None:

@@ -115,6 +115,14 @@ export function scanSummary(scan: Scan): string {
 }
 
 /** The lights a choice covers: yours, or every one on the network (a friend's too). */
+/** Why some lights did not change, under their names: one line per reason, so "no Kasa device answers on
+ * this network" is said once for every light it stopped, never under a light's network-card id. */
+export function failures(errors: { id: string; error: string }[], nameOf: (id: string) => string): string {
+  const named = new Map<string, string[]>();
+  for (const { id, error } of errors) named.set(error, [...(named.get(error) ?? []), nameOf(id)]);
+  return [...named].map(([why, names]) => `${names.join(", ")}: ${why}`).join(" · ");
+}
+
 export const inScope = (lights: Light[], scope: Scope) => (scope === "mine" ? lights.filter((light) => light.mine) : lights);
 
 /** The colour of the light a white temperature gives, for a card's swatch (Tanner Helland's fit). */

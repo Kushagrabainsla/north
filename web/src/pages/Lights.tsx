@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, post } from "../api";
 import { Empty, ErrorNotice, Loading, PageHeader, Panel } from "../components";
 import { useResource } from "../hooks";
-import { addDeviceRequest, brandOf, deviceRequest, inScope, scanSummary, kelvinToRgb, latestWins, swatch, type Light, type NetworkDevice, type Scan, type LightChange, type LightsOverview, type Scope } from "../lights";
+import { addDeviceRequest, brandOf, deviceRequest, failures, inScope, scanSummary, kelvinToRgb, latestWins, swatch, type Light, type NetworkDevice, type Scan, type LightChange, type LightsOverview, type Scope } from "../lights";
 import { sliceMs, type Levels } from "../listen";
 import listenWorklet from "../listen.worklet.ts?worker&url";
 import { hear, listening, spread, type Frame, type Mode } from "../music";
@@ -34,7 +34,7 @@ export function Lights() {
     try {
       const out = await post<Applied>("/web/api/lights/apply", { ids: shown.map((light) => light.id), ...change });
       merge(out.lights);
-      setNotice(out.errors.map((e) => `${named(e.id)}: ${e.error}`).join(" · "));
+      setNotice(failures(out.errors, named));
     } catch (error) {
       setNotice(message(error));
     }
@@ -96,7 +96,7 @@ export function Lights() {
       {(lights.length > 0 || locked.length > 0) && overview.data?.problem && !locked.length && <p className="lights-notice">{overview.data.problem}</p>}
       {notice && <p className="lights-notice" role="status">{notice}</p>}
       {shown.length
-        ? <div className="lights-grid">{shown.map((light) => <LightCard key={light.id} light={light} onChanged={merge} onError={(error) => setNotice(`${light.name}: ${message(error)}`)} onMine={markMine}/>)}</div>
+        ? <div className="lights-grid">{shown.map((light) => <LightCard key={light.id} light={light} onChanged={merge} onNotice={setNotice} onMine={markMine}/>)}</div>
         : <Empty>{empty}</Empty>}
     </>}
   </div>;
@@ -187,10 +187,10 @@ function DeviceRow({ device, sending, onConnect }: { device: NetworkDevice; send
   </div>;
 }
 
-function LightCard({ light, onChanged, onError, onMine }: {
+function LightCard({ light, onChanged, onNotice, onMine }: {
   light: Light;
   onChanged: (lights: Light[]) => void;
-  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
   onMine: (light: Light, mine: boolean) => void;
 }) {
   const [draft, setDraft] = useState(light);
@@ -199,7 +199,11 @@ function LightCard({ light, onChanged, onError, onMine }: {
   // While a slider is held, what the light reports back must not pull it from under your finger.
   useEffect(() => { if (!holding.current) setDraft(light); }, [light]);
   const send = useMemo(
-    () => latestWins((change: LightChange) => post<Applied>("/web/api/lights/apply", { ids: [light.id], ...change }), (out) => onChanged(out.lights), onError),
+    () => latestWins(
+      (change: LightChange) => post<Applied>("/web/api/lights/apply", { ids: [light.id], ...change }),
+      (out) => { onChanged(out.lights); if (out.errors.length) onNotice(failures(out.errors, () => light.name)); },
+      (error) => onNotice(`${light.name}: ${message(error)}`),
+    ),
     [light.id],
   );
   const set = (change: LightChange) => {
