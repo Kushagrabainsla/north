@@ -205,6 +205,28 @@ def test_logins_kept_in_env_move_to_secrets_once_and_leave_env(tmp_path) -> None
     assert "NORTH_KASA_USERNAME" not in env and "NORTH_KASA_SECOND_PASSWORD=abc" in env and "gsk_untouched" in env
 
 
+def test_logins_exported_in_the_shell_move_to_secrets_too(tmp_path, monkeypatch) -> None:
+    """North read NORTH_KASA_* from the shell it started in as well as from .env; the move looked only
+    in .env, so a login exported in the shell was no longer used by anything."""
+    from config import secret_store
+    from config.env_file import write_env_key
+    from tools.specialized.kasa_devices import move_logins_to_secrets
+
+    monkeypatch.setenv("NORTH_KASA_USERNAME", "me@example.com")
+    monkeypatch.setenv("NORTH_KASA_PASSWORD", "p@ss w#rd")
+    monkeypatch.setenv("NORTH_KASA_SECOND_USERNAME", "an old export")
+    write_env_key(tmp_path, "NORTH_KASA_SECOND_USERNAME", "friend@example.com")  # .env wins
+
+    moved = move_logins_to_secrets(tmp_path)
+    monkeypatch.setenv("NORTH_KASA_PASSWORD", "changed since")  # a secret you saved is never replaced
+    again = move_logins_to_secrets(tmp_path)
+
+    store = secret_store.SecretStore(tmp_path)
+    assert moved == ["kasa_email", "kasa_password", "kasa_second_email"] and again == []
+    assert (store.value("kasa_email"), store.value("kasa_password")) == ("me@example.com", "p@ss w#rd")
+    assert store.value("kasa_second_email") == "friend@example.com"
+
+
 async def test_a_brand_added_through_north_shows_here_and_is_yours_to_mark_and_change(home) -> None:
     """Only Kasa bulbs could show here; a Hue lamp north wrote a tool for now sits beside them."""
     from fastapi.routing import APIRoute

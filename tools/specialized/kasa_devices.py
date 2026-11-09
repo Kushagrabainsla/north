@@ -387,32 +387,45 @@ _NOTES = {
 
 
 def move_logins_to_secrets(home: Path) -> list[str]:
-    """Move TP-Link logins from north's .env into your secrets, and return the names moved.
+    """Move TP-Link logins from north's .env, or the shell north started in, into your secrets.
 
-    A login the secret store cannot keep (too short) stays in .env and is named in north.log;
-    north then does not use it, and the Devices page says where to add it.
+    North read them from both before they were secrets, so a login exported in the shell
+    (`export NORTH_KASA_USERNAME=...`) must move too; .env wins when both have one. Returns
+    the names moved. A secret you already saved is never replaced. A login the secret store
+    cannot keep (too short) stays where it is and is named in north.log; north then does not
+    use it, and the Devices page says where to add it.
     """
     from dotenv import dotenv_values
 
     from config.env_file import remove_env_key
 
-    env = dotenv_values(home / ".env") if (home / ".env").exists() else {}
+    in_file = dotenv_values(home / ".env") if (home / ".env").exists() else {}
     store = secret_store.SecretStore(home)
     moved: list[str] = []
+    exported: list[str] = []
     for env_key, name in _ENV_LOGINS.items():
-        value = env.get(env_key) or ""
+        from_file = in_file.get(env_key) or ""
+        value = from_file or os.environ.get(env_key, "")
         if not value:
             continue
-        if name not in store.names():
+        saved_now = name not in store.names()
+        if saved_now:
             if why := secret_store.unusable(name, value):
-                logger.warning("kasa: %s stays in .env and is not used: %s Add it in %s.", env_key, why, _WHERE)
+                where = ".env" if from_file else "your shell"
+                logger.warning("kasa: %s stays in %s and is not used: %s Add it in %s.", env_key, where, why, _WHERE)
                 continue
             store.save(name, value, note=_NOTES[name])
-        remove_env_key(home, env_key)
+        if from_file:
+            remove_env_key(home, env_key)
+        else:
+            exported.append(env_key)
         os.environ.pop(env_key, None)
-        moved.append(name)
+        if from_file or saved_now:
+            moved.append(name)
     if moved:
-        logger.info("kasa: TP-Link logins moved from .env to your secrets: %s", ", ".join(moved))
+        logger.info("kasa: TP-Link logins moved to your secrets: %s", ", ".join(moved))
+    if exported:
+        logger.info("kasa: north uses your secrets now; %s can come out of your shell's setup", ", ".join(exported))
     return moved
 
 
