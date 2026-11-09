@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException, Request
 
-from config.security import verify_api_access, verify_secret
+from config.security import load_secret, server_proof, verify_api_access, verify_secret
 from config.settings import settings
 
 
@@ -21,7 +21,6 @@ def test_verify_secret_reloads_rotated_file_backed_key(tmp_path, monkeypatch) ->
 
     monkeypatch.setattr(settings, "north_home", tmp_path)
     monkeypatch.setattr(settings, "north_secret", "")
-    monkeypatch.setattr(settings, "_secret_cache", "")
 
     assert verify_secret("old-secret") is True
     key_path.write_text("new-secret", encoding="utf-8")
@@ -37,7 +36,6 @@ async def test_request_auth_accepts_rotated_secret_without_restart(tmp_path, mon
 
     monkeypatch.setattr(settings, "north_home", tmp_path)
     monkeypatch.setattr(settings, "north_secret", "")
-    monkeypatch.setattr(settings, "_secret_cache", "")
 
     await verify_api_access(_request(), x_north_secret="old-secret", x_north_csrf=None)
     key_path.write_text("new-secret", encoding="utf-8")
@@ -45,3 +43,16 @@ async def test_request_auth_accepts_rotated_secret_without_restart(tmp_path, mon
     await verify_api_access(_request(), x_north_secret="new-secret", x_north_csrf=None)
     with pytest.raises(HTTPException):
         await verify_api_access(_request(), x_north_secret="old-secret", x_north_csrf=None)
+
+
+def test_the_secret_is_the_one_in_the_home_north_reads_now(tmp_path, move_north_home) -> None:
+    """`settings.secret` kept the first home's secret for the life of the process, so after the home
+    moved the server proved itself with the old one. Among the tests, any that asked for the secret
+    first made tests/unit/cli/test_reaching_north.py fail, which is why these tests cleared it by hand."""
+    first = load_secret()
+    assert settings.secret == first
+    move_north_home(tmp_path / "moved")
+    moved = load_secret()
+
+    assert moved != first and settings.secret == moved
+    assert server_proof("ab" * 16) == server_proof("ab" * 16, moved)

@@ -161,12 +161,8 @@ def verify_secret(secret_to_verify: str) -> bool:
     # the cache so running servers accept the new key without a restart.
     if settings.north_secret:
         return False
-    secret_file = settings.north_home / "secret.key"
-    if not secret_file.exists():
-        return False
-    refreshed_secret = read_secret_file(secret_file)
-    settings._secret_cache = refreshed_secret
-    return secrets.compare_digest(secret_to_verify, refreshed_secret)
+    refreshed_secret = settings.reread_secret()
+    return bool(refreshed_secret) and secrets.compare_digest(secret_to_verify, refreshed_secret)
 
 
 async def verify_api_access(

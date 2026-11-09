@@ -55,8 +55,8 @@ def read_secret_file(secret_file: Path) -> str:
 class Settings(BaseSettings):
     """Configuration loaded from the environment with prefix `NORTH_` or a `.env` file."""
 
-    # In-memory cache for the secret so the key file is only read once.
-    _secret_cache: str = PrivateAttr(default="")
+    # The secret read from a key file, and that file: each home's key file is read once.
+    _secret_cache: tuple[Path, str] | None = PrivateAttr(default=None)
 
     # Required for production; empty default allows import/initialization without crash
     openrouter_api_key: str = ""
@@ -236,18 +236,24 @@ class Settings(BaseSettings):
     def secret(self) -> str:
         """Return the shared secret: env var takes priority over the key file.
 
-        The key-file path is read once and cached in ``_secret_cache`` so that
-        subsequent calls (one per authenticated request) do not hit the filesystem.
+        The key file is read once, so later calls (one per authenticated request) do
+        not hit the filesystem; the secret is kept with the file it came from, so a
+        home that moved is read afresh. It used to be kept for the life of the
+        process, and a server whose home had moved proved itself with the old one.
         """
         if self.north_secret:
             return self.north_secret
-        if self._secret_cache:
-            return self._secret_cache
+        if self._secret_cache is not None and self._secret_cache[0] == self.north_home / "secret.key":
+            return self._secret_cache[1]
+        return self.reread_secret()
+
+    def reread_secret(self) -> str:
+        """The key file's secret as it is now, kept for later calls; "" while the home has none."""
         secret_file = self.north_home / "secret.key"
         if not secret_file.exists():
             return ""
         value = read_secret_file(secret_file)
-        self._secret_cache = value
+        self._secret_cache = (secret_file, value)
         return value
 
     @property
