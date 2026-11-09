@@ -39,8 +39,12 @@ async def test_tool_hands_repo_and_user_context_to_the_cli_and_records_its_resul
     workspace.mkdir()
     (workspace / "CLAUDE.md").write_text("Use type hints.\n", encoding="utf-8")
     (workspace / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    # No sandbox tools to look for: the run probes first, and a machine without bwrap and socat,
+    # CI's among them, refused it. test_claude_backend covers that check.
     backend = (
-        ClaudeBackend(str(make_fake_claude())) if backend_name == "claude" else CodexBackend(str(make_fake_codex()))
+        ClaudeBackend(str(make_fake_claude()), sandbox_tools=())
+        if backend_name == "claude"
+        else CodexBackend(str(make_fake_codex()))
     )
     store = AgentRunStore(tmp_path / "tasks.db")
     runner = CodingRunner({backend_name: backend}, AgentRunRecorder(store))

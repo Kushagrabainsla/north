@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 from types import SimpleNamespace
 
+import cli.tui
 from cli.tui import NorthApp
 
 _DEAD = "http://127.0.0.1:1"  # nothing listening -> immediate ConnectError, caught
@@ -263,16 +264,20 @@ async def test_streaming_tok_per_sec_throughput():
         assert app._last_assistant_response != ""
 
 
-async def test_copy_last_response_action():
+async def test_copy_last_response_action(monkeypatch):
+    # The real copy wrote to the terminal running the tests and, on a Mac, ran pbcopy: every run
+    # replaced the clipboard of whoever ran it with this test's text.
+    copied: list[str] = []
+    monkeypatch.setattr(cli.tui, "_copy_to_clipboard", lambda text: copied.append(text) or True)
     app = NorthApp(base_url=_DEAD, headers=_HEADERS)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        # With no response yet
-        app.action_copy_last_response()
-        # With a completed response
+        app.action_copy_last_response()  # no response yet: nothing to copy
         app._last_assistant_response = "Here is the response code"
         app.action_copy_last_response()
         await pilot.pause()
+
+    assert copied == ["Here is the response code"]
 
 
 async def test_lifecycle_extended_events_render():
