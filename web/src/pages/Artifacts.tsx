@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import { Link } from "react-router-dom";
-import { Empty, ErrorNotice, Loading, MarkdownPane, Modal, PageHeader, timeAgo } from "../components";
+import { MarkdownPane, Modal, PageHeader, timeAgo } from "../components";
+import { CardGrid, EntityCard, Notice, ResourceView } from "../kit";
 import { useResource } from "../hooks";
 import type { Artifact } from "../types";
 
@@ -20,19 +21,54 @@ export const stageIcon: Record<string, string> = {
 
 const OWNER_KIND: Record<string, string> = { flow: "Flow", session: "Session", task: "Task" };
 
-/** Every file grouped under the flow, session or task that made it, newest first. */
-export function ArtifactLibrary() {
-  const resource = useResource<Artifact[]>("/web/api/artifacts", 10000);
+/** The line under a file's name: its kind, its size when known, and when it changed. */
+export function artifactMeta(file: Artifact): string {
+  return [file.kind, file.size ? `${Math.ceil(file.size / 1024)} KB` : "", timeAgo(file.updated_at)].filter(Boolean).join(" · ");
+}
+
+/** Opening a file: fetch its content and show it in the one viewer. */
+function useArtifactViewer() {
   const [selected, setSelected] = useState<Artifact | null>(null);
   const [error, setError] = useState("");
-  const files = resource.data || [];
   const open = async (file: Artifact) => {
+    setError("");
     try {
       setSelected({ ...(await api<Artifact>(`/web/api/artifacts/${file.id}`)), owner: file.owner });
     } catch (err) {
-      setError(String(err));
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
+  const viewer = <Modal
+    open={!!selected}
+    eyebrow={selected?.owner ? `${OWNER_KIND[selected.owner.kind]} · ${selected.owner.name}` : selected?.kind || ""}
+    title={selected?.name || ""}
+    onClose={() => setSelected(null)}
+  >
+    <MarkdownPane>{selected?.content || ""}</MarkdownPane>
+  </Modal>;
+  return { open, error, viewer };
+}
+
+/** One file as a card that opens it. Every page that lists files uses this one. */
+export function ArtifactCard({ file, onOpen }: { file: Artifact; onOpen: (file: Artifact) => void }) {
+  return <EntityCard icon={stageIcon[file.kind] || "◇"} title={file.name} meta={artifactMeta(file)} onOpen={() => onOpen(file)}/>;
+}
+
+/** Files as cards, each opening in the viewer: a task's outputs on its own page. */
+export function ArtifactGrid({ files }: { files: Artifact[] }) {
+  const { open, error, viewer } = useArtifactViewer();
+  return <>
+    {error && <Notice tone="error">{error}</Notice>}
+    <CardGrid>{files.map(file => <ArtifactCard key={file.id} file={file} onOpen={open}/>)}</CardGrid>
+    {viewer}
+  </>;
+}
+
+/** Every file grouped under the flow, session or task that made it, newest first. */
+export function ArtifactLibrary() {
+  const resource = useResource<Artifact[]>("/web/api/artifacts", 10000);
+  const { open, error, viewer } = useArtifactViewer();
+  const files = resource.data || [];
   const groups = useMemo(() => {
     const grouped = new Map<string, Artifact[]>();
     for (const file of files) grouped.set(file.task || "", [...(grouped.get(file.task || "") || []), file]);
@@ -47,44 +83,27 @@ export function ArtifactLibrary() {
       }))
       .sort((a, b) => b.updated - a.updated);
   }, [files]);
-  const card = (file: Artifact) => (
-    <button className="artifact-card" key={file.id} onClick={() => open(file)}>
-      <span>{stageIcon[file.kind] || "◇"}</span>
-      <div>
-        <b>{file.name}</b>
-        <small>
-          {file.kind} · {file.size ? `${Math.ceil(file.size / 1024)} KB` : ""} · {timeAgo(file.updated_at)}
-        </small>
-      </div>
-    </button>
-  );
-  if (resource.loading) return <Loading />;
   return (
     <>
-      {(resource.error || error) && <ErrorNotice message={resource.error || error} />}
-      {groups.map((group) => (
-        <section className="artifact-run" key={group.task}>
-          <h3>
-            {group.owner && (
-              <>
-                <span className="artifact-owner-kind">{OWNER_KIND[group.owner.kind]}</span>
-                <Link to={group.owner.link}>{group.owner.name}</Link>
-              </>
-            )}
-            <small>{timeAgo(group.updated)}</small>
-          </h3>
-          <div className="artifact-grid">{group.items.map(card)}</div>
-        </section>
-      ))}
-      {!files.length && <Empty>No files have been generated yet.</Empty>}
-      <Modal
-        open={!!selected}
-        eyebrow={selected?.owner ? `${OWNER_KIND[selected.owner.kind]} · ${selected.owner.name}` : selected?.kind || ""}
-        title={selected?.name || ""}
-        onClose={() => setSelected(null)}
-      >
-        <MarkdownPane>{selected?.content || ""}</MarkdownPane>
-      </Modal>
+      {resource.error && resource.data && <Notice tone="error">{resource.error}</Notice>}
+      {error && <Notice tone="error">{error}</Notice>}
+      <ResourceView resource={resource} isEmpty={data => !data.length} empty="No files have been generated yet.">
+        {() => groups.map((group) => (
+          <section className="artifact-run" key={group.task}>
+            <h3>
+              {group.owner && (
+                <>
+                  <span className="artifact-owner-kind">{OWNER_KIND[group.owner.kind]}</span>
+                  <Link to={group.owner.link}>{group.owner.name}</Link>
+                </>
+              )}
+              <small>{timeAgo(group.updated)}</small>
+            </h3>
+            <CardGrid>{group.items.map(file => <ArtifactCard key={file.id} file={file} onOpen={open}/>)}</CardGrid>
+          </section>
+        ))}
+      </ResourceView>
+      {viewer}
     </>
   );
 }

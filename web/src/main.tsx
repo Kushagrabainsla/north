@@ -5,6 +5,7 @@ import { api, bootstrapSession } from "./api";
 import { App } from "./App";
 import { configureDisplayTimezone } from "./components";
 import "./styles.css";
+import "./kit.css";
 
 function Root() {
   const [ready, setReady] = useState(false);

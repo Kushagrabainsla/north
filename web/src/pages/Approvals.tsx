@@ -1,14 +1,33 @@
-import { useEffect, useState } from "react";
-import { api, del, patch, post } from "../api";
-import { Empty, ErrorNotice, Loading, Markdown, NoticeList, PageHeader, Panel, Status, timeAgo, reveal } from "../components";
+import { useEffect, useState, type ReactNode } from "react";
+import { del, patch, post } from "../api";
+import { Markdown, NoticeList, PageHeader, Panel, timeAgo } from "../components";
+import { ActionBar, Button, confirmDelete, Empty, EntityForm, Field, ListRow, Loading, Notice, ResourceView, SectionHeader, Stack, Status, Tabs } from "../kit";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Link, useSearchParams } from "react-router-dom";
-import type { Approval, CardField, MemoryRef, Notice } from "../types";
+import type { Approval, CardField, MemoryRef, Notice as NoticeEntry } from "../types";
 
 export const fieldLabel = (field: CardField) =>
   field.label ||
   field.name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+/** Picks one of several answers: the chosen one stands out, the rest stay plain buttons. */
+function Choices({ options, chosen, onChoose }: { options: string[]; chosen: string; onChoose: (option: string) => void }) {
+  return (
+    <ActionBar align="start">
+      {options.map((option) => (
+        <Button
+          key={option}
+          size="sm"
+          aria-pressed={chosen === option}
+          onClick={() => onChoose(option)}
+        >
+          {option}
+        </Button>
+      ))}
+    </ActionBar>
+  );
+}
 
 // One filled-in field. Read-only ones render as text so the card reads as work
 // to check rather than a form to fill: the point is to see what North put there,
@@ -30,18 +49,11 @@ export function CardFieldRow({
   if (!field.editable) {
     control =
       field.type === "link" ? (
-        <a
-          className="card-field-value"
-          href={text}
-          target="_blank"
-          rel="noreferrer"
-        >
+        <a href={text} target="_blank" rel="noreferrer">
           {text}
         </a>
       ) : (
-        <div className="card-field-value">
-          {field.type === "boolean" ? (value ? "yes" : "no") : text || "—"}
-        </div>
+        <div>{field.type === "boolean" ? (value ? "yes" : "no") : text || "—"}</div>
       );
   } else if (field.type === "textarea") {
     control = (
@@ -79,39 +91,15 @@ export function CardFieldRow({
       />
     );
   }
-  const label = (
-    <span>
-      {fieldLabel(field)}
-      {field.editable && !asking && <em> editable</em>}
-    </span>
-  );
-  // Suggested answers are buttons, so the field is not a <label>: a label passes a click
-  // on the question to its first button, which would pick the first option.
-  if (field.editable && field.type === "text" && field.options.length > 0) {
-    return (
-      <div className="card-field">
-        {label}
-        <div className="reason-chips">
-          {field.options.map((o) => (
-            <button
-              type="button"
-              key={o}
-              className={text === o ? "active" : ""}
-              onClick={() => onChange(o)}
-            >
-              {o}
-            </button>
-          ))}
-        </div>
-        {control}
-      </div>
-    );
-  }
+  // Suggested answers are buttons in the field's group, not inside a <label>: a
+  // label passes a click on the question to its first button, which would pick
+  // the first option.
+  const suggested = field.editable && field.type === "text" && field.options.length > 0;
   return (
-    <label className="card-field">
-      {label}
+    <Field label={fieldLabel(field)} hint={field.editable && !asking ? "You can edit this." : undefined}>
+      {suggested && <Choices options={field.options} chosen={text} onChoose={onChange} />}
       {control}
-    </label>
+    </Field>
   );
 }
 
@@ -140,6 +128,19 @@ export const REJECTION_REASONS = [
   "Bad timing",
   "Not interested",
 ];
+
+/** A card's own options in the kit's order: the rejecting ones first, the card's
+ *  first other option last, as the one primary. */
+export function orderOwnOptions(options: string[], rejecting: string[]): { option: string; rejects: boolean; primary: boolean }[] {
+  const rejects = options.filter((option) => rejecting.includes(option));
+  const others = options.filter((option) => !rejecting.includes(option));
+  const [main, ...rest] = others;
+  return [
+    ...rejects.map((option) => ({ option, rejects: true, primary: false })),
+    ...rest.map((option) => ({ option, rejects: false, primary: false })),
+    ...(main === undefined ? [] : [{ option: main, rejects: false, primary: true }]),
+  ];
+}
 
 export function ApprovalCard({
   card,
@@ -190,17 +191,119 @@ export function ApprovalCard({
       )}
       {card.context && !sideBySide && (
         <div className="card-context">
-          <button
-            className="link-button"
-            onClick={() => setShowContext(!showContext)}
-          >
+          <Button variant="quiet" size="sm" onClick={() => setShowContext(!showContext)}>
             {showContext ? "Hide" : "Show"} source
-          </button>
+          </Button>
           {showContext && <pre>{card.context}</pre>}
         </div>
       )}
     </>
   );
+  const answerInOwnWords = () => onDecide("answered", answer.trim(), values);
+  let actions: ReactNode;
+  if (rejecting) {
+    // Asked only for prepared work. A guard-rail rejection is a decision about
+    // one action in one task, not an example of what should be proposed, so
+    // interrupting it for a reason would cost a click and teach nothing.
+    actions = (
+      <EntityForm
+        title="Why reject it?"
+        description="This is what makes the next batch better."
+        submitLabel="Reject"
+        onSubmit={() => onDecide("rejected", "", values, reason)}
+        onCancel={() => {
+          setRejecting(false);
+          setReason("");
+        }}
+      >
+        <Field label="Common reasons" wide>
+          <Choices options={REJECTION_REASONS} chosen={reason} onChoose={setReason} />
+        </Field>
+        <Field label="In your own words" wide>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="or say why in your own words…"
+          />
+        </Field>
+      </EntityForm>
+    );
+  } else if (card.type === "question" && fields.length > 0) {
+    actions = (
+      <ActionBar>
+        <Button
+          variant="primary"
+          disabled={!answersComplete(card, values)}
+          onClick={() => onDecide("answered", "", values)}
+        >
+          Send answers
+        </Button>
+      </ActionBar>
+    );
+  } else if (card.type === "question") {
+    // Options are shortcuts; a question can always be answered in your own words.
+    // With buttons only, a question asked without options could not be answered here.
+    actions = (
+      <>
+        {card.options.length > 0 && (
+          <ActionBar align="start">
+            {card.options.map((option) => (
+              <Button key={option} onClick={() => onDecide("answered", option, values)}>
+                {option}
+              </Button>
+            ))}
+          </ActionBar>
+        )}
+        <Field label={card.options.length > 0 ? "Or in your own words" : "Your answer"}>
+          <input
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && answer.trim()) answerInOwnWords();
+            }}
+            placeholder="Type your answer"
+          />
+        </Field>
+        <ActionBar>
+          <Button variant="primary" disabled={!answer.trim()} onClick={answerInOwnWords}>
+            Answer
+          </Button>
+        </ActionBar>
+      </>
+    );
+  } else if (hasOwnOptions(card.options)) {
+    // A card with options of its own acts on the one you choose. Plain
+    // Approve and Reject closed a Resume/Discard card and did nothing.
+    actions = (
+      <ActionBar>
+        {orderOwnOptions(card.options, card.rejecting).map(({ option, rejects, primary }) => (
+          <Button
+            key={option}
+            variant={primary ? "primary" : "secondary"}
+            onClick={() => onDecide(rejects ? "rejected" : "approved", option, values)}
+          >
+            {option}
+          </Button>
+        ))}
+      </ActionBar>
+    );
+  } else {
+    // The same order as the chat's card: Reject, then Approve as the main action, last.
+    actions = (
+      <ActionBar>
+        <Button
+          onClick={() =>
+            card.source ? setRejecting(true) : onDecide("rejected", "", values)
+          }
+        >
+          Reject
+        </Button>
+        <Button variant="primary" onClick={() => onDecide("approved", "", values)}>
+          Approve
+        </Button>
+      </ActionBar>
+    );
+  }
   return (
     <article className="approval-card">
       <div className="approval-type">
@@ -232,123 +335,7 @@ export function ApprovalCard({
           Approving will <b>{card.next_step}</b>.
         </p>
       )}
-      {/* Asked only for prepared work. A guard-rail rejection is a decision about
-        one action in one task, not an example of what should be proposed, so
-        interrupting it for a reason would cost a click and teach nothing. */}
-      {rejecting ? (
-        <div className="reject-reason">
-          <div className="editor-label">
-            Why? This is what makes the next batch better.
-          </div>
-          <div className="reason-chips">
-            {REJECTION_REASONS.map((chip) => (
-              <button
-                key={chip}
-                className={reason === chip ? "active" : ""}
-                onClick={() => setReason(chip)}
-              >
-                {chip}
-              </button>
-            ))}
-          </div>
-          <input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="or say why in your own words…"
-          />
-          <div className="approval-actions">
-            <button
-              className="danger-button"
-              onClick={() => onDecide("rejected", "", values, reason)}
-            >
-              Reject
-            </button>
-            <button
-              onClick={() => {
-                setRejecting(false);
-                setReason("");
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="approval-actions">
-          {card.type === "question" && fields.length > 0 ? (
-            <button
-              className="primary-button"
-              disabled={!answersComplete(card, values)}
-              onClick={() => onDecide("answered", "", values)}
-            >
-              Send answers
-            </button>
-          ) : card.type === "question" ? (
-            // Options are shortcuts; a question can always be answered in your own words.
-            // With buttons only, a question asked without options could not be answered here.
-            <>
-              {card.options.map((option) => (
-                <button
-                  key={option}
-                  onClick={() => onDecide("answered", option, values)}
-                >
-                  {option}
-                </button>
-              ))}
-              <input
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && answer.trim()) onDecide("answered", answer.trim(), values);
-                }}
-                placeholder="Type your answer"
-              />
-              <button
-                className="primary-button"
-                disabled={!answer.trim()}
-                onClick={() => onDecide("answered", answer.trim(), values)}
-              >
-                Answer
-              </button>
-            </>
-          ) : hasOwnOptions(card.options) ? (
-            // A card with options of its own acts on the one you choose. Plain
-            // Approve and Reject closed a Resume/Discard card and did nothing.
-            <>
-              {card.options.map((option) => (
-                <button
-                  key={option}
-                  className={card.rejecting.includes(option) ? "danger-button" : "primary-button"}
-                  onClick={() =>
-                    onDecide(card.rejecting.includes(option) ? "rejected" : "approved", option, values)
-                  }
-                >
-                  {option}
-                </button>
-              ))}
-            </>
-          ) : (
-            <>
-              <button
-                className="primary-button"
-                onClick={() => onDecide("approved", "", values)}
-              >
-                Approve
-              </button>
-              <button
-                className="danger-button"
-                onClick={() =>
-                  card.source
-                    ? setRejecting(true)
-                    : onDecide("rejected", "", values)
-                }
-              >
-                Reject
-              </button>
-            </>
-          )}
-        </div>
-      )}
+      {actions}
     </article>
   );
 }
@@ -373,7 +360,7 @@ export function Approvals() {
   // card appear; the poll is what stops a dropped connection turning into a
   // queue that has silently stopped updating.
   const resource = useResource<Approval[]>("/web/api/approvals", 30000);
-  const notices = useResource<Notice[]>("/web/api/notices", 30000);
+  const notices = useResource<NoticeEntry[]>("/web/api/notices", 30000);
   const { reload } = resource;
   useEffect(() => {
     const stream = new EventSource("/orchestrator/stream");
@@ -419,7 +406,6 @@ export function Approvals() {
     });
     await resource.reload();
   };
-  if (resource.loading) return <Loading />;
   const pending = (resource.data || []).filter(
     (card) => card.status === "pending",
   );
@@ -460,64 +446,58 @@ export function Approvals() {
             : "Questions and consequential actions waiting for your decision."
         }
       />
-      {resource.error && <ErrorNotice message={resource.error} />}
-      <nav className="segmented" aria-label="Approval views">
-        {APPROVAL_TABS.map(([value, label]) => (
-          <button
-            key={value}
-            className={tab === value ? "active" : ""}
-            aria-pressed={tab === value}
-            onClick={() => setParams(value === "waiting" ? {} : { tab: value })}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      {resource.error && <Notice tone="error">{resource.error}</Notice>}
+      <Tabs
+        label="Approval views"
+        items={APPROVAL_TABS.map(([value, label]) => ({ value, label }))}
+        value={tab}
+        onChange={(value) => setParams(value === "waiting" ? {} : { tab: value })}
+      />
       {tab === "decisions" && <ApprovalMemoryPanel find={find} />}
       {tab === "rules" && <SafeActionsPanel />}
-      {tab === "waiting" && <>
+      {tab === "waiting" && resource.loading && <Loading />}
+      {tab === "waiting" && !resource.loading && <>
       {(notices.data || []).length > 0 && (
         <>
-          <h2 className="section-title">From north</h2>
-          <p className="muted memory-note">
-            Reminders and how scheduled runs ended. Nothing to decide; dismiss each once read.
-          </p>
+          <SectionHeader
+            title="From north"
+            description="Reminders and how scheduled runs ended. Nothing to decide; dismiss each once read."
+          />
           <div className="table-list"><NoticeList notices={notices.data || []} onDismissed={() => void notices.reload()}/></div>
         </>
       )}
       {blocking.length > 0 && (
         <>
-          <h2 className="section-title">Needs you now</h2>
-          <p className="muted memory-note">
-            Something is stopped until you answer.
-          </p>
+          <SectionHeader title="Needs you now" description="Something is stopped until you answer." />
           {section(blocking)}
         </>
       )}
 
       {prepared.length > 0 && (
         <>
-          <h2 className="section-title">When you have a minute</h2>
-          <p className="muted memory-note">
-            Work north finished and left for you. Nothing is blocked; take the
-            time to read it.
-          </p>
+          <SectionHeader
+            title="When you have a minute"
+            description="Work north finished and left for you. Nothing is blocked; take the time to read it."
+          />
           {section(prepared)}
         </>
       )}
 
       {!pending.length && !(notices.data || []).length && <Empty>Nothing needs your attention.</Empty>}
 
-      <h2 className="section-title">Resolved</h2>
-      <div className="table-list">
-        {history.map((card) => (
-          <DecisionRow
-            key={card.id}
-            card={card}
-            onOverrule={(d, o, r) => overrule(card, d, o, r)}
-          />
-        ))}
-      </div>
+      <Panel title="Resolved" label={`${history.length} decided`}>
+        {history.length ? (
+          history.map((card) => (
+            <DecisionRow
+              key={card.id}
+              card={card}
+              onOverrule={(d, o, r) => overrule(card, d, o, r)}
+            />
+          ))
+        ) : (
+          <Empty>Nothing decided yet.</Empty>
+        )}
+      </Panel>
       </>}
     </div>
   );
@@ -611,11 +591,13 @@ export function DecisionRow({
   const [answer, setAnswer] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   const northDecided = Boolean(card.decided_by) && card.decided_by !== "you";
   const question = card.type === "question";
   const flipped = card.status === "approved" ? "rejected" : "approved";
   const submit = async () => {
     setError("");
+    setBusy(true);
     try {
       if (question) await onOverrule("answered", answer.trim(), reason.trim());
       else
@@ -627,21 +609,28 @@ export function DecisionRow({
       setOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
     }
   };
   const prior = card.overruled;
   return (
-    <div className="decision-row">
-      <div className="table-row">
-        <div className="row-main">
-          <b>{card.title}</b>
-          <small>
-            {card.agent} · {timeAgo(card.created_at)}
-            {question && card.chosen_option && ` · "${card.chosen_option}"`}
-          </small>
-        </div>
-        <Status value={card.status} />
-      </div>
+    <ListRow
+      title={card.title}
+      meta={[
+        card.agent,
+        timeAgo(card.created_at),
+        question && card.chosen_option && `"${card.chosen_option}"`,
+      ]}
+      status={<Status value={card.status} />}
+      actions={
+        northDecided && !open ? (
+          <Button variant="quiet" size="sm" onClick={() => setOpen(true)}>
+            Overrule
+          </Button>
+        ) : undefined
+      }
+    >
       {/* What was decided: the command, the path, the diff. A row with only "Git Operation -
         Approval Required · Decided by the safe list" gave nothing to judge an overrule by. */}
       {card.message && (
@@ -667,49 +656,42 @@ export function DecisionRow({
           />
         </div>
       )}
-      {northDecided && !open && (
-        <button className="ghost-button" onClick={() => setOpen(true)}>
-          Overrule
-        </button>
-      )}
       {open && (
-        <div className="overrule-form">
-          <p className="muted">
-            North will decide your way next time. What it already did, or
-            refused, stays done.
-          </p>
+        <EntityForm
+          title="Overrule north"
+          description="North will decide your way next time. What it already did, or refused, stays done."
+          submitLabel={
+            question
+              ? "Answer instead"
+              : flipped === "approved"
+                ? "Should have approved"
+                : "Should have rejected"
+          }
+          canSubmit={!question || Boolean(answer.trim())}
+          busy={busy}
+          error={error}
+          onSubmit={submit}
+          onCancel={() => setOpen(false)}
+        >
           {question && (
-            <input
-              placeholder="Your answer"
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-            />
+            <Field label="Your answer">
+              <input
+                placeholder="Your answer"
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+              />
+            </Field>
           )}
-          <input
-            placeholder="Why (optional)"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
-          <div className="card-actions">
-            <button
-              className="primary-button"
-              disabled={question && !answer.trim()}
-              onClick={submit}
-            >
-              {question
-                ? "Answer instead"
-                : flipped === "approved"
-                  ? "Should have approved"
-                  : "Should have rejected"}
-            </button>
-            <button className="ghost-button" onClick={() => setOpen(false)}>
-              Cancel
-            </button>
-          </div>
-          {error && <ErrorNotice message={error} />}
-        </div>
+          <Field label="Why (optional)">
+            <input
+              placeholder="Why (optional)"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
+          </Field>
+        </EntityForm>
       )}
-    </div>
+    </ListRow>
   );
 }
 
@@ -726,6 +708,7 @@ export interface ApprovalDecision {
 // can be checked before it is trusted, and forgotten one row at a time - a
 // decision that cannot be withdrawn is not consent.
 export function ApprovalMemoryPanel({ find = "" }: { find?: string }) {
+  const dialog = useDialog();
   const resource = useResource<ApprovalDecision[]>(
     "/web/api/memory/approvals",
     10000,
@@ -733,6 +716,13 @@ export function ApprovalMemoryPanel({ find = "" }: { find?: string }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const forget = async (row: ApprovalDecision) => {
+    const ok = await confirmDelete(dialog, {
+      noun: "decision",
+      name: row.signature,
+      verb: "Forget",
+      consequence: "North will ask you again the next time this action comes up.",
+    });
+    if (!ok) return;
     setBusy(row.fingerprint);
     setError("");
     try {
@@ -749,46 +739,44 @@ export function ApprovalMemoryPanel({ find = "" }: { find?: string }) {
   const rows = resource.data || [];
   return (
     <Panel title="Learned decisions" label={`${rows.length} remembered`}>
-      {error && <ErrorNotice message={error} />}
+      {error && <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice>}
       <p className="muted memory-note">
         Every time you approve or reject an action, north records it against a
         fingerprint of that action and replays your decision when a matching one
         comes up. Safe and autonomous modes replay these before anything else.
       </p>
-      {resource.loading ? (
-        <Loading />
-      ) : rows.length ? (
-        rows.map((row) => (
-          <div
-            className={`memory-row${row.fingerprint === find ? " memory-found" : ""}`}
-            key={row.fingerprint}
-            ref={row.fingerprint === find ? reveal : undefined}
-          >
-            <div className="memory-main">
-              <b>{row.signature}</b>
-              <small>
-                {row.agent} ·{" "}
-                <span className={`decision decision-${row.decision}`}>
-                  {row.decision}
-                </span>
-                {row.count > 1 && ` · ${row.count}×`} ·{" "}
-                {timeAgo(row.updated_at)}
-              </small>
-            </div>
-            <button
-              className="ghost-button danger-link"
-              disabled={busy === row.fingerprint}
-              onClick={() => forget(row)}
-            >
-              Forget
-            </button>
-          </div>
-        ))
-      ) : (
-        <Empty>
-          Nothing learned yet. Approve or reject an action and it appears here.
-        </Empty>
-      )}
+      <ResourceView
+        resource={resource}
+        isEmpty={(data) => !data.length}
+        empty="Nothing learned yet. Approve or reject an action and it appears here."
+      >
+        {(data) =>
+          data.map((row) => (
+              <ListRow
+                key={row.fingerprint}
+                found={row.fingerprint === find}
+                title={row.signature}
+                meta={[
+                  row.agent,
+                  row.count > 1 && `${row.count}×`,
+                  timeAgo(row.updated_at),
+                ]}
+                status={<Status value={row.decision} />}
+                actions={
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    busy={busy === row.fingerprint}
+                    busyLabel="Forgetting…"
+                    onClick={() => void forget(row)}
+                  >
+                    Forget
+                  </Button>
+                }
+              />
+          ))
+        }
+      </ResourceView>
     </Panel>
   );
 }
@@ -863,20 +851,18 @@ export function SafeActionsPanel() {
         enabled: !row.enabled,
       }),
     );
+  // A shipped rule can be added back ("Restore shipped rules"), so it is removed;
+  // a rule of your own is deleted.
   const remove = async (row: UnattendedRule) => {
     const shipped = row.source === "builtin";
-    const ok = await dialog.confirm(
-      shipped
+    const ok = await confirmDelete(dialog, {
+      noun: "rule",
+      name: row.pattern,
+      verb: shipped ? "Remove" : "Delete",
+      consequence: shipped
         ? "It stays in the list, switched off, so you can restore it later."
-        : "This rule is yours, so removing it deletes it.",
-      {
-        title: shipped
-          ? `Disable "${row.pattern}"?`
-          : `Delete "${row.pattern}"?`,
-        confirmLabel: shipped ? "Disable" : "Delete",
-        danger: true,
-      },
-    );
+        : "This rule is yours, so deleting it cannot be undone.",
+    });
     if (!ok) return;
     return run(row.id, () =>
       del(`/web/api/unattended/rules/${encodeURIComponent(row.id)}`),
@@ -903,25 +889,16 @@ export function SafeActionsPanel() {
     <Panel
       title="Safe actions"
       label={`${rules.filter((r) => r.enabled).length} active`}
-      actions={
-        <button
-          className="ghost-button"
-          disabled={busy === "restore"}
-          onClick={restore}
-        >
-          Restore shipped rules
-        </button>
-      }
     >
-      {error && <ErrorNotice message={error} />}
+      {error && <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice>}
 
       {/* A rule only ever fires in `safe`. Listing rules that cannot fire, with
         nothing saying so, is how someone concludes the feature is broken. */}
       {data && !data.active && (
-        <div className="notice">
+        <Notice tone="warning">
           These rules are inactive: north is in <b>{data.mode}</b> mode. They
           apply only in <b>safe</b> mode.
-        </div>
+        </Notice>
       )}
 
       <p className="muted memory-note">
@@ -930,83 +907,91 @@ export function SafeActionsPanel() {
         spending money. A sent email cannot be unsent.
       </p>
 
-      <div className="fact-editor">
-        <select value={kind} onChange={(e) => setKind(e.target.value)}>
-          {kinds.map((k) => (
-            <option key={k} value={k}>
-              {KIND_LABELS[k] || k}
-            </option>
-          ))}
-        </select>
-        <input
-          value={pattern}
-          onChange={(e) => setPattern(e.target.value)}
-          placeholder={kind === "command" ? "e.g. make lint" : "e.g. fetch"}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") add();
-          }}
-        />
-        <button
-          className="ghost-button"
-          disabled={busy === "new"}
-          onClick={add}
-        >
-          Add rule
-        </button>
-      </div>
+      <EntityForm
+        title="Add a safe action"
+        submitLabel="Add rule"
+        busy={busy === "new"}
+        busyLabel="Adding…"
+        canSubmit={Boolean(pattern.trim())}
+        onSubmit={add}
+      >
+        <Field label="Kind">
+          <select value={kind} onChange={(e) => setKind(e.target.value)}>
+            {kinds.map((k) => (
+              <option key={k} value={k}>
+                {KIND_LABELS[k] || k}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Action">
+          <input
+            value={pattern}
+            onChange={(e) => setPattern(e.target.value)}
+            placeholder={kind === "command" ? "e.g. make lint" : "e.g. fetch"}
+          />
+        </Field>
+      </EntityForm>
 
-      {resource.loading ? (
-        <Loading />
-      ) : (
-        kinds.map((k) => {
-          const forKind = rules.filter((r) => r.kind === k);
-          if (!forKind.length) return null;
-          return (
-            <div className="rule-group" key={k}>
-              <div className="editor-label">{KIND_LABELS[k] || k}</div>
-              <p className="muted memory-note">{KIND_HELP[k]}</p>
-              {forKind.map((row) => (
-                <div
-                  className={`memory-row ${row.enabled ? "" : "rule-disabled"}`}
-                  key={row.id}
-                >
-                  <div className="memory-main">
-                    <b>{row.pattern}</b>
-                    <small>
-                      {row.source === "builtin" ? "shipped" : "yours"}
-                      {!row.enabled && " · disabled"}
-                      {/* A rule that has fired 40 times is a different object from one
-                  that never has, and that is what you want to see before keeping it. */}
-                      {row.fire_count > 0
-                        ? ` · used ${row.fire_count}×${row.last_fired_at ? `, last ${timeAgo(row.last_fired_at)}` : ""}`
-                        : " · never used"}
-                    </small>
-                  </div>
-                  <div className="fact-actions">
-                    <button
-                      disabled={busy === row.id}
-                      onClick={() => toggle(row)}
-                    >
-                      {row.enabled ? "Disable" : "Enable"}
-                    </button>
-                    <button
-                      className="danger-link"
-                      disabled={busy === row.id}
-                      onClick={() => remove(row)}
-                    >
-                      {row.source === "builtin" ? "Remove" : "Delete"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          );
-        })
-      )}
-      {!resource.loading && !rules.length && (
-        <Empty>No safe actions configured.</Empty>
-      )}
+      <ResourceView
+        resource={resource}
+        isEmpty={(loaded) => !loaded.rules.length}
+        empty="No safe actions configured."
+      >
+        {() => <Stack gap="lg">{
+          kinds.map((k) => {
+            const forKind = rules.filter((r) => r.kind === k);
+            if (!forKind.length) return null;
+            return (
+              <Stack gap="sm" key={k}>
+                <SectionHeader level={3} title={KIND_LABELS[k] || k} description={KIND_HELP[k]} />
+                <div>{forKind.map((row) => (
+                  <ListRow
+                    key={row.id}
+                    title={row.pattern}
+                    muted={!row.enabled}
+                    meta={[
+                      row.source === "builtin" ? "shipped" : "yours",
+                      !row.enabled && "disabled",
+                      // A rule that has fired 40 times is a different object from one
+                      // that never has, and that is what you want to see before keeping it.
+                      row.fire_count > 0
+                        ? `used ${row.fire_count}×${row.last_fired_at ? `, last ${timeAgo(row.last_fired_at)}` : ""}`
+                        : "never used",
+                    ]}
+                    actions={
+                      <>
+                        <Button
+                          variant="quiet"
+                          size="sm"
+                          disabled={busy === row.id}
+                          onClick={() => void toggle(row)}
+                        >
+                          {row.enabled ? "Disable" : "Enable"}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          disabled={busy === row.id}
+                          onClick={() => void remove(row)}
+                        >
+                          {row.source === "builtin" ? "Remove" : "Delete"}
+                        </Button>
+                      </>
+                    }
+                  />
+                ))}</div>
+              </Stack>
+            );
+          })
+        }</Stack>}
+      </ResourceView>
+
+      <ActionBar>
+        <Button busy={busy === "restore"} busyLabel="Restoring…" onClick={() => void restore()}>
+          Restore shipped rules
+        </Button>
+      </ActionBar>
     </Panel>
   );
 }
-

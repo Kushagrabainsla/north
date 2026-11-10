@@ -1,6 +1,6 @@
-import { NavLink } from "react-router-dom";
-import { MessageSquare, Sun, File, ChevronRight } from "lucide-react";
-import { Empty, ErrorNotice, formatDateTime, HealthIndicator, Loading, NoticeList, PageHeader, Panel, Status, timeAgo, unpricedNote, YoloBadge } from "../components";
+import { MessageSquare, File } from "lucide-react";
+import { formatDateTime, HealthIndicator, NoticeList, PageHeader, Panel, timeAgo, unpricedNote, YoloBadge } from "../components";
+import { Button, CardGrid, Empty, EntityCard, ListRow, Loading, Notice, Status } from "../kit";
 import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
 import { SetupReminder } from "./Setup";
@@ -28,14 +28,19 @@ export function memoryLine(memory: DashboardData["memory"]): { count: number; la
 
 export function Dashboard() {
   const { data, error, loading, reload } = useResource<DashboardData>("/web/api/dashboard", 10000);
-  if (loading) return <Loading />;
-  if (error || !data) return <ErrorNotice message={error || "Dashboard unavailable"} />;
+  // The header stays while the dashboard loads or fails, with Refresh in it.
+  const header = <PageHeader eyebrow="Live cockpit" title="Everything, at a glance" subtitle="The complete state of North. Live, local, and under your control."
+    actions={<Button onClick={() => void reload()}>Refresh</Button>} />;
+  if (!data) return <div className="page dashboard-page">
+    {header}
+    {loading ? <Loading/> : <Notice tone="error">{error || "Dashboard unavailable"}</Notice>}
+  </div>;
   const totalCost = Number(data.metrics.total_cost_usd || 0);
   const briefing = data.artifacts.find(artifact => artifact.kind === "news");
   const todaysBriefing = briefing?.is_today === true;
   return <div className="page dashboard-page">
-    <PageHeader eyebrow="Live cockpit" title="Everything, at a glance" subtitle="The complete state of North. Live, local, and under your control."
-      actions={<button className="ghost-button" onClick={reload}>Refresh</button>} />
+    {header}
+    {error && <Notice tone="error">{error}</Notice>}
     <SetupReminder/>
     <div className="cockpit-grid">
       <Panel title="System" label="Status" to="/system" className="system-panel">
@@ -43,22 +48,24 @@ export function Dashboard() {
       </Panel>
       <Panel title="Attention" label={`${data.attention.length + data.notices.length} items`} to="/approvals" className={data.attention.length + data.notices.length ? "attention-panel" : ""}>
         <NoticeList compact notices={data.notices.slice(0, 3)} onDismissed={() => void reload()}/>
-        {data.attention.length ? data.attention.slice(0, 3).map(item => <NavLink className="list-row" to="/approvals" key={item.id}><div><b>{item.title}</b><small>{item.agent} needs a decision</small></div><ChevronRight size={15}/></NavLink>) : !data.notices.length && <Empty>Nothing needs you right now.</Empty>}
+        {data.attention.length ? data.attention.slice(0, 3).map(item => <ListRow key={item.id} to="/approvals" title={item.title} meta={[`${item.agent} needs a decision`]}/>) : !data.notices.length && <Empty>Nothing needs you right now.</Empty>}
       </Panel>
       <Panel title="Active now" label={`${data.active_tasks.length} tasks`} to="/tasks">
-        {data.active_tasks.length ? data.active_tasks.map(task => <div className="list-row" key={task.task_id}><div><b>{task.task_id.slice(0, 12)}</b><small>{timeAgo(task.created_at)}</small></div><Status value={task.status}/></div>) : <Empty>North is ready.</Empty>}
+        {data.active_tasks.length ? data.active_tasks.map(task => <ListRow key={task.task_id} title={task.task_id.slice(0, 12)} meta={[timeAgo(task.created_at)]} status={<Status value={task.status}/>}/>) : <Empty>North is ready.</Empty>}
       </Panel>
       <Panel title="Sessions" label="Recent" to="/sessions" className="wide-panel">
-        {data.conversations.length ? <div className="conversation-strip">{data.conversations.map(session => <NavLink to={`/sessions/${session.id}`} className="conversation-card" key={session.id}><span className="conversation-glyph"><MessageSquare size={16}/></span><b>{session.title}</b><small>{session.source === "cli" ? "CLI · " : ""}{timeAgo(session.updated_at)}</small></NavLink>)}</div> : <Empty>Start your first session.</Empty>}
+        {data.conversations.length ? <CardGrid>{data.conversations.map(session => <EntityCard key={session.id} to={`/sessions/${session.id}`} icon={<MessageSquare size={16}/>} title={session.title} meta={`${session.source === "cli" ? "CLI · " : ""}${timeAgo(session.updated_at)}`}/>)}</CardGrid> : <Empty>Start your first session.</Empty>}
       </Panel>
       <Panel title={todaysBriefing ? "Today's briefing" : "Latest briefing"} label="Daily intelligence" to="/artifacts" className="wide-panel briefing-panel">
-        {briefing ? <div className="briefing-summary"><div className="sun-mark"><Sun size={18}/></div><div><b>{briefing.name}</b><p>{todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}</p></div><NavLink to="/artifacts" className="primary-button">Open artifact</NavLink></div> : <Empty>No briefing has been generated yet.</Empty>}
+        {briefing ? <ListRow title={briefing.name}
+          description={todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}
+          actions={<Button variant="primary" size="sm" to="/artifacts">Open artifact</Button>}/> : <Empty>No briefing has been generated yet.</Empty>}
       </Panel>
       <Panel title="Flows" label={`${data.scheduled ?? data.cron.length} scheduled`} to="/flows">
-        {data.jobs.length ? data.jobs.slice(0, 3).map(job => <div className="list-row" key={job.job_id}><div><b>{job.task}</b><small>{[formatDateTime(job.scheduled_at), job.late_note].filter(Boolean).join(" · ")}</small></div><Status value={job.status}/></div>) : <Empty>No flow has run yet.</Empty>}
+        {data.jobs.length ? data.jobs.slice(0, 3).map(job => <ListRow key={job.job_id} title={job.task} meta={[formatDateTime(job.scheduled_at), job.late_note]} status={<Status value={job.status}/>}/>) : <Empty>No flow has run yet.</Empty>}
       </Panel>
       <Panel title="Artifacts" label={`${data.artifacts.length} recent`} to="/artifacts">
-        {data.artifacts.length ? data.artifacts.slice(0, 4).map(file => <div className="list-row compact" key={file.id}><div><b>{file.name}</b><small>{file.kind} · {timeAgo(file.updated_at)}</small></div><File size={14}/></div>) : <Empty>No generated outputs.</Empty>}
+        {data.artifacts.length ? data.artifacts.slice(0, 4).map(file => <ListRow key={file.id} title={file.name} meta={[file.kind, timeAgo(file.updated_at)]} status={<File size={14} aria-hidden="true"/>}/>) : <Empty>No generated outputs.</Empty>}
       </Panel>
       <Panel title="Memory" label="Context" to="/memory">
         {(() => { const memory = memoryLine(data.memory); return <><div className="metric"><strong>{memory.count}</strong><span>{memory.label}</span></div><p className="muted">{memory.note}</p></>; })()}
@@ -67,7 +74,7 @@ export function Dashboard() {
         <div className="metric-row"><div className="metric"><strong>{String(data.metrics.total_tasks || 0)}</strong><span>tasks</span></div><div className="metric"><strong>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</strong><span>model cost</span></div></div>
       </Panel>
       <Panel title="Activity" label="Latest events" to="/tasks?view=everything" className="full-panel">
-        <div className="activity-line">{data.activity.slice(0, 8).map(entry => <div key={entry.id}><span className={`event-dot ${entry.status || ""}`}/><b>{entry.action?.replaceAll("_", " ") || entry.source}</b><small>{entry.agent || "north"} · {timeAgo(entry.timestamp)}</small></div>)}</div>
+        {data.activity.length === 0 ? <Empty>Nothing has happened yet.</Empty> : <div className="activity-line">{data.activity.slice(0, 8).map(entry => <div key={entry.id}><span className={`event-dot ${entry.status || ""}`}/><b>{entry.action?.replaceAll("_", " ") || entry.source}</b><small>{entry.agent || "north"} · {timeAgo(entry.timestamp)}</small></div>)}</div>}
       </Panel>
     </div>
   </div>;

@@ -3,8 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { ArtifactLibrary } from "./Artifacts";
-import { SETUP_STEPS, YourFiles } from "./Setup";
+import { Setup, SETUP_STEPS, YourFiles } from "./Setup";
 import { TelegramConnection } from "../connections";
+import { DialogProvider } from "../dialog";
 
 const DATA: Record<string, unknown> = {
   "/web/api/artifacts": [
@@ -23,7 +24,7 @@ vi.mock("../hooks", async (importOriginal) => ({
 }));
 
 const render = (element: ReturnType<typeof createElement>) =>
-  renderToStaticMarkup(createElement(MemoryRouter, null, element));
+  renderToStaticMarkup(createElement(MemoryRouter, null, createElement(DialogProvider, null, element)));
 
 describe("onboarding", () => {
   it("walks the connections and your files, with no separate permissions step", () => {
@@ -36,8 +37,16 @@ describe("onboarding", () => {
     expect(markup).toContain("@userinfobot");
     expect(markup).toContain("Ready 1234…wxyz");
     expect(markup).toContain('value="12345"');
-    expect(markup).toContain("Disconnect");
+    // Taking the token away says what it does, in red, never a vague "Disconnect".
+    expect(markup).toMatch(/<button[^>]*kit-button-danger[^>]*><span>Remove token<\/span><\/button>/);
+    expect(markup).not.toContain("Disconnect");
     expect(markup).not.toMatch(/type="password"[^>]*value="[^"]+"/);
+  });
+
+  it("keeps the page header when setup cannot be read, and says why in an error", () => {
+    const markup = render(createElement(Setup));
+    expect(markup).toContain("<h1>Set up North</h1>");
+    expect(markup).toMatch(/kit-notice-error[^>]*><div>Setup unavailable<\/div>/);
   });
 
   it("explains what reading your files does and never starts on its own", () => {

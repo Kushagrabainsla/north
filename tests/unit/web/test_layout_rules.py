@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 CSS = (Path(__file__).parents[3] / "web" / "src" / "styles.css").read_text(encoding="utf-8")
+KIT = (Path(__file__).parents[3] / "web" / "src" / "kit.css").read_text(encoding="utf-8")
 
 
 def _rule(selector: str) -> str:
@@ -26,9 +27,9 @@ def test_a_long_word_in_a_reply_or_an_artifact_wraps() -> None:
 
 
 def test_a_session_s_activity_and_turns_have_their_own_cells_on_a_phone() -> None:
-    # :first-of-type and :last-of-type count every span in the row, so neither matched a meta cell.
-    assert not re.search(r"capability-registry-meta:(first|last)-of-type", CSS)
-    assert ".capability-registry-meta + .capability-registry-meta { grid-column: 2;" in CSS
+    # Sessions is a kit table now: on a phone every cell of a row is its own line.
+    phone = KIT[KIT.index("@media (max-width: 680px)"):]
+    assert ".kit-table-open { grid-template-columns: 1fr;" in phone
 
 
 def test_the_activity_strip_fills_each_row_however_few_events_there_are() -> None:
@@ -40,7 +41,8 @@ def test_the_devices_page_lines_up_with_its_header_like_every_other_page() -> No
     """Its blocks were indented 26 px with margins of their own, and the Add a device panel then ran off the
     right edge at 1080 px. A page's blocks sit on its edges and are spaced by its one gap; checked in a browser
     at 390, 1080 and 1400 px, every block's left and right edges equal the header's."""
-    for selector in (".lights-bar", ".lights-notice", ".lights-grid", ".music-sync"):
+    # The bar, notice and grid are kit parts now (Toolbar, Notice, CardGrid), with no margins of their own.
+    for selector in (".music-sync",):
         body = _rule(selector)
         assert body, selector
         assert not re.search(r"\b(margin|padding)\s*:\s*0 \d+px", body), selector
@@ -64,6 +66,5 @@ def test_the_dashboard_grid_has_no_grey_holes_and_a_notice_cannot_stretch_it() -
     assert _winning(".cockpit-grid", "background") == "var(--surface)"
     assert _winning(".cockpit-grid", "grid-auto-flow") == "dense"
     assert _winning(".cockpit-grid > .panel", "box-shadow").startswith("0 0 0 1px")
-    assert _winning(".conversation-strip", "background") == "var(--surface)"
     assert ".notice-row small { white-space: pre-wrap" not in CSS  # the whole message, every line kept
     assert "-webkit-line-clamp: 2" in _rule(".notice-row .notice-preview")

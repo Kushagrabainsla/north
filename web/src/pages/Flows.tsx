@@ -1,20 +1,27 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Fragment, useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { api, del, patch, post } from "../api";
-import {
-  Empty,
-  ErrorNotice,
-  formatDateTime,
-  Loading,
-  PageHeader,
-  Panel,
-  Status,
-  Modal,
-} from "../components";
+import { formatDateTime, Modal, PageHeader, Panel } from "../components";
 import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
+import {
+  ActionBar,
+  Button,
+  confirmDelete,
+  Empty,
+  EntityForm,
+  EntityTable,
+  Field,
+  ListRow,
+  Loading,
+  Notice,
+  ResourceView,
+  SectionHeader,
+  Status,
+  Tabs,
+} from "../kit";
 import { agoText, whenFromNow } from "../schedule";
-import { ConfirmRow, draftOf, emptyDraft, ScheduleForm } from "../scheduleForm";
+import { draftOf, emptyDraft, ScheduleForm } from "../scheduleForm";
 import type { Draft } from "../scheduleForm";
 import {
   buildUpcoming,
@@ -35,7 +42,14 @@ import {
 } from "./flowsView";
 import type { JobLike, RunLike, ScheduleLike } from "./flowsView";
 
-import type { SkillSummary } from "./capabilities";
+import {
+  CapabilityName,
+  capabilityColumns,
+  failure,
+  sourceLabel,
+  type PageMessage,
+  type SkillSummary,
+} from "./capabilities";
 
 interface FlowSummary {
   name: string;
@@ -96,7 +110,15 @@ const draftFromDetail = (detail: FlowDetail): FlowDraft => ({
   })),
 });
 
-function FlowStepCard({
+const APPROVAL_TEXT: Record<string, string> = {
+  before_step: "once, before the step",
+  on_mutation: "before each change",
+  never: "none",
+};
+
+// One step of the flow form: its fields sit in the form's own grid, under a
+// header that names the step and what it runs.
+function FlowStepFields({
   step,
   index,
   onChange,
@@ -159,158 +181,143 @@ function FlowStepCard({
     });
   };
   const chooseInstructionsKind = () => set({ skill: "", inputs: {} });
+  // What the step may do, said once in its header.
+  const about = [
+    step.action
+      ? `Runs north's own job: ${step.action}. No model; it is plain code.`
+      : "",
+    execution
+      ? `Allowed tools: ${execution.tools.length ? execution.tools.join(", ") : "none"}. Approval: ${APPROVAL_TEXT[execution.approval] || "none"}.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <article className="flow-step-card">
-      <header>
-        <div>
-          <span className="eyebrow">Step {index + 1}</span>
-          <h3>{step.name || "Untitled step"}</h3>
-        </div>
-        <button
-          type="button"
-          className="ghost-button danger-link"
-          disabled={!canRemove}
-          onClick={onRemove}
-        >
-          Remove
-        </button>
-      </header>
-      {step.action ? (
-        <div className="flow-contract">
-          <span>
-            <b>Runs</b>
-            north's own job
-          </span>
-          <span>
-            <b>Action</b>
-            {step.action}
-          </span>
-          <span>
-            <b>Model</b>
-            none, it is plain code
-          </span>
-        </div>
-      ) : null}
+    <>
+      <Field label={`Step ${index + 1}`} wide>
+        <SectionHeader
+          level={3}
+          title={step.name || "Untitled step"}
+          description={about || undefined}
+          actions={
+            <Button
+              variant="quiet"
+              size="sm"
+              disabled={!canRemove}
+              onClick={onRemove}
+            >
+              Remove step
+            </Button>
+          }
+        />
+      </Field>
       {!step.action && (
-        <div className="flow-step-grid">
-          <label>
-            Step name
+        <>
+          <Field label="Step name">
             <input
               disabled={!editable}
               value={step.name}
               placeholder="Review matching jobs"
               onChange={(event) => set({ name: event.target.value })}
             />
-          </label>
-          <label>
-            Kind
-            <div className="segmented">
-              <button
-                type="button"
-                className={kind === "skill" ? "active" : ""}
-                disabled={!editable || !activeSkills.length}
-                title={
-                  activeSkills.length
-                    ? undefined
-                    : "No active skills to choose from"
-                }
-                onClick={chooseSkillKind}
-              >
-                Existing skill
-              </button>
-              <button
-                type="button"
-                className={kind === "instructions" ? "active" : ""}
-                disabled={!editable}
-                onClick={chooseInstructionsKind}
-              >
-                Instructions
-              </button>
-            </div>
-          </label>
-        </div>
-      )}
-      {step.action ? null : kind === "skill" ? (
-        <label className="flow-wide-field">
-          Skill
-          <select
-            aria-label="Skill"
-            disabled={!editable}
-            value={step.skill}
-            onChange={(event) => selectSkill(event.target.value)}
+          </Field>
+          <Field
+            label="Kind"
+            hint={
+              activeSkills.length ? undefined : "No active skills to choose from."
+            }
           >
-            {step.skill &&
-              !activeSkills.some((skill) => skill.name === step.skill) && (
-                <option value={step.skill}>
-                  {step.skill} ({inactiveSkillLabel(selectedSkill?.status)})
-                </option>
-              )}
-            {activeSkills.map((skill) => (
-              <option key={skill.name} value={skill.name}>
-                {skill.name}
-                {skill.execution ? "" : " · instruction only"}
-              </option>
-            ))}
-          </select>
-          <small>North runs this step using the selected reusable skill.</small>
-        </label>
-      ) : (
-        <label className="flow-wide-field">
-          Step instructions
-          <textarea
-            aria-label="Step instructions"
-            disabled={!editable}
-            value={step.instructions}
-            rows={3}
-            placeholder="Write the procedure North should follow for this step."
-            onChange={(event) => set({ instructions: event.target.value })}
-          />
-          <small>
-            North follows these instructions directly - no reusable skill
-            involved.
-          </small>
-        </label>
-      )}
-      {execution && (
-        <div className="flow-contract">
-          <span>
-            <b>Allowed tools</b>
-            {execution.tools.length ? execution.tools.join(", ") : "None"}
-          </span>
-          <span>
-            <b>Approval</b>
-            {execution.approval === "before_step"
-              ? "Once, before the step"
-              : execution.approval === "on_mutation"
-                ? "Before mutations"
-                : "None"}
-          </span>
-        </div>
-      )}
-      {execution && (
-        <div className="flow-params">
-          <div className="flow-params-heading">
-            <div>
-              <b>Skill inputs</b>
-              <small>
-                Required fields are loaded from the skill contract. Bind prior
-                results with {"${steps.review.output}"}.
-              </small>
-            </div>
-            <button
-              type="button"
-              className="ghost-button"
+            <select
+              aria-label="Kind"
               disabled={!editable}
-              onClick={() => set({ inputs: { ...step.inputs, "": "" } })}
+              value={kind}
+              onChange={(event) =>
+                event.target.value === "skill"
+                  ? chooseSkillKind()
+                  : chooseInstructionsKind()
+              }
             >
-              + Add input
-            </button>
-          </div>
-          {inputs.length ? (
-            inputs.map(([key, value], inputIndex) => {
-              const property = execution.inputs.properties?.[key];
-              return (
-                <div className="flow-param-row" key={`${key}-${inputIndex}`}>
+              <option value="skill" disabled={!activeSkills.length}>
+                Existing skill
+              </option>
+              <option value="instructions">Instructions</option>
+            </select>
+          </Field>
+          {kind === "skill" ? (
+            <Field
+              label="Skill"
+              wide
+              hint="North runs this step using the selected reusable skill."
+            >
+              <select
+                aria-label="Skill"
+                disabled={!editable}
+                value={step.skill}
+                onChange={(event) => selectSkill(event.target.value)}
+              >
+                {step.skill &&
+                  !activeSkills.some((skill) => skill.name === step.skill) && (
+                    <option value={step.skill}>
+                      {step.skill} ({inactiveSkillLabel(selectedSkill?.status)})
+                    </option>
+                  )}
+                {activeSkills.map((skill) => (
+                  <option key={skill.name} value={skill.name}>
+                    {skill.name}
+                    {skill.execution ? "" : " · instruction only"}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <Field
+              label="Step instructions"
+              wide
+              hint="North follows these instructions directly - no reusable skill involved."
+            >
+              <textarea
+                aria-label="Step instructions"
+                disabled={!editable}
+                value={step.instructions}
+                rows={3}
+                placeholder="Write the procedure North should follow for this step."
+                onChange={(event) => set({ instructions: event.target.value })}
+              />
+            </Field>
+          )}
+        </>
+      )}
+      {execution && (
+        <>
+          <Field
+            label="Skill inputs"
+            wide
+            hint={
+              inputs.length ? (
+                <>
+                  Required fields come from the skill. Pass on an earlier
+                  step's result with {"${steps.review.output}"}.
+                </>
+              ) : (
+                "No skill inputs needed."
+              )
+            }
+          >
+            <ActionBar align="start">
+              <Button
+                size="sm"
+                disabled={!editable}
+                onClick={() => set({ inputs: { ...step.inputs, "": "" } })}
+              >
+                + Add input
+              </Button>
+            </ActionBar>
+          </Field>
+          {inputs.map(([key, value], inputIndex) => {
+            const property = execution.inputs.properties?.[key];
+            return (
+              <Fragment key={`${key}-${inputIndex}`}>
+                <Field label="Input name">
                   <input
                     disabled={!editable}
                     aria-label="Input name"
@@ -320,6 +327,8 @@ function FlowStepCard({
                       setInput(key, event.target.value, value)
                     }
                   />
+                </Field>
+                <Field label="Value">
                   {property?.enum ? (
                     <select
                       disabled={!editable}
@@ -359,35 +368,33 @@ function FlowStepCard({
                       }
                     />
                   )}
-                  <button
-                    type="button"
-                    className="ghost-button danger-link"
-                    disabled={!editable}
-                    aria-label="Remove input"
-                    onClick={() => {
-                      const next = { ...step.inputs };
-                      delete next[key];
-                      set({ inputs: next });
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              );
-            })
-          ) : (
-            <small className="flow-empty-inputs">No skill inputs needed.</small>
-          )}
-        </div>
+                  <ActionBar align="start">
+                    <Button
+                      variant="icon-danger"
+                      icon={<X size={14} />}
+                      disabled={!editable}
+                      aria-label="Remove input"
+                      title="Remove input"
+                      onClick={() => {
+                        const next = { ...step.inputs };
+                        delete next[key];
+                        set({ inputs: next });
+                      }}
+                    />
+                  </ActionBar>
+                </Field>
+              </Fragment>
+            );
+          })}
+        </>
       )}
-    </article>
+    </>
   );
 }
 
 interface FlowRunStep {
   step: string;
   skill: string;
-  agent: string;
   summary: string;
   output: string;
   tools_used: string[];
@@ -399,7 +406,6 @@ interface FlowRunView extends RunLike {
 interface ScheduleView extends ScheduleLike {
   label: string;
   task: string;
-  agent: string;
   weekdays: number[];
   schedule: string;
   source: string;
@@ -411,6 +417,46 @@ const stepFallback = (step: FlowRunStep) =>
   step.artifacts.length || step.tools_used.length
     ? "Finished."
     : "No output recorded.";
+
+// What each step of a run did, and where it stopped, as rows under the run.
+function RunDetails({ run }: { run: FlowRunView }) {
+  return (
+    <>
+      {run.steps.map((step) => (
+        <ListRow
+          key={step.step}
+          title={step.step}
+          description={step.summary || step.output || stepFallback(step)}
+          meta={[
+            step.artifacts.length > 0 &&
+              `Wrote ${step.artifacts.map((file) => `${file.kind}/${file.name}`).join(", ")}`,
+            step.tools_used.length > 0 && `Used ${step.tools_used.join(", ")}`,
+          ]}
+        />
+      ))}
+      {run.stopped_at ? (
+        <ListRow
+          title={`${run.stopped_at.step} · ${run.stopped_at.runs}`}
+          description={stoppedStepText(run, formatDateTime)}
+        />
+      ) : (
+        !run.steps.length && (
+          <ListRow
+            title="Steps"
+            description="No step finished before this run stopped."
+          />
+        )
+      )}
+      {run.task_id && (
+        <ListRow
+          title="Task"
+          description="Open its timeline"
+          to={`/tasks/${run.task_id}`}
+        />
+      )}
+    </>
+  );
+}
 
 // One run's row, opening to what each step did. Used under "Recent runs" and in
 // a flow's own history, so a run reads the same wherever it is listed. A paused
@@ -435,14 +481,12 @@ function RunRow({
   const act = async (action: "resume" | "discard") => {
     if (
       action === "discard" &&
-      !(await dialog.confirm(
-        "The steps it finished stay on record; the rest will not run.",
-        {
-          title: `Discard this ${run.status} run?`,
-          confirmLabel: "Discard",
-          danger: true,
-        },
-      ))
+      !(await confirmDelete(dialog, {
+        verb: "Discard",
+        noun: "run",
+        name: run.flow,
+        consequence: `This run is ${run.status}. The steps it finished stay on record; the rest will not run.`,
+      }))
     )
       return;
     setBusy(true);
@@ -460,65 +504,41 @@ function RunRow({
     }
   };
   const how = triggerLabel(run.trigger);
+  const stopped = run.status === "paused" || run.status === "waiting";
+  const hasBody = Boolean(run.error || actionError || open);
   return (
-    <div className="schedule-row run-row">
-      <div className="schedule-main">
-        <b>{showFlow ? run.flow : how || "run"}</b>
-        <small title={formatDateTime(run.started_at)}>
-          {[showFlow ? how : "", agoText(run.started_at), run.late_note, progressText(run)]
-            .filter(Boolean)
-            .join(" · ")}
-        </small>
-        {run.error && <small className="run-error">{run.error}</small>}
-        {actionError && <small className="run-error">{actionError}</small>}
-        {open && (
-          <dl className="run-details">
-            {run.steps.map((step) => (
-                <div key={step.step}>
-                  <dt>{step.step}</dt>
-                  <dd>
-                    {step.summary || step.output || stepFallback(step)}
-                    {step.artifacts.length > 0 &&
-                      `\nWrote ${step.artifacts.map((file) => `${file.kind}/${file.name}`).join(", ")}`}
-                    {step.tools_used.length > 0 &&
-                      `\nUsed ${step.tools_used.join(", ")}`}
-                  </dd>
-                </div>
-            ))}
-            {run.stopped_at ? (
-              <div>
-                <dt>
-                  {run.stopped_at.step} · {run.stopped_at.runs}
-                </dt>
-                <dd>{stoppedStepText(run, formatDateTime)}</dd>
-              </div>
-            ) : (
-              !run.steps.length && (
-                <div>
-                  <dt>Steps</dt>
-                  <dd>No step finished before this run stopped.</dd>
-                </div>
-              )
-            )}
-            {run.task_id && (
-              <div>
-                <dt>Task</dt>
-                <dd>
-                  <Link to={`/tasks/${run.task_id}`}>Open its timeline</Link>
-                </dd>
-              </div>
-            )}
-          </dl>
-        )}
-      </div>
-      <div className="schedule-actions">
-        <Status value={run.status} />
-        {(run.status === "paused" || run.status === "waiting") && (
-          <>
-            <button
-              className="ghost-button"
+    <ListRow
+      title={showFlow ? run.flow : how || "run"}
+      meta={[
+        showFlow && how,
+        <span title={formatDateTime(run.started_at)}>
+          {agoText(run.started_at)}
+        </span>,
+        run.late_note,
+        progressText(run),
+      ]}
+      status={<Status value={run.status} />}
+      actions={
+        <ActionBar
+          danger={
+            stopped && (
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={busy}
+                onClick={() => void act("discard")}
+              >
+                Discard
+              </Button>
+            )
+          }
+        >
+          {stopped && (
+            <Button
+              variant="quiet"
+              size="sm"
               disabled={busy}
-              onClick={() => act("resume")}
+              onClick={() => void act("resume")}
               title={
                 run.status === "waiting"
                   ? "Try now, instead of waiting for north to retry it"
@@ -526,31 +546,28 @@ function RunRow({
               }
             >
               Resume
-            </button>
-            <button
-              className="ghost-button danger-link"
-              disabled={busy}
-              onClick={() => act("discard")}
-            >
-              Discard
-            </button>
-          </>
-        )}
-        <button
-          className="ghost-button"
-          aria-expanded={open}
-          onClick={onToggle}
-        >
-          {open ? "Hide" : "Details"}
-        </button>
-      </div>
-    </div>
+            </Button>
+          )}
+          <Button variant="quiet" size="sm" onClick={onToggle}>
+            {open ? "Hide" : "Details"}
+          </Button>
+        </ActionBar>
+      }
+    >
+      {hasBody && (
+        <>
+          {run.error && <Notice tone="error">{run.error}</Notice>}
+          {actionError && <Notice tone="error">{actionError}</Notice>}
+          {open && <RunDetails run={run} />}
+        </>
+      )}
+    </ListRow>
   );
 }
 
 // A flow's schedules, managed where the flow is: when it runs is a property of
 // the flow, so it is added, retimed, paused and removed here. There is no prompt
-// and no agent to choose - the flow carries the work.
+// and nothing else to choose - the flow carries the work.
 function FlowSchedules({
   flow,
   entries,
@@ -564,9 +581,9 @@ function FlowSchedules({
   canSchedule: boolean;
   onChanged: () => Promise<unknown>;
 }) {
+  const dialog = useDialog();
   const [editing, setEditing] = useState("");
   const [creating, setCreating] = useState(false);
-  const [confirming, setConfirming] = useState("");
   const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -581,7 +598,6 @@ function FlowSchedules({
       await onChanged();
       setEditing("");
       setCreating(false);
-      setConfirming("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -591,7 +607,6 @@ function FlowSchedules({
   const close = () => {
     setEditing("");
     setCreating(false);
-    setConfirming("");
     setError("");
   };
   const startCreate = () => {
@@ -606,25 +621,48 @@ function FlowSchedules({
   };
   const path = (name: string) =>
     `/web/api/flow-schedules/${encodeURIComponent(name)}`;
+  const removeEntry = async (entry: ScheduleView) => {
+    if (
+      await confirmDelete(dialog, {
+        noun: "schedule",
+        name: entry.title,
+        consequence: "The flow stays; it just stops running on this schedule.",
+      })
+    )
+      await act(() => del(path(entry.name)));
+  };
+  const removeOnce = async (job: JobLike) => {
+    if (
+      await confirmDelete(dialog, {
+        noun: "one-time run",
+        name: job.scheduled_local,
+        consequence: "It will not run. The flow stays.",
+      })
+    )
+      await act(() =>
+        del(`/orchestrator/jobs/${encodeURIComponent(job.job_id)}`),
+      );
+  };
 
   return (
     <>
-      <div className="flow-schedule-head">
-        <small>
-          {canSchedule
+      <SectionHeader
+        level={3}
+        title="Schedules"
+        description={
+          canSchedule
             ? "When this flow runs. Each schedule runs the whole flow."
-            : "Test and activate this flow before scheduling it."}
-        </small>
-        <button
-          className="ghost-button"
-          onClick={startCreate}
-          disabled={!canSchedule || busy}
-        >
-          + Add schedule
-        </button>
-      </div>
+            : "Test and activate this flow before scheduling it."
+        }
+        actions={
+          <Button onClick={startCreate} disabled={!canSchedule || busy}>
+            + New schedule
+          </Button>
+        }
+      />
       {creating && (
         <ScheduleForm
+          title="New schedule"
           draft={draft}
           setDraft={setDraft}
           allowOnce
@@ -646,50 +684,51 @@ function FlowSchedules({
         <Empty>This flow is not scheduled. It runs only when asked.</Empty>
       )}
       {oneOffs.map((job) => (
-        <div className="schedule-row" key={job.job_id}>
-          <div className="schedule-main">
-            <b>Once</b>
-            <small>{job.scheduled_local}</small>
-          </div>
-          <div className="schedule-actions">
-            <button
-              className="ghost-button"
-              disabled={busy}
-              onClick={() =>
-                act(() =>
-                  del(`/orchestrator/jobs/${encodeURIComponent(job.job_id)}`),
-                )
+        <ListRow
+          key={job.job_id}
+          title="Once"
+          meta={[job.scheduled_local]}
+          actions={
+            <ActionBar
+              danger={
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void removeOnce(job)}
+                >
+                  Delete
+                </Button>
               }
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+            />
+          }
+        />
       ))}
       {entries.map((entry) => (
-        <div
-          className={entry.enabled ? "schedule-row" : "schedule-row paused"}
+        <ListRow
           key={entry.name}
-        >
-          <div className="schedule-main">
-            <b>{entry.title}</b>
-            <small>
-              {cadenceText(entry)}
-              {entry.enabled ? ` · next ${entry.next_run_local}` : " · paused"}
-            </small>
-          </div>
-          {confirming === entry.name ? (
-            <ConfirmRow
-              busy={busy}
-              question="Delete this schedule? The flow stays; it just stops running on this schedule."
-              confirmLabel="Delete"
-              onCancel={() => setConfirming("")}
-              onConfirm={() => act(() => del(path(entry.name)))}
-            />
-          ) : (
-            <div className="schedule-actions">
-              <button
-                className="ghost-button"
+          title={entry.title}
+          muted={!entry.enabled}
+          meta={[
+            cadenceText(entry),
+            entry.enabled ? `next ${entry.next_run_local}` : "paused",
+          ]}
+          actions={
+            <ActionBar
+              danger={
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void removeEntry(entry)}
+                >
+                  Delete
+                </Button>
+              }
+            >
+              <Button
+                variant="quiet"
+                size="sm"
                 disabled={busy}
                 onClick={() =>
                   act(() =>
@@ -698,25 +737,21 @@ function FlowSchedules({
                 }
               >
                 {entry.enabled ? "Pause" : "Resume"}
-              </button>
-              <button
-                className="ghost-button"
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
                 disabled={busy}
                 onClick={() => startEdit(entry)}
               >
                 Edit
-              </button>
-              <button
-                className="ghost-button danger-link"
-                disabled={busy}
-                onClick={() => setConfirming(entry.name)}
-              >
-                Delete
-              </button>
-            </div>
-          )}
+              </Button>
+            </ActionBar>
+          }
+        >
           {editing === entry.name && (
             <ScheduleForm
+              title="Change schedule"
               draft={draft}
               setDraft={setDraft}
               allowOnce={false}
@@ -729,16 +764,24 @@ function FlowSchedules({
               }
             />
           )}
-        </div>
+        </ListRow>
       ))}
       {error && !creating && !editing && (
-        <p className="schedule-form-error">{error}</p>
+        <Notice tone="error">{error}</Notice>
       )}
     </>
   );
 }
 
 type FlowTab = "definition" | "schedule" | "runs";
+
+const FLOW_TABS: { value: FlowTab; label: string }[] = [
+  { value: "definition", label: "Definition" },
+  { value: "schedule", label: "Schedule" },
+  { value: "runs", label: "Runs" },
+];
+
+const FLOW_COLUMNS = capabilityColumns("Flow", "Schedule");
 
 export function Flows() {
   const dialog = useDialog();
@@ -753,7 +796,7 @@ export function Flows() {
   const [selected, setSelected] = useState<string | null>(null);
   const [draft, setDraft] = useState<FlowDraft | null>(null);
   const [creating, setCreating] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<PageMessage | null>(null);
   const [tab, setTab] = useState<FlowTab>("definition");
   const [openRun, setOpenRun] = useState("");
   // Quicker while a flow is open: a run started here should be seen moving.
@@ -790,7 +833,7 @@ export function Flows() {
     setCreating(true);
     setSelected(null);
     setDraft(prefill || emptyFlow());
-    setMessage("");
+    setMessage(null);
   };
   const closeEditor = () => {
     setSelected(null);
@@ -800,7 +843,7 @@ export function Flows() {
     setSelected(name);
     setCreating(false);
     setDraft(null);
-    setMessage("");
+    setMessage(null);
     setTab("definition");
     try {
       const detail = await api<FlowDetail>(
@@ -811,7 +854,7 @@ export function Flows() {
       setChangedSinceActivation(Boolean(detail.changed_since_activation));
     } catch (error) {
       setSelected(null);
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const reloadSchedules = () => Promise.all([cron.reload(), jobs.reload()]);
@@ -833,14 +876,16 @@ export function Flows() {
         { mode },
       );
       setTab("runs");
-      setMessage(
-        mode === "test"
-          ? "Test run started. It does the real work once, on a small case. Anything that needs approval is under Approvals."
-          : "Run started. Anything that needs approval is under Approvals.",
-      );
+      setMessage({
+        tone: "success",
+        text:
+          mode === "test"
+            ? "Test run started. It does the real work once, on a small case. Anything that needs approval is under Approvals."
+            : "Run started. Anything that needs approval is under Approvals.",
+      });
       await Promise.all([history.reload(), runs.reload()]);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const activate = async () => {
@@ -860,10 +905,13 @@ export function Flows() {
       setDraft(draftFromDetail(detail));
       setTestedRun("");
       setChangedSinceActivation(false);
-      setMessage("Flow activated. It can now be scheduled and run.");
+      setMessage({
+        tone: "success",
+        text: "Flow activated. It can now be scheduled and run.",
+      });
       await flows.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const create = async () => {
@@ -876,10 +924,13 @@ export function Flows() {
       setSelected(detail.name);
       setCreating(false);
       setDraft(draftFromDetail(detail));
-      setMessage("Flow candidate created. Test it before activation.");
+      setMessage({
+        tone: "success",
+        text: "Flow candidate created. Test it before activation.",
+      });
       await flows.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const save = async () => {
@@ -892,10 +943,13 @@ export function Flows() {
       setDraft(draftFromDetail(detail));
       setTestedRun(detail.tested_run_id || "");
       setChangedSinceActivation(Boolean(detail.changed_since_activation));
-      setMessage("Flow saved as a candidate. Test it before activation.");
+      setMessage({
+        tone: "success",
+        text: "Flow saved as a candidate. Test it before activation.",
+      });
       await flows.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const remove = async () => {
@@ -903,8 +957,10 @@ export function Flows() {
       !selected ||
       flows.data?.find((flow) => flow.name === selected)?.source !==
         "learned" ||
-      !(await dialog.confirm(
-        flowDeletionPrompt(
+      !(await confirmDelete(dialog, {
+        noun: "flow",
+        name: selected,
+        consequence: flowDeletionPrompt(
           selected,
           (byFlow.get(selected) || []).map((entry) => entry.title),
           (jobs.data || []).filter(
@@ -914,18 +970,17 @@ export function Flows() {
               job.status === "queued",
           ).length,
         ),
-        { title: "Delete flow?", confirmLabel: "Delete flow", danger: true },
-      ))
+      }))
     )
       return;
     try {
       await del(`/web/api/flow-definitions/${encodeURIComponent(selected)}`);
       setSelected(null);
       setDraft(null);
-      setMessage("Learned flow deleted.");
+      setMessage({ tone: "success", text: "Learned flow deleted." });
       await flows.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   // A built-in flow is part of how north works, so it is shown, not edited:
@@ -945,12 +1000,18 @@ export function Flows() {
     };
     closeEditor();
     startCreating(copy);
-    setMessage(
-      "This is a copy of a built-in flow. The built-in stays as shipped.",
-    );
+    setMessage({
+      tone: "info",
+      text: "This is a copy of a built-in flow. The built-in stays as shipped.",
+    });
+  };
+  const cancelCreating = () => {
+    setCreating(false);
+    setDraft(null);
   };
   const selectedFlow = flows.data?.find((flow) => flow.name === selected);
   const readOnly = selectedFlow?.source === "builtin";
+  const systemFlow = usesSystemAction(draft?.steps || []);
   const actions = flowActions(
     selectedFlow?.status || "",
     selectedFlow?.source || "",
@@ -964,58 +1025,53 @@ export function Flows() {
     flowStepsComplete(draft.steps) &&
     editable,
   );
-  const flowEditor = draft ? (
-    <section className="flow-builder">
-      <div className="flow-builder-intro">
-        <div>
-          <div className="editor-label">Flow details</div>
-          <p>
-            {readOnly
-              ? usesSystemAction(draft.steps)
-                ? "This flow is built into north and runs north's own maintenance, so it is shown as shipped."
-                : "This flow is built into north, so it is shown as shipped. Customize makes an editable copy."
-              : "Arrange existing skills in order, or write inline instructions when a step does not need a reusable skill. Approval is inherited from the selected skill and system policy."}
-          </p>
-        </div>
-        <span className="flow-source-badge">
-          {creating ? "new flow" : selectedFlow?.source}
-        </span>
-      </div>
-      <div className="flow-meta-grid">
-        <label>
-          Flow name
-          <input
-            disabled={!creating}
-            value={draft.name}
-            placeholder="job-application-review"
-            onChange={(event) =>
-              setDraft({ ...draft, name: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Status
-          <select
-            aria-label="Status"
-            value={draft.status}
-            disabled={!editable}
-            onChange={(event) =>
-              setDraft({ ...draft, status: event.target.value })
-            }
-          >
-            <option value="active" disabled>
-              Active (tested)
-            </option>
-            <option value="candidate">Draft / candidate</option>
-            <option value="retired">Retired</option>
-          </select>
-          <small>
-            Saving an executable change returns this flow to candidate.
-          </small>
-        </label>
-      </div>
-      <label className="flow-wide-field">
-        Purpose
+  // One form for creating, changing and reading a flow. A built-in is read
+  // only: its one action is to copy it (Customize), unless it runs north's own
+  // upkeep, which cannot be copied.
+  const flowForm = draft ? (
+    <EntityForm
+      title={creating ? "Create flow" : "Flow details"}
+      label={creating ? "New automation" : sourceLabel(selectedFlow?.source || "")}
+      description={
+        readOnly
+          ? systemFlow
+            ? "This flow is built into north and runs north's own maintenance, so it is shown as shipped."
+            : "This flow is built into north, so it is shown as shipped. Customize makes an editable copy."
+          : "Arrange existing skills in order, or write inline instructions when a step does not need a reusable skill. Approval is inherited from the selected skill and system policy."
+      }
+      submitLabel={creating ? "Create flow" : readOnly ? "Customize" : "Save flow"}
+      canSubmit={readOnly ? !systemFlow : canSave}
+      onSubmit={creating ? create : readOnly ? customize : save}
+      onCancel={creating ? cancelCreating : undefined}
+    >
+      <Field label="Flow name">
+        <input
+          disabled={!creating}
+          value={draft.name}
+          placeholder="job-application-review"
+          onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+        />
+      </Field>
+      <Field
+        label="Status"
+        hint="Saving an executable change returns this flow to candidate."
+      >
+        <select
+          aria-label="Status"
+          value={draft.status}
+          disabled={!editable}
+          onChange={(event) =>
+            setDraft({ ...draft, status: event.target.value })
+          }
+        >
+          <option value="active" disabled>
+            Active (tested)
+          </option>
+          <option value="candidate">Draft / candidate</option>
+          <option value="retired">Retired</option>
+        </select>
+      </Field>
+      <Field label="Purpose" wide>
         <textarea
           aria-label="Purpose"
           disabled={!editable}
@@ -1026,27 +1082,26 @@ export function Flows() {
             setDraft({ ...draft, description: event.target.value })
           }
         />
-      </label>
-      <div className="flow-steps-heading">
-        <div>
-          <h2>Steps</h2>
-          <p>
-            North executes each selected skill or inline procedure from top to
-            bottom.
-          </p>
-        </div>
-        <button
-          className="ghost-button"
-          disabled={!editable}
-          onClick={() =>
-            setDraft({ ...draft, steps: [...draft.steps, emptyStep()] })
-          }
-        >
-          + Add step
-        </button>
-      </div>
+      </Field>
+      <Field
+        label="Steps"
+        wide
+        hint="North runs each selected skill or inline procedure from top to bottom."
+      >
+        <ActionBar align="start">
+          <Button
+            size="sm"
+            disabled={!editable}
+            onClick={() =>
+              setDraft({ ...draft, steps: [...draft.steps, emptyStep()] })
+            }
+          >
+            + Add step
+          </Button>
+        </ActionBar>
+      </Field>
       {draft.steps.map((step, index) => (
-        <FlowStepCard
+        <FlowStepFields
           key={index}
           step={step}
           index={index}
@@ -1069,7 +1124,7 @@ export function Flows() {
           }
         />
       ))}
-    </section>
+    </EntityForm>
   ) : (
     <Loading />
   );
@@ -1078,37 +1133,19 @@ export function Flows() {
   const byFlow = schedulesByFlow(schedules);
   const allRuns = runs.data || [];
   const upcoming = buildUpcoming(schedules, jobs.data || [], allRuns);
-  const registered = flows.data || [];
-  const mine = registered.filter((flow) => flow.source !== "builtin");
-  const builtins = registered.filter((flow) => flow.source === "builtin");
+  // Your own flows first, then the ones north ships with.
+  const ordered = (rows: FlowSummary[]) => [
+    ...rows.filter((flow) => flow.source !== "builtin"),
+    ...rows.filter((flow) => flow.source === "builtin"),
+  ];
   const toggleRun = (id: string) => setOpenRun(openRun === id ? "" : id);
-
-  const flowRow = (flow: FlowSummary) => (
-    <div className="schedule-row flow-row" key={flow.name}>
-      <div className="schedule-main">
-        <b>{flow.name}</b>
-        <small className="schedule-description">{flow.description}</small>
-        <small>
-          {flow.steps} step{flow.steps === 1 ? "" : "s"} ·{" "}
-          {scheduleSummary(byFlow.get(flow.name) || [])} ·{" "}
-          {lastRunText(lastRunOf(allRuns, flow.name))}
-        </small>
-      </div>
-      <div className="schedule-actions">
-        {flow.source === "builtin" && (
-          <span className="schedule-locked">built-in</span>
-        )}
-        <Status value={flow.status} />
-        <button
-          className="ghost-button"
-          aria-haspopup="dialog"
-          onClick={() => void open(flow.name)}
-        >
-          {flow.source === "builtin" ? "Details" : "Open"}
-        </button>
-      </div>
-    </div>
-  );
+  const reloadRuns = () => Promise.all([runs.reload(), history.reload()]);
+  // A list that failed with nothing to show says so in its own place; a failed
+  // refresh of a list already shown, or of the schedules, says it here.
+  const pageError =
+    cron.error ||
+    (flows.data ? flows.error : "") ||
+    (runs.data ? runs.error : "");
 
   return (
     <div className="page capability-page">
@@ -1117,65 +1154,63 @@ export function Flows() {
         title="Flows"
         subtitle="What north runs, when it runs next, and how it went."
         actions={
-          <button className="primary-button" onClick={() => startCreating()}>
+          <Button variant="primary" onClick={() => startCreating()}>
             + New flow
-          </button>
+          </Button>
         }
       />
-      {(flows.error || cron.error || runs.error) && (
-        <ErrorNotice message={flows.error || cron.error || runs.error} />
+      {pageError && <Notice tone="error">{pageError}</Notice>}
+      {message && !selected && (
+        <Notice tone={message.tone}>{message.text}</Notice>
       )}
-      {message && !selected && <div className="notice">{message}</div>}
-      {creating && (
-        <section className="capability-create-panel flow-create-panel">
-          <header>
-            <div>
-              <span>New automation</span>
-              <h2>Create flow</h2>
-              <p>
-                Compose skills and inline procedures into an ordered process.
-              </p>
-            </div>
-            <div>
-              <button
-                className="ghost-button"
-                onClick={() => {
-                  setCreating(false);
-                  setDraft(null);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="primary-button"
-                disabled={!canSave}
-                onClick={() => void create()}
-              >
-                Create flow
-              </button>
-            </div>
-          </header>
-          {flowEditor}
-        </section>
-      )}
+      {creating && flowForm}
+
+      <ResourceView resource={flows}>
+        {(rows) => (
+          <EntityTable
+            label="Flows"
+            columns={FLOW_COLUMNS}
+            rows={ordered(rows)}
+            rowKey={(flow) => flow.name}
+            onOpen={(flow) => void open(flow.name)}
+            empty="No flows yet. Create one, or ask north to build one."
+            cell={(flow, key) =>
+              key === "name" ? (
+                <CapabilityName name={flow.name} source={flow.source} />
+              ) : key === "description" ? (
+                flow.description
+              ) : key === "fact" ? (
+                <>
+                  {flow.steps} step{flow.steps === 1 ? "" : "s"} ·{" "}
+                  {scheduleSummary(byFlow.get(flow.name) || [])}
+                  <small>{lastRunText(lastRunOf(allRuns, flow.name))}</small>
+                </>
+              ) : (
+                <Status value={flow.status} />
+              )
+            }
+          />
+        )}
+      </ResourceView>
 
       <Panel title="Next up" label="soonest first">
         {flows.loading || cron.loading || jobs.loading ? (
           <Loading />
         ) : upcoming.length ? (
           upcoming.slice(0, 8).map((item) => (
-            <div className="schedule-row upcoming" key={item.key}>
-              <div className="schedule-main">
-                <b>{item.title}</b>
-                <small title={item.absolute}>
+            <ListRow
+              key={item.key}
+              title={item.title}
+              meta={[
+                <span title={item.absolute}>
                   {item.epoch
                     ? `${whenFromNow(item.epoch)} · ${item.absolute}`
-                    : item.absolute}{" "}
-                  · {item.kind}
-                  {item.title !== item.flow && ` · ${item.flow}`}
-                </small>
-              </div>
-            </div>
+                    : item.absolute}
+                </span>,
+                item.kind,
+                item.title !== item.flow && item.flow,
+              ]}
+            />
           ))
         ) : (
           <Empty>
@@ -1184,132 +1219,85 @@ export function Flows() {
         )}
       </Panel>
 
-      <Panel title="Your flows" label={`${mine.length} custom`}>
-        {flows.loading ? (
-          <Loading />
-        ) : mine.length ? (
-          mine.map(flowRow)
-        ) : (
-          <Empty>
-            No flows of your own yet. Create one above, or ask north to build
-            one.
-          </Empty>
-        )}
-      </Panel>
-
-      <Panel title="Built into north" label="read-only">
-        {flows.loading ? (
-          <Loading />
-        ) : builtins.length ? (
-          builtins.map(flowRow)
-        ) : (
-          <Empty>North has no built-in flows.</Empty>
-        )}
-      </Panel>
-
       <Panel title="Recent runs" label="history">
-        {runs.loading ? (
-          <Loading />
-        ) : allRuns.length ? (
-          allRuns
-            .slice(0, 8)
-            .map((run) => (
-              <RunRow
-                key={run.run_id}
-                run={run}
-                showFlow
-                open={openRun === run.run_id}
-                onToggle={() => toggleRun(run.run_id)}
-                onChanged={() => Promise.all([runs.reload(), history.reload()])}
-              />
-            ))
-        ) : (
-          <Empty>No flow has run yet.</Empty>
-        )}
+        <ResourceView
+          resource={runs}
+          isEmpty={(rows) => !rows.length}
+          empty="No flow has run yet."
+        >
+          {(rows) =>
+            rows
+              .slice(0, 8)
+              .map((run) => (
+                <RunRow
+                  key={run.run_id}
+                  run={run}
+                  showFlow
+                  open={openRun === run.run_id}
+                  onToggle={() => toggleRun(run.run_id)}
+                  onChanged={reloadRuns}
+                />
+              ))
+          }
+        </ResourceView>
       </Panel>
 
       <Modal
         open={Boolean(selected)}
         onClose={closeEditor}
         title={selected || "Flow"}
-        eyebrow={selectedFlow?.source || "Automation"}
+        eyebrow={selectedFlow ? sourceLabel(selectedFlow.source) : "Automation"}
         className="flow-modal"
         actions={
           <>
+            {selectedFlow?.source === "learned" && (
+              <Button variant="danger" onClick={() => void remove()}>
+                Delete
+              </Button>
+            )}
             {actions.test && (
-              <button
-                className="ghost-button"
-                onClick={() => void startRun("test")}
-              >
-                Test run
-              </button>
+              <Button onClick={() => void startRun("test")}>Test run</Button>
             )}
             {actions.run && (
-              <button
-                className="ghost-button"
-                onClick={() => void startRun("execute")}
-              >
-                Run now
-              </button>
+              <Button onClick={() => void startRun("execute")}>Run now</Button>
             )}
             {actions.activate && (
-              <button
-                className="primary-button"
+              // The Definition tab's form has its own primary (Save), and a
+              // dialog shows one primary at a time.
+              <Button
+                variant={tab === "definition" ? "secondary" : "primary"}
                 onClick={() => void activate()}
               >
                 Activate
-              </button>
-            )}
-            {readOnly && !usesSystemAction(draft?.steps || []) && (
-              <button className="primary-button" onClick={customize}>
-                Customize
-              </button>
-            )}
-            {selectedFlow?.source === "learned" && (
-              <button className="danger-button" onClick={() => void remove()}>
-                Delete flow
-              </button>
-            )}
-            {!readOnly && tab === "definition" && (
-              <button
-                className="primary-button"
-                disabled={!canSave}
-                onClick={() => void save()}
-              >
-                Save flow
-              </button>
+              </Button>
             )}
           </>
         }
       >
-        {message && <div className="notice flow-modal-notice">{message}</div>}
-        {changedSinceActivation && (
-          <div className="notice flow-modal-notice">
-            This flow changed after it was activated, so its schedule will not
-            run it. Test it, then activate it again.
+        {message && (
+          <div className="flow-modal-notice">
+            <Notice tone={message.tone}>{message.text}</Notice>
           </div>
         )}
-        <div className="segmented flow-tabs">
-          {(
-            [
-              ["definition", "Definition"],
-              ["schedule", "Schedule"],
-              ["runs", "Runs"],
-            ] as [FlowTab, string][]
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={tab === value ? "active" : ""}
-              onClick={() => setTab(value)}
-            >
-              {label}
-            </button>
-          ))}
+        {changedSinceActivation && (
+          <div className="flow-modal-notice">
+            <Notice tone="warning">
+              This flow changed after it was activated, so its schedule will
+              not run it. Test it, then activate it again.
+            </Notice>
+          </div>
+        )}
+        <div className="flow-tabs">
+          <Tabs
+            label="Flow sections"
+            items={FLOW_TABS}
+            value={tab}
+            onChange={setTab}
+          />
         </div>
-        {tab === "definition" && flowEditor}
-        {tab === "schedule" && (
-          <div className="flow-tab-body">
+        <div className="flow-tab-body">
+          {tab === "definition" && flowForm}
+          {tab === "schedule" && (
             <FlowSchedules
               flow={selected || ""}
               entries={byFlow.get(selected || "") || []}
@@ -1322,30 +1310,28 @@ export function Flows() {
               canSchedule={actions.schedule}
               onChanged={reloadSchedules}
             />
-          </div>
-        )}
-        {tab === "runs" && (
-          <div className="flow-tab-body">
-            {history.loading ? (
-              <Loading />
-            ) : history.data?.length ? (
-              history.data.map((run) => (
-                <RunRow
-                  key={run.run_id}
-                  run={run}
-                  showFlow={false}
-                  open={openRun === run.run_id}
-                  onToggle={() => toggleRun(run.run_id)}
-                  onChanged={() =>
-                    Promise.all([runs.reload(), history.reload()])
-                  }
-                />
-              ))
-            ) : (
-              <Empty>This flow has not run yet.</Empty>
-            )}
-          </div>
-        )}
+          )}
+          {tab === "runs" && (
+            <ResourceView
+              resource={history}
+              isEmpty={(rows) => !rows.length}
+              empty="This flow has not run yet."
+            >
+              {(rows) =>
+                rows.map((run) => (
+                  <RunRow
+                    key={run.run_id}
+                    run={run}
+                    showFlow={false}
+                    open={openRun === run.run_id}
+                    onToggle={() => toggleRun(run.run_id)}
+                    onChanged={reloadRuns}
+                  />
+                ))
+              }
+            </ResourceView>
+          )}
+        </div>
       </Modal>
     </div>
   );

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, del, post } from "./api";
-import { ErrorNotice, Panel } from "./components";
+import { Panel } from "./components";
+import { useDialog } from "./dialog";
 import { useResource } from "./hooks";
+import { Button, confirmDelete, EntityForm, Field, ListRow, Loading, Notice, Status, type NoticeTone, type Tone } from "./kit";
 
 // Connections North works with: AI providers, coding agents and Telegram. Each
 // lives here once; onboarding and Settings show the same component, never a copy.
@@ -21,6 +23,11 @@ export interface ProviderAuthState {
   account_hint?: string;
 }
 
+/** What a panel says after an action: the words, and whether it went well. */
+type Said = { tone: NoticeTone; text: string } | null;
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 // The embeddings row is the only provider with no key and no login, so it is
 // the only one whose identifying detail has to come from elsewhere.
 export function isLocalEmbeddings(provider: any) {
@@ -38,6 +45,13 @@ export function savedKeyMessage(saved: { state?: string; state_detail?: string }
   return "Key saved. North is still checking it with the provider.";
 }
 
+/** A rejected key is a failure, shown as one: it was shown in the success colour. */
+export function savedKeyTone(saved: { state?: string }): NoticeTone {
+  if (saved.state === "ready") return "success";
+  if (saved.state === "failing") return "error";
+  return "info";
+}
+
 export function providerFailing(provider: any): boolean {
   return FAILING.has(provider.state);
 }
@@ -49,10 +63,21 @@ export function providerStateLabel(provider: any, configured: boolean, accountHi
   return `Ready ${accountHint || provider.credential_hint || ""}`.trim();
 }
 
+/** The colour of a provider's state: only one that works is green. */
+export function providerStateTone(provider: any, configured: boolean, waiting = false): Tone {
+  if (waiting || provider.state === "loading") return "busy";
+  if (FAILING.has(provider.state)) return "bad";
+  return configured ? "good" : "neutral";
+}
+
 export function ProviderConnections() {
+  const dialog = useDialog();
   const overview = useResource<any>("/web/api/system", 8000);
   const [keys, setKeys] = useState<Record<string, string>>({});
-  const [providerMessage, setProviderMessage] = useState("");
+  // The provider whose key form is open.
+  const [editing, setEditing] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [said, setSaid] = useState<Said>(null);
   const [providerAuth, setProviderAuth] = useState<
     Record<string, ProviderAuthState>
   >({});
@@ -68,23 +93,33 @@ export function ProviderConnections() {
     .join(",");
 
   const saveProvider = async (id: string) => {
+    setSaving(true);
     try {
       const saved = await post<{ state?: string; state_detail?: string }>(`/web/api/providers/${id}`, { api_key: keys[id] });
       setKeys((current) => ({ ...current, [id]: "" }));
-      setProviderMessage(savedKeyMessage(saved));
+      setEditing("");
+      setSaid({ tone: savedKeyTone(saved), text: savedKeyMessage(saved) });
       await overview.reload();
     } catch (error) {
-      setProviderMessage(String(error));
+      setSaid({ tone: "error", text: errorText(error) });
+    } finally {
+      setSaving(false);
     }
   };
 
-  const removeProvider = async (id: string) => {
+  // A wrong key could be replaced but not removed, short of editing .env by hand.
+  const removeProvider = async (provider: any) => {
+    const yes = await confirmDelete(dialog, {
+      noun: "key", name: provider.name, verb: "Remove",
+      consequence: `North stops using ${provider.name} until you add a key again.`,
+    });
+    if (!yes) return;
     try {
-      await del(`/web/api/providers/${id}`);
-      setProviderMessage("Key removed.");
+      await del(`/web/api/providers/${provider.id}`);
+      setSaid({ tone: "success", text: "Key removed." });
       await overview.reload();
     } catch (error) {
-      setProviderMessage(String(error));
+      setSaid({ tone: "error", text: errorText(error) });
     }
   };
 
@@ -116,7 +151,7 @@ export function ProviderConnections() {
         popup.opener = null;
         popup.location.replace(state.authorization_url);
       } else if (state.authorization_url) {
-        setProviderMessage("Pop-up blocked. Use ‘Continue login’ below.");
+        setSaid({ tone: "warning", text: "Pop-up blocked. Use ‘Continue login’ below." });
       } else if (popup) {
         popup.close();
       }
@@ -135,17 +170,17 @@ export function ProviderConnections() {
     }
   };
 
-  const disconnectProvider = async (id: string) => {
+  const signOut = async (provider: any) => {
     try {
       const state = await api<ProviderAuthState>(
-        `/web/api/providers/${id}/auth`,
+        `/web/api/providers/${provider.id}/auth`,
         { method: "DELETE" },
       );
-      setProviderAuth((current) => ({ ...current, [id]: state }));
-      setProviderMessage("OpenAI Codex disconnected.");
+      setProviderAuth((current) => ({ ...current, [provider.id]: state }));
+      setSaid({ tone: "success", text: `Signed out of ${provider.name}.` });
       await overview.reload();
     } catch (error) {
-      setProviderMessage(String(error));
+      setSaid({ tone: "error", text: errorText(error) });
     }
   };
 
@@ -167,7 +202,7 @@ export function ProviderConnections() {
             await overview.reload();
           }
         } catch (error) {
-          if (!stopped) setProviderMessage(String(error));
+          if (!stopped) setSaid({ tone: "error", text: errorText(error) });
         }
       }
     };
@@ -184,125 +219,67 @@ export function ProviderConnections() {
       title="Providers"
       label={`${providers.filter((provider: any) => provider.configured).length} configured`}
     >
-      {providerMessage && <div className="notice">{providerMessage}</div>}
-      <div className="provider-list">
-        {providers.map((provider: any) => {
-          const auth = providerAuth[provider.id];
-          const waiting =
-            auth?.state === "starting" || auth?.state === "pending";
-          const configured = auth ? auth.configured : provider.configured;
-          return (
-            <div className="provider-row" key={provider.id}>
-              {/* The trailing detail is whatever identifies the provider: the env var
-            holding its key, "Browser login" for OAuth, or - for the on-device
-            embedder, which has no key at all - the model it runs. Without the
-            last case the row ended on a dangling separator. */}
-              <div>
-                <b>{provider.name}</b>
-                <small>
-                  {[
-                    provider.description,
-                    provider.auth_kind === "oauth_pkce"
-                      ? "Browser login"
-                      : provider.env_key || embeddingsFor(provider),
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </small>
-              </div>
-              <div className="provider-controls">
-                <span
-                  className={
-                    configured && !providerFailing(provider)
-                      ? "provider-state configured"
-                      : "provider-state"
-                  }
-                  title={provider.state_detail || ""}
-                >
-                  {waiting
-                    ? "Waiting for browser login"
-                    : providerStateLabel(provider, configured, auth?.account_hint)}
-                </span>
-                {provider.env_key && (
-                  <div className="provider-edit">
-                    <input
-                      type="password"
-                      placeholder="API key"
-                      value={keys[provider.id] || ""}
-                      onChange={(event) =>
-                        setKeys((current) => ({
-                          ...current,
-                          [provider.id]: event.target.value,
-                        }))
-                      }
-                    />
-                    <button
-                      className="ghost-button"
-                      disabled={!keys[provider.id]}
-                      onClick={() => saveProvider(provider.id)}
-                    >
-                      Save
-                    </button>
-                    {/* A wrong key could be replaced but not removed, short of editing .env by hand. */}
-                    {provider.configured && (
-                      <button className="ghost-button" onClick={() => removeProvider(provider.id)}>
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                )}
-                {provider.auth_kind === "oauth_pkce" && (
-                  <div className="provider-auth">
-                    <div className="provider-auth-actions">
-                      <button
-                        className={
-                          configured ? "ghost-button" : "primary-button"
-                        }
-                        disabled={waiting}
-                        onClick={() => connectProvider(provider.id)}
-                      >
-                        {waiting
-                          ? "Waiting…"
-                          : configured
-                            ? "Reconnect"
-                            : "Connect"}
-                      </button>
-                      {configured && (
-                        <button
-                          className="ghost-button"
-                          onClick={() => disconnectProvider(provider.id)}
-                        >
-                          Disconnect
-                        </button>
-                      )}
-                      {auth?.authorization_url && (
-                        <a
-                          href={auth.authorization_url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Continue login
-                        </a>
-                      )}
-                    </div>
-                    {auth?.detail && (
-                      <small
-                        className={
-                          auth.state === "error"
-                            ? "provider-auth-error"
-                            : "provider-auth-detail"
-                        }
-                      >
-                        {auth.detail}
-                      </small>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {said && <Notice tone={said.tone} onDismiss={() => setSaid(null)}>{said.text}</Notice>}
+      {overview.error && !overview.data && <Notice tone="error">{overview.error}</Notice>}
+      {overview.loading && !overview.data && <Loading/>}
+      {providers.map((provider: any) => {
+        const auth = providerAuth[provider.id];
+        const waiting =
+          auth?.state === "starting" || auth?.state === "pending";
+        const configured = auth ? auth.configured : provider.configured;
+        const failing = providerFailing(provider);
+        const label = waiting
+          ? "Waiting for browser login"
+          : failing ? "Not working" : providerStateLabel(provider, configured, auth?.account_hint);
+        return (
+          // The trailing detail is whatever identifies the provider: the env var
+          // holding its key, "Browser login" for OAuth, or - for the on-device
+          // embedder, which has no key at all - the model it runs. Without the
+          // last case the row ended on a dangling separator.
+          <ListRow
+            key={provider.id}
+            title={provider.name}
+            description={[
+              provider.description,
+              provider.auth_kind === "oauth_pkce"
+                ? "Browser login"
+                : provider.env_key || embeddingsFor(provider),
+            ].filter(Boolean).join(" · ")}
+            status={<span title={provider.state_detail || ""}><Status label={label} tone={providerStateTone(provider, configured, waiting)}/></span>}
+            actions={<>
+              {provider.env_key && <>
+                <Button size="sm" aria-pressed={editing === provider.id} onClick={() => setEditing(editing === provider.id ? "" : provider.id)}>
+                  {provider.configured ? "Replace key" : "Add key"}
+                </Button>
+                {provider.configured && <Button size="sm" variant="danger" onClick={() => void removeProvider(provider)}>Remove</Button>}
+              </>}
+              {provider.auth_kind === "oauth_pkce" && <>
+                {configured && <Button size="sm" onClick={() => void signOut(provider)}>Sign out</Button>}
+                <Button size="sm" variant={configured ? "secondary" : "primary"} busy={waiting} busyLabel="Waiting…" onClick={() => void connectProvider(provider.id)}>
+                  {configured ? "Sign in again" : "Sign in"}
+                </Button>
+              </>}
+            </>}
+          >
+            {failing && <Notice tone="error">{providerStateLabel(provider, configured)}</Notice>}
+            {auth?.authorization_url && <a href={auth.authorization_url} target="_blank" rel="noreferrer">Continue login</a>}
+            {auth?.detail && <Notice tone={auth.state === "error" ? "error" : "info"}>{auth.detail}</Notice>}
+            {editing === provider.id && <EntityForm
+              title={`${provider.configured ? "Replace" : "Add"} the ${provider.name} key`}
+              description={`North keeps it on this computer as ${provider.env_key} and checks it with the provider.`}
+              submitLabel="Save key" busy={saving} busyLabel="Checking…"
+              canSubmit={Boolean(keys[provider.id])}
+              onSubmit={() => saveProvider(provider.id)}
+              onCancel={() => { setEditing(""); setKeys((current) => ({ ...current, [provider.id]: "" })); }}
+            >
+              <Field label="API key" wide>
+                <input type="password" autoComplete="off" placeholder="API key" value={keys[provider.id] || ""}
+                  onChange={(event) => setKeys((current) => ({ ...current, [provider.id]: event.target.value }))}/>
+              </Field>
+            </EntityForm>}
+          </ListRow>
+        );
+      })}
     </Panel>
   );
 }
@@ -315,6 +292,13 @@ export interface CodingAgentStatus {
   detail: string;
 }
 
+/** An agent's state in words and colour: installed is not ready. */
+export function agentStatus(agent: Pick<CodingAgentStatus, "installed" | "ready">): { label: string; tone: Tone } {
+  if (agent.ready) return { label: "Ready", tone: "good" };
+  if (agent.installed) return { label: "Needs attention", tone: "warn" };
+  return { label: "Not installed", tone: "neutral" };
+}
+
 // Installed is not enough: the probe also checks the version, the agent's own
 // login and its protocol. It starts each CLI, so it runs when asked, not on a timer.
 export function CodingAgents() {
@@ -324,18 +308,18 @@ export function CodingAgents() {
   const check = async () => {
     setChecking(true); setError("");
     try { setAgents(await api<CodingAgentStatus[]>("/web/api/setup/coding-agents")); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    catch (err) { setError(errorText(err)); }
     finally { setChecking(false); }
   };
   useEffect(() => { void check(); }, []);
-  return <Panel title="Coding agents" label="Codex and Claude Code" actions={<button className="ghost-button" disabled={checking} onClick={() => void check()}>{checking ? "Checking…" : "Check again"}</button>}>
-    {error && <div className="notice">{error}</div>}
-    {!agents && !error && <p className="setup-copy muted">Checking each agent’s install and login…</p>}
-    {agents && <div className="setup-status-list">{agents.map(agent => <div key={agent.name}>
-      <b>{agent.name}{agent.version && <small> {agent.version}</small>}</b>
-      <span className={`status status-${agent.ready ? "completed" : "pending"}`}>{agent.ready ? "ready" : agent.installed ? "needs attention" : "not installed"}</span>
-      {agent.detail && <small className="setup-tool-detail">{agent.detail}</small>}
-    </div>)}</div>}
+  return <Panel title="Coding agents" label="Codex and Claude Code" actions={<Button size="sm" busy={checking} busyLabel="Checking…" onClick={() => void check()}>Check again</Button>}>
+    {error && <Notice tone="error">{error}</Notice>}
+    {!agents && !error && <Loading label="Checking each agent’s install and login"/>}
+    {agents?.map(agent => {
+      const state = agentStatus(agent);
+      return <ListRow key={agent.name} title={agent.name} meta={[agent.version]} description={agent.detail}
+        status={<Status label={state.label} tone={state.tone}/>}/>;
+    })}
     <p className="setup-copy muted">North hands coding to these agents in their own login. Ready means installed, recent enough, logged in and able to run its sandbox here; usage limits are only known when a run starts.</p>
   </Panel>;
 }
@@ -351,6 +335,7 @@ export interface TelegramStatus {
 // Telegram runs tasks and answers approvals from your phone. North checks the
 // token with Telegram before saving, and the running server picks it up live.
 export function TelegramConnection() {
+  const dialog = useDialog();
   const resource = useResource<TelegramStatus>("/web/api/telegram", 10000);
   const [token, setToken] = useState("");
   const [ids, setIds] = useState<string | null>(null);
@@ -362,38 +347,42 @@ export function TelegramConnection() {
   const perform = async (work: () => Promise<string>) => {
     setBusy(true); setError(""); setMessage("");
     try { setMessage(await work()); setToken(""); setIds(null); await resource.reload(); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    catch (err) { setError(errorText(err)); }
     finally { setBusy(false); }
   };
-  const save = (event: FormEvent) => {
-    event.preventDefault();
-    void perform(async () => {
-      const saved = await post<TelegramStatus>("/web/api/telegram", { bot_token: token, allowed_chat_ids: allowed });
-      return `Connected as @${saved.bot}. Send it a message to run a task.`;
+  const save = () => perform(async () => {
+    const saved = await post<TelegramStatus>("/web/api/telegram", { bot_token: token, allowed_chat_ids: allowed });
+    return `Connected as @${saved.bot}. Send it a message to run a task.`;
+  });
+  const removeToken = async () => {
+    const yes = await confirmDelete(dialog, {
+      noun: "Telegram token", name: data?.token_hint || "", verb: "Remove",
+      consequence: "North stops answering in Telegram until you connect a bot again.",
+    });
+    if (!yes) return;
+    await perform(async () => {
+      await api<TelegramStatus>("/web/api/telegram", { method: "DELETE" });
+      return "Telegram token removed.";
     });
   };
-  const disconnect = () => void perform(async () => {
-    await api<TelegramStatus>("/web/api/telegram", { method: "DELETE" });
-    return "Telegram disconnected.";
-  });
   return <Panel title="Telegram" label={data?.configured ? `Ready ${data.token_hint}` : "Optional"}
-    actions={data?.token_hint && <button className="ghost-button" disabled={busy} onClick={disconnect}>Disconnect</button>}>
-    {message && <div className="notice">{message}</div>}
-    {(error || resource.error || data?.problem) && <ErrorNotice message={error || resource.error || data!.problem}/>}
-    <div className="setup-connection-note"><ol>
+    actions={data?.token_hint && <Button size="sm" variant="danger" disabled={busy} onClick={() => void removeToken()}>Remove token</Button>}>
+    {message && <Notice tone="success">{message}</Notice>}
+    {(error || resource.error || data?.problem) && <Notice tone="error">{error || resource.error || data!.problem}</Notice>}
+    <Notice><ol>
       <li>In Telegram, message <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a>, send <code>/newbot</code> and copy the token it gives you.</li>
       <li>Message <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer">@userinfobot</a> to get your numeric user id.</li>
       <li>Paste both here. Only the ids you list can use the bot.</li>
-    </ol></div>
-    <form className="setup-form" onSubmit={save}>
-      <label>Bot token<input type="password" autoComplete="off" value={token}
+    </ol></Notice>
+    <EntityForm title={data?.token_hint ? "Change the bot" : "Connect a bot"} onSubmit={save}
+      submitLabel={data?.token_hint ? "Save" : "Connect"} busy={busy} busyLabel="Checking with Telegram…"
+      canSubmit={Boolean((token.trim() || data?.token_hint) && allowed.trim())}>
+      <Field label="Bot token"><input type="password" autoComplete="off" value={token}
         placeholder={data?.token_hint ? `Saved ${data.token_hint} · paste a new one to replace it` : "123456789:AA…"}
-        onChange={event => setToken(event.target.value)}/></label>
-      <label>Allowed user ids<input value={allowed} placeholder="123456789, comma-separated for more than one"
-        onChange={event => setIds(event.target.value)}/></label>
-      <div className="setup-actions"><button className="primary-button" type="submit"
-        disabled={busy || (!token.trim() && !data?.token_hint) || !allowed.trim()}>{busy ? "Checking with Telegram…" : data?.token_hint ? "Save" : "Connect"}</button></div>
-    </form>
+        onChange={event => setToken(event.target.value)}/></Field>
+      <Field label="Allowed user ids"><input value={allowed} placeholder="123456789, comma-separated for more than one"
+        onChange={event => setIds(event.target.value)}/></Field>
+    </EntityForm>
     <p className="setup-copy muted">Send the bot any message or voice note to run a task. North also sends approval requests there, unless the terminal UI is already showing them. In the chat, <code>/help</code> lists the commands; <code>/workspace</code> picks the folder a task works in, which must be a git repository for coding.</p>
   </Panel>;
 }
@@ -429,7 +418,15 @@ export function secretDetail(secret: SavedSecret): string {
   return [secret.note, uses].filter(Boolean).join(" · ");
 }
 
+/** What removing a secret means, asked before it goes. */
+export function secretRemoval(secret: SavedSecret): string {
+  return secret.used_by.length
+    ? `${secret.used_by.join(", ")} can no longer use it until you add it again.`
+    : "No tool uses it. You can add it again later.";
+}
+
 export function Secrets() {
+  const dialog = useDialog();
   const resource = useResource<SecretsList>("/web/api/secrets");
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
@@ -440,9 +437,10 @@ export function Secrets() {
   const saved = resource.data?.secrets ?? [];
   const missing = resource.data?.missing ?? [];
   const problem = secretProblem(name.trim(), value);
+  // Each rule's message sits under the field it is about.
+  const nameProblem = secretProblem(name.trim(), "");
   const replacing = saved.some((secret) => secret.name === name.trim());
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
+  const save = async () => {
     const key = name.trim();
     setBusy("save"); setError(""); setMessage("");
     try {
@@ -450,38 +448,34 @@ export function Secrets() {
       setMessage(`Saved ${key}.`);
       setName(""); setValue(""); setNote("");
       await resource.reload();
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    } catch (err) { setError(errorText(err)); }
     finally { setBusy(""); }
   };
-  const remove = async (key: string) => {
-    setBusy(key); setError(""); setMessage("");
-    try { await del(`/web/api/secrets/${encodeURIComponent(key)}`); setMessage(`Removed ${key}.`); await resource.reload(); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  const remove = async (secret: SavedSecret) => {
+    if (!await confirmDelete(dialog, { noun: "secret", name: secret.name, verb: "Remove", consequence: secretRemoval(secret) })) return;
+    setBusy(secret.name); setError(""); setMessage("");
+    try { await del(`/web/api/secrets/${encodeURIComponent(secret.name)}`); setMessage(`Removed ${secret.name}.`); await resource.reload(); }
+    catch (err) { setError(errorText(err)); }
     finally { setBusy(""); }
   };
   return <Panel title="Secrets" label={saved.length ? `${saved.length} saved` : "None yet"}>
-    {message && <div className="notice">{message}</div>}
-    {(error || resource.error) && <ErrorNotice message={error || resource.error}/>}
+    {message && <Notice tone="success">{message}</Notice>}
+    {(error || resource.error) && <Notice tone="error">{error || resource.error}</Notice>}
     <p className="setup-copy muted">Keys and passwords for the tools North makes for you. North's AI only sees a secret's name: North hands the value to a tool that says it uses it, once you approve that tool, and hides it from anything a tool returns. Kept on this computer, readable only by you.</p>
-    {missing.map((needed) => <div className="notice" key={needed.name}>
+    {missing.map((needed) => <Notice tone="warning" key={needed.name}>
       {needed.used_by.join(", ")} needs the secret <b>{needed.name}</b>.{" "}
-      <button className="link-button" type="button" onClick={() => setName(needed.name)}>Add it</button>
-    </div>)}
-    <div className="provider-list">
-      {saved.map((secret) => <div className="provider-row" key={secret.name}>
-        <div><b>{secret.name}</b><small>{secretDetail(secret)}</small></div>
-        <button className="ghost-button" type="button" disabled={busy === secret.name} onClick={() => remove(secret.name)}>Remove</button>
-      </div>)}
-    </div>
-    <form className="setup-form" onSubmit={save} aria-label="Add a secret">
-      <label>Name<input value={name} autoComplete="off" placeholder="openweather" onChange={(event) => setName(event.target.value)}/></label>
-      <label>Value<input type="password" autoComplete="new-password" value={value}
-        placeholder={replacing ? "Saved · type a new one to replace it" : `at least ${SECRET_MIN_LENGTH} characters`} onChange={(event) => setValue(event.target.value)}/></label>
-      <label>Note<input value={note} autoComplete="off" placeholder="what it is for (optional)" onChange={(event) => setNote(event.target.value)}/></label>
-      {problem && <small className="muted">{problem}</small>}
-      <div className="setup-actions">
-        <button className="primary-button" type="submit" disabled={busy === "save" || !name.trim() || value.length < SECRET_MIN_LENGTH || Boolean(problem)}>{replacing ? "Replace" : "Save"}</button>
-      </div>
-    </form>
+      <Button variant="quiet" size="sm" onClick={() => setName(needed.name)}>Add it</Button>
+    </Notice>)}
+    {resource.loading && !resource.data && <Loading/>}
+    {saved.map((secret) => <ListRow key={secret.name} title={secret.name} description={secretDetail(secret)}
+      actions={<Button size="sm" variant="danger" busy={busy === secret.name} busyLabel="Removing…" onClick={() => void remove(secret)}>Remove</Button>}/>)}
+    <EntityForm title="Add a secret" onSubmit={save} submitLabel={replacing ? "Replace" : "Save"} busy={busy === "save"}
+      canSubmit={Boolean(name.trim()) && value.length >= SECRET_MIN_LENGTH && !problem}>
+      <Field label="Name" error={nameProblem || undefined}><input value={name} autoComplete="off" placeholder="openweather" onChange={(event) => setName(event.target.value)}/></Field>
+      <Field label="Value" error={(!nameProblem && problem) || undefined}><input type="password" autoComplete="new-password" value={value}
+        placeholder={replacing ? "Saved · type a new one to replace it" : `at least ${SECRET_MIN_LENGTH} characters`} onChange={(event) => setValue(event.target.value)}/></Field>
+      <Field label="Note" wide><input value={note} autoComplete="off" placeholder="what it is for (optional)" onChange={(event) => setNote(event.target.value)}/></Field>
+    </EntityForm>
   </Panel>;
 }
+

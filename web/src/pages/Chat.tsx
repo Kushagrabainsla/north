@@ -2,7 +2,8 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, FolderOpen, Pin, PinOff, Trash2 } from "lucide-react";
 import { api, del, patch, post } from "../api";
-import { Empty, ErrorNotice, InferenceCategories, Loading, Markdown, PageHeader, PromptTelemetry, Status, timeAgo } from "../components";
+import { ErrorNotice, InferenceCategories, Markdown, PageHeader, PromptTelemetry, timeAgo } from "../components";
+import { ActionBar, Button, confirmDelete, Empty, EntityTable, Loading, Notice, ResourceView, SearchField, Status, Tabs, Toolbar, type Column } from "../kit";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
@@ -167,7 +168,7 @@ function OwnAnswer({ hasOptions, value, onChange, onSubmit, label }: { hasOption
   if (!open) return <button type="button" className="ask-option ask-other" onClick={() => setOpen(true)}><span>Something else…</span></button>;
   return <div className="ask-own">
     <input autoFocus={hasOptions} value={value} onChange={event => onChange(event.target.value)} placeholder="Type your answer" onKeyDown={event => { if (event.key === "Enter" && value.trim() && onSubmit) { event.preventDefault(); onSubmit(); } }}/>
-    {onSubmit && <button type="button" className="primary-button" disabled={!value.trim()} onClick={onSubmit}>{label}</button>}
+    {onSubmit && <Button variant="primary" size="sm" disabled={!value.trim()} onClick={onSubmit}>{label}</Button>}
   </div>;
 }
 
@@ -189,7 +190,11 @@ export function ApprovalCard({ card, respond }: { card: Approval; respond: (card
       <div className="ask-message"><Markdown>{card.message}</Markdown></div>
       {fields.length > 0 && <div className="card-fields">{fields.map(field => <CardFieldRow key={field.name} field={field} value={values[field.name]} onChange={value => setValue(field.name, value)}/>)}</div>}
       {context}
-      <div className="ask-foot"><button type="button" className="ghost-button" onClick={() => respond(card, "rejected", "", values)}>Reject</button><button type="button" className="primary-button" onClick={() => respond(card, "approved", "", values)}>Approve</button></div>
+      {/* The standard for every approval card: Reject, then Approve as the primary action, at the right. */}
+      <div className="ask-foot"><ActionBar>
+        <Button size="sm" onClick={() => void respond(card, "rejected", "", values)}>Reject</Button>
+        <Button variant="primary" size="sm" onClick={() => void respond(card, "approved", "", values)}>Approve</Button>
+      </ActionBar></div>
     </div>;
   }
 
@@ -224,8 +229,8 @@ export function ApprovalCard({ card, respond }: { card: Approval; respond: (card
       ? <OwnAnswer key={field.name} hasOptions={withOptions} value={field.options.includes(text) ? "" : text} onChange={typed => setValue(field.name, typed)} onSubmit={last ? undefined : next} label="Next"/>
       : !withOptions && <CardFieldRow field={field} asking value={value} onChange={changed => setValue(field.name, changed)}/>}
     <div className="ask-foot">{last
-      ? <button type="button" className="primary-button" disabled={!answersComplete(card, values)} onClick={send}>Send answers</button>
-      : answered && <button type="button" className="ghost-button" onClick={next}>Next</button>}</div>
+      ? <Button variant="primary" size="sm" disabled={!answersComplete(card, values)} onClick={() => void send()}>Send answers</Button>
+      : answered && <Button size="sm" onClick={next}>Next</Button>}</div>
   </div>;
 }
 
@@ -430,49 +435,44 @@ export function Sessions() {
     await sessions.reload();
   };
   const deleteSession = async (session: Conversation) => {
-    if (!await dialog.confirm(DELETE_SESSION_COPY, { title: `Delete "${session.title}"?`, confirmLabel: "Delete", danger: true })) return;
+    if (!await confirmDelete(dialog, { noun: "session", name: session.title, consequence: DELETE_SESSION_COPY })) return;
     await del(`/web/api/conversations/${session.id}`);
     await sessions.reload();
   };
+  const cell = (session: Conversation, key: string) => {
+    if (key === "session") return <><b>{session.pinned && <Pin size={11} aria-label="Pinned"/>} {session.title}</b><small>{session.goal || (session.source === "cli" ? "CLI session" : "North session")}</small></>;
+    if (key === "workspace") return session.workspace || "No workspace selected";
+    if (key === "activity") return timeAgo(session.updated_at);
+    if (key === "turns") return session.turn_count;
+    return <Status value={session.archived ? "archived" : session.goal_status}/>;
+  };
+  const rowActions = (session: Conversation) => <>
+    <Button variant="icon" onClick={() => void togglePinned(session)} aria-label={session.pinned ? "Unpin session" : "Pin session"} title={session.pinned ? "Unpin" : "Pin"} icon={session.pinned ? <PinOff size={13}/> : <Pin size={13}/>}/>
+    <Button variant="icon" onClick={() => void toggleArchived(session)} aria-label={session.archived ? "Unarchive session" : "Archive session"} title={session.archived ? "Unarchive" : "Archive"} icon={session.archived ? <ArchiveRestore size={13}/> : <Archive size={13}/>}/>
+    <Button variant="danger" size="sm" onClick={() => void deleteSession(session)} aria-label="Delete session" title="Delete" icon={<Trash2 size={13}/>}/>
+  </>;
   return <div className="page capability-page session-page">
-    <PageHeader eyebrow="Workspace" title="Sessions" subtitle="Open a session to continue work with North." actions={<button className="primary-button" onClick={createSession}>+ New session</button>} />
-    {sessions.error && <ErrorNotice message={sessions.error}/>}
-    <section className="session-toolbar">
-      <label>Find a session<input aria-label="Search sessions" placeholder="Search sessions" value={search} onChange={event => setSearch(event.target.value)}/></label>
-      <div className="session-tabs" role="tablist" aria-label="Session filter">
-        <button type="button" role="tab" aria-selected={tab === "active"} className={`session-tab ${tab === "active" ? "active" : ""}`} onClick={() => setTab("active")}>Active</button>
-        <button type="button" role="tab" aria-selected={tab === "archived"} className={`session-tab ${tab === "archived" ? "active" : ""}`} onClick={() => setTab("archived")}>Archived</button>
-      </div>
-      <span>{visibleSessions.length} session{visibleSessions.length === 1 ? "" : "s"}</span>
-    </section>
-    <section className="capability-registry session-registry">
-      <div className="capability-registry-head"><span>Session</span><span>Workspace</span><span>Activity</span><span>Turns</span><span>Status</span><span/></div>
-      <div className="capability-registry-list">{sessions.loading ? <Loading/> : visibleSessions.map(session =>
-        <div
-          className="capability-registry-row session-registry-row"
-          key={session.id}
-          role="button"
-          tabIndex={0}
-          aria-label={`Open session ${session.title}`}
-          onClick={() => navigate(`/sessions/${session.id}`)}
-          onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); navigate(`/sessions/${session.id}`); } }}
-        >
-          <span className="capability-registry-name">{session.pinned && <Pin size={11} className="session-pin-indicator" aria-label="Pinned"/>}<b>{session.title}</b><small>{session.goal || (session.source === "cli" ? "CLI session" : "North session")}</small></span>
-          <span className="capability-registry-description">{session.workspace || "No workspace selected"}</span>
-          <span className="capability-registry-meta">{timeAgo(session.updated_at)}</span>
-          <span className="capability-registry-meta">{session.turn_count}</span>
-          <Status value={session.archived ? "archived" : session.goal_status}/>
-          <span className="session-actions">
-            <button type="button" className="session-action-button" onClick={event => { event.stopPropagation(); void togglePinned(session); }} aria-label={session.pinned ? "Unpin session" : "Pin session"} title={session.pinned ? "Unpin" : "Pin"}>{session.pinned ? <PinOff size={13}/> : <Pin size={13}/>}</button>
-            <button type="button" className="session-action-button" onClick={event => { event.stopPropagation(); void toggleArchived(session); }} aria-label={session.archived ? "Unarchive session" : "Archive session"} title={session.archived ? "Unarchive" : "Archive"}>{session.archived ? <ArchiveRestore size={13}/> : <Archive size={13}/>}</button>
-            <button type="button" className="session-action-button danger" onClick={event => { event.stopPropagation(); void deleteSession(session); }} aria-label="Delete session" title="Delete"><Trash2 size={13}/></button>
-            <ChevronRight size={13} className="session-open-indicator" aria-hidden="true"/>
-          </span>
-        </div>
-      )}{!sessions.loading && !visibleSessions.length && <Empty>{sessionsEmptyMessage(search, tab)}</Empty>}</div>
-    </section>
+    <PageHeader eyebrow="Workspace" title="Sessions" subtitle="Open a session to continue work with North." actions={<Button variant="primary" onClick={() => void createSession()}>+ New session</Button>} />
+    {sessions.error && sessions.data && <Notice tone="error">{sessions.error}</Notice>}
+    <Toolbar
+      tabs={<Tabs label="Session filter" value={tab} onChange={setTab} items={[{ value: "active", label: "Active" }, { value: "archived", label: "Archived" }]}/>}
+      search={<SearchField label="Search sessions" value={search} onChange={setSearch}
+        count={`${visibleSessions.length} session${visibleSessions.length === 1 ? "" : "s"}`}/>}/>
+    <ResourceView resource={sessions}>
+      {() => <EntityTable label="Sessions" columns={SESSION_COLUMNS} rows={visibleSessions} rowKey={session => session.id}
+        to={session => `/sessions/${session.id}`} cell={cell} rowActions={rowActions}
+        empty={sessionsEmptyMessage(search, tab)}/>}
+    </ResourceView>
   </div>;
 }
+
+const SESSION_COLUMNS: Column[] = [
+  { key: "session", label: "Session", width: "minmax(0, 2fr)" },
+  { key: "workspace", label: "Workspace", width: "minmax(0, 1.4fr)" },
+  { key: "activity", label: "Activity", width: "minmax(0, .7fr)" },
+  { key: "turns", label: "Turns", width: "minmax(0, .5fr)" },
+  { key: "status", label: "Status", width: "minmax(0, .8fr)" },
+];
 
 export function Chat() {
   // Namespaced rather than destructured: `prompt` is already the composer's
@@ -620,11 +620,11 @@ export function Chat() {
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); return false; }
     finally { setSavingWorkspace(false); }
   };
-  const deleteChat = async (id: string) => {
-    if (!await dialog.confirm(DELETE_SESSION_COPY, { title: "Delete this session?", confirmLabel: "Delete", danger: true })) return;
-    await del(`/web/api/conversations/${id}`);
+  const deleteChat = async (session: Conversation) => {
+    if (!await confirmDelete(dialog, { noun: "session", name: session.title, consequence: DELETE_SESSION_COPY })) return;
+    await del(`/web/api/conversations/${session.id}`);
     await chats.reload();
-    if (id === conversationId) navigate("/sessions");
+    if (session.id === conversationId) navigate("/sessions");
   };
   const togglePinned = async () => {
     if (!room.data) return;
@@ -640,10 +640,19 @@ export function Chat() {
   const taskRunning = (room.data?.turns || []).some(turn => turn.task_id && ["pending", "running", "queued", "retrying", "paused"].includes(turn.detail?.task.status || ""));
   return <div className={`chat-page session-room ${dragging ? "dragging" : ""}`} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
     <section className="chat-room" ref={chatRoom}>
-      {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><button className="primary-button" onClick={createSession}>New session</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Session unavailable"}/> : <>
-        <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<><Status value={room.data.archived ? "archived" : room.data.goal_status}/><button className="ghost-button" onClick={togglePinned}>{room.data.pinned ? "Unpin" : "Pin"}</button><button className="ghost-button" onClick={toggleArchived}>{room.data.archived ? "Unarchive" : "Archive"}</button><button className="ghost-button" onClick={editGoal}>Edit goal</button><button className="ghost-button" onClick={rename}>Rename</button><button className="danger-button" onClick={() => deleteChat(room.data!.id)}>Delete</button></>}/>
-        <section className="session-goal"><div><small>Active goal</small><p>{room.data.goal || "No goal has been set for this session yet."}</p></div><div><Status value={room.data.goal_status}/>{room.data.goal && room.data.goal_status !== "achieved" && <button className="ghost-button" onClick={markGoalAchieved}>Mark achieved</button>}</div></section>
-        <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} reasoning={turn.task_id ? reasoning[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} steps={turn.task_id ? steps[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
+      {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><Button variant="primary" onClick={() => void createSession()}>+ New session</Button></div> : room.loading && !room.data ? <Loading/> : !room.data ? <Notice tone="error">{room.error || "Session unavailable"}</Notice> : <>
+        <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<>
+          <Status value={room.data.archived ? "archived" : room.data.goal_status}/>
+          <ActionBar danger={<Button variant="danger" onClick={() => void deleteChat(room.data!)}>Delete</Button>}>
+            <Button onClick={() => void togglePinned()}>{room.data.pinned ? "Unpin" : "Pin"}</Button>
+            <Button onClick={() => void toggleArchived()}>{room.data.archived ? "Unarchive" : "Archive"}</Button>
+            <Button onClick={() => void editGoal()}>Edit goal</Button>
+            <Button onClick={() => void rename()}>Rename</Button>
+          </ActionBar>
+        </>}/>
+        {room.error && <Notice tone="error">{room.error}</Notice>}
+        <section className="session-goal"><div><small>Active goal</small><p>{room.data.goal || "No goal has been set for this session yet."}</p></div><div><Status value={room.data.goal_status}/>{room.data.goal && room.data.goal_status !== "achieved" && <Button size="sm" onClick={() => void markGoalAchieved()}>Mark achieved</Button>}</div></section>
+        <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} reasoning={turn.task_id ? reasoning[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} steps={turn.task_id ? steps[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <Empty>A fresh room. Your prompts, North's responses and every step of the work will stay together here.</Empty>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
         <form className="composer" onSubmit={submit}><textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder={taskRunning ? "Add to the task North is working on…" : "Ask North anything…"} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}

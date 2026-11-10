@@ -18,10 +18,11 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { post } from "../api";
 import { useResource } from "../hooks";
-import { Empty, ErrorNotice, formatDateTime, InferenceCategories, Loading, PageHeader, Panel, PromptTelemetry, Status, timeAgo } from "../components";
+import { formatDateTime, InferenceCategories, PageHeader, Panel, PromptTelemetry, timeAgo } from "../components";
+import { Button, Empty, EntityTable, ListRow, Loading, Notice, ResourceView, SearchField, Status, Tabs, Toolbar, type Column, type TabItem } from "../kit";
 import type { AgentRun, Approval, Artifact, Conversation, LedgerEntry, TaskDetail } from "../types";
 import { RoutingAttempts } from "./routing";
-import { stageIcon } from "./Artifacts";
+import { ArtifactGrid } from "./Artifacts";
 import { turnStatus } from "./Chat";
 
 /** One source of truth for the lifecycle actions shown in the task list. */
@@ -108,35 +109,41 @@ function EventRow({ entry, showTask = false }: { entry: LedgerEntry; showTask?: 
 
 // ── Everything one task did ──────────────────────────────────────────────────
 
+/** What one agent run used, as the facts under its name. */
+export function runFacts(run: AgentRun): string {
+  return [
+    run.models_used.join(", ") || "no model recorded",
+    run.providers_used?.length ? run.providers_used.join(", ") : "",
+    run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "",
+    `${(run.tokens_in + run.tokens_out).toLocaleString()} tokens`,
+    run.cost_usd ? `$${run.cost_usd.toFixed(4)}` : "",
+    run.skills?.length ? `skills: ${run.skills.map(s => s.name).join(", ")}` : "",
+  ].filter(Boolean).join(" · ");
+}
+
 function RunRow({ run }: { run: AgentRun }) {
-  return <div className="memory-row">
-    <div className="memory-main">
-      <b>{run.agent}{run.attempt > 1 && ` · attempt ${run.attempt}`}</b>
-      <small>
-        {run.models_used.join(", ") || "no model recorded"}
-        {run.providers_used?.length ? ` · ${run.providers_used.join(", ")}` : ""}
-        {run.duration_ms ? ` · ${(run.duration_ms / 1000).toFixed(1)}s` : ""}
-        {` · ${(run.tokens_in + run.tokens_out).toLocaleString()} tokens`}
-        {run.cost_usd ? ` · $${run.cost_usd.toFixed(4)}` : ""}
-        {run.skills?.length ? ` · skills: ${run.skills.map(s => s.name).join(", ")}` : ""}
-      </small>
-      <PromptTelemetry run={run}/>
-      {run.error && <p className="run-error">{run.error}</p>}
-    </div>
-    <Status value={run.status}/>
-  </div>;
+  return <ListRow
+    title={<>{run.agent}{run.attempt > 1 && ` · attempt ${run.attempt}`}</>}
+    description={runFacts(run)}
+    meta={run.prompt_profiles?.length ? [<PromptTelemetry key="telemetry" run={run}/>] : undefined}
+    status={<Status value={run.status}/>}>
+    {run.error && <Notice tone="error">{run.error}</Notice>}
+  </ListRow>;
 }
 
 function TaskActivity({ taskId }: { taskId: string }) {
-  const navigate = useNavigate();
   const detail = useResource<TaskDetail>(`/web/api/tasks/${encodeURIComponent(taskId)}`, 5000);
   // Artifacts and approvals are whole-collection endpoints; filtering here beats
   // adding a per-task variant of each for a page that already has them cached.
   const artifacts = useResource<Artifact[]>("/web/api/artifacts", 30000);
   const approvals = useResource<Approval[]>("/web/api/approvals", 30000);
+  const back = <Button to="/tasks">← All tasks</Button>;
 
-  if (detail.loading) return <Loading/>;
-  if (detail.error) return <div className="page"><ErrorNotice message={detail.error}/></div>;
+  // The header stays while the task loads or fails, so the way back is always there.
+  if (!detail.data) return <div className="page task-detail">
+    <PageHeader eyebrow="Task" title={taskId} actions={back}/>
+    {detail.error ? <Notice tone="error">{detail.error}</Notice> : <Loading/>}
+  </div>;
 
   const entries = detail.data?.entries || [];
   const runs = detail.data?.runs || [];
@@ -163,10 +170,11 @@ function TaskActivity({ taskId }: { taskId: string }) {
   return <div className="page task-detail">
     <PageHeader eyebrow="Task" title={prompt}
       subtitle={`${taskId} · ${timeAgo(detail.data?.task?.created_at || entries[0]?.timestamp || "")}`}
-      actions={<button className="task-back" onClick={() => navigate("/tasks")}>← All tasks</button>}/>
+      actions={back}/>
+    {detail.error && <Notice tone="error">{detail.error}</Notice>}
 
     <div className="metric-cards">
-      <div><span>Status</span><strong className="task-status">{status}</strong></div>
+      <div><span>Status</span><strong><Status value={status}/></strong></div>
       <div><span>Agent runs</span><strong>{runs.length}</strong></div>
       <div><span>Events</span><strong>{entries.length}</strong></div>
       <div><span>Cost</span><strong>${spend.toFixed(4)}</strong></div>
@@ -185,19 +193,11 @@ function TaskActivity({ taskId }: { taskId: string }) {
     </Panel>}
 
     {!!asked.length && <Panel title="What it stopped to ask" label={`${asked.length}`}>
-      {asked.map(card => <div className="memory-row" key={card.id}>
-        <div className="memory-main"><b>{card.title}</b><small>{card.message}</small></div>
-        <Status value={card.status}/>
-      </div>)}
+      {asked.map(card => <ListRow key={card.id} title={card.title} description={card.message} status={<Status value={card.status}/>}/>)}
     </Panel>}
 
     {!!mine.length && <Panel title="What it produced" label={`${mine.length} file${mine.length > 1 ? "s" : ""}`}>
-      <div className="artifact-grid">
-        {mine.map(file => <div className="artifact-card" key={file.id}>
-          <span>{stageIcon[file.kind] || "◇"}</span>
-          <div><b>{file.name}</b><small>{file.kind} · {timeAgo(file.updated_at)}</small></div>
-        </div>)}
-      </div>
+      <ArtifactGrid files={mine}/>
     </Panel>}
 
     {/* The whole reason the pages were merged: this is the Activity stream,
@@ -240,14 +240,12 @@ export function Tasks() {
   // The tab is in the URL so the old /activity path can land on the stream
   // rather than dropping someone on the task list and making them find it.
   const [params, setParams] = useSearchParams();
-  type TaskView = "all" | "active" | "approvals" | "completed" | "everything";
   const requested = params.get("view");
   const tab: TaskView = ["active", "approvals", "completed", "everything"].includes(requested || "")
     ? requested as TaskView : "all";
   const showTab = (next: TaskView) => setParams(next === "all" ? {} : { view: next }, { replace: true });
 
   if (taskId) return <TaskActivity taskId={taskId}/>;
-  if (resource.loading) return <Loading/>;
 
   const entries = resource.data || [];
   const tasks = summarise(entries);
@@ -284,9 +282,12 @@ export function Tasks() {
   return <div className="page tasks-ledger-page">
     <PageHeader eyebrow="Work" title="Tasks"
       subtitle="Everything North is doing, waiting on, or has completed."
-      actions={<><button disabled={Boolean(busy)} onClick={() => void refresh()}>{busy === "refresh" ? "Refreshing…" : "Refresh"}</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void createTask()}>{busy === "create" ? "Creating…" : "+ New task"}</button></>}/>
-    {resource.error && <ErrorNotice message={resource.error}/>}
-    {actionError && <ErrorNotice message={actionError}/>}
+      actions={<>
+        <Button disabled={Boolean(busy)} busy={busy === "refresh"} busyLabel="Refreshing…" onClick={() => void refresh()}>Refresh</Button>
+        <Button variant="primary" disabled={Boolean(busy)} busy={busy === "create"} busyLabel="Creating…" onClick={() => void createTask()}>+ New task</Button>
+      </>}/>
+    {resource.error && resource.data && <Notice tone="error">{resource.error}</Notice>}
+    {actionError && <Notice tone="error">{actionError}</Notice>}
 
     <section className="task-ledger-stats" aria-label="Task summary">
       <div><small>Active</small><strong>{active}</strong><span>in progress</span></div>
@@ -297,36 +298,42 @@ export function Tasks() {
 
     {/* Most of the time you want the runs. The raw stream is still here because
         startup, cron ticks and recovery sweeps have no task to belong to. */}
-    <div className="task-ledger-toolbar">
-      <div className="task-ledger-tabs" role="tablist" aria-label="Task views">
-        <button role="tab" aria-selected={tab === "all"} className={tab === "all" ? "active" : ""} onClick={() => showTab("all")}>All work</button>
-        <button role="tab" aria-selected={tab === "active"} className={tab === "active" ? "active" : ""} onClick={() => showTab("active")}>Active</button>
-        <button role="tab" aria-selected={tab === "approvals"} className={tab === "approvals" ? "active" : ""} onClick={() => showTab("approvals")}>Approvals</button>
-        <button role="tab" aria-selected={tab === "completed"} className={tab === "completed" ? "active" : ""} onClick={() => showTab("completed")}>Completed</button>
-        <button role="tab" aria-selected={tab === "everything"} className={tab === "everything" ? "active" : ""} onClick={() => showTab("everything")}>Everything</button>
-      </div>
-      <input className="task-ledger-search" aria-label={tab === "everything" ? "Filter events" : "Filter tasks"}
-        placeholder={tab === "everything" ? "Filter events" : "Filter tasks"}
-        value={query} onChange={event => setQuery(event.target.value)}/>
-    </div>
+    <Toolbar
+      tabs={<Tabs label="Task views" items={TASK_VIEWS} value={tab} onChange={showTab}/>}
+      search={<SearchField label={tab === "everything" ? "Filter events" : "Filter tasks"} value={query} onChange={setQuery}/>}/>
 
-    {tab !== "everything"
-      ? <>
-          <div className="task-ledger-table-wrap">
-            <table className="task-ledger-table">
-              <thead><tr><th>Task</th><th>Agent</th><th>Updated</th><th>Events</th><th>State</th><th><span className="sr-only">Action</span></th></tr></thead>
-              <tbody>{shown.map(task => <tr key={task.id}>
-                <td><Link className="task-ledger-primary" to={`/tasks/${task.id}`}><b>{task.prompt}</b><small>{task.id}</small></Link></td>
-                <td data-label="Agent">{task.agents.join(", ") || "orchestrator"}</td>
-                <td data-label="Updated">{timeAgo(task.latest)}</td>
-                <td data-label="Events">{task.entries.length}</td>
-                <td data-label="State"><Status value={task.status}/></td>
-                <td><Link className="task-ledger-open" to={`/tasks/${task.id}`} aria-label={`Open task: ${task.prompt}`}>Open</Link></td>
-              </tr>)}</tbody>
-            </table>
-          </div>
-          {!shown.length && <Empty>{tasks.length ? "No tasks match this view." : "No task history yet."}</Empty>}
-        </>
-      : <AllEvents entries={entries} query={query}/>}
+    <ResourceView resource={resource}>
+      {() => tab !== "everything"
+        ? <EntityTable label="Tasks" columns={TASK_COLUMNS} rows={shown} rowKey={task => task.id}
+            to={task => `/tasks/${task.id}`} cell={taskCell}
+            empty={tasks.length ? "No tasks match this view." : "No task history yet."}/>
+        : <AllEvents entries={entries} query={query}/>}
+    </ResourceView>
   </div>;
+}
+
+type TaskView = "all" | "active" | "approvals" | "completed" | "everything";
+
+const TASK_VIEWS: TabItem<TaskView>[] = [
+  { value: "all", label: "All work" },
+  { value: "active", label: "Active" },
+  { value: "approvals", label: "Approvals" },
+  { value: "completed", label: "Completed" },
+  { value: "everything", label: "Everything" },
+];
+
+const TASK_COLUMNS: Column[] = [
+  { key: "task", label: "Task", width: "minmax(0, 2.4fr)" },
+  { key: "agent", label: "Agent" },
+  { key: "updated", label: "Updated", width: "minmax(0, .7fr)" },
+  { key: "events", label: "Events", width: "minmax(0, .5fr)" },
+  { key: "state", label: "State", width: "minmax(0, .8fr)" },
+];
+
+function taskCell(task: TaskSummary, key: string) {
+  if (key === "task") return <><b>{task.prompt}</b><small>{task.id}</small></>;
+  if (key === "agent") return task.agents.join(", ") || "orchestrator";
+  if (key === "updated") return timeAgo(task.latest);
+  if (key === "events") return task.entries.length;
+  return <Status value={task.status}/>;
 }

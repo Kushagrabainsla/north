@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { formatDay } from "../components";
-import { factDates, LearningStatus } from "./Memory";
+import { EpisodesPanel, factDates, LearningStatus } from "./Memory";
 
 let learning: unknown;
 
@@ -44,5 +44,20 @@ describe("fact dates", () => {
     expect(factDates({ ...base, valid_from: "2026-05-26" })).toMatch(/^true from/);
     expect(factDates(base)).toBe("");
     expect(factDates({ ...base, status: "superseded" })).toBe("replaced by a newer fact");
+  });
+});
+
+describe("episodes", () => {
+  it("lists each episode as a row, its outcome as a status word", () => {
+    learning = [{ id: "e1", task_id: "t1", domain: "coding", outcome: "completed", summary: "Fixed the CI run", timestamp: "" }];
+    const markup = renderToStaticMarkup(createElement(EpisodesPanel));
+    expect(markup).toContain('class="kit-row"');
+    expect(markup).toContain("Fixed the CI run");
+    expect(markup).toContain('kit-status kit-tone-good">completed</span>');
+  });
+
+  it("says when there are none", () => {
+    learning = [];
+    expect(renderToStaticMarkup(createElement(EpisodesPanel))).toContain("No episodes recorded yet.");
   });
 });

@@ -1,4 +1,5 @@
 import { dateInNorthTimezone, weekdayInNorthTimezone } from "./components";
+import { EntityForm, Field } from "./kit";
 import { hhmm } from "./schedule";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -74,6 +75,8 @@ export const draftOf = (entry: ScheduleFields): Draft => ({
   date: todayISO(),
 });
 
+// One checkbox a day: a picked day has to look picked, and a plain checkbox
+// says so without a style of its own.
 function DayPicker({
   days,
   onChange,
@@ -88,23 +91,23 @@ function DayPicker({
         : [...days, day].sort(),
     );
   return (
-    <div className="day-picker">
+    <>
       {DAY_LABELS.map((label, day) => (
-        <button
-          type="button"
-          key={label}
-          aria-pressed={days.includes(day)}
-          className={days.includes(day) ? "day on" : "day"}
-          onClick={() => toggle(day)}
-        >
-          {label}
-        </button>
+        <label key={label}>
+          <input
+            type="checkbox"
+            checked={days.includes(day)}
+            onChange={() => toggle(day)}
+          />{" "}
+          {label}{" "}
+        </label>
       ))}
-    </div>
+    </>
   );
 }
 
 export function ScheduleForm({
+  title,
   draft,
   setDraft,
   onSubmit,
@@ -114,6 +117,7 @@ export function ScheduleForm({
   error,
   allowOnce,
 }: {
+  title: string;
   draft: Draft;
   setDraft: (d: Draft) => void;
   onSubmit: () => void;
@@ -147,24 +151,26 @@ export function ScheduleForm({
     : REPEAT_LABELS.filter(([value]) => value !== "once");
 
   return (
-    <form
-      className="schedule-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSubmit();
-      }}
+    // The failure shows in the form, beside the fields that caused it, not at
+    // the top of the page.
+    <EntityForm
+      title={title}
+      submitLabel={submitLabel}
+      busy={busy}
+      error={error}
+      canSubmit={!noDays}
+      onSubmit={onSubmit}
+      onCancel={onCancel}
     >
-      <label>
-        Name
+      <Field label="Name">
         <input
           value={draft.label}
           placeholder="Optional, e.g. Morning run"
           autoFocus
           onChange={(e) => setDraft({ ...draft, label: e.target.value })}
         />
-      </label>
-      <label>
-        Repeats
+      </Field>
+      <Field label="Repeats">
         <select
           value={draft.repeat}
           onChange={(e) => setRepeat(e.target.value as Repeat)}
@@ -175,109 +181,57 @@ export function ScheduleForm({
             </option>
           ))}
         </select>
-      </label>
+      </Field>
       {draft.repeat === "custom" && (
-        <label>
-          On these days
+        <Field
+          label="On these days"
+          wide
+          error={noDays ? "Pick at least one day." : undefined}
+        >
           <DayPicker
             days={draft.days}
             onChange={(days) => setDraft({ ...draft, days })}
           />
-        </label>
+        </Field>
       )}
-      <div className="schedule-form-row">
-        {/* A one-off happens on a date; a wall-clock routine happens at a time;
-          a fixed interval carries its own period instead. */}
-        {draft.repeat === "once" && (
-          <label>
-            Date
-            <input
-              type="date"
-              value={draft.date}
-              min={todayISO()}
-              onChange={(e) =>
-                e.target.value && setDraft({ ...draft, date: e.target.value })
-              }
-            />
-          </label>
-        )}
-        {draft.repeat === "interval" ? (
-          <label>
-            Every (minutes)
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={draft.intervalMinutes}
-              onChange={(e) =>
-                setDraft({
-                  ...draft,
-                  intervalMinutes: Math.max(1, Number(e.target.value) || 1),
-                })
-              }
-            />
-          </label>
-        ) : (
-          <label>
-            Time
-            <input
-              type="time"
-              value={hhmm(draft.hour, draft.minute)}
-              onChange={(e) => setTime(e.target.value)}
-            />
-          </label>
-        )}
-      </div>
-      {/* Beside the field that caused it, not at the top of the page. */}
-      {error && <p className="schedule-form-error">{error}</p>}
-      {noDays && <p className="schedule-form-error">Pick at least one day.</p>}
-      <div className="schedule-form-actions">
-        <button
-          type="submit"
-          className="primary-button"
-          disabled={busy || noDays}
-        >
-          {busy ? "Saving…" : submitLabel}
-        </button>
-        <button type="button" className="ghost-button" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </form>
-  );
-}
-
-// An in-page confirmation. window.confirm is an operating-system dialog in an
-// app that styles everything else itself, and it cannot say what will happen
-// afterwards.
-export function ConfirmRow({
-  question,
-  confirmLabel,
-  onConfirm,
-  onCancel,
-  busy,
-}: {
-  question: string;
-  confirmLabel: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-  busy: boolean;
-}) {
-  return (
-    <div className="schedule-confirm">
-      <span>{question}</span>
-      <div className="schedule-actions">
-        <button
-          className="ghost-button danger-link"
-          onClick={onConfirm}
-          disabled={busy}
-        >
-          {confirmLabel}
-        </button>
-        <button className="ghost-button" onClick={onCancel} disabled={busy}>
-          Keep it
-        </button>
-      </div>
-    </div>
+      {/* A one-off happens on a date; a wall-clock routine happens at a time;
+        a fixed interval carries its own period instead. */}
+      {draft.repeat === "once" && (
+        <Field label="Date">
+          <input
+            type="date"
+            value={draft.date}
+            min={todayISO()}
+            onChange={(e) =>
+              e.target.value && setDraft({ ...draft, date: e.target.value })
+            }
+          />
+        </Field>
+      )}
+      {draft.repeat === "interval" ? (
+        <Field label="Every (minutes)">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={draft.intervalMinutes}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                intervalMinutes: Math.max(1, Number(e.target.value) || 1),
+              })
+            }
+          />
+        </Field>
+      ) : (
+        <Field label="Time">
+          <input
+            type="time"
+            value={hhmm(draft.hour, draft.minute)}
+            onChange={(e) => setTime(e.target.value)}
+          />
+        </Field>
+      )}
+    </EntityForm>
   );
 }

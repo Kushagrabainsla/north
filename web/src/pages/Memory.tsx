@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../api";
-import { Empty, formatDay, Loading, Markdown, PageHeader, Panel, Status, timeAgo, reveal } from "../components";
+import { formatDay, Markdown, PageHeader, Panel, timeAgo } from "../components";
+import { ActionBar, Badge, Button, confirmDelete, EntityForm, Field, ListRow, Loading, Notice, ResourceView, Stack, Status, Tabs, Toolbar } from "../kit";
 import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -48,23 +49,18 @@ export function EpisodesPanel() {
         What north remembers of past tasks, used to recognise a situation it has
         been in before.
       </p>
-      {resource.loading ? (
-        <Loading />
-      ) : rows.length ? (
-        rows.map((row) => (
-          <div className="memory-row" key={row.id}>
-            <div className="memory-main">
-              <b>{row.summary}</b>
-              <small>
-                {row.domain} · {row.task_id} · {timeAgo(row.timestamp)}
-              </small>
-            </div>
-            <Status value={row.outcome} />
-          </div>
-        ))
-      ) : (
-        <Empty>No episodes recorded yet.</Empty>
-      )}
+      <ResourceView resource={resource} isEmpty={(data) => !data.length} empty="No episodes recorded yet.">
+        {(data) =>
+          data.map((row) => (
+            <ListRow
+              key={row.id}
+              title={row.summary}
+              meta={[row.domain, row.task_id, timeAgo(row.timestamp)]}
+              status={<Status value={row.outcome} />}
+            />
+          ))
+        }
+      </ResourceView>
     </Panel>
   );
 }
@@ -115,6 +111,8 @@ export function factDates(fact: Fact): string {
 // a decision that used it matches the stored text it starts with.
 const isFound = (fact: Fact, find: string) => !!find && (find === fact.content || find.startsWith(`${fact.content} (`));
 
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 export function Memory() {
   const dialog = useDialog();
   const [tab, setTab] = usePersistentState<MemoryTab>(
@@ -153,6 +151,18 @@ export function Memory() {
   const [factFrom, setFactFrom] = useState("");
   const [factUntil, setFactUntil] = useState("");
   const [editingFact, setEditingFact] = useState<Fact | null>(null);
+  const [savingFact, setSavingFact] = useState(false);
+  // Saving or deleting can fail (the server is down, a request is refused); it
+  // used to fail with nothing on screen.
+  const [error, setError] = useState("");
+  const attempt = async (fn: () => Promise<void>) => {
+    setError("");
+    try {
+      await fn();
+    } catch (err) {
+      setError(message(err));
+    }
+  };
   const resetFactDraft = () => {
     setFactDraft("");
     setFactFrom("");
@@ -160,29 +170,28 @@ export function Memory() {
     setEditingFact(null);
   };
   const content = draft ?? resource.data?.content ?? "";
-  const save = async () => {
-    await api(`/orchestrator/context/${doc}`, {
-      method: "PUT",
-      body: JSON.stringify({ content }),
+  const save = () =>
+    attempt(async () => {
+      await api(`/orchestrator/context/${doc}`, {
+        method: "PUT",
+        body: JSON.stringify({ content }),
+      });
+      setDraft(null);
+      await resource.reload();
     });
-    setDraft(null);
-    await resource.reload();
-  };
   const removeDocument = async () => {
-    if (
-      !(await dialog.confirm(
-        `This puts ${docLabels[doc]} back to what north ships with. Anything written here is lost.`,
-        {
-          title: `Reset ${docLabels[doc]}?`,
-          confirmLabel: "Reset",
-          danger: true,
-        },
-      ))
-    )
-      return;
-    await api(`/orchestrator/context/${doc}`, { method: "DELETE" });
-    setDraft(null);
-    await resource.reload();
+    const ok = await confirmDelete(dialog, {
+      noun: "document",
+      name: docLabels[doc],
+      verb: "Reset",
+      consequence: `This puts ${docLabels[doc]} back to what north ships with. Anything written here is lost.`,
+    });
+    if (!ok) return;
+    await attempt(async () => {
+      await api(`/orchestrator/context/${doc}`, { method: "DELETE" });
+      setDraft(null);
+      await resource.reload();
+    });
   };
   const saveFact = async () => {
     if (!factDraft.trim()) return;
@@ -193,22 +202,33 @@ export function Memory() {
       valid_from: factFrom || null,
       valid_until: factUntil || null,
     };
-    if (editingFact)
-      await api(`/web/api/memory/facts/${editingFact.id}`, { method: "PATCH", body: JSON.stringify(body) });
-    else await post("/web/api/memory/facts", body);
-    resetFactDraft();
-    await facts.reload();
+    setSavingFact(true);
+    await attempt(async () => {
+      if (editingFact)
+        await api(`/web/api/memory/facts/${editingFact.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      else await post("/web/api/memory/facts", body);
+      resetFactDraft();
+      await facts.reload();
+    });
+    setSavingFact(false);
   };
-  const removeFact = async (id: string) => {
-    if (
-      !(await dialog.confirm(
-        "north will stop using it, and stop recalling it for future tasks.",
-        { title: "Forget this fact?", confirmLabel: "Forget", danger: true },
-      ))
-    )
-      return;
-    await api(`/web/api/memory/facts/${id}`, { method: "DELETE" });
-    await facts.reload();
+  const removeFact = async (fact: Fact) => {
+    const ok = await confirmDelete(dialog, {
+      noun: "fact",
+      name: fact.content,
+      consequence: "north will stop using it, and stop recalling it for future tasks.",
+    });
+    if (!ok) return;
+    await attempt(async () => {
+      await api(`/web/api/memory/facts/${fact.id}`, { method: "DELETE" });
+      await facts.reload();
+    });
+  };
+  const editFact = (fact: Fact) => {
+    setEditingFact(fact);
+    setFactDraft(fact.content);
+    setFactFrom(fact.valid_from || "");
+    setFactUntil(fact.valid_until || "");
   };
   const onDocuments = tab === "documents";
   return (
@@ -219,149 +239,122 @@ export function Memory() {
         subtitle="Everything north has learned about you, and from you."
         actions={
           onDocuments ? (
-            <>
-              <button onClick={removeDocument}>Reset document</button>
-              <button
-                className="primary-button"
-                disabled={draft === null}
-                onClick={save}
-              >
+            <ActionBar danger={<Button variant="danger" onClick={() => void removeDocument()}>Reset document</Button>}>
+              <Button variant="primary" disabled={draft === null} onClick={() => void save()}>
                 Save document
-              </button>
-            </>
+              </Button>
+            </ActionBar>
           ) : null
         }
       />
-      <div className="segmented memory-tabs">
-        {MEMORY_TABS.map(([value, label]) => (
-          <button
-            className={tab === value ? "active" : ""}
-            key={value}
-            onClick={() => setTab(value)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        label="Memory views"
+        items={MEMORY_TABS.map(([value, label]) => ({ value, label }))}
+        value={tab}
+        onChange={setTab}
+      />
       <LearningStatus />
+      {error && <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice>}
 
       {onDocuments && (
-        <div className="memory-layout">
-          <aside>
-            {docs.map((name) => (
-              <button
-                className={doc === name ? "active" : ""}
-                key={name}
-                onClick={() => {
+        <>
+          <Toolbar
+            tabs={
+              <Tabs
+                label="Documents"
+                items={docs.map((name) => ({ value: name, label: docLabels[name] }))}
+                value={doc}
+                onChange={(name) => {
                   setDoc(name);
                   setDraft(null);
                 }}
-              >
-                {docLabels[name]}
-              </button>
-            ))}
-          </aside>
-          <div className="memory-editor-grid">
-            <section>
-              <div className="editor-label">Markdown source</div>
-              {resource.loading ? (
-                <Loading />
-              ) : (
-                <textarea
-                  className="document-editor"
-                  value={content}
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-              )}
-            </section>
-            <section className="memory-preview">
-              <div className="editor-label">Rendered preview</div>
-              <Markdown>{content || "Nothing written yet."}</Markdown>
-            </section>
-          </div>
-        </div>
+              />
+            }
+          />
+          {resource.error && <Notice tone="error">{resource.error}</Notice>}
+          <Panel title={docLabels[doc]} label="Document">
+            <div className="memory-editor-grid">
+              <section>
+                <div className="editor-label">Markdown source</div>
+                {resource.loading ? (
+                  <Loading />
+                ) : (
+                  <textarea
+                    className="document-editor"
+                    aria-label={`${docLabels[doc]} source`}
+                    value={content}
+                    onChange={(e) => setDraft(e.target.value)}
+                  />
+                )}
+              </section>
+              <section className="memory-preview">
+                <div className="editor-label">Rendered preview</div>
+                <Markdown>{content || "Nothing written yet."}</Markdown>
+              </section>
+            </div>
+          </Panel>
+        </>
       )}
 
       {tab === "facts" && (
-        <section className="facts-panel panel">
-          <header>
-            <div>
-              <span>Durable context</span>
-              <h2>Facts</h2>
-            </div>
-            <span>{facts.data?.length || 0} stored</span>
-          </header>
-          <div className="panel-content">
-            <div className="fact-editor">
+        <Panel title="Facts" label={`${facts.data?.length || 0} stored`}>
+          <Stack>
+          <EntityForm
+            level={3}
+            title={editingFact ? "Edit fact" : "Add a fact"}
+            submitLabel={editingFact ? "Save fact" : "Add fact"}
+            busy={savingFact}
+            canSubmit={Boolean(factDraft.trim())}
+            onSubmit={saveFact}
+            onCancel={editingFact ? resetFactDraft : undefined}
+          >
+            <Field label="Fact" wide>
               <input
                 value={factDraft}
                 onChange={(e) => setFactDraft(e.target.value)}
                 placeholder="Add one atomic fact…"
               />
-              <label className="fact-date">
-                True from
-                <input type="date" value={factFrom} onChange={(e) => setFactFrom(e.target.value)} />
-              </label>
-              <label className="fact-date">
-                until
-                <input type="date" value={factUntil} onChange={(e) => setFactUntil(e.target.value)} />
-              </label>
-              <button className="ghost-button" onClick={saveFact}>
-                {editingFact ? "Update" : "Add fact"}
-              </button>
-              {editingFact && (
-                <button className="ghost-button" onClick={resetFactDraft}>
-                  Cancel
-                </button>
-              )}
-            </div>
-            <div className="fact-list">
-              {facts.loading ? (
-                <Loading />
-              ) : (
-                (facts.data || []).map((fact) => (
-                  <article
-                    className={`fact-row${isFound(fact, find) ? " memory-found" : ""}${fact.ended || fact.status === "superseded" ? " fact-past" : ""}`}
+            </Field>
+            <Field label="True from">
+              <input type="date" value={factFrom} onChange={(e) => setFactFrom(e.target.value)} />
+            </Field>
+            <Field label="Until">
+              <input type="date" value={factUntil} onChange={(e) => setFactUntil(e.target.value)} />
+            </Field>
+          </EntityForm>
+          <ResourceView resource={facts} isEmpty={(data) => !data.length} empty="No durable facts have been captured yet.">
+            {(data) =>
+              data.map((fact) => (
+                  <ListRow
                     key={fact.id}
-                    ref={isFound(fact, find) ? reveal : undefined}
-                  >
-                    <div>
-                      <b>{fact.content}</b>
-                      <small>
-                        {[fact.category || "general", factDates(fact), `updated ${timeAgo(fact.updated_at)}`]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </small>
-                    </div>
-                    <div className="fact-actions">
-                      <span>
+                    found={isFound(fact, find)}
+                    title={fact.content}
+                    // An ended or replaced fact is history, so it reads quieter.
+                    muted={fact.ended || fact.status === "superseded"}
+                    meta={[fact.category || "general", factDates(fact), `updated ${timeAgo(fact.updated_at)}`]}
+                    status={
+                      <Badge>
                         {fact.confidence != null
                           ? `${Math.round(Number(fact.confidence) * 100)}%`
                           : "Active"}
-                      </span>
-                      <button
-                        onClick={() => {
-                          setEditingFact(fact);
-                          setFactDraft(fact.content);
-                          setFactFrom(fact.valid_from || "");
-                          setFactUntil(fact.valid_until || "");
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button onClick={() => removeFact(fact.id)}>
-                        Delete
-                      </button>
-                    </div>
-                  </article>
-                ))
-              )}
-              {!facts.loading && !facts.data?.length && (
-                <Empty>No durable facts have been captured yet.</Empty>
-              )}
-            </div>
-          </div>
-        </section>
+                      </Badge>
+                    }
+                    actions={
+                      <>
+                        <Button variant="quiet" size="sm" onClick={() => editFact(fact)}>
+                          Edit
+                        </Button>
+                        <Button variant="danger" size="sm" onClick={() => void removeFact(fact)}>
+                          Delete
+                        </Button>
+                      </>
+                    }
+                  />
+              ))
+            }
+          </ResourceView>
+          </Stack>
+        </Panel>
       )}
 
       {tab === "episodes" && <EpisodesPanel />}
@@ -375,4 +368,3 @@ export function Memory() {
     </div>
   );
 }
-

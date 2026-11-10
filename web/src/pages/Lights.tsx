@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, post } from "../api";
-import { Empty, ErrorNotice, Loading, PageHeader, Panel } from "../components";
+import { PageHeader, Panel } from "../components";
 import { useResource } from "../hooks";
+import { ActionBar, Button, CardGrid, Empty, EntityCard, EntityForm, Field, ListRow, Loading, Notice, SectionHeader, Status, Tabs, Toolbar } from "../kit";
 import { addDeviceRequest, brandOf, deviceRequest, failures, inScope, scanSummary, kelvinToRgb, latestWins, swatch, type Light, type NetworkDevice, type Scan, type LightChange, type LightsOverview, type Scope } from "../lights";
 import { sliceMs, type Levels } from "../listen";
 import listenWorklet from "../listen.worklet.ts?worker&url";
@@ -12,6 +13,9 @@ import type { Conversation } from "../types";
 type Applied = { lights: Light[]; errors: { id: string; error: string }[] };
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** A scene's name as a button says it: "movie night" reads "Movie night". */
+export const sceneLabel = (scene: string) => scene.charAt(0).toUpperCase() + scene.slice(1);
 
 // Your lights, plugs and switches of every brand, controlled by you: what you set happens at
 // once, with no approval card (CODING_STYLE §7.3). "My devices" acts only on the ones you
@@ -72,31 +76,31 @@ export function Lights() {
       title="Devices"
       subtitle="Your lights, plugs and switches, of any brand. What you set here happens at once, with no approval card."
       actions={<>
-        <button className="ghost-button" onClick={() => setAdding(!adding)} aria-expanded={adding}>Add a device</button>
-        <button className="ghost-button" onClick={lookAgain} disabled={looking}>{looking ? "Looking…" : "Look again"}</button>
+        <Button onClick={() => setAdding(!adding)} aria-pressed={adding}>Add a device</Button>
+        <Button onClick={lookAgain} busy={looking} busyLabel="Looking…">Look again</Button>
       </>}
     />
     {adding && <AddDevice onCancel={() => setAdding(false)}/>}
-    {overview.loading ? <Loading/> : overview.error ? <ErrorNotice message={overview.error}/> : <>
-      <section className="lights-bar">
-        <div className="session-tabs" role="tablist" aria-label="Which devices">
-          <button type="button" role="tab" aria-selected={chosen === "mine"} className={`session-tab ${chosen === "mine" ? "active" : ""}`} onClick={() => setScope("mine")}>My devices ({mineCount})</button>
-          <button type="button" role="tab" aria-selected={chosen === "all"} className={`session-tab ${chosen === "all" ? "active" : ""}`} onClick={() => setScope("all")}>All devices ({lights.length})</button>
-        </div>
-        <div className="lights-group" aria-label={chosen === "mine" ? "Your devices together" : "All devices together"}>
-          <button type="button" disabled={!shown.length} onClick={() => applyToShown({ on: true })}>All on</button>
-          <button type="button" disabled={!shown.length} onClick={() => applyToShown({ on: false })}>All off</button>
-          {(overview.data?.scenes ?? []).map((scene) => <button type="button" key={scene} className="lights-scene" disabled={!shown.length} onClick={() => applyToShown({ scene })}>{scene}</button>)}
-        </div>
-      </section>
+    {overview.loading ? <Loading/> : overview.error ? <Notice tone="error">{overview.error}</Notice> : <>
+      <Toolbar
+        tabs={<Tabs<Scope> label="Which devices" value={chosen} onChange={setScope} items={[
+          { value: "mine", label: "My devices", count: mineCount },
+          { value: "all", label: "All devices", count: lights.length },
+        ]}/>}
+        actions={<ActionBar>
+          <Button size="sm" disabled={!shown.length} onClick={() => applyToShown({ on: true })}>All on</Button>
+          <Button size="sm" disabled={!shown.length} onClick={() => applyToShown({ on: false })}>All off</Button>
+          {(overview.data?.scenes ?? []).map((scene) => <Button size="sm" key={scene} disabled={!shown.length} onClick={() => applyToShown({ scene })}>{sceneLabel(scene)}</Button>)}
+        </ActionBar>}
+      />
       {shown.length > 0 && <MusicSync lights={shown} scope={chosen} onStopped={() => void overview.reload()}/>}
-      {locked.length > 0 && <p className="lights-notice lights-locked">
+      {locked.length > 0 && <Notice tone="warning">
         {locked.length} Kasa light{locked.length === 1 ? "" : "s"} found {locked.length === 1 ? "needs its" : "need their"} TP-Link login, the Kasa app account {locked.length === 1 ? "it was" : "they were"} set up with: {locked.join(", ")}. <Link to="/settings">Add it in Settings → Secrets as kasa_email and kasa_password</Link>, then press Look again.
-      </p>}
-      {(lights.length > 0 || locked.length > 0) && overview.data?.problem && !locked.length && <p className="lights-notice">{overview.data.problem}</p>}
-      {notice && <p className="lights-notice" role="status">{notice}</p>}
+      </Notice>}
+      {(lights.length > 0 || locked.length > 0) && overview.data?.problem && !locked.length && <Notice tone="warning">{overview.data.problem}</Notice>}
+      {notice && <Notice tone="error" onDismiss={() => setNotice("")}>{notice}</Notice>}
       {shown.length
-        ? <div className="lights-grid">{shown.map((light) => <LightCard key={light.id} light={light} onChanged={merge} onNotice={setNotice} onMine={markMine}/>)}</div>
+        ? <CardGrid>{shown.map((light) => <LightCard key={light.id} light={light} onChanged={merge} onNotice={setNotice} onMine={markMine}/>)}</CardGrid>
         : <Empty>{empty}</Empty>}
     </>}
   </div>;
@@ -140,31 +144,29 @@ function AddDevice({ onCancel }: { onCancel: () => void }) {
     }
   };
   const devices = scan?.devices ?? [];
-  return <Panel title="Add a device" label="Find devices" className="add-device" actions={<button className="ghost-button" type="button" onClick={onCancel}>Close</button>}>
+  return <Panel title="Add a device" label="Find devices" className="add-device" actions={<Button size="sm" onClick={onCancel}>Close</Button>}>
     <p className="setup-copy">North lists every device on your network, named as far as it can tell. Choose one to connect: North works out how to control it in a session you can follow, asking you only for what you need to do, and tells you plainly if it cannot. Once it works, it shows up here with the same controls and music sync.</p>
-    {looking ? <p className="setup-copy">Looking at every address on your network… this takes a few seconds.</p>
+    {looking ? <Loading label="Looking at every address on your network… this takes a few seconds"/>
       : scan && <>
         {GROUPS.map(([kinds, title]) => {
           const group = devices.filter((device) => kinds.includes(device.connect));
-          return group.length > 0 && <div className="found-group" key={title}>
-            <p className="found-group-title">{title} ({group.length})</p>
-            <div className="provider-list">{group.map((device) => <DeviceRow key={device.id} device={device} sending={sending} onConnect={() => ask(device.id, device.name, deviceRequest(device))}/>)}</div>
+          return group.length > 0 && <div key={title}>
+            <SectionHeader level={3} title={`${title} (${group.length})`}/>
+            {group.map((device) => <DeviceRow key={device.id} device={device} sending={sending} onConnect={() => ask(device.id, device.name, deviceRequest(device))}/>)}
           </div>;
         })}
         <p className="setup-copy">{scanSummary(scan)}</p>
       </>}
-    <div className="setup-actions">
-      <button className="ghost-button" type="button" onClick={look} disabled={looking}>{looking ? "Looking…" : "Look again"}</button>
-    </div>
-    <div className="setup-form">
-      <label>Not listed? Say what it is: its brand and model, and where it is if you know (its address, or the app you use for it).
+    <ActionBar align="start">
+      <Button onClick={look} busy={looking} busyLabel="Looking…">Look again</Button>
+    </ActionBar>
+    <EntityForm title="Not listed?" description="Say what it is: its brand and model, and where it is if you know (its address, or the app you use for it)."
+      submitLabel="Ask North to add it" busy={sending === "typed"} busyLabel="Asking North…" error={error || undefined}
+      canSubmit={Boolean(what.trim()) && !sending} onSubmit={() => ask("typed", what.trim(), addDeviceRequest(what))}>
+      <Field label="What it is" wide>
         <textarea value={what} rows={2} placeholder="A Philips Hue bridge at 192.168.1.20" onChange={(event) => setWhat(event.target.value)}/>
-      </label>
-      {error && <ErrorNotice message={error}/>}
-      <div className="setup-actions">
-        <button className="primary-button" type="button" disabled={!what.trim() || Boolean(sending)} onClick={() => ask("typed", what.trim(), addDeviceRequest(what))}>{sending === "typed" ? "Asking North…" : "Ask North to add it"}</button>
-      </div>
-    </div>
+      </Field>
+    </EntityForm>
   </Panel>;
 }
 
@@ -173,18 +175,12 @@ function DeviceRow({ device, sending, onConnect }: { device: NetworkDevice; send
   const about = device.found
     ? (device.found.cannot ? `A ${device.found.brand} ${device.found.kind}. North can't connect to it directly yet: ${device.found.cannot}.` : `A ${device.found.brand} ${device.found.kind}. North reaches it through ${device.found.reach}.`)
     : device.offers.length ? `Offers ${device.offers.join(", ")}.` : device.hint ? `${device.hint}.` : "";
-  return <div className="provider-row">
-    <div>
-      <b>{device.name}</b>
-      <small>{where}</small>
-      {about && <small>{about}</small>}
-    </div>
-    {device.connect === "here" ? <span className="provider-state configured">On this page</span>
-      : device.connect === "none" ? null
-      : <button className={device.connect === "add" ? "primary-button" : "ghost-button"} type="button" disabled={Boolean(sending)} onClick={onConnect}>
-        {sending === device.id ? "Asking North…" : device.connect === "add" ? "Add" : "Try to connect"}
-      </button>}
-  </div>;
+  return <ListRow title={device.name} description={about || undefined} meta={[where]}
+    status={device.connect === "here" && <Status label="On this page" tone="good"/>}
+    actions={device.connect !== "here" && device.connect !== "none" &&
+      <Button size="sm" variant={device.connect === "add" ? "primary" : "secondary"} busy={sending === device.id} busyLabel="Asking North…" disabled={Boolean(sending)} onClick={onConnect}>
+        {device.connect === "add" ? "Add" : "Try to connect"}
+      </Button>}/>;
 }
 
 function LightCard({ light, onChanged, onNotice, onMine }: {
@@ -225,22 +221,25 @@ function LightCard({ light, onChanged, onNotice, onMine }: {
   const saturation = draft.saturation ?? 100;
   const off = Boolean(light.unreachable);
 
-  return <article className={`light-card ${draft.on ? "is-on" : ""}`}>
-    <header>
-      <span className="light-swatch" style={{ background: swatch(draft) }} aria-hidden="true"/>
-      <div className="light-name"><b>{light.name}</b><small>{brandOf(light)}</small></div>
-      <button type="button" className={`light-mine ${light.mine ? "active" : ""}`} aria-pressed={light.mine} onClick={() => onMine(light, !light.mine)} title={light.mine ? "Yours: My lights includes it" : "Mark as yours"}>{light.mine ? "★" : "☆"} Mine</button>
-      <button type="button" className="light-power" aria-pressed={draft.on} disabled={off} onClick={() => set({ on: !draft.on })}>{draft.on ? "On" : "Off"}</button>
-    </header>
-    {light.unreachable && <p className="lights-notice">Not answering: {light.unreachable}</p>}
+  return <EntityCard icon={<span className="light-swatch" style={{ background: swatch(draft) }} aria-hidden="true"/>}
+    title={light.name} meta={brandOf(light)}>
+    <ActionBar>
+      <Button size="sm" variant="quiet" aria-pressed={light.mine} onClick={() => onMine(light, !light.mine)} title={light.mine ? "Yours: My lights includes it" : "Mark as yours"}>{light.mine ? "★" : "☆"} Mine</Button>
+      <Button size="sm" variant={draft.on ? "primary" : "secondary"} aria-pressed={draft.on} disabled={off} onClick={() => set({ on: !draft.on })}>{draft.on ? "On" : "Off"}</Button>
+    </ActionBar>
+    {light.unreachable && <Notice tone="warning">Not answering: {light.unreachable}</Notice>}
     {light.can.dim && <label className="light-slider">
       <span>Brightness <em>{draft.brightness ?? 100}%</em></span>
       <input type="range" min={1} max={100} value={draft.brightness ?? 100} disabled={off} {...hold} onChange={(e) => set({ brightness: Number(e.target.value) })}/>
     </label>}
-    {light.can.color && white && <div className="session-tabs light-modes" role="tablist" aria-label={`${light.name} mode`}>
-      <button type="button" role="tab" aria-selected={mode === "white"} className={`session-tab ${mode === "white" ? "active" : ""}`} disabled={off} onClick={() => { setMode("white"); set({ kelvin }); }}>White</button>
-      <button type="button" role="tab" aria-selected={mode === "colour"} className={`session-tab ${mode === "colour" ? "active" : ""}`} disabled={off} onClick={() => { setMode("colour"); set({ hue, saturation }); }}>Colour</button>
-    </div>}
+    {/* The kit's tabs cannot be switched off, so a light that is not answering ignores them. */}
+    {light.can.color && white && <Tabs<"white" | "colour"> label={`${light.name} mode`} value={mode}
+      items={[{ value: "white", label: "White" }, { value: "colour", label: "Colour" }]}
+      onChange={(next) => {
+        if (off) return;
+        setMode(next);
+        set(next === "white" ? { kelvin } : { hue, saturation });
+      }}/>}
     {white && (mode === "white" || !light.can.color) && <label className="light-slider">
       <span>Warmth <em>{kelvin}K</em></span>
       <input type="range" className="light-white" min={white[0]} max={white[1]} step={100} value={kelvin} disabled={off} {...hold}
@@ -257,7 +256,7 @@ function LightCard({ light, onChanged, onNotice, onMine }: {
         <input type="range" min={0} max={100} value={saturation} disabled={off} {...hold} style={{ background: `linear-gradient(90deg, hsl(${hue} 0% 70%), hsl(${hue} 100% 50%))` }} onChange={(e) => set({ hue, saturation: Number(e.target.value) })}/>
       </label>
     </>}
-  </article>;
+  </EntityCard>;
 }
 
 // The lights get a frame at most this often, and at once on a beat; a beat rises over BEAT_FADE_MS.
@@ -384,15 +383,14 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
   };
 
   const chosen = MODES.find((entry) => entry.mode === mode) ?? MODES[0];
-  return <section className="music-sync" aria-label="Music sync">
+  return <><section className="music-sync" aria-label="Music sync">
     <div className="music-sync-text">
       <b>Music sync</b>
       <small>Listens through this device's microphone. The sound stays in your browser; only colours go to your lights. Follows {scope === "mine" ? "your" : "all"} {colourful.length} colour light{colourful.length === 1 ? "" : "s"}, and puts them back when you stop.</small>
     </div>
     <div className="music-sync-mode">
-      <div className="session-tabs" role="tablist" aria-label="How the lights follow the music">
-        {MODES.map((entry) => <button key={entry.mode} type="button" role="tab" aria-selected={mode === entry.mode} className={`session-tab ${mode === entry.mode ? "active" : ""}`} onClick={() => setMode(entry.mode)}>{entry.name}</button>)}
-      </div>
+      <Tabs<Mode> label="How the lights follow the music" value={mode} onChange={setMode}
+        items={MODES.map((entry) => ({ value: entry.mode, label: entry.name }))}/>
       <small>{chosen.does}</small>
     </div>
     <label className="light-slider music-strength">
@@ -404,7 +402,10 @@ function MusicSync({ lights, scope, onStopped }: { lights: Light[]; scope: Scope
       <span key={beats} className={`music-beat ${running && beats ? "on" : ""}`} title="Lights up on each beat it hears"/>
       <span className="music-meter" aria-hidden="true"><span style={{ width: `${level}%` }}/></span>
     </span>
-    <button type="button" className={`light-power ${running ? "" : "music-start"}`} aria-pressed={running} disabled={phase === "starting" || phase === "stopping"} onClick={() => (running ? void stop() : void start())}>{phase === "starting" ? "Starting…" : running ? "Stop" : "Start"}</button>
-    {note && <p className="lights-notice music-note" role="status">{note}</p>}
-  </section>;
+    <Button variant={running ? "secondary" : "primary"} aria-pressed={running}
+      busy={phase === "starting" || phase === "stopping"} busyLabel={phase === "starting" ? "Starting…" : "Stopping…"}
+      onClick={() => (running ? void stop() : void start())}>{running ? "Stop" : "Start"}</Button>
+  </section>
+  {note && <Notice tone="error" onDismiss={() => setNote("")}>{note}</Notice>}
+  </>;
 }

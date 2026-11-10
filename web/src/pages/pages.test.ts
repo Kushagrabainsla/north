@@ -1,9 +1,9 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ApprovalCard, DecisionRow, memoryLabel, memoryLink } from "./Approvals";
+import { ApprovalCard, CardFieldRow, DecisionRow, memoryLabel, memoryLink, orderOwnOptions } from "./Approvals";
 import { ApprovalCard as InlineApprovalCard } from "./Chat";
-import type { Approval } from "../types";
+import type { Approval, CardField } from "../types";
 
 describe("links from a decision to the memory it used", () => {
   const params = (link: string) => new URLSearchParams(link.split("?")[1]);
@@ -50,8 +50,51 @@ describe("answering a question on the approvals page", () => {
 
   it("keeps the offered options as buttons beside it", () => {
     const html = markup(["Q2", "Q3"]);
-    expect(html).toContain(">Q2</button>");
+    expect(html).toContain("<span>Q2</span></button>");
     expect(html).toContain('placeholder="Type your answer"');
+  });
+});
+
+describe("the approvals page's card, in the kit's order", () => {
+  const approval = (options: string[], rejecting: string[] = []) =>
+    ({ id: "a1", type: "approval", task_id: "t1", agent: "git", title: "Git Operation - Approval Required",
+       message: "Run git?", options, rejecting, status: "pending", chosen_option: "", created_at: "", fields: [],
+       context: "", response: {}, blocking: true, source: "" }) as unknown as Approval;
+  const page = (card: Approval) => renderToStaticMarkup(createElement(ApprovalCard, { card, onDecide: () => undefined }));
+
+  it("puts Reject first and Approve last, as the one main action, at the end like the chat's card", () => {
+    // It was Approve first, at the start, with a red Reject: the reverse of the chat.
+    const html = page(approval(["Approve", "Reject"]));
+    expect(html).toContain("kit-action-bar-end");
+    expect(html.indexOf("<span>Reject</span>")).toBeGreaterThan(-1);
+    expect(html.indexOf("<span>Reject</span>")).toBeLessThan(html.indexOf("<span>Approve</span>"));
+    expect(html).toContain('kit-button-primary kit-button-md"><span>Approve</span>');
+    expect(html).not.toContain("kit-button-danger");
+  });
+
+  it("orders a card's own options the same way: the rejecting one first, the main one last", () => {
+    expect(orderOwnOptions(["Resume", "Discard"], ["Discard"])).toEqual([
+      { option: "Discard", rejects: true, primary: false },
+      { option: "Resume", rejects: false, primary: true },
+    ]);
+    const html = page(approval(["Resume", "Discard"], ["Discard"]));
+    expect(html.indexOf("<span>Discard</span>")).toBeLessThan(html.indexOf("<span>Resume</span>"));
+    expect(html).toContain('kit-button-primary kit-button-md"><span>Resume</span>');
+  });
+
+  it("offers a question's suggested answers as buttons, outside a label", () => {
+    // In a <label>, a click on the question picked the first option.
+    const html = renderToStaticMarkup(createElement(CardFieldRow, {
+      field: { name: "q", label: "Which folder?", type: "text", value: "", editable: true, options: ["~/Reading", "~/Notes"] } as unknown as CardField,
+      value: "~/Notes",
+      asking: true,
+      onChange: () => undefined,
+    }));
+    expect(html).not.toContain("<label");
+    expect(html).toContain("Which folder?");
+    expect(html).toContain('class="kit-button kit-button-secondary kit-button-sm" aria-pressed="true"><span>~/Notes</span>');
+    expect(html).toContain('aria-pressed="false"');
+    expect(html).toContain('placeholder="Your answer"');
   });
 });
 
@@ -110,10 +153,30 @@ describe("what an approval card shows", () => {
     }
   });
 
+  it("offers Reject, then Approve as the primary action, in the chat", () => {
+    const inline = renderToStaticMarkup(
+      createElement(InlineApprovalCard, { card: card("pending"), respond: async () => undefined }),
+    );
+    expect(inline).toMatch(/<div class="kit-action-bar kit-action-bar-end">.*kit-button-secondary[^>]*><span>Reject<\/span>.*kit-button-primary[^>]*><span>Approve<\/span>/);
+  });
+
   it("shows what a resolved card decided", () => {
     const html = renderToStaticMarkup(
       createElement(DecisionRow, { card: card("approved", "safe_list"), onOverrule: async () => undefined }),
     );
     expect(html).toContain("git checkout -- draft.txt");
+  });
+
+  it("shows a resolved card as a row with its decision as a status, and offers to overrule north", () => {
+    const html = renderToStaticMarkup(
+      createElement(DecisionRow, { card: card("rejected", "safe_list"), onOverrule: async () => undefined }),
+    );
+    expect(html).toContain('class="kit-row"');
+    expect(html).toContain('kit-status kit-tone-bad">rejected</span>');
+    expect(html).toContain("<span>Overrule</span>");
+    const yours = renderToStaticMarkup(
+      createElement(DecisionRow, { card: card("approved", "you"), onOverrule: async () => undefined }),
+    );
+    expect(yours).not.toContain("Overrule");
   });
 });

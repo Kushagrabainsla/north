@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sceneLabel } from "./pages/Lights";
 import { addDeviceRequest, brandOf, deviceRequest, failures, foundRequest, inScope, kelvinToRgb, latestWins, scanSummary, swatch, type Light } from "./lights";
 
 const light = (over: Partial<Light>): Light => ({
@@ -134,5 +135,12 @@ describe("lights that did not change", () => {
     expect(said).toBe(`Desk lamp, Bed lamp: ${away} · Strip: HTTP 503`);
     expect(said).not.toContain("78:20");
     expect(failures([], (id) => id)).toBe("");
+  });
+});
+
+describe("a scene button", () => {
+  it("reads as a word, capitalised once", () => {
+    expect(sceneLabel("movie night")).toBe("Movie night");
+    expect(sceneLabel("")).toBe("");
   });
 });

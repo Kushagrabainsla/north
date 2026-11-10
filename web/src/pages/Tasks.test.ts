@@ -2,10 +2,26 @@
 // the runs it came from. The ledger is a flat stream ordered newest-first, and
 // every field the task list shows has to be recovered from it.
 
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
 import { turnStatus } from "./Chat";
-import { summarise, taskStatus } from "./Tasks";
-import type { LedgerEntry } from "../types";
+import { runFacts, summarise, taskStatus, Tasks } from "./Tasks";
+import { ArtifactGrid } from "./Artifacts";
+import type { AgentRun, Artifact, LedgerEntry } from "../types";
+
+// What each endpoint returns in the render tests; a path left out is still loading.
+const served = vi.hoisted(() => ({ data: {} as Record<string, unknown> }));
+vi.mock("../hooks", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../hooks")>(),
+  useResource: (path: string) => ({ data: served.data[path] ?? null, loading: !(path in served.data), error: "", reload: async () => {} }),
+}));
+
+const page = (url: string) => renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [url] },
+  createElement(Routes, null,
+    createElement(Route, { path: "/tasks", element: createElement(Tasks) }),
+    createElement(Route, { path: "/tasks/:taskId", element: createElement(Tasks) }))));
 
 let counter = 0;
 const entry = (over: Partial<LedgerEntry>): LedgerEntry => ({
@@ -105,5 +121,63 @@ describe("a task whose work was blocked", () => {
 
     expect(taskStatus(rows)).toBe("blocked");
     expect(turnStatus("completed", false, "blocked")).toBe("blocked");
+  });
+});
+
+describe("the task list", () => {
+  it("keeps its header while the ledger loads", () => {
+    served.data = {};
+    const html = page("/tasks");
+    expect(html).toContain("<h1>Tasks</h1>");
+    expect(html).toContain("+ New task");
+    expect(html).toContain("kit-loading");
+  });
+
+  it("lists each task as a row that opens it, under the kit's tabs and search", () => {
+    served.data = { "/orchestrator/ledger?limit=500": [
+      { id: "e1", timestamp: "2026-11-02T10:00:00Z", source: "prompt", task_id: "t1", action: "task_received", input: "Book the flight" },
+    ] };
+    const html = page("/tasks");
+    expect(html).toContain('role="tablist" aria-label="Task views"');
+    expect(html).toContain('aria-selected="true" class="kit-tab kit-tab-active">All work');
+    expect(html).toContain('aria-label="Filter tasks"');
+    expect(html).toMatch(/<a class="kit-table-open" href="\/tasks\/t1"[^>]*>.*Book the flight/);
+  });
+
+  it("says why the list is empty", () => {
+    served.data = { "/orchestrator/ledger?limit=500": [] };
+    expect(page("/tasks")).toContain("No task history yet.");
+  });
+});
+
+describe("one task's page", () => {
+  it("keeps its header and the way back while the task loads", () => {
+    served.data = {};
+    const html = page("/tasks/t1");
+    expect(html).toContain("<h1>t1</h1>");
+    expect(html).toMatch(/<a [^>]*class="kit-button kit-button-secondary kit-button-md[^"]*" href="\/tasks"[^>]*><span>← All tasks<\/span><\/a>/);
+    expect(html).toContain("kit-loading");
+  });
+});
+
+describe("an agent run's facts", () => {
+  const run = (over: Partial<AgentRun>) => ({
+    run_id: "r1", agent: "general", status: "completed", attempt: 1, models_used: [], tokens_in: 10, tokens_out: 5,
+    cost_usd: 0, skills: [], ...over,
+  }) as AgentRun;
+
+  it("joins what is known and leaves out what is not", () => {
+    expect(runFacts(run({}))).toBe("no model recorded · 15 tokens");
+    expect(runFacts(run({ models_used: ["gpt-5"], providers_used: ["codex"], duration_ms: 1500, cost_usd: 0.01 })))
+      .toBe("gpt-5 · codex · 1.5s · 15 tokens · $0.0100");
+  });
+});
+
+describe("what a task produced", () => {
+  it("shows each file as the same card the Artifacts page opens", () => {
+    const file = { id: "a1", name: "plan.md", kind: "notes", task: "t1", media_type: "text/markdown", updated_at: 0 } as Artifact;
+    const html = renderToStaticMarkup(createElement(ArtifactGrid, { files: [file] }));
+    expect(html).toContain('class="kit-card-grid"');
+    expect(html).toMatch(/<button type="button" class="kit-card-head"><span class="kit-card-icon">✎<\/span><b>plan.md<\/b><small>notes<\/small><\/button>/);
   });
 });

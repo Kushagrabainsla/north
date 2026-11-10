@@ -1,9 +1,21 @@
 import { useState } from "react";
 import { api, del, post } from "../api";
-import { Empty, ErrorNotice, Loading, PageHeader, Status, Modal } from "../components";
+import { Modal, PageHeader } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { ContentTextarea, ToolDetail, ToolSummary } from "./capabilities";
+import { Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, Status } from "../kit";
+import {
+  CapabilityName,
+  capabilityColumns,
+  ContentTextarea,
+  failure,
+  sourceLabel,
+  type PageMessage,
+  type ToolDetail,
+  type ToolSummary,
+} from "./capabilities";
+
+const TOOL_COLUMNS = capabilityColumns("Tool", "Operation");
 
 export function Tools() {
   const dialog = useDialog();
@@ -14,7 +26,7 @@ export function Tools() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<PageMessage | null>(null);
   const selectedTool = tools.data?.find((tool) => tool.name === selected);
   const closeEditor = () => {
     setSelected(null);
@@ -24,7 +36,7 @@ export function Tools() {
     setSelected(null);
     setName("");
     setDescription("");
-    setMessage("");
+    setMessage(null);
     setCreating(true);
   };
   const open = async (toolName: string) => {
@@ -32,7 +44,7 @@ export function Tools() {
     setCreating(false);
     setDetailLoading(true);
     setContent("");
-    setMessage("");
+    setMessage(null);
     try {
       const detail = await api<ToolDetail>(
         `/web/api/tools/${encodeURIComponent(toolName)}`,
@@ -40,7 +52,7 @@ export function Tools() {
       setContent(detail.content);
     } catch (error) {
       setSelected(null);
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     } finally {
       setDetailLoading(false);
     }
@@ -56,11 +68,12 @@ export function Tools() {
       setDescription("");
       await tools.reload();
       await open(created.name);
-      setMessage(
-        "Tool candidate created. Implement and test it before activation.",
-      );
+      setMessage({
+        tone: "success",
+        text: "Tool candidate created. Implement and test it before activation.",
+      });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const save = async () => {
@@ -70,32 +83,30 @@ export function Tools() {
         method: "PUT",
         body: JSON.stringify({ content }),
       });
-      setMessage(
-        "Tool saved as a candidate. Validate and test it before activation.",
-      );
+      setMessage({
+        tone: "success",
+        text: "Tool saved as a candidate. Validate and test it before activation.",
+      });
       await tools.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const remove = async () => {
     if (
       !selected ||
       selectedTool?.source !== "learned" ||
-      !(await dialog.confirm(
-        `Delete learned tool '${selected}'? This cannot be undone.`,
-        { title: "Delete tool?", confirmLabel: "Delete tool", danger: true },
-      ))
+      !(await confirmDelete(dialog, { noun: "tool", name: selected }))
     )
       return;
     try {
       await del(`/web/api/tools/${encodeURIComponent(selected)}`);
       setSelected(null);
       setContent("");
-      setMessage("Learned tool deleted.");
+      setMessage({ tone: "success", text: "Learned tool deleted." });
       await tools.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   return (
@@ -105,120 +116,84 @@ export function Tools() {
         title="Tools"
         subtitle="Inspect the atomic operations North's skills can call, and manage your learned tools."
         actions={
-          <button className="primary-button" onClick={startCreating}>
+          <Button variant="primary" onClick={startCreating}>
             + New tool
-          </button>
+          </Button>
         }
       />
-      {tools.error && <ErrorNotice message={tools.error} />}{" "}
-      {message && <div className="notice">{message}</div>}
+      {tools.data && tools.error && <Notice tone="error">{tools.error}</Notice>}
+      {message && <Notice tone={message.tone}>{message.text}</Notice>}
       {creating && (
-        <section className="capability-create-panel">
-          <header>
-            <div>
-              <span>New capability</span>
-              <h2>Create tool</h2>
-              <p>Tools are atomic Python operations called by skills.</p>
-            </div>
-            <button className="ghost-button" onClick={() => setCreating(false)}>
-              Cancel
-            </button>
-          </header>
-          <div className="tool-create">
-            <div className="tool-create-grid">
-              <label>
-                Name
-                <input
-                  autoFocus
-                  value={name}
-                  placeholder="search_jobs"
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </label>
-              <label>
-                Description
-                <input
-                  value={description}
-                  placeholder="What should this operation do?"
-                  onChange={(event) => setDescription(event.target.value)}
-                />
-              </label>
-            </div>
-            <div className="tool-create-footer">
-              <small>
-                North creates a non-runnable candidate stub. Activation requires
-                a successful test.
-              </small>
-              <button
-                className="primary-button"
-                disabled={!name.trim() || !description.trim()}
-                onClick={() => void create()}
-              >
-                Create tool
-              </button>
-            </div>
-          </div>
-        </section>
+        <EntityForm
+          title="Create tool"
+          label="New capability"
+          description="Tools are atomic Python operations called by skills."
+          submitLabel="Create tool"
+          canSubmit={Boolean(name.trim() && description.trim())}
+          onSubmit={create}
+          onCancel={() => setCreating(false)}
+          hint="North creates a non-runnable candidate stub. Activation requires a successful test."
+        >
+          <Field label="Name">
+            <input
+              autoFocus
+              value={name}
+              placeholder="search_jobs"
+              onChange={(event) => setName(event.target.value)}
+            />
+          </Field>
+          <Field label="Description">
+            <input
+              value={description}
+              placeholder="What should this operation do?"
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </Field>
+        </EntityForm>
       )}
-      <section className="capability-registry">
-        <div className="capability-registry-head">
-          <span>Tool</span>
-          <span>Description</span>
-          <span>Operation</span>
-          <span>Status</span>
-          <span />
-        </div>
-        <div className="capability-registry-list">
-          {tools.loading ? (
-            <Loading />
-          ) : (
-            (tools.data || []).map((tool) => (
-              <button
-                className="capability-registry-row"
-                key={tool.name}
-                aria-haspopup="dialog"
-                onClick={() => void open(tool.name)}
-              >
-                <span className="capability-registry-name">
-                  <b>{tool.name}</b>
-                  <small>{tool.source}</small>
-                </span>
-                <span className="capability-registry-description">
-                  {tool.description}
-                </span>
-                <span className="capability-registry-meta">
-                  {tool.mutating ? "Mutating" : "Read-only"}
-                </span>
+      <ResourceView resource={tools}>
+        {(rows) => (
+          <EntityTable
+            label="Tools"
+            columns={TOOL_COLUMNS}
+            rows={rows}
+            rowKey={(tool) => tool.name}
+            onOpen={(tool) => void open(tool.name)}
+            empty="No tools are registered yet."
+            cell={(tool, key) =>
+              key === "name" ? (
+                <CapabilityName name={tool.name} source={tool.source} />
+              ) : key === "description" ? (
+                tool.description
+              ) : key === "fact" ? (
+                tool.mutating ? "Makes changes" : "Read-only"
+              ) : (
                 <Status value={tool.status} />
-                <span className="capability-registry-open">Open</span>
-              </button>
-            ))
-          )}
-          {!tools.loading && !tools.data?.length && (
-            <Empty>No tools are registered yet.</Empty>
-          )}
-        </div>
-      </section>
+              )
+            }
+          />
+        )}
+      </ResourceView>
       <Modal
         open={Boolean(selected)}
         onClose={closeEditor}
         title={selected || "Tool"}
-        eyebrow={selectedTool?.source || "Capability"}
+        eyebrow={selectedTool ? sourceLabel(selectedTool.source) : "Capability"}
         actions={
           selected ? (
             <>
-              <button
-                className="primary-button"
+              {selectedTool?.source === "learned" && (
+                <Button variant="danger" onClick={() => void remove()}>
+                  Delete
+                </Button>
+              )}
+              <Button
+                variant="primary"
                 disabled={detailLoading}
                 onClick={() => void save()}
               >
                 Save tool
-              </button>
-              {selectedTool?.source === "learned" && (
-                <button className="danger-button" onClick={() => void remove()}>
-                  Delete tool
-                </button>
-              )}
+              </Button>
             </>
           ) : undefined
         }
@@ -250,4 +225,3 @@ export function Tools() {
     </div>
   );
 }
-

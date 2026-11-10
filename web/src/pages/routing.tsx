@@ -1,7 +1,6 @@
 import { useMemo } from "react";
-import { api } from "../api";
-import { Empty, ErrorNotice, Loading } from "../components";
 import { useResource } from "../hooks";
+import { EntityTable, ListRow, ResourceView, Status } from "../kit";
 import type { RoutingDecision, RoutingSkip } from "../types";
 
 // One provider's part in a routing walk: what north called and what came back,
@@ -58,9 +57,27 @@ export function rollUp(skips: RoutingSkip[]): ProviderRoll[] {
     .sort((a, b) => b.total - a.total);
 }
 
+/** One line of the walk's table: a provider, how many endpoints, and what came back. */
+export interface EndpointLine { key: string; provider: string; outcome: string; reason: string; detail: string }
+
+/** The roll-ups as table lines, each provider's calls before what it skipped. */
+export function endpointLines(rolls: ProviderRoll[]): EndpointLine[] {
+  return rolls.flatMap((roll) => [
+    ...roll.tried.map((row) => ({ key: `${roll.provider}:t:${row.label}`, provider: roll.provider, outcome: `${row.count} called`, reason: row.label, detail: row.detail })),
+    ...roll.skipped.map((row) => ({ key: `${roll.provider}:s:${row.label}`, provider: roll.provider, outcome: `${row.count} skipped`, reason: row.label, detail: "" })),
+  ]);
+}
+
+const COLUMNS = [
+  { key: "provider", label: "Provider", width: "minmax(110px, 150px)" },
+  { key: "outcome", label: "Endpoints", width: "90px" },
+  { key: "reason", label: "Why" },
+  { key: "detail", label: "What came back" },
+];
+
 export function DecisionCard({ decision }: { decision: RoutingDecision }) {
-  const rolls = useMemo(
-    () => rollUp(decision.skipped || []),
+  const lines = useMemo(
+    () => endpointLines(rollUp(decision.skipped || [])),
     [decision.skipped],
   );
   // The stored skip list is capped, so the honest total comes from the row's own
@@ -68,50 +85,26 @@ export function DecisionCard({ decision }: { decision: RoutingDecision }) {
   const shown = (decision.skipped || []).length;
   const hidden = Math.max(0, decision.endpoints - shown);
   return (
-    <div className="routing-card">
-      <header>
-        <b>{decision.part}</b>
-        {decision.chosen_model ? (
-          <span>
-            answered by {decision.chosen_model} · {decision.chosen_provider}
-          </span>
-        ) : (
-          <span className="routing-exhausted">no model answered</span>
-        )}
-        <small>
-          {decision.considered} models · {decision.endpoints} endpoints ·{" "}
-          {decision.attempted} called
-        </small>
-      </header>
-      {rolls.map((roll) => (
-        <div className="routing-provider" key={roll.provider}>
-          <b>{roll.provider}</b>
-          <div>
-            {roll.tried.map((row) => (
-              <div className="routing-line" key={`t${row.label}`}>
-                <span className="routing-count">{row.count} called</span>
-                <span title={row.label}>{row.label}</span>
-                {row.detail && <em title={row.detail}>{row.detail}</em>}
-              </div>
-            ))}
-            {roll.skipped.map((row) => (
-              <div
-                className="routing-line routing-untried"
-                key={`s${row.label}`}
-              >
-                <span className="routing-count">{row.count} skipped</span>
-                <span title={row.label}>{row.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-      {hidden > 0 && (
-        <small className="routing-more">
-          …and {hidden} more endpoints not listed
-        </small>
-      )}
-    </div>
+    <ListRow
+      title={decision.part}
+      description={decision.chosen_model ? `answered by ${decision.chosen_model} · ${decision.chosen_provider}` : undefined}
+      status={decision.chosen_model ? <Status value="answered" /> : <Status label="no model answered" tone="bad" />}
+      meta={[
+        `${decision.considered} models · ${decision.endpoints} endpoints · ${decision.attempted} called`,
+        hidden > 0 && `…and ${hidden} more endpoints not listed`,
+      ]}
+    >
+      {lines.length > 0 && <EntityTable
+        label={`Endpoints for ${decision.part}`}
+        columns={COLUMNS}
+        rows={lines}
+        rowKey={(line) => line.key}
+        cell={(line, key) => {
+          const text = line[key as keyof EndpointLine];
+          return <span title={text}>{text}</span>;
+        }}
+      />}
+    </ListRow>
   );
 }
 
@@ -119,16 +112,11 @@ export function RoutingAttempts({ taskId }: { taskId: string }) {
   const resource = useResource<RoutingDecision[]>(
     `/web/api/routing/decisions?task_id=${encodeURIComponent(taskId)}`,
   );
-  if (resource.loading) return <Loading />;
-  if (resource.error) return <ErrorNotice message={resource.error} />;
-  const decisions = resource.data || [];
-  if (!decisions.length) return <Empty>No routing record for this task.</Empty>;
   return (
-    <div className="routing-detail">
-      {decisions.map((d) => (
+    <ResourceView resource={resource} isEmpty={(decisions) => !decisions.length} empty="No routing record for this task.">
+      {(decisions) => <div>{decisions.map((d) => (
         <DecisionCard decision={d} key={d.id} />
-      ))}
-    </div>
+      ))}</div>}
+    </ResourceView>
   );
 }
-

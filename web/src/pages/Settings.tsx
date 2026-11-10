@@ -2,10 +2,9 @@ import { useState } from "react";
 import { post } from "../api";
 import { BrowserProfiles } from "../browserProfiles";
 import { CodingAgents, ProviderConnections, Secrets, TelegramConnection } from "../connections";
-import { configureDisplayTimezone, Empty, ErrorNotice, Loading, PageHeader, Panel, YoloBadge } from "../components";
+import { configureDisplayTimezone, PageHeader, Panel, YoloBadge } from "../components";
 import { useResource } from "../hooks";
-import { Link } from "react-router-dom";
-import type { Approval } from "../types";
+import { Button, Empty, Field, Loading, Notice, SectionHeader, Tabs } from "../kit";
 
 export interface ChainModel {
   model: string;
@@ -45,6 +44,8 @@ export interface ProviderModels {
   models: string[];
 }
 
+export const POWER_LEVELS = ["eco", "cruise", "sport"];
+
 // Which model answers, when the user is choosing it rather than north. Provider
 // first, then that provider's models: a flat list of several hundred ids is not
 // a choice anyone can make, and the provider is the half people know.
@@ -73,11 +74,7 @@ export function ModelPicker({
 
   if (catalog.loading) return <Loading />;
   if (catalog.error)
-    return (
-      <ErrorNotice
-        message={`Could not read the model catalog: ${catalog.error}`}
-      />
-    );
+    return <Notice tone="error">Could not read the model catalog: {catalog.error}</Notice>;
   if (!providers.length)
     return (
       <Empty>
@@ -86,8 +83,7 @@ export function ModelPicker({
     );
   return (
     <div className="model-picker">
-      <label>
-        Provider
+      <Field label="Provider">
         <select
           value={provider}
           disabled={busy}
@@ -103,9 +99,8 @@ export function ModelPicker({
             </option>
           ))}
         </select>
-      </label>
-      <label>
-        Model
+      </Field>
+      <Field label="Model">
         <select
           value={chosenModel}
           disabled={busy || !models.length}
@@ -120,7 +115,7 @@ export function ModelPicker({
             </option>
           ))}
         </select>
-      </label>
+      </Field>
     </div>
   );
 }
@@ -130,6 +125,8 @@ export function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const update = async (body: Partial<SettingsData>) => {
+    // A dial is one choice at a time: a second press while the first saves is dropped.
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
@@ -153,38 +150,31 @@ export function SettingsPage() {
   // So choosing "manual" with nothing stored opens the picker and waits: the
   // switch is made by picking a model, which is the decision anyway.
   const [choosing, setChoosing] = useState(false);
-  const pickManual = () =>
-    resource.data?.model ? update({ routing: "manual" }) : setChoosing(true);
+  const pickRouting = (value: "auto" | "manual") => {
+    if (busy) return;
+    if (value === "auto") {
+      setChoosing(false);
+      void update({ routing: "auto" });
+    } else if (resource.data?.model) void update({ routing: "manual" });
+    else setChoosing(true);
+  };
   return (
     <div className="page">
       <PageHeader
         eyebrow="Configuration"
         title="Settings"
         subtitle="Control how North balances capability, cost, autonomy, and readability."
-        actions={<Link className="ghost-button" to="/setup">Setup guide</Link>}
+        actions={<Button to="/setup">Setup guide</Button>}
       />
-      {error && <ErrorNotice message={error} />}
+      {error && <Notice tone="error">{error}</Notice>}
       <div className="settings-grid">
         <Panel title="Model routing" label="Who picks">
-          <div className="segmented">
-            <button
-              className={!manual && !choosing ? "active" : ""}
-              disabled={busy}
-              onClick={() => {
-                setChoosing(false);
-                update({ routing: "auto" });
-              }}
-            >
-              auto
-            </button>
-            <button
-              className={manual || choosing ? "active" : ""}
-              disabled={busy}
-              onClick={pickManual}
-            >
-              manual
-            </button>
-          </div>
+          <Tabs
+            label="Who picks the model"
+            value={manual || choosing ? "manual" : "auto"}
+            onChange={pickRouting}
+            items={[{ value: "auto", label: "auto" }, { value: "manual", label: "manual" }]}
+          />
           <p className="muted">
             {manual
               ? "One model answers everything. North's ranking is skipped, and a model it cannot reach fails the call rather than falling back."
@@ -198,7 +188,7 @@ export function SettingsPage() {
               busy={busy}
               onPick={(spec) => {
                 setChoosing(false);
-                update({ routing: "manual", model: spec });
+                void update({ routing: "manual", model: spec });
               }}
             />
           )}
@@ -210,18 +200,12 @@ export function SettingsPage() {
           label={manual ? "not in use" : "Model strategy"}
           className={manual ? "panel-inert" : ""}
         >
-          <div className="segmented">
-            {["eco", "cruise", "sport"].map((value) => (
-              <button
-                className={resource.data?.power === value ? "active" : ""}
-                disabled={busy || manual}
-                onClick={() => update({ power: value })}
-                key={value}
-              >
-                {value}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            label="Power"
+            value={resource.data?.power || ""}
+            onChange={(value) => { if (!manual) void update({ power: value }); }}
+            items={POWER_LEVELS.map((value) => ({ value, label: value }))}
+          />
           <p className="muted">
             {manual
               ? "Nothing to order while one model is pinned. Switch routing to auto to use this."
@@ -229,19 +213,12 @@ export function SettingsPage() {
           </p>
         </Panel>
         <Panel title="Autonomy" label="Approval behavior">
-          <div className="segmented">
-            {autonomyOptions.map((option) => (
-              <button
-                className={autonomy === option.value ? "active" : ""}
-                disabled={busy}
-                onClick={() => update({ autonomy: option.value })}
-                title={option.description}
-                key={option.value}
-              >
-                {option.value}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            label="Approval mode"
+            value={autonomy || ""}
+            onChange={(value) => void update({ autonomy: value })}
+            items={autonomyOptions.map((option) => ({ value: option.value, label: option.value }))}
+          />
           <p className="muted">
             {currentMode?.description}
             <YoloBadge mode={autonomy} />
@@ -251,12 +228,11 @@ export function SettingsPage() {
           {resource.loading ? (
             <Loading />
           ) : (
-            <label className="timezone-picker">
-              North uses
+            <Field label="North uses">
               <select
                 value={resource.data?.timezone || "UTC"}
                 disabled={busy}
-                onChange={(event) => update({ timezone: event.target.value })}
+                onChange={(event) => void update({ timezone: event.target.value })}
               >
                 {(
                   resource.data?.timezone_options || [
@@ -268,7 +244,7 @@ export function SettingsPage() {
                   </option>
                 ))}
               </select>
-            </label>
+            </Field>
           )}
           <p className="muted">
             Current North time: {resource.data?.local_time || "–"}. New
@@ -276,8 +252,7 @@ export function SettingsPage() {
           </p>
         </Panel>
       </div>
-      <h2 className="section-title">Connections</h2>
-      <p className="muted memory-note">What North connects to. Setup walks through these same controls.</p>
+      <SectionHeader title="Connections" description="What North connects to. Setup walks through these same controls." />
       <div className="settings-grid">
         <ProviderConnections />
         <CodingAgents />
@@ -288,4 +263,3 @@ export function SettingsPage() {
     </div>
   );
 }
-

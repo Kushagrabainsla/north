@@ -3,7 +3,8 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { fileName, noticeBody, noticePreview, savedFile } from "./notices";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
-import type { AgentRun, Conversation, InferenceCategory, Notice } from "./types";
+import { ActionBar, Button, Empty, Notice, Status } from "./kit";
+import type { AgentRun, Conversation, InferenceCategory, Notice as NoticeEntry } from "./types";
 import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Lightbulb, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
@@ -114,23 +115,17 @@ export function Panel({ title, label, children, to, actions, className = "" }: {
   return <section className={`panel ${className}`}><header><div>{label && <span>{label}</span>}<h2>{title}</h2></div>{actions}{to && <NavLink to={to}>View all <span>→</span></NavLink>}</header><div className="panel-content">{children}</div></section>;
 }
 
-export function Status({ value }: { value?: string }) {
-  const normalized = value || "unknown";
-  return <span className={`status status-${normalized}`}>{normalized.replaceAll("_", " ")}</span>;
-}
+// The kit's own state, empty and loading displays (kit.tsx), under the names pages already import.
+export { Empty, Loading, Status } from "./kit";
 
 // Shown beside the approval mode wherever it appears, while that mode says yes to everything.
 export function YoloBadge({ mode }: { mode?: string }) {
   if (mode !== "yolo") return null;
-  return <span className="status status-yolo" title="Every approval is yes">⚠ yolo</span>;
+  return <span title="Every approval is yes"><Status value="yolo" label="⚠ yolo"/></span>;
 }
 
-export function Empty({ children = "Nothing here yet." }: { children?: ReactNode }) {
-  return <div className="empty">{children}</div>;
-}
-
-export function Loading() { return <div className="loading"><span className="pulse"/>Loading</div>; }
-export function ErrorNotice({ message }: { message: string }) { return <div className="error-notice">{message}</div>; }
+/** A failure, in the kit's error notice. */
+export function ErrorNotice({ message }: { message: string }) { return <Notice tone="error">{message}</Notice>; }
 
 export function PromptTelemetry({ run }: { run: AgentRun }) {
   const profiles = run.prompt_profiles || [];
@@ -159,7 +154,7 @@ export function unpricedNote(count: unknown): string {
 /** What north delivered to you, newest first, each until you dismiss it. */
 // What north delivered: a reminder, or how a scheduled run ended. `compact` is the dashboard's view, one
 // short row each with a link to the rest; without it, each notice reads in full, a long one opened on demand.
-export function NoticeList({ notices, onDismissed, compact = false }: { notices: Notice[]; onDismissed: () => void; compact?: boolean }) {
+export function NoticeList({ notices, onDismissed, compact = false }: { notices: NoticeEntry[]; onDismissed: () => void; compact?: boolean }) {
   const dismiss = async (id: string) => {
     await post(`/web/api/notices/${id}/dismiss`, {});
     onDismissed();
@@ -175,7 +170,7 @@ export function NoticeList({ notices, onDismissed, compact = false }: { notices:
         : <div><b>{notice.title}</b>{body && (body.length > 600
             ? <details className="notice-body"><summary>{preview}</summary><Markdown>{body}</Markdown></details>
             : <div className="notice-body"><Markdown>{body}</Markdown></div>)}{when}</div>}
-      <button className="ghost-button" onClick={() => void dismiss(notice.id)}>Dismiss</button>
+      <Button size="sm" onClick={() => void dismiss(notice.id)}>Dismiss</Button>
     </div>;
   })}</>;
 }
@@ -276,6 +271,7 @@ export function Modal({
   title,
   eyebrow,
   actions,
+  danger,
   className = "",
   onClose,
   children,
@@ -284,6 +280,8 @@ export function Modal({
   title: string;
   eyebrow: string;
   actions?: ReactNode;
+  /** A delete or discard: shown alone at the start of the actions. */
+  danger?: ReactNode;
   className?: string;
   onClose: () => void;
   children: ReactNode;
@@ -316,10 +314,10 @@ export function Modal({
             <h2>{title}</h2>
           </div>
           <div className="capability-modal-actions">
-            <button className="ghost-button" onClick={onClose}>
-              Close
-            </button>
-            {actions}
+            <ActionBar danger={danger}>
+              <Button onClick={onClose}>Close</Button>
+              {actions}
+            </ActionBar>
           </div>
         </header>
         <div className="capability-modal-content">{children}</div>

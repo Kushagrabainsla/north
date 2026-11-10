@@ -121,10 +121,10 @@ def test_a_segmented_control_sizes_itself_to_its_buttons() -> None:
     buttons needs a modifier, and each modifier is another chance to lose the
     race above. Sizing to the children removes the need for any of them.
     """
-    rules = _single_class_rules()
-    assert "segmented" in rules, "the segmented control's rule was renamed - update this test"
-    block = rules["segmented"][0][1]
-    assert "grid-auto-flow" in block, ".segmented must size to its children, not a written-down count"
+    # Every tab set is the kit's Tabs now.
+    kit = (Path(__file__).parents[3] / "web" / "src" / "kit.css").read_text(encoding="utf-8")
+    block = re.search(r"^\.kit-tabs \{([^}]*)\}", kit, re.M).group(1)
+    assert "inline-flex" in block, ".kit-tabs must size to its children, not a written-down count"
     assert not re.search(r"grid-template-columns\s*:\s*repeat\(\s*\d", block), (
         "a hardcoded column count breaks the moment a tab is added"
     )

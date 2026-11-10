@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { BrowserProfiles, newBrowserProfile, profileTestLabel } from "./browserProfiles";
 import { setupNeedsAttention } from "./pages/Setup";
 import { SettingsPage } from "./pages/Settings";
+import { DialogProvider } from "./dialog";
 
 vi.mock("./hooks", async (importOriginal) => ({
   ...await importOriginal<typeof import("./hooks")>(),
@@ -42,16 +43,17 @@ describe("browser setup evidence", () => {
 
 describe("browser profile presentation", () => {
   it("puts preferences first, then connections, in onboarding order", () => {
-    const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SettingsPage)));
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(DialogProvider, null, createElement(SettingsPage))));
     const titles = [...markup.matchAll(/<h2>(.*?)<\/h2>/g)].map(match => match[1]);
-    expect(titles).toEqual(["Model routing", "Power", "Autonomy", "Time zone", "Providers", "Coding agents", "Browser profiles", "Telegram", "Secrets"]);
+    // Panel titles, the Connections section and, inside their panels, the Telegram and Secrets forms.
+    expect(titles).toEqual(["Model routing", "Power", "Autonomy", "Time zone", "Connections", "Providers", "Coding agents", "Browser profiles", "Telegram", "Connect a bot", "Secrets", "Add a secret"]);
   });
 
-  it("uses North's existing secondary button variant and a helpful empty state", () => {
+  it("uses the kit's secondary button and a helpful empty state", () => {
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(BrowserProfiles)));
     const buttons = [...markup.matchAll(/<button\b[^>]*>/g)].map(match => match[0]);
     expect(buttons).toHaveLength(2);
-    expect(buttons.every(button => button.includes('class="ghost-button"'))).toBe(true);
+    expect(buttons.every(button => button.includes("kit-button-secondary"))).toBe(true);
     expect(markup).toContain("No browser profiles yet.");
   });
 });

@@ -214,6 +214,16 @@ Every piece of logic exists in exactly one place. SQLite connection setup with W
 
 **The dashboard speaks plain words.** A label, mode or button names what it does for you in everyday words, not the technique behind it: "Beat" (the lights jump with each beat) rather than "Pulse", "Mood" rather than "Spectrum". A choice says in one short line what picking it will do. **Why:** the dashboard is for the person using north, who should not need to know how a feature works to choose it. **How to apply:** before naming a control, say what it does to someone who has never seen north, and use those words.
 
+**One UI kit: the same kind of thing looks the same everywhere.** Pages build from `web/src/kit.tsx`, styled only by `kit.css` (classes start with `kit-`); a page adds no list, row, button, tab, form, notice or status style of its own. The mapping:
+- A list of things with the same facts (skills, tools, flows, tasks, sessions): `EntityTable`. A short list: `ListRow`. Files, sessions, devices as tiles: `CardGrid` + `EntityCard`.
+- Buttons: `Button`. `primary` is the one main action on a page or form; `danger` removes something; `quiet` is an action inside a row. Several actions sit in an `ActionBar`: danger alone at the start, Cancel, then the primary last.
+- Creating something: "+ New skill" (primary) in the page header. Deleting: a red "Delete" that always asks through `confirmDelete`; taking something away that can be added back (a key, a rule) says "Remove" and asks the same way.
+- Forms: `EntityForm` with `Field`s; Enter submits; Cancel then Save.
+- Views of one list or sections of one thing: `Tabs`. Search: `SearchField`. Both above a list sit in a `Toolbar`.
+- What happened: `Notice` (`error` for failures, never the success colour). A state: `Status` (its colour is set by the word, the same on every page); a tag that is not a state: `Badge`.
+- Loading and empty: `ResourceView`, or `Loading` and `Empty`; a page keeps its header while it loads.
+**Why:** each page built its own: nine kinds of list row, four tab styles, delete buttons that were not red, errors shown in the success colour, and Approve and Reject in a different order on two pages. North's own views are drawn from the same set, so a view can only use what is here. **How to apply:** reach for the kit first; when a page needs something it lacks, add it to the kit for every page, never to the page.
+
 **The README covers north, install and commands only.** Setup steps for a connection (Telegram, browser profiles, providers) live in dashboard onboarding, not the README. Every command row matches the CLI's real behavior and options. **Why:** setup docs in two places drift. **How to apply:** when a command or option changes, check its README row against `--help` and the code.
 
 ### 5.2 Shared Utilities Live in utils/

@@ -23,6 +23,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { ActionBar, Button } from "./kit";
 
 type Kind = "confirm" | "prompt" | "alert";
 
@@ -85,7 +86,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       element.showModal();
       // The input for a prompt, so it can be typed into straight away; otherwise
       // the confirm button, so Enter answers and Escape cancels.
-      (request.kind === "prompt" ? input.current : element.querySelector<HTMLButtonElement>(".dialog-confirm"))?.focus();
+      (request.kind === "prompt" ? input.current : element.querySelector<HTMLButtonElement>(".dialog-confirm-slot button"))?.focus();
     }
     if (!request && element.open) element.close();
   }, [request]);
@@ -109,11 +110,14 @@ export function DialogProvider({ children }: { children: ReactNode }) {
         {request.kind === "prompt" && <input ref={input} value={draft} autoComplete="off"
           onChange={event => setDraft(event.target.value)}/>}
         <div className="dialog-actions">
-          {request.kind !== "alert" && <button type="button" className="ghost-button" onClick={cancel}>Cancel</button>}
-          <button type="submit"
-            className={`dialog-confirm ${request.danger ? "danger-button" : "primary-button"}`}>
-            {request.confirmLabel || (request.kind === "alert" ? "Got it" : "Confirm")}
-          </button>
+          <ActionBar>
+            {request.kind !== "alert" && <Button onClick={cancel}>Cancel</Button>}
+            <span className="dialog-confirm-slot">
+              <Button type="submit" variant={request.danger ? "danger" : "primary"}>
+                {request.confirmLabel || (request.kind === "alert" ? "Got it" : "Confirm")}
+              </Button>
+            </span>
+          </ActionBar>
         </div>
       </form>}
     </dialog>

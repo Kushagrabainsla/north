@@ -3,9 +3,51 @@
 // tells a lie ("no archived sessions" on the active tab with none created
 // yet) or hides a search that just has no results.
 
-import { describe, expect, it } from "vitest";
-import { attachmentText, dictationProblem, ghostText, joinedTurn, optionParts, replyText, sessionsEmptyMessage, turnStatus } from "./Chat";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+import { attachmentText, dictationProblem, ghostText, joinedTurn, optionParts, replyText, Sessions, sessionsEmptyMessage, turnStatus } from "./Chat";
+import { DialogProvider } from "../dialog";
 import type { Turn } from "../types";
+
+// What each endpoint returns in the render tests; a path left out is still loading.
+const served = vi.hoisted(() => ({ data: {} as Record<string, unknown> }));
+vi.mock("../hooks", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../hooks")>(),
+  useResource: (path: string) => ({ data: served.data[path] ?? null, loading: !(path in served.data), error: "", reload: async () => {} }),
+}));
+
+const sessionsPage = () => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(DialogProvider, null, createElement(Sessions))));
+
+describe("the sessions list", () => {
+  const session = { id: "c1", title: "Trip planning", goal: "", goal_status: "active", source: "web", workspace: "", pinned: true,
+    archived: false, turn_count: 3, updated_at: "" };
+
+  it("keeps its header while the list loads", () => {
+    served.data = {};
+    const html = sessionsPage();
+    expect(html).toContain("<h1>Sessions</h1>");
+    expect(html).toContain('class="kit-button kit-button-primary kit-button-md"><span>+ New session</span>');
+    expect(html).toContain("kit-loading");
+  });
+
+  it("opens a session from its row, with pin, archive and a red delete beside it", () => {
+    served.data = { "/web/api/conversations?archived=false": [session] };
+    const html = sessionsPage();
+    expect(html).toMatch(/<a class="kit-table-open" href="\/sessions\/c1"[^>]*>.*Trip planning/);
+    expect(html).toContain('aria-label="Unpin session"');
+    expect(html).toContain('aria-label="Archive session"');
+    expect(html).toMatch(/class="kit-button kit-button-danger kit-button-sm"[^>]*aria-label="Delete session"/);
+    expect(html).toContain('aria-label="Search sessions"');
+    expect(html).toContain("1 session<");
+  });
+
+  it("says why the list is empty", () => {
+    served.data = { "/web/api/conversations?archived=false": [] };
+    expect(sessionsPage()).toContain("No sessions have been created yet.");
+  });
+});
 
 describe("what can be attached to a message", () => {
   const bytes = (values: number[]) => new Uint8Array(values).buffer;

@@ -1,9 +1,21 @@
 import { useState } from "react";
 import { api, del, post } from "../api";
-import { Empty, ErrorNotice, Loading, MarkdownPane, Modal, PageHeader, Status } from "../components";
+import { MarkdownPane, Modal, PageHeader } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { ContentTextarea, SkillDetail, SkillSummary, ToolSummary } from "./capabilities";
+import { ActionBar, Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, Status } from "../kit";
+import {
+  CapabilityName,
+  capabilityColumns,
+  ContentTextarea,
+  failure,
+  skillRunsAs,
+  sourceLabel,
+  type PageMessage,
+  type SkillDetail,
+  type SkillSummary,
+  type ToolSummary,
+} from "./capabilities";
 
 export interface SkillCreateDraft {
   name: string;
@@ -44,6 +56,8 @@ export const fieldSchema = (value: string) => {
   };
 };
 
+const SKILL_COLUMNS = capabilityColumns("Skill", "Runs as");
+
 export function Skills() {
   const dialog = useDialog();
   const skills = useResource<SkillSummary[]>("/web/api/skills", 10000);
@@ -53,7 +67,7 @@ export function Skills() {
   const [creating, setCreating] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [draft, setDraft] = useState<SkillCreateDraft>(emptySkill());
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<PageMessage | null>(null);
   const closeEditor = () => {
     setSelected(null);
     setDetailLoading(false);
@@ -61,7 +75,7 @@ export function Skills() {
   const startCreating = () => {
     setSelected(null);
     setDraft(emptySkill());
-    setMessage("");
+    setMessage(null);
     setCreating(true);
   };
   const open = async (name: string) => {
@@ -69,7 +83,7 @@ export function Skills() {
     setCreating(false);
     setDetailLoading(true);
     setContent("");
-    setMessage("");
+    setMessage(null);
     try {
       const detail = await api<SkillDetail>(
         `/web/api/skills/${encodeURIComponent(name)}`,
@@ -77,7 +91,7 @@ export function Skills() {
       setContent(detail.content);
     } catch (error) {
       setSelected(null);
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     } finally {
       setDetailLoading(false);
     }
@@ -111,11 +125,12 @@ export function Skills() {
       setDraft(emptySkill());
       await skills.reload();
       await open(created.name);
-      setMessage(
-        "Skill candidate created. Validate its selection before activation.",
-      );
+      setMessage({
+        tone: "success",
+        text: "Skill candidate created. Validate its selection before activation.",
+      });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const save = async () => {
@@ -125,37 +140,41 @@ export function Skills() {
         method: "PUT",
         body: JSON.stringify({ content }),
       });
-      setMessage("Skill saved as a candidate. Validate it before activation.");
+      setMessage({
+        tone: "success",
+        text: "Skill saved as a candidate. Validate it before activation.",
+      });
       await skills.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
   const remove = async () => {
     if (
       !selected ||
       selectedSkill?.source !== "learned" ||
-      !(await dialog.confirm(
-        `Delete learned skill '${selected}'? This cannot be undone.`,
-        { title: "Delete skill?", confirmLabel: "Delete skill", danger: true },
-      ))
+      !(await confirmDelete(dialog, { noun: "skill", name: selected }))
     )
       return;
     try {
       await del(`/web/api/skills/${encodeURIComponent(selected)}`);
       setSelected(null);
       setContent("");
-      setMessage("Learned skill deleted.");
+      setMessage({ tone: "success", text: "Learned skill deleted." });
       await skills.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failure(error));
     }
   };
-  const canCreate =
+  const canCreate = Boolean(
     draft.name.trim() &&
-    draft.description.trim() &&
-    draft.instructions.trim() &&
-    draft.successCriteria.trim();
+      draft.description.trim() &&
+      draft.instructions.trim() &&
+      draft.successCriteria.trim(),
+  );
+  const addableTools = (tools.data || []).filter(
+    (tool) => tool.status === "active" && !draft.tools.includes(tool.name),
+  );
   return (
     <div className="page capability-page">
       <PageHeader
@@ -163,245 +182,196 @@ export function Skills() {
         title="Skills"
         subtitle="Inspect and edit the playbooks North follows."
         actions={
-          <button className="primary-button" onClick={startCreating}>
+          <Button variant="primary" onClick={startCreating}>
             + New skill
-          </button>
+          </Button>
         }
       />
-      {skills.error && <ErrorNotice message={skills.error} />}{" "}
-      {message && <div className="notice">{message}</div>}
+      {skills.data && skills.error && <Notice tone="error">{skills.error}</Notice>}
+      {message && <Notice tone={message.tone}>{message.text}</Notice>}
       {creating && (
-        <section className="capability-create-panel">
-          <header>
-            <div>
-              <span>New procedure</span>
-              <h2>Create skill</h2>
-              <p>
-                Define the procedure and its executable contract once. Flows
-                will depend only on this skill.
-              </p>
-            </div>
-            <button className="ghost-button" onClick={() => setCreating(false)}>
-              Cancel
-            </button>
-          </header>
-          <div className="tool-create skill-create">
-            <div className="skill-create-grid">
-              <label>
-                Name
-                <input
-                  autoFocus
-                  value={draft.name}
-                  placeholder="review-job-match"
-                  onChange={(event) =>
-                    setDraft({ ...draft, name: event.target.value })
-                  }
-                />
-              </label>
-              <label>
-                Domains
-                <input
-                  value={draft.domains}
-                  placeholder="general, research"
-                  onChange={(event) =>
-                    setDraft({ ...draft, domains: event.target.value })
-                  }
-                />
-              </label>
-              <label className="skill-create-wide">
-                Description
-                <input
-                  value={draft.description}
-                  placeholder="Use when North should review a job match."
-                  onChange={(event) =>
-                    setDraft({ ...draft, description: event.target.value })
-                  }
-                />
-              </label>
-              <label>
-                Minimum approval
-                <select
-                  value={draft.approval}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      approval: event.target
-                        .value as SkillCreateDraft["approval"],
-                    })
-                  }
-                >
-                  <option value="never">No mutations</option>
-                  <option value="on_mutation">Ask before each mutation</option>
-                  <option value="before_step">Ask once before the step</option>
-                </select>
-              </label>
-              <label className="skill-create-wide">
-                Allowed tools
-                <select
-                  value=""
-                  onChange={(event) => {
-                    const name = event.target.value;
-                    if (name && !draft.tools.includes(name))
-                      setDraft({ ...draft, tools: [...draft.tools, name] });
-                  }}
-                >
-                  <option value="">Add an atomic tool</option>
-                  {(tools.data || [])
-                    .filter(
-                      (tool) =>
-                        tool.status === "active" &&
-                        !draft.tools.includes(tool.name),
-                    )
-                    .map((tool) => (
-                      <option key={tool.name} value={tool.name}>
-                        {tool.name}
-                        {tool.mutating ? " · mutating" : ""}
-                      </option>
-                    ))}
-                </select>
-                <div className="contract-chips">
-                  {draft.tools.length ? (
-                    draft.tools.map((name) => (
-                      <button
-                        type="button"
-                        key={name}
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            tools: draft.tools.filter((item) => item !== name),
-                          })
-                        }
-                      >
-                        {name} ×
-                      </button>
-                    ))
-                  ) : (
-                    <small>No tools. This skill can reason only.</small>
-                  )}
-                </div>
-              </label>
-              <label>
-                Required input fields
-                <input
-                  value={draft.inputs}
-                  placeholder="resume, job_url"
-                  onChange={(event) =>
-                    setDraft({ ...draft, inputs: event.target.value })
-                  }
-                />
-                <small>Comma-separated names.</small>
-              </label>
-              <label>
-                Required output fields
-                <input
-                  value={draft.outputs}
-                  placeholder="result, evidence"
-                  onChange={(event) =>
-                    setDraft({ ...draft, outputs: event.target.value })
-                  }
-                />
-                <small>Comma-separated names.</small>
-              </label>
-              <label className="skill-create-wide">
-                Success criteria
-                <textarea
-                  rows={3}
-                  value={draft.successCriteria}
-                  placeholder="One verifiable condition per line."
-                  onChange={(event) =>
-                    setDraft({ ...draft, successCriteria: event.target.value })
-                  }
-                />
-              </label>
-              <label className="skill-create-wide">
-                Markdown instructions
-                <textarea
-                  rows={10}
-                  value={draft.instructions}
-                  placeholder="Write the ordered procedure North should follow."
-                  onChange={(event) =>
-                    setDraft({ ...draft, instructions: event.target.value })
-                  }
-                />
-              </label>
-            </div>
-            <div className="tool-create-footer">
-              <small>
-                Use a lowercase, hyphenated name. Descriptions start with “Use
-                when”.
-              </small>
-              <button
-                className="primary-button"
-                disabled={!canCreate}
-                onClick={() => void create()}
-              >
-                Create skill
-              </button>
-            </div>
-          </div>
-        </section>
+        <EntityForm
+          title="Create skill"
+          label="New procedure"
+          description="Define the procedure and its executable contract once. Flows will depend only on this skill."
+          submitLabel="Create skill"
+          canSubmit={canCreate}
+          onSubmit={create}
+          onCancel={() => setCreating(false)}
+          hint="Use a lowercase, hyphenated name. Descriptions start with “Use when”."
+        >
+          <Field label="Name">
+            <input
+              autoFocus
+              value={draft.name}
+              placeholder="review-job-match"
+              onChange={(event) =>
+                setDraft({ ...draft, name: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="Domains">
+            <input
+              value={draft.domains}
+              placeholder="general, research"
+              onChange={(event) =>
+                setDraft({ ...draft, domains: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="Description" wide>
+            <input
+              value={draft.description}
+              placeholder="Use when North should review a job match."
+              onChange={(event) =>
+                setDraft({ ...draft, description: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="Minimum approval">
+            <select
+              value={draft.approval}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  approval: event.target.value as SkillCreateDraft["approval"],
+                })
+              }
+            >
+              <option value="never">No mutations</option>
+              <option value="on_mutation">Ask before each mutation</option>
+              <option value="before_step">Ask once before the step</option>
+            </select>
+          </Field>
+          <Field
+            label="Allowed tools"
+            wide
+            hint={
+              draft.tools.length
+                ? "Click a tool to take it off the list."
+                : "No tools. This skill can reason only."
+            }
+          >
+            <select
+              value=""
+              aria-label="Add a tool"
+              onChange={(event) => {
+                const name = event.target.value;
+                if (name && !draft.tools.includes(name))
+                  setDraft({ ...draft, tools: [...draft.tools, name] });
+              }}
+            >
+              <option value="">Add an atomic tool</option>
+              {addableTools.map((tool) => (
+                <option key={tool.name} value={tool.name}>
+                  {tool.name}
+                  {tool.mutating ? " · makes changes" : ""}
+                </option>
+              ))}
+            </select>
+            {draft.tools.length > 0 && (
+              <ActionBar align="start">
+                {draft.tools.map((name) => (
+                  <Button
+                    key={name}
+                    size="sm"
+                    aria-label={`Remove ${name}`}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        tools: draft.tools.filter((item) => item !== name),
+                      })
+                    }
+                  >
+                    {name} ×
+                  </Button>
+                ))}
+              </ActionBar>
+            )}
+          </Field>
+          <Field label="Required input fields" hint="Comma-separated names.">
+            <input
+              value={draft.inputs}
+              placeholder="resume, job_url"
+              onChange={(event) =>
+                setDraft({ ...draft, inputs: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="Required output fields" hint="Comma-separated names.">
+            <input
+              value={draft.outputs}
+              placeholder="result, evidence"
+              onChange={(event) =>
+                setDraft({ ...draft, outputs: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="Success criteria" wide>
+            <textarea
+              rows={3}
+              value={draft.successCriteria}
+              placeholder="One verifiable condition per line."
+              onChange={(event) =>
+                setDraft({ ...draft, successCriteria: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="Markdown instructions" wide>
+            <textarea
+              rows={10}
+              value={draft.instructions}
+              placeholder="Write the ordered procedure North should follow."
+              onChange={(event) =>
+                setDraft({ ...draft, instructions: event.target.value })
+              }
+            />
+          </Field>
+        </EntityForm>
       )}
-      <section className="capability-registry">
-        <div className="capability-registry-head">
-          <span>Skill</span>
-          <span>Description</span>
-          <span>Definition</span>
-          <span>Status</span>
-          <span />
-        </div>
-        <div className="capability-registry-list">
-          {skills.loading ? (
-            <Loading />
-          ) : (
-            (skills.data || []).map((skill) => (
-              <button
-                className="capability-registry-row"
-                key={skill.name}
-                aria-haspopup="dialog"
-                onClick={() => void open(skill.name)}
-              >
-                <span className="capability-registry-name">
-                  <b>{skill.name}</b>
-                  <small>{skill.source}</small>
-                </span>
-                <span className="capability-registry-description">
-                  {skill.description}
-                </span>
-                <span className="capability-registry-meta">
-                  {skill.execution
-                    ? `${skill.execution.agent} · ${skill.execution.tools.length} tools`
-                    : "advisory only"}
-                </span>
+      <ResourceView resource={skills}>
+        {(rows) => (
+          <EntityTable
+            label="Skills"
+            columns={SKILL_COLUMNS}
+            rows={rows}
+            rowKey={(skill) => skill.name}
+            onOpen={(skill) => void open(skill.name)}
+            empty="No skills have been created yet."
+            cell={(skill, key) =>
+              key === "name" ? (
+                <CapabilityName name={skill.name} source={skill.source} />
+              ) : key === "description" ? (
+                skill.description
+              ) : key === "fact" ? (
+                skillRunsAs(skill.execution)
+              ) : (
                 <Status value={skill.status} />
-                <span className="capability-registry-open">Open</span>
-              </button>
-            ))
-          )}
-          {!skills.loading && !skills.data?.length && (
-            <Empty>No skills have been created yet.</Empty>
-          )}
-        </div>
-      </section>
+              )
+            }
+          />
+        )}
+      </ResourceView>
       <Modal
         open={Boolean(selected)}
         onClose={closeEditor}
         title={selected || "Skill"}
-        eyebrow={selectedSkill?.source || "Procedure"}
+        eyebrow={selectedSkill ? sourceLabel(selectedSkill.source) : "Procedure"}
         actions={
           selected ? (
             <>
-              <button
-                className="primary-button"
+              {selectedSkill?.source === "learned" && (
+                <Button variant="danger" onClick={() => void remove()}>
+                  Delete
+                </Button>
+              )}
+              <Button
+                variant="primary"
                 disabled={detailLoading}
                 onClick={() => void save()}
               >
                 Save skill
-              </button>
-              {selectedSkill?.source === "learned" && (
-                <button className="danger-button" onClick={() => void remove()}>
-                  Delete skill
-                </button>
-              )}
+              </Button>
             </>
           ) : undefined
         }
@@ -434,4 +404,3 @@ export function Skills() {
     </div>
   );
 }
-
