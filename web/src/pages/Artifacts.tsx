@@ -112,7 +112,6 @@ export function Artifacts() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Outputs"
         title="Artifacts"
         subtitle="Every report, briefing, note and plan North has produced, under the flow, session or task that made it."
       />

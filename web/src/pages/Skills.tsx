@@ -178,7 +178,6 @@ export function Skills() {
   return (
     <div className="page capability-page">
       <PageHeader
-        eyebrow="Procedures"
         title="Skills"
         subtitle="Inspect and edit the playbooks North follows."
         actions={

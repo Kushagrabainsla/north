@@ -114,7 +114,7 @@ function TaskActivity({ taskId }: { taskId: string }) {
 
   // The header stays while the task loads or fails, so the way back is always there.
   if (!detail.data) return <div className="page task-detail">
-    <PageHeader eyebrow="Task" title={taskId} actions={back}/>
+    <PageHeader title={taskId} actions={back}/>
     {detail.error ? <Notice tone="error">{detail.error}</Notice> : <Loading/>}
   </div>;
 
@@ -141,7 +141,7 @@ function TaskActivity({ taskId }: { taskId: string }) {
   const finished = !["running", "queued", "retrying", "paused", "working", "waiting_for_approval"].includes(status);
 
   return <div className="page task-detail">
-    <PageHeader eyebrow="Task" title={prompt}
+    <PageHeader title={prompt}
       subtitle={`${taskId} · ${timeAgo(detail.data?.task?.created_at || entries[0]?.timestamp || "")}`}
       actions={back}/>
     {detail.error && <Notice tone="error">{detail.error}</Notice>}
@@ -253,7 +253,7 @@ export function Tasks() {
   };
 
   return <div className="page tasks-ledger-page">
-    <PageHeader eyebrow="Work" title="Tasks"
+    <PageHeader title="Tasks"
       subtitle="Everything North is doing, waiting on, or has completed."
       actions={<>
         <Button disabled={Boolean(busy)} busy={busy === "refresh"} busyLabel="Refreshing…" onClick={() => void refresh()}>Refresh</Button>

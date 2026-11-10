@@ -72,7 +72,6 @@ export function Lights() {
 
   return <div className="page lights-page">
     <PageHeader
-      eyebrow="Home"
       title="Devices"
       subtitle="Your lights, plugs and switches, of any brand. What you set here happens at once, with no approval card."
       actions={<>

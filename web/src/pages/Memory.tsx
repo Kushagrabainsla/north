@@ -234,7 +234,6 @@ export function Memory() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Knowledge"
         title="Memory"
         subtitle="Everything north has learned about you, and from you."
         actions={

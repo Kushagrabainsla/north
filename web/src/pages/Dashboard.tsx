@@ -30,7 +30,7 @@ export function memoryLine(memory: DashboardData["memory"]): { count: number; la
 export function Dashboard() {
   const { data, error, loading, reload } = useResource<DashboardData>("/web/api/dashboard", 10000);
   // The header stays while the dashboard loads or fails, with Refresh in it.
-  const header = <PageHeader eyebrow="Live cockpit" title="Everything, at a glance" subtitle="The complete state of North. Live, local, and under your control."
+  const header = <PageHeader title="Everything, at a glance" subtitle="The complete state of North. Live, local, and under your control."
     actions={<Button onClick={() => void reload()}>Refresh</Button>} />;
   if (!data) return <div className="page dashboard-page">
     {header}

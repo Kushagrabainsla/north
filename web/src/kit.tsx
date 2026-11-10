@@ -7,6 +7,7 @@
 // catalog north's own views are drawn from: a view can use only what is here.
 
 import { cloneElement, isValidElement, useId, useState, type FormEvent, type ReactElement, type ReactNode } from "react";
+import { Ellipsis } from "lucide-react";
 import { Link, NavLink } from "react-router-dom";
 import type { useDialog } from "./dialog";
 
@@ -95,6 +96,39 @@ export function SearchField({ value, onChange, label, placeholder, count }: { va
 /** The line above a list: its tabs, its search, and actions on the list itself. */
 export function Toolbar({ tabs, search, actions }: { tabs?: ReactNode; search?: ReactNode; actions?: ReactNode }) {
   return <div className="kit-toolbar">{tabs}{search}{actions && <div className="kit-toolbar-actions">{actions}</div>}</div>;
+}
+
+// ── Page and panels ─────────────────────────────────────────────────────────
+
+/** A page's title, a line about it, and its actions: the main one, and the rest in More. */
+export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
+  return <header className="kit-page-header page-header">
+    <div><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div>
+    {actions && <div className="kit-page-header-actions">{actions}</div>}
+  </header>;
+}
+
+/** A titled block. `label` is a quiet word beside the title, such as a count. Blocks inside it are flat. */
+export function Panel({ title, label, children, to, actions, className }: { title: string; label?: string; children: ReactNode; to?: string; actions?: ReactNode; className?: string }) {
+  return <section className={cx("kit-panel", "panel", className)}>
+    <header className="kit-panel-head"><h2>{title}</h2>{label && <span className="kit-panel-label">{label}</span>}
+      {(actions || to) && <div className="kit-panel-actions">{actions}{to && <Button variant="quiet" size="sm" to={to}>View all</Button>}</div>}
+    </header>
+    <div className="kit-panel-body panel-content">{children}</div>
+  </section>;
+}
+
+export interface MenuItem { label: string; onSelect: () => void; danger?: boolean }
+
+/** The actions a header does not need on show, behind one three-dots button. A delete goes last, in red. */
+export function Menu({ items, label = "More actions" }: { items: MenuItem[]; label?: string }) {
+  const ordered = [...items.filter(item => !item.danger), ...items.filter(item => item.danger)];
+  return <details className="kit-menu">
+    <summary className="kit-button kit-button-secondary kit-button-md" aria-label={label} title={label}><Ellipsis size={16}/></summary>
+    <div className="kit-menu-list" role="menu">{ordered.map(item => <button key={item.label} type="button" role="menuitem"
+      className={cx("kit-menu-item", item.danger && "kit-menu-item-danger")}
+      onClick={event => { event.currentTarget.closest("details")?.removeAttribute("open"); item.onSelect(); }}>{item.label}</button>)}</div>
+  </details>;
 }
 
 // ── Sections ────────────────────────────────────────────────────────────────

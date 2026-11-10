@@ -161,7 +161,6 @@ export function SettingsPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Configuration"
         title="Settings"
         subtitle="Control how North balances capability, cost, autonomy, and readability."
         actions={<Button to="/setup">Setup guide</Button>}

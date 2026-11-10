@@ -107,7 +107,6 @@ export function Approvals() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Attention"
         title="Approvals"
         subtitle={
           pending.length

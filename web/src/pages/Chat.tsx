@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, FolderOpen, Pin, PinOff, Trash2 } from "lucide-react";
 import { api, del, patch, post } from "../api";
 import { ErrorNotice, InferenceCategories, Markdown, PageHeader, PromptTelemetry, timeAgo } from "../components";
-import { ActionBar, Button, confirmDelete, Empty, EntityTable, Loading, Notice, ResourceView, SearchField, Stack, Status, Tabs, Toolbar, type Column } from "../kit";
+import { Button, confirmDelete, Empty, EntityTable, Loading, Notice, ResourceView, Menu, SearchField, Stack, Status, Tabs, Toolbar, type Column } from "../kit";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, Conversation, Signal, Turn, WorkspaceListing } from "../types";
@@ -361,7 +361,7 @@ export function Sessions() {
     <Button variant="danger" size="sm" onClick={() => void deleteSession(session)} aria-label="Delete session" title="Delete" icon={<Trash2 size={13}/>}/>
   </>;
   return <div className="page capability-page session-page">
-    <PageHeader eyebrow="Workspace" title="Sessions" subtitle="Open a session to continue work with North." actions={<Button variant="primary" onClick={() => void createSession()}>+ New session</Button>} />
+    <PageHeader title="Sessions" subtitle="Open a session to continue work with North." actions={<Button variant="primary" onClick={() => void createSession()}>+ New session</Button>} />
     {sessions.error && sessions.data && <Notice tone="error">{sessions.error}</Notice>}
     <Toolbar
       tabs={<Tabs label="Session filter" value={tab} onChange={setTab} items={[{ value: "active", label: "Active" }, { value: "archived", label: "Archived" }]}/>}
@@ -550,15 +550,13 @@ export function Chat() {
   return <div className={`chat-page session-room ${dragging ? "dragging" : ""}`} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
     <section className="chat-room" ref={chatRoom}>
       {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><Button variant="primary" onClick={() => void createSession()}>+ New session</Button></div> : room.loading && !room.data ? <Loading/> : !room.data ? <Notice tone="error">{room.error || "Session unavailable"}</Notice> : <>
-        <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<>
-          <Status value={room.data.archived ? "archived" : room.data.goal_status}/>
-          <ActionBar danger={<Button variant="danger" onClick={() => void deleteChat(room.data!)}>Delete</Button>}>
-            <Button onClick={() => void togglePinned()}>{room.data.pinned ? "Unpin" : "Pin"}</Button>
-            <Button onClick={() => void toggleArchived()}>{room.data.archived ? "Unarchive" : "Archive"}</Button>
-            <Button onClick={() => void editGoal()}>Edit goal</Button>
-            <Button onClick={() => void rename()}>Rename</Button>
-          </ActionBar>
-        </>}/>
+        <PageHeader title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<Menu items={[
+          { label: room.data.pinned ? "Unpin" : "Pin", onSelect: () => void togglePinned() },
+          { label: "Rename", onSelect: () => void rename() },
+          { label: "Edit goal", onSelect: () => void editGoal() },
+          { label: room.data.archived ? "Unarchive" : "Archive", onSelect: () => void toggleArchived() },
+          { label: "Delete", danger: true, onSelect: () => void deleteChat(room.data!) },
+        ]}/>}/>
         {room.error && <Notice tone="error">{room.error}</Notice>}
         <section className="session-goal"><div><small>Active goal</small><p>{room.data.goal || "No goal has been set for this session yet."}</p></div><div><Status value={room.data.goal_status}/>{room.data.goal && room.data.goal_status !== "achieved" && <Button size="sm" onClick={() => void markGoalAchieved()}>Mark achieved</Button>}</div></section>
         <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} reasoning={turn.task_id ? reasoning[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} steps={turn.task_id ? steps[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <Empty>A fresh room. Your prompts, North's responses and every step of the work will stay together here.</Empty>}</div>

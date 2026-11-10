@@ -123,7 +123,6 @@ export function SystemPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Runtime"
         title="System"
         subtitle="Whether North is healthy, how a model gets picked, and what it costs. Providers are in Settings."
       />

@@ -9,7 +9,7 @@ import { del, post } from "../api";
 import { PageHeader, timeAgo } from "../components";
 import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
-import { Button, confirmDelete, EntityTable, Loading, Notice, ResourceView, Stack, type Column } from "../kit";
+import { Button, confirmDelete, EntityTable, Loading, Menu, Notice, ResourceView, Stack, type Column } from "../kit";
 import { ViewSurface, type ViewMessage } from "../views";
 
 interface About { kind: "flow" | "skill" | "tool"; name: string }
@@ -34,7 +34,7 @@ const COLUMNS: Column[] = [
 export function Views() {
   const resource = useResource<ViewListing[]>("/web/api/views");
   return <div className="page">
-    <PageHeader eyebrow="Made by north" title="Views" subtitle="Pages north made for itself, from the same parts as every page here."/>
+    <PageHeader title="Views" subtitle="Pages north made for itself, from the same parts as every page here."/>
     <ResourceView resource={resource} isEmpty={data => !data.length}
       empty="North has made no views yet. Ask it in a session: “make me a page that shows …”.">
       {data => <EntityTable label="Views" columns={COLUMNS} rows={data} rowKey={view => view.id} to={view => `/views/${view.id}`}
@@ -84,11 +84,10 @@ export function ViewPage() {
 
   const about = view?.about;
   return <div className="page">
-    <PageHeader eyebrow={draft ? "Draft view" : "View"} title={view?.title || "View"} subtitle={view?.description || undefined}
+    <PageHeader title={view?.title || "View"} subtitle={view?.description || undefined}
       actions={<>
         {about && <Button to={ABOUT_PAGES[about.kind]}>{`The ${about.kind} ${about.name}`}</Button>}
-        <Button onClick={() => void resource.reload()}>Refresh</Button>
-        {view && !draft && <Button variant="danger" onClick={() => void remove()}>Delete</Button>}
+        <Menu items={[{ label: "Refresh", onSelect: () => void resource.reload() }, ...(view && !draft ? [{ label: "Delete", danger: true, onSelect: () => void remove() }] : [])]}/>
       </>}/>
     {resource.loading && !view ? <Loading/> : resource.error && !view ? <Notice tone="error">{resource.error}</Notice> : view && <Stack>
       {draft && <Notice tone="warning">A draft. It joins the Views page once you approve the card that asks to add it; until then its buttons do nothing.</Notice>}

@@ -39,13 +39,13 @@
 .kit-action-bar-danger { display: flex; gap: 8px; }
 
 /* ── Tabs, search, toolbar ── */
-.kit-tabs { display: inline-flex; align-self: flex-start; width: fit-content; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); max-width: 100%; overflow-x: auto; }
-.kit-tab { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 11px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 500 11px var(--mono); white-space: nowrap; cursor: pointer; }
+.kit-tabs { display: inline-flex; align-self: flex-start; width: fit-content; max-width: 100%; gap: 20px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.kit-tab { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; margin-bottom: -1px; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: 500 12px var(--mono); white-space: nowrap; cursor: pointer; }
 .kit-tab:hover:not(:disabled) { color: var(--text); }
 .kit-tab:disabled { opacity: .42; cursor: default; }
-.kit-tab-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.kit-tab-active { border-bottom-color: var(--accent); color: var(--text); font-weight: 600; }
 .kit-tab-count { color: var(--faint); font-size: 10px; }
-.kit-tab-active .kit-tab-count { color: inherit; opacity: .75; }
+.kit-tab-active .kit-tab-count { color: var(--muted); }
 
 .kit-search { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; min-width: 0; }
 .kit-search input { flex: 1; min-width: 0; }
@@ -69,20 +69,19 @@
 .kit-section-header h3 { margin: 3px 0 0; font-size: 12px; }
 .kit-section-header p { margin: 5px 0 0; max-width: 72ch; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .kit-section-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.kit-eyebrow { color: var(--faint); font: 600 9px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.kit-eyebrow { color: var(--faint); font: 500 11px var(--mono); }
 
 /* ── Status and badges ── */
-.kit-status, .kit-badge {
-  display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border: 1px solid; border-radius: 5px;
-  font: 600 9px var(--mono); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
-}
-.kit-tone-neutral { border-color: var(--line-strong); color: var(--muted); }
-.kit-tone-good { border-color: rgba(184, 239, 114, .35); color: var(--accent); background: var(--accent-soft); }
-.kit-tone-busy { border-color: rgba(131, 185, 242, .35); color: var(--blue); background: rgba(131, 185, 242, .08); }
-.kit-tone-warn { border-color: rgba(233, 199, 111, .4); color: var(--amber); background: rgba(233, 199, 111, .08); }
-.kit-tone-bad { border-color: rgba(239, 129, 122, .4); color: var(--red); background: rgba(239, 129, 122, .08); }
-.kit-badge { border-color: var(--line-strong); color: var(--faint); }
-.kit-badge-accent { border-color: rgba(184, 239, 114, .3); color: var(--accent); }
+.kit-status, .kit-badge { display: inline-flex; align-items: center; gap: 6px; font: 500 11px var(--mono); white-space: nowrap; }
+.kit-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.kit-tone-neutral { color: var(--faint); }
+.kit-tone-good { color: var(--muted); }
+.kit-tone-good::before { background: var(--accent); }
+.kit-tone-busy { color: var(--blue); }
+.kit-tone-warn { color: var(--amber); }
+.kit-tone-bad { color: var(--red); }
+.kit-badge { color: var(--faint); }
+.kit-badge-accent { color: var(--accent); }
 
 /* ── Notes and pane labels ── */
 .kit-text { margin: 0; color: var(--text); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -90,7 +89,7 @@
 .kit-note p { margin: 0 0 8px; }
 .kit-note p:last-child { margin-bottom: 0; }
 .kit-note a { color: var(--accent); }
-.kit-pane-label { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--faint); font: 600 9px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.kit-pane-label { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--faint); font: 500 11px var(--mono); }
 
 /* ── Stack, key/values ── */
 .kit-stack { display: flex; flex-direction: column; min-width: 0; }
@@ -105,7 +104,7 @@
 /* ── Figures ── */
 .kit-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--line-strong); }
 .kit-stat { display: flex; flex-direction: column; min-height: 84px; padding: 14px; background: var(--surface); }
-.kit-stat span { color: var(--faint); font: 600 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.kit-stat span { color: var(--muted); font-size: 11px; }
 .kit-stat strong { margin-top: 8px; font-size: 22px; letter-spacing: -.03em; overflow-wrap: anywhere; }
 .kit-stat small { margin-top: 5px; color: var(--muted); font-size: 10px; }
 
@@ -119,12 +118,12 @@
 .kit-loading-inline { min-height: 64px; justify-content: flex-start; font-size: 11px; }
 .kit-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: kit-pulse 1.2s infinite; }
 @keyframes kit-pulse { 50% { opacity: .25; transform: scale(.7); } }
-.kit-empty { display: grid; place-items: center; min-height: 76px; padding: 16px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--faint); font-size: 11px; text-align: center; }
+.kit-empty { padding: 12px 0; color: var(--faint); font-size: 12px; line-height: 1.55; }
 
 /* ── Table ── */
 .kit-table { border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; background: var(--surface); }
 .kit-table-head, .kit-table-open { display: grid; grid-template-columns: var(--kit-columns); gap: 16px; align-items: center; }
-.kit-table-head { padding: 10px 16px; border-bottom: 1px solid var(--line-strong); color: var(--faint); font: 600 9px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.kit-table-head { padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--faint); font: 500 11px var(--mono); }
 .kit-table-row { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
 .kit-table-row:last-child { border-bottom: 0; }
 .kit-table-open { flex: 1; min-width: 0; min-height: 58px; padding: 10px 16px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: none; }
@@ -134,7 +133,7 @@
 .kit-table-cell b { display: block; font-size: 12px; }
 .kit-table-cell small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .kit-table-actions { display: flex; gap: 4px; padding-right: 12px; }
-.kit-table .kit-empty { margin: 14px; }
+.kit-table .kit-empty { padding: 14px 16px; }
 
 /* ── Rows ── */
 .kit-row { border-bottom: 1px solid var(--line); }
@@ -166,7 +165,7 @@ button.kit-card-head:hover b, a.kit-card-head:hover b { color: var(--accent); }
 /* ── Waiting on you: one card for a question or an action to approve ── */
 .kit-waiting { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
 .kit-waiting-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--faint); font: 10px var(--mono); }
-.kit-waiting-top > span:first-child { color: var(--amber); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; font-size: 9px; }
+.kit-waiting-top > span:first-child { color: var(--amber); font-weight: 600; font-size: 11px; }
 .kit-waiting-title { color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .kit-waiting-title p { margin: 0; }
 .kit-waiting-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
@@ -189,12 +188,47 @@ button.kit-card-head:hover b, a.kit-card-head:hover b { color: var(--accent); }
 .kit-other-answer { display: flex; gap: 8px; }
 .kit-other-answer input { flex: 1; }
 
+/* ── Page header ── */
+.kit-page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+.kit-page-header h1 { margin: 0; font-size: 26px; font-weight: 700; line-height: 1.2; letter-spacing: -.03em; }
+.kit-page-header p { margin: 6px 0 0; max-width: 72ch; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.kit-page-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+
+/* ── Panels: one outline per block; what sits inside a panel is flat ── */
+.kit-panel { min-width: 0; overflow: visible; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.kit-panel-head { display: flex; justify-content: flex-start; align-items: baseline; gap: 10px; min-height: 0; padding: 14px 16px 0; border: 0; }
+.kit-panel-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+.kit-panel-head .kit-panel-label { color: var(--faint); font: 400 11px var(--mono); letter-spacing: 0; text-transform: none; }
+/* A button in the header sits beside the title without making the header taller. */
+.kit-panel-actions { display: flex; align-items: center; gap: 8px; margin: -8px 0 -8px auto; }
+.kit-panel-body { min-width: 0; min-height: 0; padding: 12px 16px 16px; }
+/* The one gap between the blocks of a panel; the rows of a list stay together, divided by their lines. */
+.kit-panel-body > * + * { margin-top: 12px; }
+.kit-panel-body > .kit-row + .kit-row { margin-top: 0; }
+/* A block with nothing in it (a list with no items yet) takes no gap either. */
+.kit-panel-body > :empty { display: none; }
+.kit-panel .kit-table, .kit-panel .kit-stat-grid, .kit-panel .kit-form, .kit-panel .kit-panel { border: 0; border-radius: 0; background: transparent; }
+.kit-panel .kit-form { padding: 0; }
+.kit-panel .kit-stat { padding: 4px 0; background: transparent; min-height: 0; }
+.kit-panel .kit-table-head, .kit-panel .kit-table-open { padding-left: 0; padding-right: 0; }
+/* The dashboard lays its panels in one grid with shared hairlines: no outline of their own there. */
+.cockpit-grid > .kit-panel { border: 0; border-radius: 0; }
+
+/* ── More: the actions a header does not need on show ── */
+.kit-menu { position: relative; display: inline-block; }
+.kit-menu > summary { list-style: none; }
+.kit-menu > summary::-webkit-details-marker { display: none; }
+.kit-menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; display: flex; flex-direction: column; min-width: 190px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 14px 36px rgba(0, 0, 0, .45); }
+.kit-menu-item { width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: 500 12px var(--mono); text-align: left; cursor: pointer; }
+.kit-menu-item:hover { background: var(--surface-2); }
+.kit-menu-item-danger { margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; color: var(--red); }
+
 /* ── Forms ── */
 .kit-form { display: flex; flex-direction: column; gap: 16px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
 .kit-form-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
 .kit-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .kit-field-wide { grid-column: 1 / -1; }
-.kit-field-label { color: var(--muted); font: 600 9px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.kit-field-label { color: var(--muted); font: 500 11px var(--mono); }
 .kit-field small { color: var(--faint); font-size: 10px; line-height: 1.45; }
 .kit-field .kit-field-error { color: var(--red); }
 .kit-form-foot { display: flex; align-items: center; gap: 14px; }
@@ -207,6 +241,8 @@ button.kit-card-head:hover b, a.kit-card-head:hover b { color: var(--accent); }
   .kit-table-open { grid-template-columns: 1fr; gap: 4px; }
   .kit-toolbar-actions { margin-left: 0; }
   .kit-row-line { flex-wrap: wrap; }
+  .kit-page-header { flex-direction: column; gap: 12px; }
+  .kit-page-header-actions { justify-content: flex-start; }
   .kit-waiting-split { grid-template-columns: 1fr; }
   .kit-waiting-source { padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--line); }
   .kit-choice { flex-direction: column; gap: 2px; }

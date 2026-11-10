@@ -112,7 +112,6 @@ export function Tools() {
   return (
     <div className="page capability-page">
       <PageHeader
-        eyebrow="Capabilities"
         title="Tools"
         subtitle="Inspect the atomic operations North's skills can call, and manage your learned tools."
         actions={

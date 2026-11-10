@@ -756,8 +756,6 @@ button:not(:disabled):active { transform: translateY(1px); }
 /* Setup uses the existing panels, segmented navigation and button variants.
    Page spacing is owned by .page, not extra margins on these panels. */
 .settings-grid > .browser-profiles { grid-column: 1 / -1; }
-.browser-profiles .panel-content { display: flex; flex-direction: column; gap: 14px; }
-.setup-page .panel-content { display: flex; flex-direction: column; gap: 14px; }
 .setup-reminder .panel-content { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 @media (max-width: 680px) {
   .setup-reminder .panel-content { align-items: flex-start; flex-direction: column; gap: 12px; }

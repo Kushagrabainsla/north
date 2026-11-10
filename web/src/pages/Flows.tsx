@@ -1150,7 +1150,6 @@ export function Flows() {
   return (
     <div className="page capability-page">
       <PageHeader
-        eyebrow="Automation"
         title="Flows"
         subtitle="What north runs, when it runs next, and how it went."
         actions={

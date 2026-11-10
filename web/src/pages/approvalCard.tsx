@@ -90,8 +90,8 @@ export function ApprovalCard({ card, onDecide, wide = false }: { card: Approval;
   const setValue = (name: string, value: unknown) => setValues((current) => ({ ...current, [name]: value }));
   const part: Part = {
     card, values, setValue, onDecide,
-    aside: card.blocking ? undefined : <span>nothing is waiting on this</span>,
-    meta: [card.agent, timeAgo(card.created_at)].filter(Boolean).join(" · "),
+    aside: <span>{[!card.blocking && "nothing is waiting on this", timeAgo(card.created_at)].filter(Boolean).join(" · ")}</span>,
+    meta: "",
   };
   return card.type === "question" ? <QuestionCard {...part}/> : <ApproveCard {...part} wide={wide}/>;
 }
