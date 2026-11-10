@@ -6,8 +6,8 @@ import { Empty, ErrorNotice, InferenceCategories, Loading, Markdown, PageHeader,
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
-import { STEP_EVENTS, foldStep, type Step } from "./liveSteps";
-import { CardFieldRow, answersComplete } from "./Approvals";
+import { STEP_EVENTS, clock, currentActivity, foldStep, latestThought, spoken, type Step } from "./liveSteps";
+import { CardFieldRow, answersComplete, fieldLabel } from "./Approvals";
 
 /** North's self-checks, rendered live rather than only reachable in the ledger.
  *  Each entry turns one SSE payload into a one-line verdict plus its details. */
@@ -43,9 +43,17 @@ export function turnStatus(taskStatus: string, waiting: boolean, outcome = ""): 
   return taskStatus === "completed" ? outcome || "response_ready" : taskStatus;
 }
 
-export function workingText(status: string, waiting: boolean): string {
-  if (status === "paused") return waiting ? "Paused · waiting for you" : "Task paused";
-  return status === "waiting_for_approval" ? "North is waiting for you" : "North is working on this prompt";
+/** The grey line where the answer will appear: North's newest thought, else what it is doing. */
+export function ghostText(paused: boolean, reasoning: string, steps: Step[]): string {
+  if (paused) return "Paused.";
+  const activity = currentActivity(steps);
+  return latestThought(reasoning) || (activity ? `${activity}…` : "Starting…");
+}
+
+/** An offered answer as a title and its explanation: "North-native: flows that…" → both parts. */
+export function optionParts(option: string): [string, string] {
+  const at = option.indexOf(": ");
+  return at > 0 ? [option.slice(0, at), option.slice(at + 2)] : [option, ""];
 }
 
 /** The reply to show. While a task runs, its live text is the newest; once it ends, the
@@ -57,6 +65,8 @@ export function replyText(isActive: boolean, streamed = "", output = ""): string
 
 function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprovals: () => Promise<void>) {
   const [live, setLive] = useState<Record<string, string>>({});
+  // What North thinks on the way to its answer, streamed apart from the answer itself.
+  const [reasoning, setReasoning] = useState<Record<string, string>>({});
   const [signals, setSignals] = useState<Record<string, Signal[]>>({});
   // What the task is doing, step by step, from the same events the TUI renders live.
   const [steps, setSteps] = useState<Record<string, Step[]>>({});
@@ -67,10 +77,16 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
       const stream = new EventSource(`/orchestrator/stream/${taskId}`);
       // Every (re)connect replays the task's whole history, so it starts from nothing: appended to
       // what was shown, a reconnect or a new turn showed the streamed answer twice.
-      stream.addEventListener("open", () => {
+      const restart = () => {
         setLive(current => ({ ...current, [taskId]: "" }));
+        setReasoning(current => ({ ...current, [taskId]: "" }));
         setSignals(current => ({ ...current, [taskId]: [] }));
         setSteps(current => ({ ...current, [taskId]: [] }));
+      };
+      stream.addEventListener("open", restart);
+      stream.addEventListener("reasoning", event => {
+        const payload = JSON.parse((event as MessageEvent).data);
+        setReasoning(current => ({ ...current, [taskId]: (current[taskId] || "") + (payload.text || "") }));
       });
       for (const eventName of STEP_EVENTS) {
         stream.addEventListener(eventName, event => {
@@ -96,11 +112,7 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
       // message you sent while it worked.
       stream.addEventListener("stream_reset", () => setLive(current => ({ ...current, [taskId]: "" })));
       // A retry starts the task over: what the failed try streamed and warned no longer applies.
-      stream.addEventListener("task_retrying", () => {
-        setLive(current => ({ ...current, [taskId]: "" }));
-        setSignals(current => ({ ...current, [taskId]: [] }));
-        setSteps(current => ({ ...current, [taskId]: [] }));
-      });
+      stream.addEventListener("task_retrying", restart);
       for (const eventName of ["task_completed", "task_failed", "task_cancelled", "task_skipped", "task_rejected", "task_needs_attention"]) {
         stream.addEventListener(eventName, () => { stream.close(); void reload(); });
       }
@@ -111,24 +123,110 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
     });
     return () => streams.forEach(stream => stream.close());
   }, [ids.join("|"), reload, reloadApprovals]);
-  return { live, signals, steps };
+  return { live, reasoning, signals, steps };
 }
 
-/** The last few steps of a running task, newest last; the one still in progress pulses. */
-function LiveSteps({ steps }: { steps: Step[] }) {
-  if (!steps.length) return null;
-  const shown = steps.slice(-8);
-  return <div className="live-steps">
-    {steps.length > shown.length && <div className="live-step live-step-more">… {steps.length - shown.length} earlier step{steps.length - shown.length === 1 ? "" : "s"}</div>}
-    {shown.map((step, index) => <div className={`live-step ${step.active ? "live-step-active" : ""} ${step.icon === "✗" ? "live-step-failed" : ""}`} key={`${steps.length - shown.length + index}`}><span className="live-step-icon">{step.icon}</span><span>{step.text}</span></div>)}
+/** A clock that ticks each second while *running*, for the time a turn has taken. */
+function useNow(running: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+  return now;
+}
+
+const STEP_MARKS: Record<string, string> = { "✓": "trace-ok", "✗": "trace-failed", "?": "trace-wait", "▲": "trace-wait" };
+
+/** Every step of the turn, what North thought, and what it cost: the detail the quiet view folds away. */
+function Trace({ steps, reasoning, footer, children }: { steps: Step[]; reasoning: string; footer: string[]; children?: React.ReactNode }) {
+  return <div className="turn-trace">
+    {steps.map((step, index) => <div className="trace-step" key={index}>
+      {step.active ? <i className="trace-spin" aria-label="In progress"/> : <span className={STEP_MARKS[step.icon] || "trace-other"}>{step.icon}</span>}
+      <span>{step.text}</span>
+    </div>)}
+    {reasoning.trim() && <p className="trace-thought">{reasoning.trim()}</p>}
+    {footer.length > 0 && <footer>{footer.join(" · ")}</footer>}
+    {children}
   </div>;
 }
 
+/** Offered answers as rows: the part before ": " as the title, the rest under it. */
+function OptionRows({ options, chosen, pick }: { options: string[]; chosen?: unknown; pick: (option: string) => void }) {
+  return <div className="ask-options">{options.map(option => {
+    const [title, detail] = optionParts(option);
+    return <button type="button" key={option} className={`ask-option ${chosen === option ? "chosen" : ""}`} onClick={() => pick(option)}><span>{title}</span>{detail && <small>{detail}</small>}</button>;
+  })}</div>;
+}
+
+/** An answer in your own words, behind "Something else…" when there are options to pick from. */
+function OwnAnswer({ hasOptions, value, onChange, onSubmit, label }: { hasOptions: boolean; value: string; onChange: (value: string) => void; onSubmit?: () => void; label: string }) {
+  const [open, setOpen] = useState(!hasOptions || Boolean(value));
+  if (!open) return <button type="button" className="ask-option ask-other" onClick={() => setOpen(true)}><span>Something else…</span></button>;
+  return <div className="ask-own">
+    <input autoFocus={hasOptions} value={value} onChange={event => onChange(event.target.value)} placeholder="Type your answer" onKeyDown={event => { if (event.key === "Enter" && value.trim() && onSubmit) { event.preventDefault(); onSubmit(); } }}/>
+    {onSubmit && <button type="button" className="primary-button" disabled={!value.trim()} onClick={onSubmit}>{label}</button>}
+  </div>;
+}
+
+/** A card waiting on you inside the turn: a question, one at a time, or an action to approve. */
 export function ApprovalCard({ card, respond }: { card: Approval; respond: (card: Approval, decision: string, answer?: string, values?: Record<string, unknown>) => Promise<void> }) {
+  const fields = card.fields || [];
   const [answer, setAnswer] = useState("");
-  const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries((card.fields || []).map(field => [field.name, field.value])));
-  const isQuestion = card.type === "question";
-  return <div className="inline-approval"><small>{isQuestion ? "North needs your answer" : "Approval required"}</small><b>{card.title}</b><Markdown>{card.message}</Markdown>{(card.fields || []).length > 0 && <div className="card-fields">{card.fields.map(field => <CardFieldRow key={field.name} field={field} asking={isQuestion} value={values[field.name]} onChange={value => setValues(current => ({ ...current, [field.name]: value }))}/>)}</div>}{card.context && <details className="card-context"><summary>Review source</summary><pre>{card.context}</pre></details>}<div className="inline-approval-actions">{isQuestion && (card.fields || []).length > 0 ? <button disabled={!answersComplete(card, values)} onClick={() => respond(card, "answered", "", values)}>Send answers</button> : isQuestion ? <>{card.options.map(option => <button key={option} onClick={() => respond(card, "answered", option, values)}>{option}</button>)}<input value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Type your answer"/><button disabled={!answer.trim()} onClick={() => respond(card, "answered", answer, values)}>Answer</button></> : <><button onClick={() => respond(card, "approved", "", values)}>Approve</button><button className="danger-link" onClick={() => respond(card, "rejected", "", values)}>Reject</button></>}</div></div>;
+  const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries(fields.map(field => [field.name, field.value])));
+  const [index, setIndex] = useState(0);
+  const setValue = (name: string, value: unknown) => setValues(current => ({ ...current, [name]: value }));
+  const shown = fields.filter(field => !field.editable);
+  const readOnly = shown.length > 0 && <div className="card-fields">{shown.map(field => <CardFieldRow key={field.name} field={field} value={values[field.name]} onChange={() => undefined}/>)}</div>;
+  const context = card.context && <details className="card-context"><summary>Review source</summary><pre>{card.context}</pre></details>;
+
+  if (card.type !== "question") {
+    return <div className="ask-card">
+      <div className="ask-top"><span>Needs your OK</span></div>
+      <h3>{card.title}</h3>
+      <div className="ask-message"><Markdown>{card.message}</Markdown></div>
+      {fields.length > 0 && <div className="card-fields">{fields.map(field => <CardFieldRow key={field.name} field={field} value={values[field.name]} onChange={value => setValue(field.name, value)}/>)}</div>}
+      {context}
+      <div className="ask-foot"><button type="button" className="ghost-button" onClick={() => respond(card, "rejected", "", values)}>Reject</button><button type="button" className="primary-button" onClick={() => respond(card, "approved", "", values)}>Approve</button></div>
+    </div>;
+  }
+
+  const questions = fields.filter(field => field.editable);
+  if (!questions.length) {
+    const send = () => respond(card, "answered", answer, values);
+    return <div className="ask-card">
+      <div className="ask-top"><span>North asks</span></div>
+      <div className="ask-title"><Markdown>{card.message}</Markdown></div>
+      {readOnly}{context}
+      <OptionRows options={card.options} pick={option => respond(card, "answered", option, values)}/>
+      <OwnAnswer hasOptions={card.options.length > 0} value={answer} onChange={setAnswer} onSubmit={send} label="Answer"/>
+    </div>;
+  }
+
+  // Several questions: one at a time, all sent together once each has an answer.
+  const at = Math.min(index, questions.length - 1);
+  const field = questions[at];
+  const last = at === questions.length - 1;
+  const value = values[field.name];
+  const text = value === null || value === undefined ? "" : String(value);
+  const answered = text.trim() !== "";
+  const next = () => setIndex(at + 1);
+  const send = () => respond(card, "answered", "", values);
+  const withOptions = field.options.length > 0 && (field.type === "text" || field.type === "select");
+  return <div className="ask-card">
+    <div className="ask-top"><span>Question {at + 1} of {questions.length}</span>{at > 0 && <button type="button" className="link-button" onClick={() => setIndex(at - 1)}>Back</button>}</div>
+    {at === 0 && readOnly}{at === 0 && context}
+    <h3>{fieldLabel(field)}</h3>
+    {withOptions && <OptionRows options={field.options} chosen={value} pick={option => { setValue(field.name, option); if (!last) next(); }}/>}
+    {field.type === "text"
+      ? <OwnAnswer key={field.name} hasOptions={withOptions} value={field.options.includes(text) ? "" : text} onChange={typed => setValue(field.name, typed)} onSubmit={last ? undefined : next} label="Next"/>
+      : !withOptions && <CardFieldRow field={field} asking value={value} onChange={changed => setValue(field.name, changed)}/>}
+    <div className="ask-foot">{last
+      ? <button type="button" className="primary-button" disabled={!answersComplete(card, values)} onClick={send}>Send answers</button>
+      : answered && <button type="button" className="ghost-button" onClick={next}>Next</button>}</div>
+  </div>;
 }
 
 function EventRows({ entries }: { entries: LedgerEntry[] }) {
@@ -200,7 +298,7 @@ function JoinedTurn({ turn }: { turn: Turn }) {
   </article>;
 }
 
-function TurnBundle({ turn, streamed, signals = [], steps = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; steps?: Step[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
+export function TurnBundle({ turn, streamed, reasoning = "", signals = [], steps = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; reasoning?: string; signals?: Signal[]; steps?: Step[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
   const detail = turn.detail;
   const taskStatus = detail?.task.status || "pending";
   const status = turnStatus(taskStatus, pendingApprovals.length > 0, detail?.outcome_status);
@@ -219,27 +317,43 @@ function TurnBundle({ turn, streamed, signals = [], steps = [], reload, pendingA
   const responseTimestamp = [...entries].reverse().find(entry => (entry.action === "agent_completed" || entry.action === "task_synthesis") && entry.output)?.timestamp;
   const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued", "retrying", "working"].includes(status);
   const reply = replyText(isActive, streamed, detail?.output);
-  const control = async (action: "pause" | "resume" | "cancel") => {
+  const control = async (action: "resume" | "cancel") => {
     if (!turn.task_id) return;
     if (action === "cancel") await api(`/orchestrator/task/${turn.task_id}`, { method: "DELETE" });
     else await api(`/orchestrator/task/${turn.task_id}/${action}`, { method: "POST" });
     await reload();
   };
+  const [open, setOpen] = useState(false);
+  const now = useNow(isActive);
+  const waiting = pendingApprovals.length > 0;
+  const paused = taskStatus === "paused";
+  // Thinking, shown as grey text where the answer will go, until there is an answer or a card to show.
+  const thinking = isActive && !waiting && !reply;
+  const lastEntry = entries[entries.length - 1]?.timestamp;
+  const endedAt = isActive ? (waiting ? Date.parse(pendingApprovals[0].created_at) || now : now) : Date.parse(lastEntry || "") || now;
+  const elapsed = Math.max(0, endedAt - Date.parse(turn.created_at));
+  const tokens = runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0);
+  const models = [...new Set(runs.flatMap(run => run.models_used))];
+  const footer = [agents.join(", "), models.join(", "), clock(elapsed), tokens ? `${tokens.toLocaleString()} tokens` : "", cost ? `$${cost.toFixed(4)}` : ""].filter(Boolean);
+  const stepCount = steps.length ? `${steps.length} step${steps.length === 1 ? "" : "s"}` : "";
+  const stop = ["pending", "running", "queued", "retrying", "paused"].includes(taskStatus) && <button type="button" className="link-button turn-stop" onClick={() => control("cancel")}>Stop</button>;
   return <article className="turn-bundle">
     <div className="user-prompt"><div className="user-message"><div className="turn-meta">You · {timeAgo(turn.created_at)}</div><p>{turn.prompt}</p></div><div className="avatar user-avatar">You</div></div>
     <div className="north-response"><div className="avatar north-avatar">N</div><div className="response-body">
-      <div className="response-heading"><div><b>North</b>{responseTimestamp && <small>{timeAgo(responseTimestamp)}</small>}<Status value={status}/></div><div className="turn-actions">
-        {taskStatus === "paused" && <button onClick={() => control("resume")}>Resume</button>}
-        {["pending", "running", "queued", "retrying"].includes(taskStatus) && <button onClick={() => control("pause")}>Pause</button>}
-        {["pending", "running", "queued", "retrying", "paused"].includes(taskStatus) && <button className="danger-link" onClick={() => control("cancel")}>Cancel</button>}
-      </div></div>
-      {pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} respond={respondApproval}/>)}
-      {isActive && <div className={`thinking thinking-${status}`}><span className="pulse"/>{workingText(status, pendingApprovals.length > 0)}</div>}
-      {isActive && <LiveSteps steps={steps}/>}
-      {reply && <Markdown>{reply}</Markdown>}
-      {!isActive && !reply && <Empty>No response was recorded for this task.</Empty>}
-      <SignalStrip signals={signals}/>
-      <details className="turn-detail-drawer"><summary><span>Details</span><small>{agents.length || "–"} agents · {tools.length} tool events</small><i>⌄</i></summary><div><div className="turn-summary"><span>{runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0).toLocaleString()} tokens</span><span>${cost.toFixed(4)}</span></div><div className="execution-details">
+      <div className="response-heading"><div><b>North</b>{responseTimestamp && <small>{timeAgo(responseTimestamp)}</small>}</div></div>
+      {thinking ? <>
+        <div className="ghost-thought"><span className={paused ? "" : "shimmer"}>{ghostText(paused, reasoning, steps)}</span></div>
+        <div className="turn-quiet">
+          {stepCount && <button type="button" className="link-button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide steps" : stepCount}</button>}
+          <span>{clock(elapsed)}</span>
+          {paused && <button type="button" className="link-button turn-resume" onClick={() => control("resume")}>Resume</button>}
+          {stop}
+        </div>
+      </> : <div className="turn-quiet">
+        <button type="button" className="link-button turn-fold" aria-expanded={open} onClick={() => setOpen(!open)}><span aria-hidden="true">{open ? "⌄" : "›"}</span>Thought for {spoken(elapsed)}{stepCount && ` · ${stepCount}`}</button>
+        {isActive && stop}
+      </div>}
+      {open && <Trace steps={steps} reasoning={reasoning} footer={footer}>{detail && <details className="trace-more"><summary>Everything North recorded</summary><div className="execution-details">
         <DetailSection title="Plan and routing" count={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || "")).length}>
           <EventRows entries={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || ""))}/>
         </DetailSection>
@@ -258,7 +372,11 @@ function TurnBundle({ turn, streamed, signals = [], steps = [], reload, pendingA
         <DetailSection title="Complete timeline" count={entries.length}>
           <EventRows entries={entries}/>
         </DetailSection>
-      </div></div></details>
+      </div></details>}</Trace>}
+      {pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} respond={respondApproval}/>)}
+      {reply && <Markdown>{reply}</Markdown>}
+      {!isActive && !reply && <Empty>No response was recorded for this task.</Empty>}
+      <SignalStrip signals={signals}/>
     </div></div>
   </article>;
 }
@@ -381,7 +499,7 @@ export function Chat() {
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const chatRoom = useRef<HTMLElement>(null);
   const openedAtBottom = useRef<string | null>(null);
-  const { live, signals, steps } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
+  const { live, reasoning, signals, steps } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
   useEffect(() => {
     const element = composerInput.current;
@@ -525,7 +643,7 @@ export function Chat() {
       {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><button className="primary-button" onClick={createSession}>New session</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Session unavailable"}/> : <>
         <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<><Status value={room.data.archived ? "archived" : room.data.goal_status}/><button className="ghost-button" onClick={togglePinned}>{room.data.pinned ? "Unpin" : "Pin"}</button><button className="ghost-button" onClick={toggleArchived}>{room.data.archived ? "Unarchive" : "Archive"}</button><button className="ghost-button" onClick={editGoal}>Edit goal</button><button className="ghost-button" onClick={rename}>Rename</button><button className="danger-button" onClick={() => deleteChat(room.data!.id)}>Delete</button></>}/>
         <section className="session-goal"><div><small>Active goal</small><p>{room.data.goal || "No goal has been set for this session yet."}</p></div><div><Status value={room.data.goal_status}/>{room.data.goal && room.data.goal_status !== "achieved" && <button className="ghost-button" onClick={markGoalAchieved}>Mark achieved</button>}</div></section>
-        <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} steps={turn.task_id ? steps[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
+        <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} reasoning={turn.task_id ? reasoning[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} steps={turn.task_id ? steps[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
         <form className="composer" onSubmit={submit}><textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder={taskRunning ? "Add to the task North is working on…" : "Ask North anything…"} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}

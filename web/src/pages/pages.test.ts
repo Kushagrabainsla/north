@@ -71,6 +71,40 @@ describe("answering a question on the approvals page", () => {
   });
 });
 
+describe("a question in the chat", () => {
+  const field = (name: string, label: string, options: string[]) =>
+    ({ name, label, type: "text", value: "", editable: true, options });
+  const asks = (fields: unknown[], options: string[] = []) =>
+    renderToStaticMarkup(createElement(InlineApprovalCard, {
+      card: { id: "q1", type: "question", task_id: "t1", agent: "general", title: "General - Questions",
+              message: "Answer these together, then send them.", options, status: "pending", chosen_option: "",
+              created_at: "", fields, context: "", response: {}, blocking: true, source: "" } as unknown as Approval,
+      respond: async () => undefined,
+    }));
+
+  it("asks several questions one at a time, each option as a title with its explanation", () => {
+    // They were all on one card as uneven pills, with a "Send answers" button that looked disabled.
+    const html = asks([
+      field("q1", "What form should this take?", ["North-native: flows that find jobs", "Prep help only"]),
+      field("q2", "Which piece first?", ["Job discovery"]),
+    ]);
+    expect(html).toContain("Question 1 of 2");
+    expect(html).toContain("What form should this take?");
+    expect(html).toContain("<span>North-native</span><small>flows that find jobs</small>");
+    expect(html).toContain("Something else…");
+    expect(html).not.toContain("Which piece first?");
+    expect(html).not.toContain("Send answers");
+    expect(html).not.toContain("General - Questions");
+  });
+
+  it("takes a single question's answer from its options or in your own words", () => {
+    const html = asks([], ["Q2", "Q3"]);
+    expect(html).toContain("<span>Q2</span>");
+    expect(html).toContain("Something else…");
+    expect(asks([])).toContain('placeholder="Type your answer"');
+  });
+});
+
 // Issue #76, A18: cards showed markdown fences raw ("```git checkout -- draft.txt```"), and a resolved
 // row showed only its title and who decided, so there was nothing to judge an overrule by.
 describe("what an approval card shows", () => {

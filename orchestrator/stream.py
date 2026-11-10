@@ -35,6 +35,8 @@ _SSE_HEARTBEAT = ": keep-alive\n\n"
 # events a late subscriber actually needs. Consecutive token events are merged into
 # one replay entry, up to this many characters, then a fresh entry starts.
 _TOKEN_CHUNK_MAX_CHARS = 8_000
+# Events that stream text a fragment at a time: the answer, and the reasoning on the way to it.
+_STREAMED_TEXT_EVENTS = frozenset({"token", "reasoning"})
 
 _DURABLE_EVENTS = frozenset(
     {
@@ -101,23 +103,30 @@ class EventStreamManager:
         return history
 
     def _record_history(self, task_id: str, event: str, payload: dict[str, Any], message: str) -> None:
-        """Append *message* to the task's replay buffer, merging runs of tokens.
+        """Append *message* to the task's replay buffer, merging runs of streamed text.
 
-        Order is preserved exactly: a token event either extends the entry it
-        directly follows or starts a new one, so replay reads the same as the
-        live stream did - just with fewer, larger token entries.
+        Order is preserved exactly: a token (or reasoning) event either extends
+        the entry of the same kind it directly follows or starts a new one, so
+        replay reads the same as the live stream did - just with fewer, larger
+        entries. Unmerged, reasoning fragments filled the buffer and evicted the
+        steps a page reopened mid-task needs.
         """
         history = self._ensure_history(task_id)
-        if event != "token":
+        if event not in _STREAMED_TEXT_EVENTS:
             self._token_tail.pop(task_id, None)
             history.append(message)
             return
 
         tail = self._token_tail.get(task_id)
         text = str(payload.get("text", ""))
-        if tail is not None and history and len(tail["text"]) + len(text) <= _TOKEN_CHUNK_MAX_CHARS:
+        if (
+            tail is not None
+            and tail.get("event") == event
+            and history
+            and len(tail["text"]) + len(text) <= _TOKEN_CHUNK_MAX_CHARS
+        ):
             tail["text"] += text
-            history[-1] = _SSE_TEMPLATE.format(event="token", data=json.dumps(tail))
+            history[-1] = _SSE_TEMPLATE.format(event=event, data=json.dumps(tail))
             return
 
         merged = dict(payload)
@@ -183,7 +192,7 @@ class EventStreamManager:
             try:
                 q.put_nowait(message)
             except asyncio.QueueFull:
-                if event != "token":
+                if event not in _STREAMED_TEXT_EVENTS:
                     with contextlib.suppress(asyncio.QueueEmpty):
                         q.get_nowait()
                     with contextlib.suppress(asyncio.QueueFull):

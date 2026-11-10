@@ -4,7 +4,7 @@
 // yet) or hides a search that just has no results.
 
 import { describe, expect, it } from "vitest";
-import { attachmentText, dictationProblem, joinedTurn, replyText, sessionsEmptyMessage, turnStatus, workingText } from "./Chat";
+import { attachmentText, dictationProblem, ghostText, joinedTurn, optionParts, replyText, sessionsEmptyMessage, turnStatus } from "./Chat";
 import type { Turn } from "../types";
 
 describe("what can be attached to a message", () => {
@@ -67,18 +67,36 @@ describe("a message sent into a running task", () => {
 });
 
 describe("a paused task that still has a card", () => {
-  it("reads paused, and says it is also waiting for you", () => {
+  it("reads paused, card or not", () => {
     // It read "waiting for approval", so the pause was invisible until the API was asked.
     expect(turnStatus("paused", true)).toBe("paused");
-    expect(workingText("paused", true)).toBe("Paused · waiting for you");
-    expect(workingText("paused", false)).toBe("Task paused");
+    expect(ghostText(true, "half a thought", [])).toBe("Paused.");
   });
 
   it("lets a card win over a running task, and keeps a finished task's outcome", () => {
     expect(turnStatus("running", true)).toBe("waiting_for_approval");
-    expect(workingText("waiting_for_approval", true)).toBe("North is waiting for you");
     expect(turnStatus("completed", false, "waiting_for_user")).toBe("waiting_for_user");
     expect(turnStatus("completed", false)).toBe("response_ready");
+  });
+});
+
+describe("the grey line while North works", () => {
+  const searching = [{ icon: "⚙", text: "Web search: lab roles", active: true }];
+
+  it("shows North's newest thought, in full", () => {
+    expect(ghostText(false, "They want help.\n\nTheir goals point to a lab role.", searching)).toBe("Their goals point to a lab role.");
+  });
+
+  it("shows what North is doing before it has thought out loud", () => {
+    expect(ghostText(false, "", searching)).toBe("Web search: lab roles…");
+    expect(ghostText(false, "", [])).toBe("Starting…");
+  });
+});
+
+describe("an offered answer", () => {
+  it("reads as a title with its explanation under it", () => {
+    expect(optionParts("North-native: flows that find jobs, on a schedule")).toEqual(["North-native", "flows that find jobs, on a schedule"]);
+    expect(optionParts("Prep help only")).toEqual(["Prep help only", ""]);
   });
 });
 

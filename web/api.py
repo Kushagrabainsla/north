@@ -431,6 +431,31 @@ def _inference_categories(entries: list[Any]) -> list[dict[str, Any]]:
     return sorted(result, key=lambda row: (order.get(row["category"], len(order)), row["category"]))
 
 
+_ANSWER_ACTIONS = ("agent_completed", "task_synthesis")
+# How a task ended, for a task that ended without an answer: why it failed, stopped or stalled.
+_END_ACTIONS = ("task_failed", "task_cancelled", "task_needs_attention", "task_completed_with_failures")
+
+
+def _task_answer(entries: list[Any]) -> tuple[str, str]:
+    """What the task says back, and its outcome, from its ledger entries.
+
+    The newest answer; the one combining several agents' answers is written after theirs.
+    With none, how the task ended. Never any other entry: every model call writes its
+    purpose as output, so a task with no answer yet showed "general" or
+    "approval_decider" as its reply.
+    """
+    for entry in reversed(entries):
+        if entry.action in _ANSWER_ACTIONS and entry.output:
+            outcome = "working"
+            if isinstance(entry.agent_output, dict) and entry.agent_output.get("outcome_status"):
+                outcome = str(entry.agent_output["outcome_status"])
+            return entry.output, outcome
+    for entry in reversed(entries):
+        if entry.action in _END_ACTIONS and entry.output:
+            return entry.output, "working"
+    return "", "working"
+
+
 async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
     if not task_id:
         return None
@@ -453,20 +478,7 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
         for pool in current_services().inference_router.models_by_capability().values():
             for model in pool.models:
                 provider_by_model[model.id] = model.provider
-    output = ""
-    outcome_status = "working"
-    # The newest answer: the one combining several agents' answers is written after theirs.
-    for entry in reversed(entries):
-        if entry.action in ("agent_completed", "task_synthesis") and entry.output:
-            output = entry.output
-            if isinstance(entry.agent_output, dict) and entry.agent_output.get("outcome_status"):
-                outcome_status = str(entry.agent_output["outcome_status"])
-            break
-    if not output:
-        for entry in reversed(entries):
-            if entry.output:
-                output = entry.output
-                break
+    output, outcome_status = _task_answer(entries)
     if task and task.status in {"failed", "cancelled", "needs_attention"}:
         outcome_status = "blocked"
     elif task and task.status == "completed" and outcome_status == "working":
