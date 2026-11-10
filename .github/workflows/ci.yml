@@ -209,7 +209,7 @@ jobs:
           repo_root = Path(os.environ["NORTH_REPO_ROOT"]).resolve()
           assert not Path(cli.__file__).resolve().is_relative_to(repo_root)
           assert app is not None and server_app is not None
-          assert "planner" in load_prompt("prompts/planner.md").lower()
+          assert "north" in load_prompt("prompts/soul.md").lower()
           assert builtin_skills_dir().is_dir()
           assert policies_dir().is_dir()
           assert web_dist_dir().is_dir()
