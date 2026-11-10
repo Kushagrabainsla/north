@@ -95,6 +95,7 @@ from config.approval_mode import ApprovalMode
 from config.security import load_secret
 from config.server_url import is_this_computer
 from utils.time import configure_timezone, local_timezone, local_timezone_name, system_timezone_name
+from utils.update_record import record_update
 from utils.version import NORTH_VERSION
 
 _console = Console(force_terminal=sys.stdout.isatty())
@@ -2331,9 +2332,29 @@ class _UpdateOptions:
     assume_yes: bool = False
 
 
+class _UpdateFailed(Exception):
+    """The update could not finish; the message says why, for the terminal and the dashboard."""
+
+
 def _confirm_update(options: _UpdateOptions) -> None:
     if not options.assume_yes:
         typer.confirm("Proceed with update?", default=True, abort=True)
+
+
+def _install(command: list[str], *, port: int, was_running: bool) -> None:
+    """Run the install. North was stopped for it, so a failed install starts it again.
+
+    Otherwise a failure left north down, and an update started from the dashboard
+    left no dashboard to say why.
+    """
+    _console.print("  [dim]→[/dim]  installing…")
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode == 0:
+        return
+    if was_running:
+        _console.print("  [dim]→[/dim]  install failed; starting north again…")
+        _start_server_process(port)
+    raise _UpdateFailed(f"Install failed:\n{(result.stdout + result.stderr).strip()}")
 
 
 def _stop_server_if_running(port: int) -> bool:
@@ -2361,8 +2382,7 @@ def _update_docker_deployment(options: _UpdateOptions) -> None:
     project_root = _find_project_root()
     compose_file = _find_compose_file()
     if not _docker_available() or compose_file is None:
-        typer.secho("Docker or docker-compose.yml not found.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from None
+        raise _UpdateFailed("Docker or docker-compose.yml not found.")
     if project_root:
         _console.print("  [dim]→[/dim]  git pull…")
         _run_command(["git", "pull"], cwd=project_root)
@@ -2372,8 +2392,7 @@ def _update_docker_deployment(options: _UpdateOptions) -> None:
         cwd=project_root or Path.cwd(),
     )
     if result.returncode != 0:
-        typer.secho("Docker Compose rebuild failed.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from None
+        raise _UpdateFailed("Docker Compose rebuild failed.")
     _wait_for_server("127.0.0.1", options.port)
     _console.print()
     typer.secho("✓ north updated and restarted via Docker.", fg=typer.colors.GREEN)
@@ -2382,34 +2401,20 @@ def _update_docker_deployment(options: _UpdateOptions) -> None:
 def _update_local_checkout(project_root: Path, options: _UpdateOptions) -> None:
     project_root = project_root.expanduser().resolve()
     if not (project_root / "pyproject.toml").is_file() or not (project_root / "agents").is_dir():
-        typer.secho(
-            f"Local source is not a North checkout: {project_root}",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1) from None
+        raise _UpdateFailed(f"Local source is not a North checkout: {project_root}")
     if not shutil.which("uv"):
-        typer.secho("ERROR: uv is required for local updates.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from None
+        raise _UpdateFailed("ERROR: uv is required for local updates.")
 
     _console.print(f"  [dim]source     [/dim]  {project_root} (local checkout)")
-    _stop_server_if_running(options.port)
     _console.print()
     _confirm_update(options)
+    was_running = _stop_server_if_running(options.port)
 
-    _console.print("  [dim]→[/dim]  installing the local checkout in editable mode…")
-    result = subprocess.run(
+    _install(
         ["uv", "tool", "install", "--editable", "--force", str(project_root)],
-        capture_output=True,
-        text=True,
+        port=options.port,
+        was_running=was_running,
     )
-    if result.returncode != 0:
-        typer.secho(
-            f"Install failed:\n{(result.stdout + result.stderr).strip()}",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1) from None
     _install_helper_binaries()
     _console.print()
     typer.secho("✓ north installed from the local checkout.", fg=typer.colors.GREEN)
@@ -2419,36 +2424,29 @@ def _update_local_checkout(project_root: Path, options: _UpdateOptions) -> None:
 
 def _update_from_git(install_url: str, options: _UpdateOptions) -> None:
     _console.print(f"  [dim]source     [/dim]  {install_url}")
-    was_running = _stop_server_if_running(options.port)
     _console.print()
+    # Asked before north is stopped: a "no" left it stopped.
     _confirm_update(options)
+    was_running = _stop_server_if_running(options.port)
 
     if not shutil.which("uv"):
-        typer.secho(
-            f"ERROR: uv not found. Re-run the install script:\n  curl -fsSL {_INSTALL_SCRIPT_URL} | bash",
-            fg=typer.colors.RED,
-            err=True,
+        if was_running:
+            _start_server_process(options.port)
+        raise _UpdateFailed(
+            f"ERROR: uv not found. Re-run the install script:\n  curl -fsSL {_INSTALL_SCRIPT_URL} | bash"
         )
-        raise typer.Exit(1) from None
 
-    _console.print("  [dim]→[/dim]  reinstalling from git…")
-    result = subprocess.run(
+    _install(
         ["uv", "tool", "install", _pinned_git_spec(install_url), "--force", "--no-cache", "-q"],
-        capture_output=True,
-        text=True,
+        port=options.port,
+        was_running=was_running,
     )
-    if result.returncode != 0:
-        typer.secho(
-            f"Install failed:\n{(result.stdout + result.stderr).strip()}",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1) from None
     _console.print("  [dim green]✓[/dim green]  updated python dependencies and cli")
 
     _install_helper_binaries()
     _console.print()
-    if options.restart and (was_running or typer.confirm("Start north now?", default=True)):
+    start_now = was_running or options.assume_yes or typer.confirm("Start north now?", default=True)
+    if options.restart and start_now:
         _console.print("  [dim]→[/dim]  restarting…")
         proc = _start_server_process(options.port)
         _wait_for_server("127.0.0.1", options.port, proc=proc)
@@ -2485,25 +2483,45 @@ def update(
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
 
     options = _UpdateOptions(port=port or running_port(), restart=restart, assume_yes=yes)
-    if docker:
-        if source.lower().strip() != "remote" or path is not None:
-            raise typer.BadParameter("--source and --path cannot be combined with --docker")
-        _update_docker_deployment(options)
-        return
-
     normalized_source = source.lower().strip()
+    if docker and (normalized_source != "remote" or path is not None):
+        raise typer.BadParameter("--source and --path cannot be combined with --docker")
     if normalized_source not in {"remote", "local"}:
         raise typer.BadParameter("--source must be 'remote' or 'local'")
-    if normalized_source == "remote":
-        if path is not None:
-            raise typer.BadParameter("--path requires --source local")
-        _update_from_git(_NORTH_GIT_URL, options)
-        return
+    if normalized_source == "remote" and path is not None:
+        raise typer.BadParameter("--path requires --source local")
+    project_root = None
+    if not docker and normalized_source == "local":
+        project_root = path.expanduser().resolve() if path is not None else _find_project_root()
+        if project_root is None:
+            raise typer.BadParameter("No local North checkout found; pass --path /path/to/north")
 
-    project_root = path.expanduser().resolve() if path is not None else _find_project_root()
-    if project_root is None:
-        raise typer.BadParameter("No local North checkout found; pass --path /path/to/north")
-    _update_local_checkout(project_root, options)
+    # Kept on disk because the update restarts north: the dashboard reads it once north is back.
+    from config.settings import settings
+
+    record_update(settings.north_home, "running")
+    try:
+        if docker:
+            _update_docker_deployment(options)
+        elif project_root is None:
+            _update_from_git(_NORTH_GIT_URL, options)
+        else:
+            _update_local_checkout(project_root, options)
+    except _UpdateFailed as failure:
+        record_update(settings.north_home, "failed", str(failure))
+        typer.secho(str(failure), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    except (typer.Abort, KeyboardInterrupt):
+        record_update(settings.north_home, "cancelled")
+        raise
+    except typer.Exit as stop:
+        # Only a failure exits early here: the server not starting again after the install.
+        record_update(settings.north_home, "failed", f"The update stopped early (exit code {stop.exit_code}).")
+        raise
+    except BaseException as error:
+        record_update(settings.north_home, "failed", f"{type(error).__name__}: {error}")
+        raise
+    record_update(settings.north_home, "updated")
 
 
 def _north_processes(port: int = 8000) -> list:
@@ -2615,6 +2633,9 @@ def _stop_server(port: int) -> None:
     child. Its children are collected before the supervisor is signalled, since
     once it exits they are orphaned and no longer reachable through it. Whatever
     still listens on the port afterwards is stopped too (covers stale pid files).
+
+    The process doing the stopping is left out: an update the dashboard starts is
+    one of the server's children, and it stopped itself before it could install.
     """
     import psutil
 
@@ -2624,7 +2645,7 @@ def _stop_server(port: int) -> None:
     group: list = []
     with contextlib.suppress(ValueError, OSError, psutil.Error):
         server = psutil.Process(int(pid_path.read_text(encoding="utf-8").strip()))
-        group = [server, *server.children(recursive=True)]
+        group = [proc for proc in (server, *server.children(recursive=True)) if proc.pid != os.getpid()]
     for proc in group:
         with contextlib.suppress(psutil.Error):
             proc.terminate()

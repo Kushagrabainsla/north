@@ -15,8 +15,9 @@ Resolution order:
 
 from __future__ import annotations
 
+import json
 import tomllib
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 
 _PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -42,3 +43,17 @@ def _resolve_version() -> str:
 
 
 NORTH_VERSION: str = _resolve_version()
+
+
+def installed_commit() -> str | None:
+    """The git commit this north was installed from, shortened, or None.
+
+    `uv tool install git+...` records it in the package's direct_url.json (PEP 610).
+    A local or editable install records no commit, and neither does a run from source.
+    """
+    try:
+        raw = distribution("north").read_text("direct_url.json")
+        commit = json.loads(raw or "{}").get("vcs_info", {}).get("commit_id")
+    except (PackageNotFoundError, ValueError, AttributeError):
+        return None
+    return commit[:7] if isinstance(commit, str) and commit else None

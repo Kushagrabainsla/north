@@ -122,6 +122,32 @@ def test_stop_server_takes_the_spawned_worker_with_the_supervisor(tmp_path, monk
     assert not (tmp_path / "north.pid").exists()
 
 
+def test_stop_server_leaves_out_the_process_doing_the_stopping(tmp_path, monkeypatch):
+    """An update started from the dashboard is a child of the server, and stopped itself."""
+    import os
+
+    import psutil
+
+    from cli.main import _stop_server
+
+    server = _sleeper("-c", "import time; time.sleep(60)")
+    signalled: list[int] = []
+    monkeypatch.setattr("config.settings.settings.north_home", tmp_path)
+    (tmp_path / "north.pid").write_text(str(server.pid))
+    monkeypatch.setattr("cli.main._port_in_use", lambda host, port: False)
+    # This process stands in for the update: one of the server's children.
+    monkeypatch.setattr(psutil.Process, "children", lambda self, recursive=False: [psutil.Process(os.getpid())])
+    monkeypatch.setattr(psutil.Process, "terminate", lambda self: signalled.append(self.pid))
+    monkeypatch.setattr(psutil, "wait_procs", lambda procs, timeout=None: (list(procs), []))
+    try:
+        _stop_server(8000)
+    finally:
+        server.kill()
+        server.wait()
+
+    assert signalled == [server.pid]
+
+
 def test_kill_port_finds_the_listener_without_root():
     """psutil.net_connections() needs root on macOS; the old lookup failed silently."""
     import socket

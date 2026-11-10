@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import click
 from typer.testing import CliRunner
@@ -119,3 +120,88 @@ def test_local_update_installs_editable_without_pulling(tmp_path, monkeypatch) -
     assert result.exit_code == 0
     assert commands == [["uv", "tool", "install", "--editable", "--force", str(checkout.resolve())]]
     assert all("pull" not in command for command in commands)
+
+
+class _Install:
+    def __init__(self, returncode: int, stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = ""
+        self.stderr = stderr
+
+
+def _remote_update(monkeypatch, *, running: bool, install: _Install) -> list[int]:
+    """A remote update with nothing real behind it. Returns the ports north was started on."""
+    started: list[int] = []
+    monkeypatch.setattr("cli.main.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("cli.main._stop_server_if_running", lambda port: running)
+    monkeypatch.setattr("cli.main._install_helper_binaries", lambda: None)
+    monkeypatch.setattr("cli.main.subprocess.run", lambda command, **kwargs: install)
+    monkeypatch.setattr(
+        "cli.main._start_server_process", lambda port, *a, **k: started.append(port) or SimpleNamespace(pid=1)
+    )
+    monkeypatch.setattr("cli.main._wait_for_server", lambda *a, **k: None)
+    return started
+
+
+def test_an_update_that_worked_is_recorded_for_the_dashboard(monkeypatch) -> None:
+    from config.settings import settings
+    from utils.update_record import last_update
+
+    started = _remote_update(monkeypatch, running=True, install=_Install(0))
+
+    result = runner.invoke(app, ["update", "--yes", "--port", "8123"])
+
+    assert result.exit_code == 0, result.output
+    assert started == [8123]
+    assert last_update(settings.north_home)["state"] == "updated"
+
+
+def test_a_failed_install_starts_north_again_and_says_why(monkeypatch) -> None:
+    """North was stopped for the install. Left down, the dashboard that asked could not say why."""
+    from config.settings import settings
+    from utils.update_record import last_update
+
+    started = _remote_update(monkeypatch, running=True, install=_Install(1, "no network"))
+
+    result = runner.invoke(app, ["update", "--yes", "--port", "8123"])
+
+    assert result.exit_code == 1
+    assert started == [8123]
+    last = last_update(settings.north_home)
+    assert last["state"] == "failed" and "no network" in last["detail"]
+
+
+def test_a_failed_install_leaves_a_stopped_north_stopped(monkeypatch) -> None:
+    started = _remote_update(monkeypatch, running=False, install=_Install(1, "no network"))
+
+    result = runner.invoke(app, ["update", "--yes", "--port", "8123"])
+
+    assert result.exit_code == 1
+    assert started == []
+
+
+def test_yes_answers_every_question_so_nothing_waits_on_a_terminal(monkeypatch) -> None:
+    """The dashboard runs the update with no terminal, so a question there would hang it."""
+    started = _remote_update(monkeypatch, running=False, install=_Install(0))
+
+    result = runner.invoke(app, ["update", "--yes", "--port", "8123"], input="")
+
+    assert result.exit_code == 0, result.output
+    assert "Start north now?" not in result.output
+    assert started == [8123]
+
+
+def test_declining_the_update_leaves_north_running_and_is_recorded(monkeypatch) -> None:
+    """North used to be stopped before the question, so a "no" left it stopped."""
+    from config.settings import settings
+    from utils.update_record import last_update
+
+    _remote_update(monkeypatch, running=True, install=_Install(0))
+    stops: list[int] = []
+    monkeypatch.setattr("cli.main._stop_server_if_running", lambda port: stops.append(port) or True)
+
+    result = runner.invoke(app, ["update", "--port", "8123"], input="n\n")
+
+    assert result.exit_code == 1
+    assert stops == []
+    assert last_update(settings.north_home)["state"] == "cancelled"

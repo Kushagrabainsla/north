@@ -1,7 +1,99 @@
 import { useState } from "react";
-import { Empty, HealthIndicator, PageHeader, Panel, unpricedNote, YoloBadge } from "../components";
+import { api, post } from "../api";
+import { Empty, ErrorNotice, HealthIndicator, PageHeader, Panel, unpricedNote, YoloBadge } from "../components";
+import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
 import { PartChain } from "./Settings";
+
+type LastUpdate = { state: "running" | "updated" | "failed" | "cancelled"; detail: string; at: string };
+export type UpdateStatus = { version: string; commit: string | null; last: LastUpdate | null };
+
+// How the last update went, in a few words. The update restarts north, so this is
+// read from what the update wrote down, after the page comes back.
+export function lastUpdateText(last: LastUpdate | null): string {
+  if (!last) return "never updated from here";
+  return {
+    running: `updating since ${last.at}`,
+    updated: `updated ${last.at}`,
+    failed: `failed ${last.at}`,
+    cancelled: `cancelled ${last.at}`,
+  }[last.state];
+}
+
+// An install can take a few minutes on a cold cache; past this, something is wrong.
+const UPDATE_WAIT_MS = 10 * 60_000;
+const UPDATE_POLL_MS = 3000;
+
+function UpdatePanel() {
+  const status = useResource<UpdateStatus>("/web/api/update");
+  const { confirm } = useDialog();
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState("");
+  const last = status.data?.last ?? null;
+
+  const update = async () => {
+    const yes = await confirm(
+      "North installs the latest version from GitHub and restarts. Anything running now is interrupted. This page reloads by itself when north is back, usually within a few minutes.",
+      { title: "Update north?", confirmLabel: "Update and restart" },
+    );
+    if (!yes) return;
+    setError("");
+    try {
+      await post("/web/api/update", {});
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setWaiting(true);
+    // North goes away while it installs, so a failed request here means "not back yet".
+    const deadline = Date.now() + UPDATE_WAIT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, UPDATE_POLL_MS));
+      try {
+        const now = await api<UpdateStatus>("/web/api/update");
+        // A reload, not a refresh: the update may have brought a new dashboard too.
+        if (now.last?.state !== "running") return window.location.reload();
+      } catch {
+        // still restarting
+      }
+    }
+    setWaiting(false);
+    setError(
+      "North has not come back after 10 minutes. Run north start in a terminal. What the update printed is in update.log in north's home folder.",
+    );
+  };
+
+  return (
+    <Panel
+      title="Version"
+      label="Updates"
+      actions={
+        <button className="primary-button" disabled={waiting || last?.state === "running"} onClick={update}>
+          {waiting || last?.state === "running" ? "Updating…" : "Update north"}
+        </button>
+      }
+    >
+      <div className="list-row">
+        <b>Running</b>
+        <span>
+          {status.data?.version || "–"}
+          {status.data?.commit ? ` · ${status.data.commit}` : ""}
+        </span>
+      </div>
+      <div className="list-row">
+        <b>Last update</b>
+        <span>{lastUpdateText(last)}</span>
+      </div>
+      {waiting && (
+        <div className="notice">
+          Updating. North stops, installs the new version and starts again. This page reloads when it is back.
+        </div>
+      )}
+      {!waiting && last?.state === "failed" && last.detail && <ErrorNotice message={last.detail.slice(-800)} />}
+      {error && <ErrorNotice message={error} />}
+    </Panel>
+  );
+}
 
 
 export function SystemPage() {
@@ -219,6 +311,7 @@ export function SystemPage() {
           </div>
         </Panel>
       </div>
+      <UpdatePanel />
     </div>
   );
 }
