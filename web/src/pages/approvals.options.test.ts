@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasOwnOptions } from "./Approvals";
+import { hasOwnOptions } from "./approvalCard";
 
 describe("hasOwnOptions", () => {
   it("is false for a plain yes or no", () => {

@@ -1,344 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { del, patch, post } from "../api";
 import { Markdown, NoticeList, PageHeader, Panel, timeAgo } from "../components";
-import { ActionBar, Button, confirmDelete, Empty, EntityForm, Field, ListRow, Loading, Notice, ResourceView, SectionHeader, Stack, Status, Tabs } from "../kit";
+import { ActionBar, Button, confirmDelete, Empty, EntityForm, Field, ListRow, Loading, Notice, ResourceView, SectionHeader, Stack, Status, Tabs, Note } from "../kit";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Link, useSearchParams } from "react-router-dom";
-import type { Approval, CardField, MemoryRef, Notice as NoticeEntry } from "../types";
-
-export const fieldLabel = (field: CardField) =>
-  field.label ||
-  field.name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
-
-/** Picks one of several answers: the chosen one stands out, the rest stay plain buttons. */
-function Choices({ options, chosen, onChoose }: { options: string[]; chosen: string; onChoose: (option: string) => void }) {
-  return (
-    <ActionBar align="start">
-      {options.map((option) => (
-        <Button
-          key={option}
-          size="sm"
-          aria-pressed={chosen === option}
-          onClick={() => onChoose(option)}
-        >
-          {option}
-        </Button>
-      ))}
-    </ActionBar>
-  );
-}
-
-// One filled-in field. Read-only ones render as text so the card reads as work
-// to check rather than a form to fill: the point is to see what North put there,
-// and only the parts it offered as editable invite typing.
-export function CardFieldRow({
-  field,
-  value,
-  onChange,
-  asking = false,
-}: {
-  field: CardField;
-  value: unknown;
-  onChange: (v: unknown) => void;
-  // A question's answer, not work to check: no "editable" mark, and its options are buttons.
-  asking?: boolean;
-}) {
-  const text = value === null || value === undefined ? "" : String(value);
-  let control;
-  if (!field.editable) {
-    control =
-      field.type === "link" ? (
-        <a href={text} target="_blank" rel="noreferrer">
-          {text}
-        </a>
-      ) : (
-        <div>{field.type === "boolean" ? (value ? "yes" : "no") : text || "—"}</div>
-      );
-  } else if (field.type === "textarea") {
-    control = (
-      <textarea
-        value={text}
-        rows={6}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    );
-  } else if (field.type === "boolean") {
-    control = (
-      <input
-        type="checkbox"
-        checked={Boolean(value)}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    );
-  } else if (field.type === "select") {
-    control = (
-      <select value={text} onChange={(e) => onChange(e.target.value)}>
-        {field.options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-    );
-  } else {
-    control = (
-      <input
-        type={field.type === "number" ? "number" : "text"}
-        value={text}
-        placeholder={asking ? "Your answer" : undefined}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    );
-  }
-  // Suggested answers are buttons in the field's group, not inside a <label>: a
-  // label passes a click on the question to its first button, which would pick
-  // the first option.
-  const suggested = field.editable && field.type === "text" && field.options.length > 0;
-  return (
-    <Field label={fieldLabel(field)} hint={field.editable && !asking ? "You can edit this." : undefined}>
-      {suggested && <Choices options={field.options} chosen={text} onChoose={onChange} />}
-      {control}
-    </Field>
-  );
-}
-
-// Every question on a card that asks several is answered: only then are they sent, together.
-export const answersComplete = (
-  card: Approval,
-  values: Record<string, unknown>,
-) =>
-  card.fields.every(
-    (field) => String(values[field.name] ?? "").trim() !== "",
-  );
-
-// Reviewing does not need to be fast. This page is where something goes out in
-// your name, so optimising it for throughput optimises for the failure it exists
-// to prevent - a queue cleared in forty seconds and a queue rubber-stamped are
-// indistinguishable afterwards. Everything here is in aid of judging one item
-// well: the source material beside the work, what the decision will cause said
-// out loud, and no way to decide more than one thing at a time.
-// Chips for the reasons that come up over and over, plus free text for the one
-// that does not. A rejection without a reason says only "no", which cannot be
-// learned from - and this is the highest-quality signal north ever gets.
-export const REJECTION_REASONS = [
-  "Not relevant",
-  "Wrong details",
-  "Already handled",
-  "Bad timing",
-  "Not interested",
-];
-
-/** A card's own options in the kit's order: the rejecting ones first, the card's
- *  first other option last, as the one primary. */
-export function orderOwnOptions(options: string[], rejecting: string[]): { option: string; rejects: boolean; primary: boolean }[] {
-  const rejects = options.filter((option) => rejecting.includes(option));
-  const others = options.filter((option) => !rejecting.includes(option));
-  const [main, ...rest] = others;
-  return [
-    ...rejects.map((option) => ({ option, rejects: true, primary: false })),
-    ...rest.map((option) => ({ option, rejects: false, primary: false })),
-    ...(main === undefined ? [] : [{ option: main, rejects: false, primary: true }]),
-  ];
-}
-
-export function ApprovalCard({
-  card,
-  onDecide,
-}: {
-  card: Approval;
-  onDecide: (
-    decision: string,
-    chosen_option: string,
-    values: Record<string, unknown>,
-    reason?: string,
-  ) => void;
-}) {
-  const fields = card.fields || [];
-  const [values, setValues] = useState<Record<string, unknown>>(() =>
-    Object.fromEntries(fields.map((f) => [f.name, f.value])),
-  );
-  const [showContext, setShowContext] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
-  const [reason, setReason] = useState("");
-  const [answer, setAnswer] = useState("");
-  const edited = fields.filter(
-    (f) => f.editable && values[f.name] !== f.value,
-  ).length;
-  // Prepared work is judged against its source, so the source is shown. For a
-  // guard-rail the context is incidental and stays behind a toggle - collapsing
-  // it there is right, and collapsing it here would make deciding-without-
-  // looking the default path, which is the specific thing to make harder.
-  const sideBySide = !card.blocking && Boolean(card.context);
-  const body = (
-    <>
-      {/* Markdown, as it is written: shown raw, a command read "```git checkout -- draft.txt```". */}
-      {card.message && <Markdown>{card.message}</Markdown>}
-      {fields.length > 0 && (
-        <div className="card-fields">
-          {fields.map((field) => (
-            <CardFieldRow
-              key={field.name}
-              field={field}
-              asking={card.type === "question"}
-              value={values[field.name]}
-              onChange={(v) =>
-                setValues((prev) => ({ ...prev, [field.name]: v }))
-              }
-            />
-          ))}
-        </div>
-      )}
-      {card.context && !sideBySide && (
-        <div className="card-context">
-          <Button variant="quiet" size="sm" onClick={() => setShowContext(!showContext)}>
-            {showContext ? "Hide" : "Show"} source
-          </Button>
-          {showContext && <pre>{card.context}</pre>}
-        </div>
-      )}
-    </>
-  );
-  const answerInOwnWords = () => onDecide("answered", answer.trim(), values);
-  let actions: ReactNode;
-  if (rejecting) {
-    // Asked only for prepared work. A guard-rail rejection is a decision about
-    // one action in one task, not an example of what should be proposed, so
-    // interrupting it for a reason would cost a click and teach nothing.
-    actions = (
-      <EntityForm
-        title="Why reject it?"
-        description="This is what makes the next batch better."
-        submitLabel="Reject"
-        onSubmit={() => onDecide("rejected", "", values, reason)}
-        onCancel={() => {
-          setRejecting(false);
-          setReason("");
-        }}
-      >
-        <Field label="Common reasons" wide>
-          <Choices options={REJECTION_REASONS} chosen={reason} onChoose={setReason} />
-        </Field>
-        <Field label="In your own words" wide>
-          <input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="or say why in your own words…"
-          />
-        </Field>
-      </EntityForm>
-    );
-  } else if (card.type === "question" && fields.length > 0) {
-    actions = (
-      <ActionBar>
-        <Button
-          variant="primary"
-          disabled={!answersComplete(card, values)}
-          onClick={() => onDecide("answered", "", values)}
-        >
-          Send answers
-        </Button>
-      </ActionBar>
-    );
-  } else if (card.type === "question") {
-    // Options are shortcuts; a question can always be answered in your own words.
-    // With buttons only, a question asked without options could not be answered here.
-    actions = (
-      <>
-        {card.options.length > 0 && (
-          <ActionBar align="start">
-            {card.options.map((option) => (
-              <Button key={option} onClick={() => onDecide("answered", option, values)}>
-                {option}
-              </Button>
-            ))}
-          </ActionBar>
-        )}
-        <Field label={card.options.length > 0 ? "Or in your own words" : "Your answer"}>
-          <input
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && answer.trim()) answerInOwnWords();
-            }}
-            placeholder="Type your answer"
-          />
-        </Field>
-        <ActionBar>
-          <Button variant="primary" disabled={!answer.trim()} onClick={answerInOwnWords}>
-            Answer
-          </Button>
-        </ActionBar>
-      </>
-    );
-  } else if (hasOwnOptions(card.options)) {
-    // A card with options of its own acts on the one you choose. Plain
-    // Approve and Reject closed a Resume/Discard card and did nothing.
-    actions = (
-      <ActionBar>
-        {orderOwnOptions(card.options, card.rejecting).map(({ option, rejects, primary }) => (
-          <Button
-            key={option}
-            variant={primary ? "primary" : "secondary"}
-            onClick={() => onDecide(rejects ? "rejected" : "approved", option, values)}
-          >
-            {option}
-          </Button>
-        ))}
-      </ActionBar>
-    );
-  } else {
-    // The same order as the chat's card: Reject, then Approve as the main action, last.
-    actions = (
-      <ActionBar>
-        <Button
-          onClick={() =>
-            card.source ? setRejecting(true) : onDecide("rejected", "", values)
-          }
-        >
-          Reject
-        </Button>
-        <Button variant="primary" onClick={() => onDecide("approved", "", values)}>
-          Approve
-        </Button>
-      </ActionBar>
-    );
-  }
-  return (
-    <article className="approval-card">
-      <div className="approval-type">
-        {card.type}
-        {!card.blocking && (
-          <span className="card-unblocking"> · nothing is waiting on this</span>
-        )}
-      </div>
-      <h2>{card.title}</h2>
-      {sideBySide ? (
-        <div className="approval-split">
-          <div className="approval-work">{body}</div>
-          <aside className="approval-source">
-            <div className="editor-label">Source</div>
-            <pre>{card.context}</pre>
-          </aside>
-        </div>
-      ) : (
-        body
-      )}
-      <small>
-        {card.agent} · {timeAgo(card.created_at)}
-        {edited > 0 && ` · ${edited} field${edited > 1 ? "s" : ""} edited`}
-      </small>
-      {/* What approving will actually do. Two cards with identical buttons can
-        submit an application and save a draft respectively. */}
-      {card.next_step && (
-        <p className="approval-consequence">
-          Approving will <b>{card.next_step}</b>.
-        </p>
-      )}
-      {actions}
-    </article>
-  );
-}
+import type { Approval, MemoryRef, Notice as NoticeEntry } from "../types";
+import { ApprovalCard } from "./approvalCard";
 
 export type ApprovalTab = "waiting" | "decisions" | "rules";
 
@@ -424,15 +92,16 @@ export function Approvals() {
   // the fastest possible review and the worst one, and this page exists for
   // per-item judgement.
   const section = (cards: Approval[]) => (
-    <div className="approval-stack">
+    <Stack>
       {cards.map((card) => (
         <ApprovalCard
           key={card.id}
           card={card}
+          wide
           onDecide={(d, o, v, r) => decide(card, d, o, v, r)}
         />
       ))}
-    </div>
+    </Stack>
   );
 
   return (
@@ -527,10 +196,6 @@ export function memoryLink(ref: MemoryRef): string {
   }
   if (ref.text) params.set("find", ref.text);
   return `/memory?${params.toString()}`;
-}
-
-export function hasOwnOptions(options: string[]): boolean {
-  return options.some((option) => option !== "Approve" && option !== "Reject");
 }
 
 export function approveLabel(options: string[]): string {
@@ -740,11 +405,11 @@ export function ApprovalMemoryPanel({ find = "" }: { find?: string }) {
   return (
     <Panel title="Learned decisions" label={`${rows.length} remembered`}>
       {error && <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice>}
-      <p className="muted memory-note">
+      <Note>
         Every time you approve or reject an action, north records it against a
         fingerprint of that action and replays your decision when a matching one
         comes up. Safe and autonomous modes replay these before anything else.
-      </p>
+      </Note>
       <ResourceView
         resource={resource}
         isEmpty={(data) => !data.length}
@@ -901,11 +566,11 @@ export function SafeActionsPanel() {
         </Notice>
       )}
 
-      <p className="muted memory-note">
+      <Note>
         What north may do without asking, in safe mode. Two things are never on
         this list, whatever you add: sending something to another person, and
         spending money. A sent email cannot be unsent.
-      </p>
+      </Note>
 
       <EntityForm
         title="Add a safe action"

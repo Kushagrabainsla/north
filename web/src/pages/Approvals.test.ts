@@ -5,7 +5,8 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { DialogProvider } from "../dialog";
-import { answersComplete, ApprovalMemoryPanel, SafeActionsPanel } from "./Approvals";
+import { ApprovalMemoryPanel, SafeActionsPanel } from "./Approvals";
+import { answersComplete } from "./approvalCard";
 import type { Approval, CardField } from "../types";
 
 const question = (name: string): CardField =>

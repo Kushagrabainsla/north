@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, post } from "../api";
 import { PageHeader, Panel } from "../components";
 import { useResource } from "../hooks";
-import { ActionBar, Button, CardGrid, Empty, EntityCard, EntityForm, Field, ListRow, Loading, Notice, SectionHeader, Status, Tabs, Toolbar } from "../kit";
+import { ActionBar, Button, CardGrid, Empty, EntityCard, EntityForm, Field, ListRow, Loading, Notice, SectionHeader, Status, Tabs, Toolbar, Note } from "../kit";
 import { addDeviceRequest, brandOf, deviceRequest, failures, inScope, scanSummary, kelvinToRgb, latestWins, swatch, type Light, type NetworkDevice, type Scan, type LightChange, type LightsOverview, type Scope } from "../lights";
 import { sliceMs, type Levels } from "../listen";
 import listenWorklet from "../listen.worklet.ts?worker&url";
@@ -145,7 +145,7 @@ function AddDevice({ onCancel }: { onCancel: () => void }) {
   };
   const devices = scan?.devices ?? [];
   return <Panel title="Add a device" label="Find devices" className="add-device" actions={<Button size="sm" onClick={onCancel}>Close</Button>}>
-    <p className="setup-copy">North lists every device on your network, named as far as it can tell. Choose one to connect: North works out how to control it in a session you can follow, asking you only for what you need to do, and tells you plainly if it cannot. Once it works, it shows up here with the same controls and music sync.</p>
+    <Note>North lists every device on your network, named as far as it can tell. Choose one to connect: North works out how to control it in a session you can follow, asking you only for what you need to do, and tells you plainly if it cannot. Once it works, it shows up here with the same controls and music sync.</Note>
     {looking ? <Loading label="Looking at every address on your network… this takes a few seconds"/>
       : scan && <>
         {GROUPS.map(([kinds, title]) => {
@@ -155,7 +155,7 @@ function AddDevice({ onCancel }: { onCancel: () => void }) {
             {group.map((device) => <DeviceRow key={device.id} device={device} sending={sending} onConnect={() => ask(device.id, device.name, deviceRequest(device))}/>)}
           </div>;
         })}
-        <p className="setup-copy">{scanSummary(scan)}</p>
+        <Note>{scanSummary(scan)}</Note>
       </>}
     <ActionBar align="start">
       <Button onClick={look} busy={looking} busyLabel="Looking…">Look again</Button>

@@ -7,7 +7,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { attachmentText, dictationProblem, ghostText, joinedTurn, optionParts, replyText, Sessions, sessionsEmptyMessage, turnStatus } from "./Chat";
+import { attachmentText, dictationProblem, ghostText, joinedTurn, replyText, Sessions, sessionsEmptyMessage, turnStatus } from "./Chat";
+import { optionParts } from "../kit";
 import { DialogProvider } from "../dialog";
 import type { Turn } from "../types";
 

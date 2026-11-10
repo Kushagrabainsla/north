@@ -26,6 +26,8 @@
 .kit-button-icon:hover:not(:disabled) { color: var(--text); }
 .kit-button-icon-danger { width: 30px; min-height: 30px; padding: 0; border-color: transparent; background: transparent; color: var(--red); opacity: .8; }
 .kit-button-icon-danger:hover:not(:disabled) { opacity: 1; background: rgba(239, 129, 122, .08); }
+.kit-button-link { min-height: 0; padding: 0; border: 0; background: none; color: var(--faint); font: inherit; letter-spacing: inherit; }
+.kit-button-link:hover:not(:disabled) { border: 0; background: none; color: var(--text); }
 /* Chosen: a picked answer, a day that is on, an open panel. The same look on every variant. */
 .kit-button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 /* The label inside a button takes the button's type, whatever a page's own span rule says. */
@@ -52,7 +54,7 @@
 .kit-toolbar-actions { display: flex; gap: 8px; margin-left: auto; }
 
 /* ── Inputs: one look for every control in a form, a search or a toolbar ── */
-.kit-search input, .kit-field input:not([type=checkbox]):not([type=radio]):not([type=range]),
+.kit-search input, .kit-other-answer input, .kit-field input:not([type=checkbox]):not([type=radio]):not([type=range]),
 .kit-field select, .kit-field textarea {
   width: 100%; min-height: 34px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 7px;
   background: var(--bg); color: var(--text); font: 11px/1.5 var(--mono); letter-spacing: normal;
@@ -81,6 +83,13 @@
 .kit-tone-bad { border-color: rgba(239, 129, 122, .4); color: var(--red); background: rgba(239, 129, 122, .08); }
 .kit-badge { border-color: var(--line-strong); color: var(--faint); }
 .kit-badge-accent { border-color: rgba(184, 239, 114, .3); color: var(--accent); }
+
+/* ── Notes and pane labels ── */
+.kit-note { max-width: 76ch; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.kit-note p { margin: 0 0 8px; }
+.kit-note p:last-child { margin-bottom: 0; }
+.kit-note a { color: var(--accent); }
+.kit-pane-label { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--faint); font: 600 9px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
 
 /* ── Stack, key/values ── */
 .kit-stack { display: flex; flex-direction: column; min-width: 0; }
@@ -153,6 +162,32 @@ button.kit-card-head:hover b, a.kit-card-head:hover b { color: var(--accent); }
 .kit-card-head small { grid-area: meta; margin-top: 3px; color: var(--faint); font-size: 10px; }
 .kit-card-body { padding: 0 13px 13px; }
 
+/* ── Waiting on you: one card for a question or an action to approve ── */
+.kit-waiting { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.kit-waiting-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--faint); font: 10px var(--mono); }
+.kit-waiting-top > span:first-child { color: var(--amber); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; font-size: 9px; }
+.kit-waiting-title { color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.kit-waiting-title p { margin: 0; }
+.kit-waiting-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+.kit-waiting-body .markdown p { margin: 0 0 8px; }
+.kit-waiting-body b { color: var(--text); }
+.kit-waiting-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .85fr); gap: 20px; align-items: start; }
+.kit-waiting-source { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding-left: 18px; border-left: 1px solid var(--line); }
+.kit-waiting pre { max-height: clamp(220px, 36vh, 640px); margin: 0; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); font: 10px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.kit-waiting-details summary { color: var(--faint); font-size: 10px; cursor: pointer; }
+.kit-waiting-details[open] summary { margin-bottom: 8px; }
+.kit-waiting-meta { color: var(--faint); font-size: 10px; }
+.kit-waiting-foot:empty { display: none; }
+.kit-choices { display: grid; gap: 2px; }
+.kit-choice { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; width: calc(100% + 20px); margin: 0 -10px; padding: 9px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font: 12px var(--mono); text-align: left; cursor: pointer; }
+.kit-choice:hover, .kit-choice[aria-pressed="true"] { background: var(--surface-2); }
+.kit-choice > span { flex: none; max-width: 100%; overflow-wrap: anywhere; }
+.kit-choice small { color: var(--faint); font-size: 11px; line-height: 1.45; text-align: right; }
+.kit-choice:hover small, .kit-choice[aria-pressed="true"] > span { color: var(--accent); }
+.kit-choice-other { color: var(--faint); }
+.kit-other-answer { display: flex; gap: 8px; }
+.kit-other-answer input { flex: 1; }
+
 /* ── Forms ── */
 .kit-form { display: flex; flex-direction: column; gap: 16px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
 .kit-form-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
@@ -171,4 +206,8 @@ button.kit-card-head:hover b, a.kit-card-head:hover b { color: var(--accent); }
   .kit-table-open { grid-template-columns: 1fr; gap: 4px; }
   .kit-toolbar-actions { margin-left: 0; }
   .kit-row-line { flex-wrap: wrap; }
+  .kit-waiting-split { grid-template-columns: 1fr; }
+  .kit-waiting-source { padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+  .kit-choice { flex-direction: column; gap: 2px; }
+  .kit-choice small { text-align: left; }
 }

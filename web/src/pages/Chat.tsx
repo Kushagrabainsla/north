@@ -3,12 +3,13 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, FolderOpen, Pin, PinOff, Trash2 } from "lucide-react";
 import { api, del, patch, post } from "../api";
 import { ErrorNotice, InferenceCategories, Markdown, PageHeader, PromptTelemetry, timeAgo } from "../components";
-import { ActionBar, Button, confirmDelete, Empty, EntityTable, Loading, Notice, ResourceView, SearchField, Status, Tabs, Toolbar, type Column } from "../kit";
+import { ActionBar, Button, confirmDelete, Empty, EntityTable, Loading, Notice, ResourceView, SearchField, Stack, Status, Tabs, Toolbar, type Column } from "../kit";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
+import type { Approval, Conversation, Signal, Turn, WorkspaceListing } from "../types";
 import { STEP_EVENTS, clock, currentActivity, foldStep, latestThought, spoken, type Step } from "./liveSteps";
-import { CardFieldRow, answersComplete, fieldLabel } from "./Approvals";
+import { ApprovalCard } from "./approvalCard";
+import { EventList } from "../events";
 
 /** North's self-checks, rendered live rather than only reachable in the ledger.
  *  Each entry turns one SSE payload into a one-line verdict plus its details. */
@@ -49,12 +50,6 @@ export function ghostText(paused: boolean, reasoning: string, steps: Step[]): st
   if (paused) return "Paused.";
   const activity = currentActivity(steps);
   return latestThought(reasoning) || (activity ? `${activity}…` : "Starting…");
-}
-
-/** An offered answer as a title and its explanation: "North-native: flows that…" → both parts. */
-export function optionParts(option: string): [string, string] {
-  const at = option.indexOf(": ");
-  return at > 0 ? [option.slice(0, at), option.slice(at + 2)] : [option, ""];
 }
 
 /** The reply to show. While a task runs, its live text is the newest; once it ends, the
@@ -154,92 +149,6 @@ function Trace({ steps, reasoning, footer, children }: { steps: Step[]; reasonin
   </div>;
 }
 
-/** Offered answers as rows: the part before ": " as the title, the rest under it. */
-function OptionRows({ options, chosen, pick }: { options: string[]; chosen?: unknown; pick: (option: string) => void }) {
-  return <div className="ask-options">{options.map(option => {
-    const [title, detail] = optionParts(option);
-    return <button type="button" key={option} className={`ask-option ${chosen === option ? "chosen" : ""}`} onClick={() => pick(option)}><span>{title}</span>{detail && <small>{detail}</small>}</button>;
-  })}</div>;
-}
-
-/** An answer in your own words, behind "Something else…" when there are options to pick from. */
-function OwnAnswer({ hasOptions, value, onChange, onSubmit, label }: { hasOptions: boolean; value: string; onChange: (value: string) => void; onSubmit?: () => void; label: string }) {
-  const [open, setOpen] = useState(!hasOptions || Boolean(value));
-  if (!open) return <button type="button" className="ask-option ask-other" onClick={() => setOpen(true)}><span>Something else…</span></button>;
-  return <div className="ask-own">
-    <input autoFocus={hasOptions} value={value} onChange={event => onChange(event.target.value)} placeholder="Type your answer" onKeyDown={event => { if (event.key === "Enter" && value.trim() && onSubmit) { event.preventDefault(); onSubmit(); } }}/>
-    {onSubmit && <Button variant="primary" size="sm" disabled={!value.trim()} onClick={onSubmit}>{label}</Button>}
-  </div>;
-}
-
-/** A card waiting on you inside the turn: a question, one at a time, or an action to approve. */
-export function ApprovalCard({ card, respond }: { card: Approval; respond: (card: Approval, decision: string, answer?: string, values?: Record<string, unknown>) => Promise<void> }) {
-  const fields = card.fields || [];
-  const [answer, setAnswer] = useState("");
-  const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries(fields.map(field => [field.name, field.value])));
-  const [index, setIndex] = useState(0);
-  const setValue = (name: string, value: unknown) => setValues(current => ({ ...current, [name]: value }));
-  const shown = fields.filter(field => !field.editable);
-  const readOnly = shown.length > 0 && <div className="card-fields">{shown.map(field => <CardFieldRow key={field.name} field={field} value={values[field.name]} onChange={() => undefined}/>)}</div>;
-  const context = card.context && <details className="card-context"><summary>Review source</summary><pre>{card.context}</pre></details>;
-
-  if (card.type !== "question") {
-    return <div className="ask-card">
-      <div className="ask-top"><span>Needs your OK</span></div>
-      <h3>{card.title}</h3>
-      <div className="ask-message"><Markdown>{card.message}</Markdown></div>
-      {fields.length > 0 && <div className="card-fields">{fields.map(field => <CardFieldRow key={field.name} field={field} value={values[field.name]} onChange={value => setValue(field.name, value)}/>)}</div>}
-      {context}
-      {/* The standard for every approval card: Reject, then Approve as the primary action, at the right. */}
-      <div className="ask-foot"><ActionBar>
-        <Button size="sm" onClick={() => void respond(card, "rejected", "", values)}>Reject</Button>
-        <Button variant="primary" size="sm" onClick={() => void respond(card, "approved", "", values)}>Approve</Button>
-      </ActionBar></div>
-    </div>;
-  }
-
-  const questions = fields.filter(field => field.editable);
-  if (!questions.length) {
-    const send = () => respond(card, "answered", answer, values);
-    return <div className="ask-card">
-      <div className="ask-top"><span>North asks</span></div>
-      <div className="ask-title"><Markdown>{card.message}</Markdown></div>
-      {readOnly}{context}
-      <OptionRows options={card.options} pick={option => respond(card, "answered", option, values)}/>
-      <OwnAnswer hasOptions={card.options.length > 0} value={answer} onChange={setAnswer} onSubmit={send} label="Answer"/>
-    </div>;
-  }
-
-  // Several questions: one at a time, all sent together once each has an answer.
-  const at = Math.min(index, questions.length - 1);
-  const field = questions[at];
-  const last = at === questions.length - 1;
-  const value = values[field.name];
-  const text = value === null || value === undefined ? "" : String(value);
-  const answered = text.trim() !== "";
-  const next = () => setIndex(at + 1);
-  const send = () => respond(card, "answered", "", values);
-  const withOptions = field.options.length > 0 && (field.type === "text" || field.type === "select");
-  return <div className="ask-card">
-    <div className="ask-top"><span>Question {at + 1} of {questions.length}</span>{at > 0 && <button type="button" className="link-button" onClick={() => setIndex(at - 1)}>Back</button>}</div>
-    {at === 0 && readOnly}{at === 0 && context}
-    <h3>{fieldLabel(field)}</h3>
-    {withOptions && <OptionRows options={field.options} chosen={value} pick={option => { setValue(field.name, option); if (!last) next(); }}/>}
-    {field.type === "text"
-      ? <OwnAnswer key={field.name} hasOptions={withOptions} value={field.options.includes(text) ? "" : text} onChange={typed => setValue(field.name, typed)} onSubmit={last ? undefined : next} label="Next"/>
-      : !withOptions && <CardFieldRow field={field} asking value={value} onChange={changed => setValue(field.name, changed)}/>}
-    <div className="ask-foot">{last
-      ? <Button variant="primary" size="sm" disabled={!answersComplete(card, values)} onClick={() => void send()}>Send answers</Button>
-      : answered && <Button size="sm" onClick={next}>Next</Button>}</div>
-  </div>;
-}
-
-function EventRows({ entries }: { entries: LedgerEntry[] }) {
-  return <div className="event-list">{entries.map(entry => <div className="event-row" key={entry.id}>
-    <span className={`event-dot ${entry.status || ""}`}/><div><b>{entry.action?.replaceAll("_", " ") || entry.source}</b><small>{entry.agent || entry.source} · {timeAgo(entry.timestamp)}</small>{entry.output && <p>{entry.output.slice(0, 500)}</p>}</div>
-  </div>)}</div>;
-}
-
 function DetailSection({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
   return <details className="detail-section"><summary><span>{title}</span>{count !== undefined && <em>{count}</em>}<i>⌄</i></summary><div>{children}</div></details>;
 }
@@ -303,7 +212,7 @@ function JoinedTurn({ turn }: { turn: Turn }) {
   </article>;
 }
 
-export function TurnBundle({ turn, streamed, reasoning = "", signals = [], steps = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; reasoning?: string; signals?: Signal[]; steps?: Step[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
+export function TurnBundle({ turn, streamed, reasoning = "", signals = [], steps = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; reasoning?: string; signals?: Signal[]; steps?: Step[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, option: string, values: Record<string, unknown>, reason?: string) => Promise<void> }) {
   const detail = turn.detail;
   const taskStatus = detail?.task.status || "pending";
   const status = turnStatus(taskStatus, pendingApprovals.length > 0, detail?.outcome_status);
@@ -341,7 +250,7 @@ export function TurnBundle({ turn, streamed, reasoning = "", signals = [], steps
   const models = [...new Set(runs.flatMap(run => run.models_used))];
   const footer = [agents.join(", "), models.join(", "), clock(elapsed), tokens ? `${tokens.toLocaleString()} tokens` : "", cost ? `$${cost.toFixed(4)}` : ""].filter(Boolean);
   const stepCount = steps.length ? `${steps.length} step${steps.length === 1 ? "" : "s"}` : "";
-  const stop = ["pending", "running", "queued", "retrying", "paused"].includes(taskStatus) && <button type="button" className="link-button turn-stop" onClick={() => control("cancel")}>Stop</button>;
+  const stop = ["pending", "running", "queued", "retrying", "paused"].includes(taskStatus) && <Button variant="link" onClick={() => control("cancel")}>Stop</Button>;
   return <article className="turn-bundle">
     <div className="user-prompt"><div className="user-message"><div className="turn-meta">You · {timeAgo(turn.created_at)}</div><p>{turn.prompt}</p></div><div className="avatar user-avatar">You</div></div>
     <div className="north-response"><div className="avatar north-avatar">N</div><div className="response-body">
@@ -349,18 +258,18 @@ export function TurnBundle({ turn, streamed, reasoning = "", signals = [], steps
       {thinking ? <>
         <div className="ghost-thought"><span className={paused ? "" : "shimmer"}>{ghostText(paused, reasoning, steps)}</span></div>
         <div className="turn-quiet">
-          {stepCount && <button type="button" className="link-button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide steps" : stepCount}</button>}
+          {stepCount && <Button variant="link" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide steps" : stepCount}</Button>}
           <span>{clock(elapsed)}</span>
-          {paused && <button type="button" className="link-button turn-resume" onClick={() => control("resume")}>Resume</button>}
+          {paused && <Button variant="link" onClick={() => control("resume")}>Resume</Button>}
           {stop}
         </div>
       </> : <div className="turn-quiet">
-        <button type="button" className="link-button turn-fold" aria-expanded={open} onClick={() => setOpen(!open)}><span aria-hidden="true">{open ? "⌄" : "›"}</span>Thought for {spoken(elapsed)}{stepCount && ` · ${stepCount}`}</button>
+        <Button variant="link" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "⌄" : "›"} Thought for {spoken(elapsed)}{stepCount && ` · ${stepCount}`}</Button>
         {isActive && stop}
       </div>}
       {open && <Trace steps={steps} reasoning={reasoning} footer={footer}>{detail && <details className="trace-more"><summary>Everything North recorded</summary><div className="execution-details">
         <DetailSection title="Plan and routing" count={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || "")).length}>
-          <EventRows entries={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || ""))}/>
+          <EventList entries={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || ""))}/>
         </DetailSection>
         <DetailSection title="Agent runs" count={runs.length}>
           {runs.length ? runs.map(run => <div className="run-card" key={run.run_id}><div><b>{run.agent}</b><Status value={run.status}/></div><small>Attempt {run.attempt + 1} · {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "running"} · {run.providers_used?.join(", ") || "provider pending"} · {run.models_used.join(", ") || "model pending"}</small><PromptTelemetry run={run}/>{run.error && <p className="error-text">{run.error}</p>}</div>) : <Empty>No agent runs recorded yet.</Empty>}
@@ -369,16 +278,16 @@ export function TurnBundle({ turn, streamed, reasoning = "", signals = [], steps
           <InferenceCategories categories={inferenceCategories}/>
         </DetailSection>
         <DetailSection title="Tools and skills" count={tools.length + runs.flatMap(r => r.skills).length}>
-          <EventRows entries={tools}/>{runs.flatMap(run => run.skills.map(skill => <div className="skill-chip" key={`${run.run_id}-${skill.name}`}>{skill.name} <small>v{skill.version}</small></div>))}
+          <EventList entries={tools}/>{runs.flatMap(run => run.skills.map(skill => <div className="skill-chip" key={`${run.run_id}-${skill.name}`}>{skill.name} <small>v{skill.version}</small></div>))}
         </DetailSection>
         <DetailSection title="Approvals and verification" count={approvals.length + verification.length}>
-          <EventRows entries={[...approvals, ...verification]}/>
+          <EventList entries={[...approvals, ...verification]}/>
         </DetailSection>
         <DetailSection title="Complete timeline" count={entries.length}>
-          <EventRows entries={entries}/>
+          <EventList entries={entries}/>
         </DetailSection>
       </div></details>}</Trace>}
-      {pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} respond={respondApproval}/>)}
+      {pendingApprovals.length > 0 && <Stack>{pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} onDecide={(decision, option, values, reason) => respondApproval(card, decision, option, values, reason)}/>)}</Stack>}
       {reply && <Markdown>{reply}</Markdown>}
       {!isActive && !reply && <Empty>No response was recorded for this task.</Empty>}
       <SignalStrip signals={signals}/>
@@ -585,7 +494,7 @@ export function Chat() {
     await appendFiles(Array.from(event.target.files || []));
     event.target.value = "";
   };
-  const respondApproval = async (card: Approval, decision: string, answer = "", values: Record<string, unknown> = {}) => { try { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option: answer, values }); flash("Response received. North is continuing the task."); await Promise.all([approvalResource.reload(), room.reload()]); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
+  const respondApproval = async (card: Approval, decision: string, option = "", values: Record<string, unknown> = {}, reason = "") => { try { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option: option, values, reason }); flash("Response received. North is continuing the task."); await Promise.all([approvalResource.reload(), room.reload()]); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
   const rename = async () => {
     if (!room.data) return;
     const title = await dialog.prompt("What should this session be called?", room.data.title,

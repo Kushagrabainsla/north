@@ -3,7 +3,7 @@ import { api, del, post } from "./api";
 import { Panel } from "./components";
 import { useDialog } from "./dialog";
 import { useResource } from "./hooks";
-import { Button, confirmDelete, EntityForm, Field, ListRow, Loading, Notice, Status, type NoticeTone, type Tone } from "./kit";
+import { Button, confirmDelete, EntityForm, Field, ListRow, Loading, Notice, Status, type NoticeTone, type Tone, Note } from "./kit";
 
 // Connections North works with: AI providers, coding agents and Telegram. Each
 // lives here once; onboarding and Settings show the same component, never a copy.
@@ -320,7 +320,7 @@ export function CodingAgents() {
       return <ListRow key={agent.name} title={agent.name} meta={[agent.version]} description={agent.detail}
         status={<Status label={state.label} tone={state.tone}/>}/>;
     })}
-    <p className="setup-copy muted">North hands coding to these agents in their own login. Ready means installed, recent enough, logged in and able to run its sandbox here; usage limits are only known when a run starts.</p>
+    <Note>North hands coding to these agents in their own login. Ready means installed, recent enough, logged in and able to run its sandbox here; usage limits are only known when a run starts.</Note>
   </Panel>;
 }
 
@@ -383,7 +383,7 @@ export function TelegramConnection() {
       <Field label="Allowed user ids"><input value={allowed} placeholder="123456789, comma-separated for more than one"
         onChange={event => setIds(event.target.value)}/></Field>
     </EntityForm>
-    <p className="setup-copy muted">Send the bot any message or voice note to run a task. North also sends approval requests there, unless the terminal UI is already showing them. In the chat, <code>/help</code> lists the commands; <code>/workspace</code> picks the folder a task works in, which must be a git repository for coding.</p>
+    <Note>Send the bot any message or voice note to run a task. North also sends approval requests there, unless the terminal UI is already showing them. In the chat, <code>/help</code> lists the commands; <code>/workspace</code> picks the folder a task works in, which must be a git repository for coding.</Note>
   </Panel>;
 }
 
@@ -461,7 +461,7 @@ export function Secrets() {
   return <Panel title="Secrets" label={saved.length ? `${saved.length} saved` : "None yet"}>
     {message && <Notice tone="success">{message}</Notice>}
     {(error || resource.error) && <Notice tone="error">{error || resource.error}</Notice>}
-    <p className="setup-copy muted">Keys and passwords for the tools North makes for you. North's AI only sees a secret's name: North hands the value to a tool that says it uses it, once you approve that tool, and hides it from anything a tool returns. Kept on this computer, readable only by you.</p>
+    <Note>Keys and passwords for the tools North makes for you. North's AI only sees a secret's name: North hands the value to a tool that says it uses it, once you approve that tool, and hides it from anything a tool returns. Kept on this computer, readable only by you.</Note>
     {missing.map((needed) => <Notice tone="warning" key={needed.name}>
       {needed.used_by.join(", ")} needs the secret <b>{needed.name}</b>.{" "}
       <Button variant="quiet" size="sm" onClick={() => setName(needed.name)}>Add it</Button>

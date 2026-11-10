@@ -5,7 +5,7 @@ import { BrowserProfiles } from "../browserProfiles";
 import { CodingAgents, ProviderConnections, TelegramConnection, type TelegramStatus } from "../connections";
 import { configureDisplayTimezone, PageHeader, Panel } from "../components";
 import { useResource } from "../hooks";
-import { ActionBar, Button, Empty, ListRow, Loading, Notice, Status, Tabs, type NoticeTone } from "../kit";
+import { ActionBar, Button, Empty, ListRow, Loading, Notice, Status, Tabs, type NoticeTone, Note } from "../kit";
 
 interface SetupData {
   status: "not_started" | "in_progress" | "completed" | "skipped"; step: number;
@@ -29,7 +29,7 @@ export function SetupReminder() {
   const { data } = useResource<SetupData>("/web/api/setup", 10000);
   if (!data || !setupNeedsAttention(data.status)) return null;
   return <Panel title="Set up North" label="Your connections" className="setup-reminder">
-    <p className="setup-copy">Connect an AI provider, your coding agents, browser profiles and Telegram, and choose whether North reads your files. Skip any step and come back later.</p>
+    <Note>Connect an AI provider, your coding agents, browser profiles and Telegram, and choose whether North reads your files. Skip any step and come back later.</Note>
     <Button variant="primary" to="/setup">{data.status === "in_progress" ? "Continue setup" : "Start setup"}</Button>
   </Panel>;
 }
@@ -53,11 +53,11 @@ export function YourFiles() {
   return <Panel title="Let North learn from your files" label="Optional"
     actions={!data ? undefined : data.status === "complete" && !fresh.length ? <Status value="completed"/>
       : <Button variant="primary" busy={data.status === "in_progress"} busyLabel="Reading…" onClick={() => void start()}>{fresh.length ? `Read ${fresh.length} new file${fresh.length > 1 ? "s" : ""}` : "Read my files"}</Button>}>
-    <div className="setup-copy">
+    <Note>
       <p>North can read documents like your resume, notes and plans once, and remember facts about you: your work, goals and preferences. Then you don’t have to repeat them.</p>
       <p>It looks only in your Documents, Desktop, Downloads and notes folders and skips code and build files. The text of each document goes to your AI provider to pull out facts. Nothing starts until you press the button.</p>
       {data?.status === "complete" && <p>North has read the documents marked completed. Facts it learned are on the <Link to="/memory?tab=facts">Memory</Link> page, where you can correct or forget them.{fresh.length > 0 && " Files added or changed since then are marked pending."}</p>}
-    </div>
+    </Note>
     {said && <Notice tone={said.tone}>{said.text}</Notice>}
     {resource.error && <Notice tone="error">{resource.error}</Notice>}
     {resource.loading && !data ? <Loading/> : <>
@@ -80,7 +80,7 @@ function Finish({ data }: { data: SetupData }) {
   return <Panel title="Ready to go" label="Summary">
     <div>{rows.map(([name, ok, detail]) =>
       <ListRow key={name} title={name} description={detail} status={<Status value={ok ? "set" : "not_set"}/>}/>)}</div>
-    <p className="setup-copy muted">North asks before acting according to your approval mode. Change it, and everything else here, in <Link to="/settings">Settings</Link>.</p>
+    <Note>North asks before acting according to your approval mode. Change it, and everything else here, in <Link to="/settings">Settings</Link>.</Note>
   </Panel>;
 }
 

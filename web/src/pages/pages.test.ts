@@ -1,8 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ApprovalCard, CardFieldRow, DecisionRow, memoryLabel, memoryLink, orderOwnOptions } from "./Approvals";
-import { ApprovalCard as InlineApprovalCard } from "./Chat";
+import { DecisionRow, memoryLabel, memoryLink } from "./Approvals";
+import { ApprovalCard, CardFieldRow, orderOwnOptions } from "./approvalCard";
 import type { Approval, CardField } from "../types";
 
 describe("links from a decision to the memory it used", () => {
@@ -48,10 +48,10 @@ describe("answering a question on the approvals page", () => {
     expect(markup([])).toContain('placeholder="Type your answer"');
   });
 
-  it("keeps the offered options as buttons beside it", () => {
+  it("offers the options as rows, with your own words behind Something else…", () => {
     const html = markup(["Q2", "Q3"]);
     expect(html).toContain("<span>Q2</span></button>");
-    expect(html).toContain('placeholder="Type your answer"');
+    expect(html).toContain("Something else…");
   });
 });
 
@@ -102,11 +102,11 @@ describe("a question in the chat", () => {
   const field = (name: string, label: string, options: string[]) =>
     ({ name, label, type: "text", value: "", editable: true, options });
   const asks = (fields: unknown[], options: string[] = []) =>
-    renderToStaticMarkup(createElement(InlineApprovalCard, {
+    renderToStaticMarkup(createElement(ApprovalCard, {
       card: { id: "q1", type: "question", task_id: "t1", agent: "general", title: "General - Questions",
               message: "Answer these together, then send them.", options, status: "pending", chosen_option: "",
               created_at: "", fields, context: "", response: {}, blocking: true, source: "" } as unknown as Approval,
-      respond: async () => undefined,
+      onDecide: () => undefined,
     }));
 
   it("asks several questions one at a time, each option as a title with its explanation", () => {
@@ -143,10 +143,8 @@ describe("what an approval card shows", () => {
        memory_used: [] }) as unknown as Approval;
 
   it("renders the command as code on the approvals page and in the chat", () => {
-    const page = renderToStaticMarkup(createElement(ApprovalCard, { card: card("pending"), onDecide: () => undefined }));
-    const inline = renderToStaticMarkup(
-      createElement(InlineApprovalCard, { card: card("pending"), respond: async () => undefined }),
-    );
+    const page = renderToStaticMarkup(createElement(ApprovalCard, { card: card("pending"), onDecide: () => undefined, wide: true }));
+    const inline = renderToStaticMarkup(createElement(ApprovalCard, { card: card("pending"), onDecide: () => undefined }));
     for (const html of [page, inline]) {
       expect(html).toContain("<pre><code>git checkout -- draft.txt</code></pre>");
       expect(html).not.toContain("```");
@@ -154,9 +152,7 @@ describe("what an approval card shows", () => {
   });
 
   it("offers Reject, then Approve as the primary action, in the chat", () => {
-    const inline = renderToStaticMarkup(
-      createElement(InlineApprovalCard, { card: card("pending"), respond: async () => undefined }),
-    );
+    const inline = renderToStaticMarkup(createElement(ApprovalCard, { card: card("pending"), onDecide: () => undefined }));
     expect(inline).toMatch(/<div class="kit-action-bar kit-action-bar-end">.*kit-button-secondary[^>]*><span>Reject<\/span>.*kit-button-primary[^>]*><span>Approve<\/span>/);
   });
 
@@ -178,5 +174,29 @@ describe("what an approval card shows", () => {
       createElement(DecisionRow, { card: card("approved", "you"), onOverrule: async () => undefined }),
     );
     expect(yours).not.toContain("Overrule");
+  });
+});
+
+describe("one card on the approvals page and in the chat", () => {
+  const prepared = (options: string[], rejecting: string[] = []) =>
+    ({ id: "a2", type: "approval", task_id: "t1", agent: "north", title: "Send the application?", message: "Ready to send.",
+       options, rejecting, status: "pending", chosen_option: "", created_at: "", fields: [], context: "The job post",
+       response: {}, blocking: false, source: "jobs" }) as unknown as Approval;
+  const render = (card: Approval, wide = false) =>
+    renderToStaticMarkup(createElement(ApprovalCard, { card, onDecide: () => undefined, wide }));
+
+  it("puts prepared work's source beside it on the page, and behind Review source in the chat", () => {
+    expect(render(prepared([]), true)).toContain("kit-waiting-split");
+    const chat = render(prepared([]));
+    expect(chat).not.toContain("kit-waiting-split");
+    expect(chat).toContain("<summary>Review source</summary>");
+    expect(chat).toContain("nothing is waiting on this");
+  });
+
+  it("acts on a card's own options in the chat too, not a plain Approve and Reject", () => {
+    // The chat's own card showed Approve and Reject on a Resume/Discard card, which did nothing.
+    const chat = render(prepared(["Resume", "Discard"], ["Discard"]));
+    expect(chat).toContain("<span>Resume</span>");
+    expect(chat).not.toContain("<span>Approve</span>");
   });
 });

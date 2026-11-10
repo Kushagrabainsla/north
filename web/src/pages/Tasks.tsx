@@ -15,13 +15,14 @@
 // run, and dropping them would lose the only place they are visible.
 
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { post } from "../api";
 import { useResource } from "../hooks";
-import { formatDateTime, InferenceCategories, PageHeader, Panel, PromptTelemetry, timeAgo } from "../components";
-import { Button, Empty, EntityTable, ListRow, Loading, Notice, ResourceView, SearchField, Status, Tabs, Toolbar, type Column, type TabItem } from "../kit";
+import { InferenceCategories, PageHeader, Panel, PromptTelemetry, timeAgo } from "../components";
+import { Button, Empty, EntityTable, ListRow, Loading, Notice, ResourceView, SearchField, Stat, StatGrid, Status, Tabs, Toolbar, type Column, type TabItem } from "../kit";
 import type { AgentRun, Approval, Artifact, Conversation, LedgerEntry, TaskDetail } from "../types";
 import { RoutingAttempts } from "./routing";
+import { EventList } from "../events";
 import { ArtifactGrid } from "./Artifacts";
 import { turnStatus } from "./Chat";
 
@@ -78,34 +79,6 @@ export function summarise(entries: LedgerEntry[]): TaskSummary[] {
 
 // ── One event ────────────────────────────────────────────────────────────────
 
-// `showTask` is on in the unscoped stream and off inside a task, where saying
-// which task you are looking at for the fortieth time is noise. Activity showed
-// it on every row because it had no other way to tell you - and then you had to
-// copy the id to the other page by hand, which is what the merge is for, so here
-// it is the link instead.
-function EventRow({ entry, showTask = false }: { entry: LedgerEntry; showTask?: boolean }) {
-  const body = entry.output || entry.input || "";
-  return <div className="event-row">
-    <span className={`event-dot ${entry.status || ""}`}/>
-    <div>
-      <b>{entry.action?.replaceAll("_", " ") || entry.source}</b>
-      <small>
-        {entry.agent || entry.source}
-        {showTask && <> · {entry.task_id
-          ? <Link className="event-task" to={`/tasks/${entry.task_id}`}>{entry.task_id}</Link>
-          // north's own events - startup, cron ticks, recovery sweeps - belong to
-          // no run. Activity called that "system"; keeping the word means the
-          // column never reads as a missing value.
-          : "system"}</>}
-        {" · "}{formatDateTime(entry.timestamp)}
-        {entry.model_used && ` · ${entry.model_used}`}
-        {entry.duration_ms ? ` · ${(entry.duration_ms / 1000).toFixed(1)}s` : ""}
-      </small>
-      {body && <p>{body.slice(0, 600)}</p>}
-    </div>
-    <Status value={entry.status}/>
-  </div>;
-}
 
 // ── Everything one task did ──────────────────────────────────────────────────
 
@@ -173,12 +146,12 @@ function TaskActivity({ taskId }: { taskId: string }) {
       actions={back}/>
     {detail.error && <Notice tone="error">{detail.error}</Notice>}
 
-    <div className="metric-cards">
-      <div><span>Status</span><strong><Status value={status}/></strong></div>
-      <div><span>Agent runs</span><strong>{runs.length}</strong></div>
-      <div><span>Events</span><strong>{entries.length}</strong></div>
-      <div><span>Cost</span><strong>${spend.toFixed(4)}</strong></div>
-    </div>
+    <StatGrid>
+      <Stat label="Status" value={<Status value={status}/>}/>
+      <Stat label="Agent runs" value={runs.length}/>
+      <Stat label="Events" value={entries.length}/>
+      <Stat label="Cost" value={`$${spend.toFixed(4)}`}/>
+    </StatGrid>
 
     {finished && detail.data?.output && <Panel title="Result">
       <p className="task-output">{detail.data.output}</p>
@@ -204,7 +177,7 @@ function TaskActivity({ taskId }: { taskId: string }) {
         already scoped to the run you are looking at. */}
     <Panel title="Timeline" label={`${entries.length} events`}>
       {entries.length
-        ? <div className="event-list verbose-events">{entries.map(entry => <EventRow key={entry.id} entry={entry}/>)}</div>
+        ? <EventList entries={entries}/>
         : <Empty>Nothing was recorded for this task.</Empty>}
     </Panel>
 
@@ -227,7 +200,7 @@ function AllEvents({ entries, query }: { entries: LedgerEntry[]; query: string }
     [entries, query],
   );
   if (!rows.length) return <Empty>No events match.</Empty>;
-  return <div className="event-list verbose-events">{rows.map(entry => <EventRow key={entry.id} entry={entry} showTask/>)}</div>;
+  return <EventList entries={rows} showTask/>;
 }
 
 export function Tasks() {
@@ -289,12 +262,12 @@ export function Tasks() {
     {resource.error && resource.data && <Notice tone="error">{resource.error}</Notice>}
     {actionError && <Notice tone="error">{actionError}</Notice>}
 
-    <section className="task-ledger-stats" aria-label="Task summary">
-      <div><small>Active</small><strong>{active}</strong><span>in progress</span></div>
-      <div><small>Needs approval</small><strong>{approvalsCount}</strong><span>waiting on you</span></div>
-      <div><small>Queued</small><strong>{queued}</strong><span>waiting to start, or for a model</span></div>
-      <div><small>Completed this week</small><strong>{completedThisWeek}</strong><span>finished work</span></div>
-    </section>
+    <StatGrid>
+      <Stat label="Active" value={active} detail="in progress"/>
+      <Stat label="Needs approval" value={approvalsCount} detail="waiting on you"/>
+      <Stat label="Queued" value={queued} detail="waiting to start, or for a model"/>
+      <Stat label="Completed this week" value={completedThisWeek} detail="finished work"/>
+    </StatGrid>
 
     {/* Most of the time you want the runs. The raw stream is still here because
         startup, cron ticks and recovery sweeps have no task to belong to. */}

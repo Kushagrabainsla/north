@@ -3,7 +3,7 @@ import { api, del, post } from "../api";
 import { Modal, PageHeader } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, Status } from "../kit";
+import { Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, Status, PaneLabel } from "../kit";
 import {
   CapabilityName,
   capabilityColumns,
@@ -203,10 +203,7 @@ export function Tools() {
         ) : (
           <section className="tool-preview-layout">
             <div className="skill-editor-pane tool-editor">
-              <div className="editor-label">
-                <span>{selected}.py</span>
-                <span>Python implementation · editable</span>
-              </div>
+              <PaneLabel aside={<>Python implementation · editable</>}>{selected}.py</PaneLabel>
               <ContentTextarea
                 aria-label={`${selected} Python implementation`}
                 value={content}
@@ -214,7 +211,7 @@ export function Tools() {
               />
             </div>
             <aside className="tool-preview-pane">
-              <div className="editor-label">Python preview</div>
+              <PaneLabel>Python preview</PaneLabel>
               <pre>
                 <code>{content || "# Nothing implemented yet."}</code>
               </pre>

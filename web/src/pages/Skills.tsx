@@ -3,7 +3,7 @@ import { api, del, post } from "../api";
 import { MarkdownPane, Modal, PageHeader } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { ActionBar, Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, Status } from "../kit";
+import { ActionBar, Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, Status, PaneLabel } from "../kit";
 import {
   CapabilityName,
   capabilityColumns,
@@ -381,14 +381,11 @@ export function Skills() {
         ) : (
           <section className="skill-preview-layout">
             <div className="skill-editor-pane">
-              <div className="editor-label">
-                <span>{selected}/SKILL.md</span>
-                <span>
+              <PaneLabel aside={<>
                   {selectedSkill?.source === "builtin"
                     ? "Built-in baseline · editable override"
                     : "Markdown instructions · editable"}
-                </span>
-              </div>
+                </>}>{selected}/SKILL.md</PaneLabel>
               <ContentTextarea
                 aria-label={`${selected} Markdown skill instructions`}
                 value={content}

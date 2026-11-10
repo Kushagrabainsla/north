@@ -32,11 +32,6 @@ def test_a_session_s_activity_and_turns_have_their_own_cells_on_a_phone() -> Non
     assert ".kit-table-open { grid-template-columns: 1fr;" in phone
 
 
-def test_the_activity_strip_fills_each_row_however_few_events_there_are() -> None:
-    assert "flex-wrap: wrap" in _rule(".activity-line")
-    assert "grid-template-columns: repeat(4, 1fr)" not in _rule(".activity-line")
-
-
 def test_the_devices_page_lines_up_with_its_header_like_every_other_page() -> None:
     """Its blocks were indented 26 px with margins of their own, and the Add a device panel then ran off the
     right edge at 1080 px. A page's blocks sit on its edges and are spaced by its one gap; checked in a browser

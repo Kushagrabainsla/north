@@ -2,7 +2,7 @@ import { useState } from "react";
 import { post } from "./api";
 import { Panel } from "./components";
 import { useResource } from "./hooks";
-import { ActionBar, Badge, Button, Empty, EntityForm, Field, ListRow, Loading, Notice, Status } from "./kit";
+import { ActionBar, Badge, Button, Empty, EntityForm, Field, ListRow, Loading, Notice, Status, Note } from "./kit";
 
 export interface BrowserProfile {
   id: string; name: string; purpose: string; context: "isolated" | "existing";
@@ -47,7 +47,7 @@ export function BrowserProfiles() {
     });
   };
   return <Panel title="Browser profiles" label="Chosen per tool call" className="browser-profiles">
-    <p className="setup-copy">Give each profile a purpose. North selects it for the current task and asks through your approval mode when unclear—not through a flow setting.</p>
+    <Note>Give each profile a purpose. North selects it for the current task and asks through your approval mode when unclear—not through a flow setting.</Note>
     {(error || resource.error) && <Notice tone="error">{error || resource.error}</Notice>}
     {resource.loading && <Loading/>}
     {!resource.loading && !resource.error && !profiles.length && !draft && <Empty>No browser profiles yet. Connect an existing profile or create a separate one for North.</Empty>}
@@ -80,7 +80,7 @@ export function BrowserProfiles() {
       })}>Find existing profiles</Button>
       <Button variant="quiet" to="/approvals">Open Approvals →</Button>
     </ActionBar>
-    <p className="setup-copy muted">Discovery reads names and directories only, never passwords, cookies or history. Switch off only stops North using a profile; your browser and logins stay as they are.</p>
+    <Note>Discovery reads names and directories only, never passwords, cookies or history. Switch off only stops North using a profile; your browser and logins stay as they are.</Note>
     {found.length > 0 && <ActionBar align="start">{found.map(({ browser, ...profile }) =>
       <Button size="sm" key={profile.id} disabled={busy} onClick={() => { setDraft({ ...profile, purpose: "", enabled: false }); setFound([]); }}>{browser} · {profile.name}</Button>)}</ActionBar>}
     {draft && <EntityForm

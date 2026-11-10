@@ -6,7 +6,7 @@
 // so nothing else in the stylesheet can change them. The same set is the
 // catalog north's own views are drawn from: a view can use only what is here.
 
-import { cloneElement, isValidElement, useId, type FormEvent, type ReactElement, type ReactNode } from "react";
+import { cloneElement, isValidElement, useId, useState, type FormEvent, type ReactElement, type ReactNode } from "react";
 import { Link, NavLink } from "react-router-dom";
 import type { useDialog } from "./dialog";
 
@@ -15,7 +15,8 @@ const cx = (...names: (string | false | null | undefined)[]) => names.filter(Boo
 // ── Buttons ─────────────────────────────────────────────────────────────────
 
 // `icon-danger` is an icon-only remove or delete in a row: red, like `danger`, without a border.
-export type ButtonVariant = "primary" | "secondary" | "danger" | "quiet" | "icon" | "icon-danger";
+// `link` is an action inside a line of text: "Stop", "Thought for 24s", "Show source".
+export type ButtonVariant = "primary" | "secondary" | "danger" | "quiet" | "icon" | "icon-danger" | "link";
 
 export interface ButtonProps {
   variant?: ButtonVariant;
@@ -97,6 +98,16 @@ export function Toolbar({ tabs, search, actions }: { tabs?: ReactNode; search?: 
 }
 
 // ── Sections ────────────────────────────────────────────────────────────────
+
+/** A few lines saying what a panel or step is for, under its title. */
+export function Note({ children }: { children: ReactNode }) {
+  return <div className="kit-note">{children}</div>;
+}
+
+/** The name bar on top of an editor or a preview pane, with an optional second part at the right. */
+export function PaneLabel({ children, aside }: { children: ReactNode; aside?: ReactNode }) {
+  return <div className="kit-pane-label"><span>{children}</span>{aside && <span>{aside}</span>}</div>;
+}
 
 /** Blocks one above the other with the kit's one gap: a header, a form, a list. */
 export function Stack({ gap = "md", children }: { gap?: "sm" | "md" | "lg"; children: ReactNode }) {
@@ -272,6 +283,65 @@ export function EntityCard({ icon, title, meta, onOpen, to, children }: { icon?:
       : <div className="kit-card-head">{head}</div>}
     {children && <div className="kit-card-body">{children}</div>}
   </div>;
+}
+
+// ── Waiting on you ──────────────────────────────────────────────────────────
+
+/** An option as a title and its explanation: "North-native: flows that…" → both parts. */
+export function optionParts(option: string): [string, string] {
+  const at = option.indexOf(": ");
+  return at > 0 ? [option.slice(0, at), option.slice(at + 2)] : [option, ""];
+}
+
+/** Answers to pick from, one row each: the part before ": " as the title, the rest under it. */
+export function ChoiceList({ options, chosen, onPick }: { options: string[]; chosen?: unknown; onPick: (option: string) => void }) {
+  if (!options.length) return null;
+  return <div className="kit-choices">{options.map(option => {
+    const [title, detail] = optionParts(option);
+    return <button type="button" key={option} className="kit-choice" aria-pressed={chosen === option} onClick={() => onPick(option)}>
+      <span>{title}</span>{detail && <small>{detail}</small>}
+    </button>;
+  })}</div>;
+}
+
+/** An answer in your own words. Behind "Something else…" when there are choices above it. */
+export function OtherAnswer({ collapsed, value, onChange, onSubmit, submitLabel }: { collapsed: boolean; value: string; onChange: (value: string) => void; onSubmit?: () => void; submitLabel: string }) {
+  const [open, setOpen] = useState(!collapsed || Boolean(value));
+  if (!open) return <button type="button" className="kit-choice kit-choice-other" onClick={() => setOpen(true)}><span>Something else…</span></button>;
+  const submit = () => { if (value.trim() && onSubmit) onSubmit(); };
+  return <div className="kit-other-answer">
+    <input aria-label="Your answer" autoFocus={collapsed} value={value} placeholder="Type your answer" onChange={event => onChange(event.target.value)}
+      onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); submit(); } }}/>
+    {onSubmit && <Button variant="primary" disabled={!value.trim()} onClick={submit}>{submitLabel}</Button>}
+  </div>;
+}
+
+/** Something waiting on you: a question or an action to approve. `source` is what it is
+ *  judged against: beside the work where there is room, else behind "Review source". */
+export function WaitingCard({ label, aside, title, source, sourceBeside = false, meta, actions, children }: {
+  label: string;
+  aside?: ReactNode;
+  title?: ReactNode;
+  source?: string;
+  sourceBeside?: boolean;
+  meta?: ReactNode;
+  actions?: ReactNode;
+  children?: ReactNode;
+}) {
+  const beside = Boolean(source) && sourceBeside;
+  return <article className="kit-waiting">
+    <div className="kit-waiting-top"><span>{label}</span>{aside}</div>
+    {title && <div className="kit-waiting-title">{title}</div>}
+    {beside ? <div className="kit-waiting-split">
+      <div className="kit-waiting-body">{children}</div>
+      <aside className="kit-waiting-source"><span className="kit-field-label">Source</span><pre>{source}</pre></aside>
+    </div> : <div className="kit-waiting-body">
+      {children}
+      {source && <details className="kit-waiting-details"><summary>Review source</summary><pre>{source}</pre></details>}
+    </div>}
+    {meta && <small className="kit-waiting-meta">{meta}</small>}
+    {actions && <div className="kit-waiting-foot">{actions}</div>}
+  </article>;
 }
 
 // ── Forms ───────────────────────────────────────────────────────────────────

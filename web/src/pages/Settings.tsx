@@ -4,7 +4,7 @@ import { BrowserProfiles } from "../browserProfiles";
 import { CodingAgents, ProviderConnections, Secrets, TelegramConnection } from "../connections";
 import { configureDisplayTimezone, PageHeader, Panel, YoloBadge } from "../components";
 import { useResource } from "../hooks";
-import { Button, Empty, Field, Loading, Notice, SectionHeader, Tabs } from "../kit";
+import { Button, Empty, Field, Loading, Notice, SectionHeader, Tabs, Note } from "../kit";
 
 export interface ChainModel {
   model: string;
@@ -175,13 +175,13 @@ export function SettingsPage() {
             onChange={pickRouting}
             items={[{ value: "auto", label: "auto" }, { value: "manual", label: "manual" }]}
           />
-          <p className="muted">
+          <Note>
             {manual
               ? "One model answers everything. North's ranking is skipped, and a model it cannot reach fails the call rather than falling back."
               : choosing
                 ? "Pick the model that should answer everything."
                 : "North ranks every model it can reach against what each part of a task needs, and calls them in that order."}
-          </p>
+          </Note>
           {(manual || choosing) && (
             <ModelPicker
               value={resource.data?.model || ""}
@@ -206,11 +206,11 @@ export function SettingsPage() {
             onChange={(value) => { if (!manual) void update({ power: value }); }}
             items={POWER_LEVELS.map((value) => ({ value, label: value }))}
           />
-          <p className="muted">
+          <Note>
             {manual
               ? "Nothing to order while one model is pinned. Switch routing to auto to use this."
               : "Choose how aggressively North selects capable models."}
-          </p>
+          </Note>
         </Panel>
         <Panel title="Autonomy" label="Approval behavior">
           <Tabs
@@ -219,10 +219,10 @@ export function SettingsPage() {
             onChange={(value) => void update({ autonomy: value })}
             items={autonomyOptions.map((option) => ({ value: option.value, label: option.value }))}
           />
-          <p className="muted">
+          <Note>
             {currentMode?.description}
             <YoloBadge mode={autonomy} />
-          </p>
+          </Note>
         </Panel>
         <Panel title="Time zone" label="Dates and schedules">
           {resource.loading ? (
@@ -246,10 +246,10 @@ export function SettingsPage() {
               </select>
             </Field>
           )}
-          <p className="muted">
+          <Note>
             Current North time: {resource.data?.local_time || "–"}. New
             schedules and times without an explicit zone use this setting.
-          </p>
+          </Note>
         </Panel>
       </div>
       <SectionHeader title="Connections" description="What North connects to. Setup walks through these same controls." />

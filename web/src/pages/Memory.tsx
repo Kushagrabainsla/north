@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../api";
 import { formatDay, Markdown, PageHeader, Panel, timeAgo } from "../components";
-import { ActionBar, Badge, Button, confirmDelete, EntityForm, Field, ListRow, Loading, Notice, ResourceView, Stack, Status, Tabs, Toolbar } from "../kit";
+import { ActionBar, Badge, Button, confirmDelete, EntityForm, Field, ListRow, Loading, Notice, ResourceView, Stack, Status, Tabs, Toolbar, Note, PaneLabel } from "../kit";
 import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -45,10 +45,10 @@ export function EpisodesPanel() {
   const rows = resource.data || [];
   return (
     <Panel title="Episodes" label={`${rows.length} remembered`}>
-      <p className="muted memory-note">
+      <Note>
         What north remembers of past tasks, used to recognise a situation it has
         been in before.
-      </p>
+      </Note>
       <ResourceView resource={resource} isEmpty={(data) => !data.length} empty="No episodes recorded yet.">
         {(data) =>
           data.map((row) => (
@@ -78,10 +78,10 @@ export function LearningStatus() {
   const count = `${data.waiting}${data.more ? "+" : ""} message${data.waiting === 1 ? "" : "s"}`;
   const upTo = data.read_up_to ? ` (read up to ${timeAgo(data.read_up_to)})` : "";
   return (
-    <p className="muted memory-note learning-status">
+    <Note>
       Learning from your messages:{" "}
       {data.waiting ? `${count} not read yet${upTo}.` : "up to date."}
-    </p>
+    </Note>
   );
 }
 
@@ -275,7 +275,7 @@ export function Memory() {
           <Panel title={docLabels[doc]} label="Document">
             <div className="memory-editor-grid">
               <section>
-                <div className="editor-label">Markdown source</div>
+                <PaneLabel>Markdown source</PaneLabel>
                 {resource.loading ? (
                   <Loading />
                 ) : (
@@ -288,7 +288,7 @@ export function Memory() {
                 )}
               </section>
               <section className="memory-preview">
-                <div className="editor-label">Rendered preview</div>
+                <PaneLabel>Rendered preview</PaneLabel>
                 <Markdown>{content || "Nothing written yet."}</Markdown>
               </section>
             </div>
@@ -359,11 +359,11 @@ export function Memory() {
 
       {tab === "episodes" && <EpisodesPanel />}
       {onDocuments && (
-        <p className="muted memory-note">
+        <Note>
           Past approval decisions and safe actions are on{" "}
           <Link to="/approvals?tab=decisions">Approvals</Link>. Reading your
           own files into memory is a step in <Link to="/setup">Setup</Link>.
-        </p>
+        </Note>
       )}
     </div>
   );

@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { fileName, noticeBody, noticePreview, savedFile } from "./notices";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
-import { ActionBar, Button, Empty, Notice, Status } from "./kit";
+import { ActionBar, Button, Empty, Notice, Status, PaneLabel } from "./kit";
 import type { AgentRun, Conversation, InferenceCategory, Notice as NoticeEntry } from "./types";
 import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Lightbulb, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
 
@@ -259,7 +259,7 @@ export const reveal = (element: HTMLElement | null) => element?.scrollIntoView({
 /** Rendered Markdown with the label and padding every modal shows it with. */
 export function MarkdownPane({ label, children }: { label?: string; children: string }) {
   return <div className="markdown-pane">
-    {label && <div className="editor-label">{label}</div>}
+    {label && <PaneLabel>{label}</PaneLabel>}
     <div className="markdown-pane-content"><Markdown>{children}</Markdown></div>
   </div>;
 }

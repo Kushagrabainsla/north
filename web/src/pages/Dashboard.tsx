@@ -1,9 +1,10 @@
 import { MessageSquare, File } from "lucide-react";
 import { formatDateTime, HealthIndicator, NoticeList, PageHeader, Panel, timeAgo, unpricedNote, YoloBadge } from "../components";
-import { Button, CardGrid, Empty, EntityCard, ListRow, Loading, Notice, Status } from "../kit";
+import { Button, CardGrid, Empty, EntityCard, ListRow, Loading, Notice, Stat, StatGrid, Status } from "../kit";
 import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
 import { SetupReminder } from "./Setup";
+import { EventList } from "../events";
 
 /** What decides the model: the pinned one under manual routing, where power is not in use, else power. */
 export function dialsLine(system: DashboardData["system"]): string {
@@ -68,13 +69,13 @@ export function Dashboard() {
         {data.artifacts.length ? data.artifacts.slice(0, 4).map(file => <ListRow key={file.id} title={file.name} meta={[file.kind, timeAgo(file.updated_at)]} status={<File size={14} aria-hidden="true"/>}/>) : <Empty>No generated outputs.</Empty>}
       </Panel>
       <Panel title="Memory" label="Context" to="/memory">
-        {(() => { const memory = memoryLine(data.memory); return <><div className="metric"><strong>{memory.count}</strong><span>{memory.label}</span></div><p className="muted">{memory.note}</p></>; })()}
+        {(() => { const memory = memoryLine(data.memory); return <StatGrid><Stat label={memory.label} value={memory.count} detail={memory.note}/></StatGrid>; })()}
       </Panel>
       <Panel title="Usage" label="Last 7 days" to="/insights">
-        <div className="metric-row"><div className="metric"><strong>{String(data.metrics.total_tasks || 0)}</strong><span>tasks</span></div><div className="metric"><strong>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</strong><span>model cost</span></div></div>
+        <StatGrid><Stat label="Tasks" value={String(data.metrics.total_tasks || 0)}/><Stat label="Model cost" value={<>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</>}/></StatGrid>
       </Panel>
       <Panel title="Activity" label="Latest events" to="/tasks?view=everything" className="full-panel">
-        {data.activity.length === 0 ? <Empty>Nothing has happened yet.</Empty> : <div className="activity-line">{data.activity.slice(0, 8).map(entry => <div key={entry.id}><span className={`event-dot ${entry.status || ""}`}/><b>{entry.action?.replaceAll("_", " ") || entry.source}</b><small>{entry.agent || "north"} · {timeAgo(entry.timestamp)}</small></div>)}</div>}
+        {data.activity.length === 0 ? <Empty>Nothing has happened yet.</Empty> : <EventList entries={data.activity.slice(0, 8)} brief/>}
       </Panel>
     </div>
   </div>;
