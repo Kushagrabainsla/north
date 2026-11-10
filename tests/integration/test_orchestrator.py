@@ -1104,7 +1104,12 @@ async def test_single_tool_marks_side_effect_when_mutating(tmp_path):
     tool = mock.MagicMock()
     tool.name = "kasa"
     tool.is_mutating = True
-    tool.execute = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
+
+    async def acts(tool_input):  # a real tool awaits this just before it changes anything
+        await tool_input.before_change()
+        return mock.MagicMock(success=True, data={})
+
+    tool.execute = acts
     tool.format_output = mock.MagicMock(return_value="ok")
     orch._tool_registry = mock.MagicMock()
     orch._tool_registry.get.return_value = tool

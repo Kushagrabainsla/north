@@ -54,11 +54,9 @@ def test_a_correction_is_judged_on_everything_the_task_did() -> None:
 
     _carry_earlier_evidence(repair, first)
 
-    assert repair.successful_tools == ["bash", "git"]
+    assert repair.successful_tools == ["git", "bash"]
     assert _evidence_counts(repair) == {"git": 1, "bash": 2}
     assert _evidence_actions(repair) == {"git:commit": 1, "bash:pytest": 2}
-
-
 
 
 def test_a_pause_keeps_the_run_like_any_other_freeze() -> None:

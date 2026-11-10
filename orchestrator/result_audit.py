@@ -256,7 +256,9 @@ def _carry_earlier_evidence(repaired: AgentResult, earlier: AgentResult) -> None
     actions.update(_evidence_actions(repaired))
     data = repaired.data if isinstance(repaired.data, dict) else {}
     repaired.data = {**data, "evidence_counts": dict(counts), "evidence_actions": dict(actions)}
-    repaired.successful_tools = sorted({*(earlier.successful_tools or []), *(repaired.successful_tools or [])})
+    repaired.successful_tools = list(
+        dict.fromkeys([*(earlier.successful_tools or []), *(repaired.successful_tools or [])])
+    )
 
 
 def _adopt_repaired_answer(result: AgentResult, repaired: AgentResult) -> None:

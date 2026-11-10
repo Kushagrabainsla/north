@@ -54,7 +54,8 @@ def test_the_log_rotates_when_the_server_writes_it(tmp_path, monkeypatch) -> Non
 
     configure_structured_logging(log_file=log_file)
     for number in range(40):
-        logging.getLogger("uvicorn.error").info("line %d", number)
+        # A warning: building the callback server leaves this logger at warnings only.
+        logging.getLogger("uvicorn.error").warning("line %d", number)
     for handler in root.handlers:
         handler.close()
     root.setLevel(level)

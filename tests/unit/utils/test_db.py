@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,9 @@ def test_open_db_connection_inner_savepoint_rollback(tmp_path: Path):
         assert rows == ["outer", "outer_after"]
 
 
+@pytest.mark.skipif(
+    not hasattr(sqlite3.Connection, "enable_load_extension"), reason="this Python cannot load SQLite extensions"
+)
 def test_sqlite_vec_loaded(tmp_path: Path):
     db_path = tmp_path / "test_vec.db"
     with open_db_connection(db_path) as conn:
