@@ -361,7 +361,7 @@ export function Sessions() {
     <Button variant="danger" size="sm" onClick={() => void deleteSession(session)} aria-label="Delete session" title="Delete" icon={<Trash2 size={13}/>}/>
   </>;
   return <div className="page capability-page session-page">
-    <PageHeader title="Sessions" subtitle="Open a session to continue work with North." actions={<Button variant="primary" onClick={() => void createSession()}>+ New session</Button>} />
+    <PageHeader title="Sessions" actions={<Button variant="primary" onClick={() => void createSession()}>+ New session</Button>} />
     {sessions.error && sessions.data && <Notice tone="error">{sessions.error}</Notice>}
     <Toolbar
       tabs={<Tabs label="Session filter" value={tab} onChange={setTab} items={[{ value: "active", label: "Active" }, { value: "archived", label: "Archived" }]}/>}

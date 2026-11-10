@@ -113,7 +113,7 @@ export function Artifacts() {
     <div className="page">
       <PageHeader
         title="Artifacts"
-        subtitle="Every report, briefing, note and plan North has produced, under the flow, session or task that made it."
+        subtitle="Everything North has made."
       />
       <ArtifactLibrary />
     </div>

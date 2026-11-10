@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { ActionBar, Button, EntityTable, Field, KeyValues, ListRow, Notice, ResourceView, Status, Tabs, confirmDelete, statusTone } from "./kit";
+import { ActionBar, Button, EntityTable, Field, KeyValues, ListRow, Notice, Panel, ResourceView, Status, Tabs, confirmDelete, statusTone } from "./kit";
 
 const html = (element: ReturnType<typeof createElement>) =>
   renderToStaticMarkup(createElement(MemoryRouter, null, element));
@@ -130,5 +130,30 @@ describe("tabs that cannot be used", () => {
     expect(one.match(/disabled=""/g)?.length).toBe(1);
     const all = html(createElement(Tabs<"a" | "b">, { label: "View", value: "a", onChange: () => undefined, items, disabled: true }));
     expect(all.match(/disabled=""/g)?.length).toBe(2);
+  });
+});
+
+describe("less text", () => {
+  const rows = [{ name: "a", state: "active" }, { name: "b", state: "active" }];
+  const table = (state: string) => html(createElement(EntityTable<{ name: string; state: string }>, {
+    label: "Things", rows: [rows[0], { ...rows[1], state }], rowKey: row => row.name, cell: (row, key) => key === "name" ? row.name : row.state,
+    columns: [{ key: "name", label: "Name", lines: 1 }, { key: "state", label: "State", same: (row: { state: string }) => row.state }],
+  }));
+
+  it("leaves out a column that says the same on every row", () => {
+    expect(table("active")).not.toContain(">State<");
+    expect(table("paused")).toContain(">State<");
+  });
+
+  it("cuts a column to its lines", () => {
+    expect(table("active")).toContain('class="kit-table-cell kit-table-cell-clamp" style="--kit-lines:1"');
+  });
+
+  it("keeps a panel's explanation behind About, and makes its title the link to the list", () => {
+    const panel = html(createElement(Panel, { title: "Recent", to: "/tasks", about: "What this panel is for.", children: "body" }));
+    expect(panel).toContain("<span>About</span>");
+    expect(panel).not.toContain("What this panel is for.");
+    expect(panel).toMatch(/<h2><a href="\/tasks"[^>]*>Recent<\/a><\/h2>/);
+    expect(panel).not.toContain("View all");
   });
 });

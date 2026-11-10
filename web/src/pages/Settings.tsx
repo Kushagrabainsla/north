@@ -162,12 +162,12 @@ export function SettingsPage() {
     <div className="page">
       <PageHeader
         title="Settings"
-        subtitle="Control how North balances capability, cost, autonomy, and readability."
+        subtitle="How North picks models, asks and connects."
         actions={<Button to="/setup">Setup guide</Button>}
       />
       {error && <Notice tone="error">{error}</Notice>}
       <div className="settings-grid">
-        <Panel title="Model routing" label="Who picks">
+        <Panel title="Model routing">
           <Tabs
             label="Who picks the model"
             value={manual || choosing ? "manual" : "auto"}
@@ -196,7 +196,7 @@ export function SettingsPage() {
           shown switched off rather than left looking live. */}
         <Panel
           title="Power"
-          label={manual ? "not in use" : "Model strategy"}
+          label={manual ? "not in use" : undefined}
           className={manual ? "panel-inert" : ""}
         >
           <Tabs
@@ -211,7 +211,7 @@ export function SettingsPage() {
               : "Choose how aggressively North selects capable models."}
           </Note>
         </Panel>
-        <Panel title="Autonomy" label="Approval behavior">
+        <Panel title="Autonomy">
           <Tabs
             label="Approval mode"
             value={autonomy || ""}
@@ -223,7 +223,7 @@ export function SettingsPage() {
             <YoloBadge mode={autonomy} />
           </Note>
         </Panel>
-        <Panel title="Time zone" label="Dates and schedules">
+        <Panel title="Time zone">
           {resource.loading ? (
             <Loading />
           ) : (

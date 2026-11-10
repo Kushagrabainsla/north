@@ -3,9 +3,10 @@ import { api, del, post } from "../api";
 import { MarkdownPane, Modal, PageHeader } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { ActionBar, Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, Status, PaneLabel } from "../kit";
+import { ActionBar, Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, PaneLabel } from "../kit";
 import {
   CapabilityName,
+  CapabilityStatus,
   capabilityColumns,
   ContentTextarea,
   failure,
@@ -179,7 +180,7 @@ export function Skills() {
     <div className="page capability-page">
       <PageHeader
         title="Skills"
-        subtitle="Inspect and edit the playbooks North follows."
+        subtitle="The playbooks North follows."
         actions={
           <Button variant="primary" onClick={startCreating}>
             + New skill
@@ -345,7 +346,7 @@ export function Skills() {
               ) : key === "fact" ? (
                 skillRunsAs(skill.execution)
               ) : (
-                <Status value={skill.status} />
+                <CapabilityStatus value={skill.status} />
               )
             }
           />

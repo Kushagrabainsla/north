@@ -3,7 +3,7 @@ import { api, post } from "../api";
 import { HealthIndicator, PageHeader, Panel, unpricedNote, YoloBadge } from "../components";
 import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
-import { Button, EntityTable, ListRow, Notice, ResourceView, Stat, StatGrid, Status } from "../kit";
+import { Button, EntityTable, ListRow, Note, Notice, ResourceView, Stat, StatGrid, Status } from "../kit";
 import type { ChainModel, PartChain } from "./Settings";
 
 type LastUpdate = { state: "running" | "updated" | "failed" | "cancelled"; detail: string; at: string };
@@ -124,7 +124,7 @@ export function SystemPage() {
     <div className="page">
       <PageHeader
         title="System"
-        subtitle="Whether North is healthy, how a model gets picked, and what it costs. Providers are in Settings."
+        subtitle="Health, model choice and cost."
       />
       <div className="system-hero">
         <HealthIndicator variant="hero" />
@@ -148,14 +148,10 @@ export function SystemPage() {
               <ListRow
                 key={part.part}
                 title={part.part}
-                description={`${part.eligible} eligible · ranked by ${part.order_by.replace(/_/g, " ")}${part.requires.length ? ` · needs ${part.requires.join(", ")}` : ""}`}
-                meta={[`1. ${part.models[0]?.model || "—"}`]}
-                actions={
-                  <Button size="sm" variant="quiet" aria-pressed={open} onClick={() => setExpandedPool(open ? null : part.part)}>
-                    {open ? "Hide models" : "Show models"}
-                  </Button>
-                }
+                description={part.models[0] ? `Uses ${part.models[0].model}` : "No model qualifies"}
+                onOpen={() => setExpandedPool(open ? null : part.part)}
               >
+                {open && <Note>{`${part.eligible} eligible · ranked by ${part.order_by.replace(/_/g, " ")}${part.requires.length ? ` · needs ${part.requires.join(", ")}` : ""}`}</Note>}
                 {open && (part.models.length
                   ? <div className="model-list">{part.models.map((model, index) => (
                     // Why north would walk past this rung right now.

@@ -3,9 +3,10 @@ import { api, del, post } from "../api";
 import { Modal, PageHeader } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, Status, PaneLabel } from "../kit";
+import { Button, confirmDelete, EntityForm, EntityTable, Field, Loading, Notice, ResourceView, PaneLabel } from "../kit";
 import {
   CapabilityName,
+  CapabilityStatus,
   capabilityColumns,
   ContentTextarea,
   failure,
@@ -113,7 +114,7 @@ export function Tools() {
     <div className="page capability-page">
       <PageHeader
         title="Tools"
-        subtitle="Inspect the atomic operations North's skills can call, and manage your learned tools."
+        subtitle="What North's skills can do."
         actions={
           <Button variant="primary" onClick={startCreating}>
             + New tool
@@ -167,7 +168,7 @@ export function Tools() {
               ) : key === "fact" ? (
                 tool.mutating ? "Makes changes" : "Read-only"
               ) : (
-                <Status value={tool.status} />
+                <CapabilityStatus value={tool.status} />
               )
             }
           />

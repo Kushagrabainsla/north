@@ -44,6 +44,7 @@ import type { JobLike, RunLike, ScheduleLike } from "./flowsView";
 
 import {
   CapabilityName,
+  CapabilityStatus,
   capabilityColumns,
   failure,
   sourceLabel,
@@ -1151,7 +1152,7 @@ export function Flows() {
     <div className="page capability-page">
       <PageHeader
         title="Flows"
-        subtitle="What north runs, when it runs next, and how it went."
+        subtitle="What North runs, and when."
         actions={
           <Button variant="primary" onClick={() => startCreating()}>
             + New flow
@@ -1185,7 +1186,7 @@ export function Flows() {
                   <small>{lastRunText(lastRunOf(allRuns, flow.name))}</small>
                 </>
               ) : (
-                <Status value={flow.status} />
+                <CapabilityStatus value={flow.status} />
               )
             }
           />

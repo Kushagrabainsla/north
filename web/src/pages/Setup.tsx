@@ -103,7 +103,7 @@ export function Setup() {
     finally { setBusy(false); }
   };
   const data = resource.data;
-  const header = <PageHeader title="Set up North" subtitle="Connect what North works with. Every step is also in Settings, so you can change it later." actions={<Button to="/settings">Settings</Button>}/>;
+  const header = <PageHeader title="Set up North" subtitle="Connect what North works with." actions={<Button to="/settings">Settings</Button>}/>;
   if (!data) return <div className="page setup-page">
     {header}
     {resource.loading ? <Loading/> : <Notice tone="error">{resource.error || "Setup unavailable"}</Notice>}

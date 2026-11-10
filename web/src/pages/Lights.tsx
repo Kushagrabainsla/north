@@ -73,7 +73,7 @@ export function Lights() {
   return <div className="page lights-page">
     <PageHeader
       title="Devices"
-      subtitle="Your lights, plugs and switches, of any brand. What you set here happens at once, with no approval card."
+      subtitle="Your devices. Changes here happen at once."
       actions={<>
         <Button onClick={() => setAdding(!adding)} aria-pressed={adding}>Add a device</Button>
         <Button onClick={lookAgain} busy={looking} busyLabel="Looking…">Look again</Button>

@@ -34,7 +34,7 @@ const COLUMNS: Column[] = [
 export function Views() {
   const resource = useResource<ViewListing[]>("/web/api/views");
   return <div className="page">
-    <PageHeader title="Views" subtitle="Pages north made for itself, from the same parts as every page here."/>
+    <PageHeader title="Views" subtitle="Pages North made for itself."/>
     <ResourceView resource={resource} isEmpty={data => !data.length}
       empty="North has made no views yet. Ask it in a session: “make me a page that shows …”.">
       {data => <EntityTable label="Views" columns={COLUMNS} rows={data} rowKey={view => view.id} to={view => `/views/${view.id}`}

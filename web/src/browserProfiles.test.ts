@@ -51,9 +51,11 @@ describe("browser profile presentation", () => {
 
   it("uses the kit's secondary button and a helpful empty state", () => {
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(BrowserProfiles)));
-    const buttons = [...markup.matchAll(/<button\b[^>]*>/g)].map(match => match[0]);
+    // The panel's About toggle is a link-style button; the actions are the kit's secondary buttons.
+    const buttons = [...markup.matchAll(/<button\b[^>]*>/g)].map(match => match[0]).filter(button => !button.includes("kit-button-link"));
     expect(buttons).toHaveLength(2);
     expect(buttons.every(button => button.includes("kit-button-secondary"))).toBe(true);
+    expect(markup).not.toContain("Discovery reads names");
     expect(markup).toContain("No browser profiles yet.");
   });
 });

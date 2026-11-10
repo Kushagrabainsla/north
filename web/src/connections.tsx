@@ -28,12 +28,6 @@ type Said = { tone: NoticeTone; text: string } | null;
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-// The embeddings row is the only provider with no key and no login, so it is
-// the only one whose identifying detail has to come from elsewhere.
-export function isLocalEmbeddings(provider: any) {
-  return !provider.env_key && provider.auth_kind !== "oauth_pkce";
-}
-
 // Trying a provider, not finding its key, is what "Ready" means: the local embedder read "Ready"
 // while its model failed to load on every refresh (issue #76, M6).
 const FAILING = new Set(["unavailable", "failing"]);
@@ -83,9 +77,6 @@ export function ProviderConnections() {
   >({});
   const authWindows = useRef<Record<string, Window | null>>({});
   const providers = overview.data?.providers || [];
-  const embeddings = overview.data?.embeddings;
-  const embeddingsFor = (provider: any) =>
-    isLocalEmbeddings(provider) && embeddings?.model ? embeddings.model : "";
   const pendingAuthIds = Object.values(providerAuth)
     .filter((state) => state.state === "starting" || state.state === "pending")
     .map((state) => state.provider_id)
@@ -232,19 +223,12 @@ export function ProviderConnections() {
           ? "Waiting for browser login"
           : failing ? "Not working" : providerStateLabel(provider, configured, auth?.account_hint);
         return (
-          // The trailing detail is whatever identifies the provider: the env var
-          // holding its key, "Browser login" for OAuth, or - for the on-device
-          // embedder, which has no key at all - the model it runs. Without the
-          // last case the row ended on a dangling separator.
+          // What the provider is, in one line. Its key's name is in the form that asks for the key,
+          // where it is needed; the Sign in button says a provider logs in through the browser.
           <ListRow
             key={provider.id}
             title={provider.name}
-            description={[
-              provider.description,
-              provider.auth_kind === "oauth_pkce"
-                ? "Browser login"
-                : provider.env_key || embeddingsFor(provider),
-            ].filter(Boolean).join(" · ")}
+            description={provider.description}
             status={<span title={provider.state_detail || ""}><Status label={label} tone={providerStateTone(provider, configured, waiting)}/></span>}
             actions={<>
               {provider.env_key && <>
@@ -312,7 +296,7 @@ export function CodingAgents() {
     finally { setChecking(false); }
   };
   useEffect(() => { void check(); }, []);
-  return <Panel title="Coding agents" label="Codex and Claude Code" actions={<Button size="sm" busy={checking} busyLabel="Checking…" onClick={() => void check()}>Check again</Button>}>
+  return <Panel title="Coding agents" about="North hands coding to these agents in their own login. Ready means installed, recent enough, logged in and able to run its sandbox here; usage limits are only known when a run starts." actions={<Button size="sm" busy={checking} busyLabel="Checking…" onClick={() => void check()}>Check again</Button>}>
     {error && <Notice tone="error">{error}</Notice>}
     {!agents && !error && <Loading label="Checking each agent’s install and login"/>}
     {agents?.map(agent => {
@@ -320,7 +304,6 @@ export function CodingAgents() {
       return <ListRow key={agent.name} title={agent.name} meta={[agent.version]} description={agent.detail}
         status={<Status label={state.label} tone={state.tone}/>}/>;
     })}
-    <Note>North hands coding to these agents in their own login. Ready means installed, recent enough, logged in and able to run its sandbox here; usage limits are only known when a run starts.</Note>
   </Panel>;
 }
 
@@ -366,6 +349,7 @@ export function TelegramConnection() {
     });
   };
   return <Panel title="Telegram" label={data?.configured ? `Ready ${data.token_hint}` : "Optional"}
+    about={<>Send the bot any message or voice note to run a task. North also sends approval requests there, unless the terminal UI is already showing them. In the chat, <code>/help</code> lists the commands; <code>/workspace</code> picks the folder a task works in, which must be a git repository for coding.</>}
     actions={data?.token_hint && <Button size="sm" variant="danger" disabled={busy} onClick={() => void removeToken()}>Remove token</Button>}>
     {message && <Notice tone="success">{message}</Notice>}
     {(error || resource.error || data?.problem) && <Notice tone="error">{error || resource.error || data!.problem}</Notice>}
@@ -383,7 +367,6 @@ export function TelegramConnection() {
       <Field label="Allowed user ids"><input value={allowed} placeholder="123456789, comma-separated for more than one"
         onChange={event => setIds(event.target.value)}/></Field>
     </EntityForm>
-    <Note>Send the bot any message or voice note to run a task. North also sends approval requests there, unless the terminal UI is already showing them. In the chat, <code>/help</code> lists the commands; <code>/workspace</code> picks the folder a task works in, which must be a git repository for coding.</Note>
   </Panel>;
 }
 
@@ -458,10 +441,10 @@ export function Secrets() {
     catch (err) { setError(errorText(err)); }
     finally { setBusy(""); }
   };
-  return <Panel title="Secrets" label={saved.length ? `${saved.length} saved` : "None yet"}>
+  return <Panel title="Secrets" label={saved.length ? `${saved.length} saved` : "None yet"}
+    about="Keys and passwords for the tools North makes for you. North's AI only sees a secret's name: North hands the value to a tool that says it uses it, once you approve that tool, and hides it from anything a tool returns. Kept on this computer, readable only by you.">
     {message && <Notice tone="success">{message}</Notice>}
     {(error || resource.error) && <Notice tone="error">{error || resource.error}</Notice>}
-    <Note>Keys and passwords for the tools North makes for you. North's AI only sees a secret's name: North hands the value to a tool that says it uses it, once you approve that tool, and hides it from anything a tool returns. Kept on this computer, readable only by you.</Note>
     {missing.map((needed) => <Notice tone="warning" key={needed.name}>
       {needed.used_by.join(", ")} needs the secret <b>{needed.name}</b>.{" "}
       <Button variant="quiet" size="sm" onClick={() => setName(needed.name)}>Add it</Button>

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { ChangeEvent, TextareaHTMLAttributes } from "react";
-import { Badge, type Column } from "../kit";
+import { Badge, Status, type Column } from "../kit";
 
 // North runs every skill itself, so a skill's contract names what it may use,
 // never who runs it: the API no longer sends an agent.
@@ -81,18 +81,24 @@ export function skillRunsAs(execution: SkillExecution | null): string {
   return count ? `flow step · ${count} tool${count === 1 ? "" : "s"}` : "flow step";
 }
 
-// Skills, Tools and Flows are sibling lists, so they share one table shape:
-// the thing, what it is for, one fact about it, and its state.
+// Skills, Tools and Flows are sibling lists, so they share one table shape: the thing, what it is
+// for in one line (the whole of it is on its page), one fact about it, and its state. The state
+// column goes when every row is in the same one: 48 skills all saying "active" said nothing.
 export const capabilityColumns = (thing: string, fact: string): Column[] => [
   { key: "name", label: thing, width: "minmax(0, 1fr)" },
-  { key: "description", label: "Description", width: "minmax(0, 2fr)" },
+  { key: "description", label: "Description", width: "minmax(0, 2fr)", lines: 1 },
   { key: "fact", label: fact, width: "minmax(0, 1fr)" },
-  { key: "status", label: "Status", width: "112px" },
+  { key: "status", label: "Status", width: "112px", same: (row: { status: string }) => row.status },
 ];
 
-/** The first cell of a capability row: its name and where it came from. */
+/** The first cell of a capability row: its name, and where it came from when that is not north itself. */
 export function CapabilityName({ name, source }: { name: string; source: string }) {
-  return <><b>{name}</b><Badge>{sourceLabel(source)}</Badge></>;
+  return <><b>{name}</b>{source !== "builtin" && <Badge>{sourceLabel(source)}</Badge>}</>;
+}
+
+/** A capability's state in its list: only one that is not the usual "active". */
+export function CapabilityStatus({ value }: { value: string }) {
+  return value === "active" ? null : <Status value={value}/>;
 }
 
 /** Where a skill, tool or flow came from, in plain words. */

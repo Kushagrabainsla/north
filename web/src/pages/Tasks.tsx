@@ -254,7 +254,7 @@ export function Tasks() {
 
   return <div className="page tasks-ledger-page">
     <PageHeader title="Tasks"
-      subtitle="Everything North is doing, waiting on, or has completed."
+      subtitle="What North is doing and has done."
       actions={<>
         <Button disabled={Boolean(busy)} busy={busy === "refresh"} busyLabel="Refreshing…" onClick={() => void refresh()}>Refresh</Button>
         <Button variant="primary" disabled={Boolean(busy)} busy={busy === "create"} busyLabel="Creating…" onClick={() => void createTask()}>+ New task</Button>

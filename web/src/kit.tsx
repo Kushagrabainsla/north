@@ -109,21 +109,33 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
 }
 
 /** A titled block. `label` is a quiet word beside the title, such as a count. Blocks inside it are flat. */
-export function Panel({ title, label, children, to, actions, className }: { title: string; label?: string; children: ReactNode; to?: string; actions?: ReactNode; className?: string }) {
+/** A titled block. `label` is a quiet word beside the title, such as a count; `to` makes the title the
+ *  link to the whole list; `about` is what the panel is for, shown only when asked. Blocks inside are flat. */
+export function Panel({ title, label, children, to, actions, about, className }: { title: string; label?: string; children: ReactNode; to?: string; actions?: ReactNode; about?: ReactNode; className?: string }) {
+  const [explained, setExplained] = useState(false);
   return <section className={cx("kit-panel", "panel", className)}>
-    <header className="kit-panel-head"><h2>{title}</h2>{label && <span className="kit-panel-label">{label}</span>}
-      {(actions || to) && <div className="kit-panel-actions">{actions}{to && <Button variant="quiet" size="sm" to={to}>View all</Button>}</div>}
+    <header className="kit-panel-head"><h2>{to ? <Link to={to}>{title}</Link> : title}</h2>{label && <span className="kit-panel-label">{label}</span>}
+      {(actions || about) && <div className="kit-panel-actions">
+        {about && <Button variant="link" aria-expanded={explained} onClick={() => setExplained(!explained)}>{explained ? "Hide" : "About"}</Button>}
+        {actions}
+      </div>}
     </header>
-    <div className="kit-panel-body panel-content">{children}</div>
+    <div className="kit-panel-body panel-content">{explained && <Note>{about}</Note>}{children}</div>
   </section>;
 }
 
 export interface MenuItem { label: string; onSelect: () => void; danger?: boolean }
 
+const MENU_WIDTH = 190;
+
 /** The actions a header does not need on show, behind one three-dots button. A delete goes last, in red. */
 export function Menu({ items, label = "More actions" }: { items: MenuItem[]; label?: string }) {
   const ordered = [...items.filter(item => !item.danger), ...items.filter(item => item.danger)];
-  return <details className="kit-menu">
+  // Opens from the button's right edge, or from its left when that would run off the page.
+  return <details className="kit-menu" onToggle={event => {
+    const menu = event.currentTarget;
+    if (menu.open) menu.classList.toggle("kit-menu-start", menu.getBoundingClientRect().right < MENU_WIDTH + 24);
+  }}>
     <summary className="kit-button kit-button-secondary kit-button-md" aria-label={label} title={label}><Ellipsis size={16}/></summary>
     <div className="kit-menu-list" role="menu">{ordered.map(item => <button key={item.label} type="button" role="menuitem"
       className={cx("kit-menu-item", item.danger && "kit-menu-item-danger")}
@@ -243,7 +255,16 @@ export function ResourceView<T>({ resource, isEmpty, empty, inline = true, child
 
 // ── Lists ───────────────────────────────────────────────────────────────────
 
-export interface Column { key: string; label: string; width?: string }
+export interface Column {
+  key: string;
+  label: string;
+  width?: string;
+  /** Cut to this many lines; the whole text is on the thing's own page. */
+  lines?: number;
+  /** The column's value for a row. When every row has the same one, the column says nothing and is left out. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  same?: (row: any) => string;
+}
 
 /** A list of things of one kind with the same facts for each: skills, tools,
  *  flows, sessions, tasks. A row opens the thing, by `onOpen` or link `to`. */
@@ -258,11 +279,15 @@ export function EntityTable<R>({ columns, rows, rowKey, cell, onOpen, to, rowAct
   empty?: ReactNode;
   label: string;
 }) {
-  const template = [...columns.map(column => column.width || "minmax(0, 1fr)"), rowActions ? "auto" : ""].filter(Boolean).join(" ");
+  // Something true of every row tells you nothing: such a column is left out.
+  const shown = rows.length > 1 ? columns.filter(column => !column.same || new Set(rows.map(column.same)).size > 1) : columns;
+  const template = [...shown.map(column => column.width || "minmax(0, 1fr)"), rowActions ? "auto" : ""].filter(Boolean).join(" ");
   return <div className="kit-table" role="table" aria-label={label} style={{ "--kit-columns": template } as React.CSSProperties}>
-    <div className="kit-table-head" role="row">{columns.map(column => <span role="columnheader" key={column.key}>{column.label}</span>)}{rowActions && <span/>}</div>
+    <div className="kit-table-head" role="row">{shown.map(column => <span role="columnheader" key={column.key}>{column.label}</span>)}{rowActions && <span/>}</div>
     {rows.length === 0 ? <Empty>{empty}</Empty> : rows.map(row => {
-      const cells = <>{columns.map(column => <span role="cell" className="kit-table-cell" key={column.key}>{cell(row, column.key)}</span>)}</>;
+      const cells = <>{shown.map(column => <span role="cell" key={column.key}
+        className={cx("kit-table-cell", Boolean(column.lines) && "kit-table-cell-clamp")}
+        style={column.lines ? { "--kit-lines": column.lines } as React.CSSProperties : undefined}>{cell(row, column.key)}</span>)}</>;
       const link = to?.(row);
       return <div className={cx("kit-table-row", (link || onOpen) && "kit-table-row-open")} role="row" key={rowKey(row)}>
         {link ? <NavLink className="kit-table-open" to={link}>{cells}</NavLink>

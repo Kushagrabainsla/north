@@ -37,9 +37,10 @@ describe("the sibling Skills, Tools and Flows tables", () => {
     expect(capabilityColumns("Tool", "Operation").map(column => column.label)).toEqual(["Tool", "Description", "Operation", "Status"]);
   });
 
-  it("names where a thing came from as a kit badge, in plain words", () => {
-    const html = renderToStaticMarkup(createElement(CapabilityName, { name: "daily-brief", source: "builtin" }));
-    expect(html).toBe('<b>daily-brief</b><span class="kit-badge">built-in</span>');
+  it("names where a thing came from only when it is not built in", () => {
+    // "built-in" on 48 of 48 skills said nothing.
+    expect(renderToStaticMarkup(createElement(CapabilityName, { name: "daily-brief", source: "builtin" }))).toBe("<b>daily-brief</b>");
+    expect(renderToStaticMarkup(createElement(CapabilityName, { name: "mine", source: "learned" }))).toBe('<b>mine</b><span class="kit-badge">learned</span>');
     expect(sourceLabel("learned")).toBe("learned");
   });
 });

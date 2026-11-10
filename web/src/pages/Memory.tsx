@@ -235,7 +235,7 @@ export function Memory() {
     <div className="page">
       <PageHeader
         title="Memory"
-        subtitle="Everything north has learned about you, and from you."
+        subtitle="What North knows about you."
         actions={
           onDocuments ? (
             <ActionBar danger={<Button variant="danger" onClick={() => void removeDocument()}>Reset document</Button>}>
@@ -271,7 +271,7 @@ export function Memory() {
             }
           />
           {resource.error && <Notice tone="error">{resource.error}</Notice>}
-          <Panel title={docLabels[doc]} label="Document">
+          <Panel title={docLabels[doc]}>
             <div className="memory-editor-grid">
               <section>
                 <PaneLabel>Markdown source</PaneLabel>
