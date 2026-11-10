@@ -105,6 +105,7 @@ from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
+from tools.universal.create_view import CreateViewTool
 from tools.universal.fetch_url import FetchUrlTool
 from tools.universal.flow_runner import DISCARD_OPTION, RESUME_OPTION, STOPPED_RUN_SOURCE, FlowRunner
 from tools.universal.forget import ForgetTool
@@ -1152,6 +1153,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             describes=f"{RESUME_OPTION} runs the step the run stopped on again; {DISCARD_OPTION} ends the run.",
         )
     tool_registry.register(RunFlowTool(flow_runner))
+    # A view checks the tools it reads and the flows its buttons run against these live registries.
+    tool_registry.register(CreateViewTool(tool_registry=tool_registry, flow_registry=flow_registry))
     # Replace the bootstrap instances now that the final live dependency exists.
     # This closes the construction cycle while still rejecting schedules that
     # name an agent the runtime cannot dispatch to.

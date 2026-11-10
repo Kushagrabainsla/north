@@ -2029,6 +2029,7 @@ _RESET_WIPES = (
     "smoke",
     "tasks",
     "tui_history",
+    "views",
 )
 
 

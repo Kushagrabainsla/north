@@ -54,6 +54,7 @@ from . import extensions as _extensions
 from . import lights as _lights
 from . import secrets_panel as _secrets
 from . import updates as _updates
+from . import views as _views
 from .conversations import ConversationStore, Turn
 
 # Compatibility exports for callers that historically imported skill routes
@@ -121,6 +122,7 @@ router.include_router(extensions_router)
 router.include_router(_lights.router)
 router.include_router(_secrets.router)
 router.include_router(_updates.router)
+router.include_router(_views.router)
 
 
 @dataclass

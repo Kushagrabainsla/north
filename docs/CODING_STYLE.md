@@ -222,6 +222,7 @@ Every piece of logic exists in exactly one place. SQLite connection setup with W
 - Views of one list or sections of one thing: `Tabs`. Search: `SearchField`. Both above a list sit in a `Toolbar`.
 - What happened: `Notice` (`error` for failures, never the success colour). A state: `Status` (its colour is set by the word, the same on every page); a tag that is not a state: `Badge`.
 - Loading and empty: `ResourceView`, or `Loading` and `Empty`; a page keeps its header while it loads.
+- A view north makes (A2UI v0.9, `views/`) uses only the parts in `views/catalog.py`, each drawn by its kit part in `web/src/views.tsx`. A kit part a view should use is added to both.
 **Why:** each page built its own: nine kinds of list row, four tab styles, delete buttons that were not red, errors shown in the success colour, and Approve and Reject in a different order on two pages. North's own views are drawn from the same set, so a view can only use what is here. **How to apply:** reach for the kit first; when a page needs something it lacks, add it to the kit for every page, never to the page.
 
 **The README covers north, install and commands only.** Setup steps for a connection (Telegram, browser profiles, providers) live in dashboard onboarding, not the README. Every command row matches the CLI's real behavior and options. **Why:** setup docs in two places drift. **How to apply:** when a command or option changes, check its README row against `--help` and the code.

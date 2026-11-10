@@ -5,7 +5,7 @@ import { fileName, noticeBody, noticePreview, savedFile } from "./notices";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
 import { ActionBar, Button, Empty, Notice, Status, PaneLabel } from "./kit";
 import type { AgentRun, Conversation, InferenceCategory, Notice as NoticeEntry } from "./types";
-import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Lightbulb, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Lightbulb, Sparkles, GitBranch, Wrench, LayoutTemplate, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
 
@@ -95,7 +95,7 @@ export function Layout() {
       <button className="new-chat" onClick={newSession}>+ New session</button>
       <nav aria-label="North navigation">
         <div className="nav-section">{primaryNav.map(([to, label, Icon, beta]) => <NavigationLink key={to} to={to} label={label} Icon={Icon} beta={beta}/>)}</div>
-        <div className="nav-group"><span className="nav-group-label"><Sparkles size={14}/> Capabilities</span><NavigationLink to="/skills" label="Skills" Icon={Sparkles}/><NavigationLink to="/flows" label="Flows" Icon={GitBranch}/><NavigationLink to="/tools" label="Tools" Icon={Wrench}/></div>
+        <div className="nav-group"><span className="nav-group-label"><Sparkles size={14}/> Capabilities</span><NavigationLink to="/skills" label="Skills" Icon={Sparkles}/><NavigationLink to="/flows" label="Flows" Icon={GitBranch}/><NavigationLink to="/tools" label="Tools" Icon={Wrench}/><NavigationLink to="/views" label="Views" Icon={LayoutTemplate}/></div>
         <div className="nav-group nav-system"><span className="nav-group-label"><Cpu size={14}/> Manage</span>{systemNav.map(([to, label, Icon]) => <NavigationLink key={to} to={to} label={label} Icon={Icon}/>)}</div>
       </nav>
       <div className="sidebar-footer"><HealthIndicator/><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>

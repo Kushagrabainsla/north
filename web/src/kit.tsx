@@ -99,6 +99,11 @@ export function Toolbar({ tabs, search, actions }: { tabs?: ReactNode; search?: 
 
 // ── Sections ────────────────────────────────────────────────────────────────
 
+/** A line or paragraph of ordinary text. */
+export function Text({ children }: { children: ReactNode }) {
+  return <p className="kit-text">{children}</p>;
+}
+
 /** A few lines saying what a panel or step is for, under its title. */
 export function Note({ children }: { children: ReactNode }) {
   return <div className="kit-note">{children}</div>;
