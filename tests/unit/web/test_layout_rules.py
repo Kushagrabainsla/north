@@ -28,7 +28,7 @@ def test_a_long_word_in_a_reply_or_an_artifact_wraps() -> None:
 
 def test_a_session_s_activity_and_turns_have_their_own_cells_on_a_phone() -> None:
     # Sessions is a kit table now: on a phone every cell of a row is its own line.
-    phone = KIT[KIT.index("@media (max-width: 680px)"):]
+    phone = KIT[KIT.index("@media (max-width: 680px)") :]
     assert ".kit-table-open { grid-template-columns: 1fr;" in phone
 
 
