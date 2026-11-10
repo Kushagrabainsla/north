@@ -11,4 +11,4 @@ def test_packaged_resource_directories_exist() -> None:
 
 
 def test_prompt_loader_keeps_legacy_prompt_names() -> None:
-    assert "planner" in load_prompt("prompts/planner.md").lower()
+    assert "goal" in load_prompt("prompts/north_star.md").lower()

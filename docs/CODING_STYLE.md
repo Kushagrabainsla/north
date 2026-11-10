@@ -339,7 +339,7 @@ Swapping any backend (e.g. `FileContextStore` → `DBContextStore`) is one line.
 
 The Orchestrator scans `/agents` at startup. A valid agent folder contains `config.yaml` and `agent.py`. Adding an agent = adding a folder. The registry exposes `get(name)`, `all()`, and `for_domain(domain)`. No registry code changes when agents come or go.
 
-An agent that is only a prompt is a skill on the general agent. Add an agent only for what a skill cannot give: its own tools, permissions or isolation (as `home` guards device control).
+An agent that is only a prompt is a skill on north. North is the one agent: a specialism is a skill, and coding goes to the installed coding agents.
 
 ### 6.5 Tools Are Discovered from the Filesystem
 
@@ -470,7 +470,7 @@ Two consequences worth keeping:
 - **Your own controls act as you.** A device control you operate yourself on the dashboard (a light's switch, slider, colour or music sync) does what you set at once, with no approval card: the person deciding is you. It reaches the device through the module that owns it, never through an agent's tool, and north.log notes each change. A change north makes for you, from chat or a flow, still goes through `Tool.execute` and asks as your mode says.
 - **One card per requirement.** Whatever an agent needs from you to do one thing (delete a file, submit one application) is asked on one card, by the approval layer. An agent never asks on a card of its own and then has the tool ask again: it calls the tool, which asks; or, when the thing takes several calls, it asks once naming each exact call, and those calls then run without another card. A call that differs from what you approved is another requirement and asks.
 
-**Why:** the issue #76 test found each broken: replays covered other files, repositories and commands; north switched itself to yolo; a rejected read was done with another tool; a learned tool printed north's secret; the general agent edited a repository with `sed`; an agent guessed a repository path; an approved "Delete old_safe.log" card was followed by bash asking again, and one delete took three cards (A14). A card for every move of a light's slider would make the control unusable in ask mode, and would ask you about your own click.
+**Why:** the issue #76 test found each broken: replays covered other files, repositories and commands; north switched itself to yolo; a rejected read was done with another tool; a learned tool printed north's secret; north edited a repository with `sed`; an agent guessed a repository path; an approved "Delete old_safe.log" card was followed by bash asking again, and one delete took three cards (A14). A card for every move of a light's slider would make the control unusable in ask mode, and would ask you about your own click.
 **How to apply:** tools report these as facts on their `Action` (paths, repository, content); `ApprovalPolicy` and `Approvals` enforce them, never the tool.
 
 **One layer per concern.** Approvals, execution, memory, capabilities, inference and channels each have one layer with one entry point; nothing outside it re-implements or bypasses it.
@@ -558,7 +558,7 @@ agents/
   models.py            <- AgentPayload, AgentResult, AgentConfig
   exceptions.py        <- AgentNotFoundError, AgentExecutionError
   constants.py         <- agent tuning constants (iteration caps, tool-result limits)
-  schemas.py           <- DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
+  schemas.py           <- ASK_USER_SCHEMA, REQUEST_APPROVAL_SCHEMA, FIND_TOOLS_SCHEMA
   registry.py          <- AgentRegistry (folder discovery)
   llm_agent.py         <- LLMAgent (single-call base)
   agentic_llm_agent.py <- AgenticLLMAgent (ReAct loop, native function calling)
@@ -591,9 +591,8 @@ orchestrator/
   exceptions.py      <- OrchestratorError, NorthStarConflictError, RoutingError
   constants.py       <- orchestrator tuning constants
   orchestrator.py    <- Orchestrator
-  router.py          <- ExecutionPlanner (intent classification + execution planning)
+  task_intent.py     <- what a task's words say: risky (goal check), repo overview
   north_star.py      <- NorthStarChecker
-  synthesizer.py     <- multi-agent result synthesis
   task_context.py    <- TaskContextStore
   failure_handler.py <- FailureHandler
   stream.py          <- EventStreamManager (SSE event stream)
@@ -1243,7 +1242,7 @@ status="completed"
 
 ## 15. Agents
 
-North has one agent, `general`. A specialism is a skill on it, never a new agent: an agent that is only a prompt is a skill (the news briefing, wellness coaching and smart home control all went this way). Coding is not an agent either: the general agent hands it to the installed Claude Code / Codex.
+North has one agent: north. Every task runs on it straight away, with no planner model call in front (one took about 4 seconds of every reply to pick the one agent there was). A specialism is a skill on north, never a new agent: an agent that is only a prompt is a skill (the news briefing, wellness coaching and smart home control all went this way). There are no personal agents and no delegation. Coding is not an agent either: north hands it to the installed Claude Code / Codex.
 
 ### 15.1 The Agent Interface
 

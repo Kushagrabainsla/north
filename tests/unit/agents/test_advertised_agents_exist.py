@@ -1,40 +1,26 @@
-"""Every agent name north advertises to a model must resolve.
+"""North is the one agent, and nothing tells a model about any other.
 
-north used to tell the model, in the `delegate_task` schema and in the planner's
-routing table, that it could hand work to `finance`, `health`, `university` and
-`job`. None of them had an agent. A model that did exactly what it was told
-raised `AgentNotFoundError`, so north caused the failure with its own
-instructions - and it read like a model mistake, which is what made it hard to
-attribute.
-
-Fixing the four names is a one-line edit. These tests are the part that keeps
-them fixed: an empty `agents/tester/` appeared after the bug was filed, so
-scaffolding a directory and never finishing it is a thing that happens here.
+north used to advertise agents that did not exist (`finance`, `health`,
+`university`, `job`) in a delegation schema and a planner routing table; a model
+that did what it was told raised `AgentNotFoundError`. Both are gone. These tests
+keep what is on disk honest: one agent, and no half-scaffolded agent folders.
 
 No network, no LLM - these read the shipped artifacts only.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-import yaml
-
-from utils.runtime_resources import prompts_dir
+from agents.capabilities import build_platform_capabilities_summary
+from agents.schemas import ASK_USER_SCHEMA, FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 AGENTS_DIR = REPO_ROOT / "agents"
-PLANNER_PROMPT = prompts_dir() / "planner.md"
 
 
 def _registered_agent_names() -> set[str]:
-    """Agent names `AgentRegistry` would actually register.
-
-    Mirrors `AgentRegistry._is_valid_agent_directory` rather than importing the
-    registry, which needs constructed dependencies. The rule under test is about
-    what is on disk, so reading disk is the honest check.
-    """
+    """Agent names `AgentRegistry` would actually register (its `_is_valid_agent_directory` rule)."""
     return {
         entry.name
         for entry in AGENTS_DIR.iterdir()
@@ -45,47 +31,8 @@ def _registered_agent_names() -> set[str]:
     }
 
 
-def _agent_domains() -> set[str]:
-    """Every domain declared by a registered agent."""
-    domains = set()
-    for name in _registered_agent_names():
-        config = yaml.safe_load((AGENTS_DIR / name / "config.yaml").read_text(encoding="utf-8"))
-        if isinstance(config, dict) and config.get("domain"):
-            domains.add(str(config["domain"]))
-    return domains
-
-
-def test_delegate_task_advertises_only_registered_agents() -> None:
-    """The schema names come from the registry, so they cannot be stale."""
-    from agents.schemas import delegate_task_schema
-
-    names = sorted(_registered_agent_names())
-    description = delegate_task_schema(names)["function"]["parameters"]["properties"]["agent"]["description"]
-
-    for name in names:
-        assert f"'{name}'" in description, f"{name} is registered but not advertised"
-    for dead in ("finance", "health", "university", "job", "tester"):
-        assert f"'{dead}'" not in description, f"{dead} has no agent and must not be advertised"
-
-
-def test_delegate_task_schema_names_nothing_without_a_registry() -> None:
-    """With no registry the schema must not fall back to a guessed list.
-
-    A guessed list is exactly what this bug was. Saying less is correct here.
-    """
-    from agents.schemas import delegate_task_schema
-
-    description = delegate_task_schema()["function"]["parameters"]["properties"]["agent"]["description"]
-    assert "registered in this install" in description
-    assert "'" not in description, "no agent name should be named when none are known"
-
-
 def test_no_scaffolded_agent_directories() -> None:
-    """A directory under agents/ is either a real agent or not there.
-
-    `AgentRegistry` skips an incomplete directory silently, which is how four of
-    them survived long enough to be advertised.
-    """
+    """A directory under agents/ is either a real agent or not there."""
     incomplete = [
         entry.name
         for entry in AGENTS_DIR.iterdir()
@@ -97,31 +44,20 @@ def test_no_scaffolded_agent_directories() -> None:
     assert not incomplete, f"scaffolded but unregistered agent directories: {incomplete}"
 
 
-def test_planner_routing_table_targets_resolve() -> None:
-    """Every target in the planner's classification table must exist.
-
-    The table routes by domain or agent name. Both are legitimate; a name that
-    is neither is the bug.
-    """
-    rows = re.findall(r"^\|(?!\s*-)[^|]+\|\s*`([a-z_]+)`\s*\|", PLANNER_PROMPT.read_text(encoding="utf-8"), re.M)
-    assert rows, "no routing rows parsed - the table's shape changed, update this test"
-
-    # Engineering has no agent of its own: the general agent takes it and hands the coding to the installed agents.
-    resolvable = _registered_agent_names() | _agent_domains()
-    if "general" in resolvable:
-        resolvable.add("engineering")
-    unresolvable = sorted(set(rows) - resolvable)
-    assert not unresolvable, f"planner routes to targets with no agent or domain: {unresolvable}"
+def test_north_is_the_one_agent() -> None:
+    """A specialism is a skill on north, never an agent of its own (CODING_STYLE §15)."""
+    assert _registered_agent_names() == {"north"}
 
 
-def test_general_is_the_one_agent() -> None:
-    """A specialism is a skill on the general agent, never an agent of its own (CODING_STYLE §15)."""
-    assert _registered_agent_names() == {"general"}
+def test_no_tool_north_is_offered_hands_work_to_another_agent() -> None:
+    names = {schema["function"]["name"] for schema in (ASK_USER_SCHEMA, FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA)}
+
+    assert "delegate_task" not in names
 
 
-def test_planner_examples_name_only_agents_that_exist() -> None:
-    """Its examples still planned `home` beside `general` after the home agent became a skill."""
-    text = PLANNER_PROMPT.read_text(encoding="utf-8")
-    named = set(re.findall(r'"([a-z_]+)"', "".join(re.findall(r'"agents":\s*\[([^\]]*)\]', text))))
-    named |= {n.strip() for line in re.findall(r"agents:\s*\[([^\]]*)\]", text) for n in line.split(",") if n.strip()}
-    assert named <= _registered_agent_names(), f"planner examples name unregistered agents: {sorted(named)}"
+def test_north_is_not_told_it_has_specialist_agents() -> None:
+    summary = build_platform_capabilities_summary(object())
+
+    assert "create_agent" not in summary
+    assert "Specialized Agents" not in summary
+    assert "delegate" not in summary.lower()

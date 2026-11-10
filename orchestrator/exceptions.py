@@ -18,11 +18,3 @@ class NorthStarConflictError(OrchestratorError):
 
 class TaskCapacityError(OrchestratorError):
     """Raised when the concurrent-task cap is reached. API routes map this to HTTP 429."""
-
-
-class RoutingError(OrchestratorError):
-    """Raised when intent routing or execution plan construction fails."""
-
-
-class DeclaredArtifactMissingError(OrchestratorError):
-    """Raised when an agent finishes without writing an output it declares."""

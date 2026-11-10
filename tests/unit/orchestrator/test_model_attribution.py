@@ -20,17 +20,13 @@ def _orchestrator():
     ledger.write = AsyncMock()
     stream_manager = MagicMock()
     stream_manager.emit = AsyncMock()
-    task_context_store = MagicMock()
-    task_context_store.write = AsyncMock()
     notifier = MagicMock()
     notifier.notify = AsyncMock()
     approval_store_ = ApprovalStore()
     orch = Orchestrator(
         ledger=ledger,
-        agent_registry=MagicMock(),
+        agent=MagicMock(),
         north_star_checker=MagicMock(),
-        execution_planner=MagicMock(),
-        task_context_store=task_context_store,
         failure_handler=MagicMock(),
         interaction=UserInteraction(approval_store_, notifier=notifier, stream_manager=stream_manager),
         stream_manager=stream_manager,
@@ -50,7 +46,7 @@ def _completed_entry(ledger):
 async def test_agent_completed_ledger_records_model_used():
     orch, ledger = _orchestrator()
     agent = MagicMock()
-    agent.name = "general"  # non-engineering: skips the evidence gate
+    agent.name = "north"
     result = AgentResult(
         output="Done.",
         summary="Done.",

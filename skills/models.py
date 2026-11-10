@@ -43,7 +43,8 @@ class SkillIntent(StrEnum):
 class SkillExecution:
     """Server-enforced runtime contract for a flow-executable skill."""
 
-    agent: str
+    # Unread: north runs every step. Kept only because flow fingerprints include it.
+    agent: str = ""
     tools: tuple[str, ...] = ()
     inputs: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
     outputs: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})

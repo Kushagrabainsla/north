@@ -58,7 +58,6 @@ class TestPortsAreTypeOnlyForOrchestration:
     """
 
     TYPE_ONLY_MODULES = (
-        "orchestrator/router.py",
         "orchestrator/api_context.py",
         "orchestrator/api/deps.py",
         "orchestrator/orchestrator.py",

@@ -156,15 +156,9 @@ async def test_a_completed_scheduled_task_returns_quietly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_scheduled_task_runs_its_configured_agent() -> None:
+async def test_a_scheduled_task_is_submitted_as_a_schedule_s_task() -> None:
     orchestrator = _FakeOrchestrator(["completed"])
-    await _run_scheduled_task(
-        orchestrator,
-        "[scheduled] brief",
-        forced_agent="general",
-        poll_seconds=0,
-    )
-    assert orchestrator.requests[0].forced_agent == "general"
+    await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)
     assert orchestrator.requests[0].source is LedgerSource.CRON
 
 

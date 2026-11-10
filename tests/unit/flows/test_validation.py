@@ -14,6 +14,10 @@ class _Registry:
     def __init__(self, values):
         self.values = values
 
+    @property
+    def north(self):
+        return self.get("north")
+
     def get(self, name):
         if name not in self.values:
             raise KeyError(name)
@@ -78,11 +82,11 @@ def test_candidate_skills_require_explicit_test_validation_and_matching_domain(t
     )
     kwargs = {
         "skill_registry": _Registry({"strict": skill}),
-        "agent_registry": _Registry({"general": SimpleNamespace(domain="general")}),
+        "agent_registry": _Registry({"north": SimpleNamespace(domain="general")}),
     }
     assert not validate_flow_capabilities(_flow(tmp_path), **kwargs).valid
     assert validate_flow_capabilities(_flow(tmp_path), allow_candidate_skills=True, **kwargs).valid
-    kwargs["agent_registry"] = _Registry({"general": SimpleNamespace(domain="engineering")})
+    kwargs["agent_registry"] = _Registry({"north": SimpleNamespace(domain="engineering")})
     assert not validate_flow_capabilities(_flow(tmp_path), allow_candidate_skills=True, **kwargs).valid
 
 
@@ -103,7 +107,7 @@ def test_validation_enforces_inputs_approval_executor_and_tools(tmp_path):
     report = validate_flow_capabilities(
         _flow(tmp_path, inputs={"extra": True}, approval="never"),
         skill_registry=_Registry({"strict": _skill(tmp_path, execution=execution)}),
-        agent_registry=_Registry({"general": SimpleNamespace(domain="general")}),
+        agent_registry=_Registry({"north": SimpleNamespace(domain="general")}),
         tool_registry=_Registry({}),
     )
 
@@ -138,7 +142,7 @@ def test_validation_resolves_legacy_dynamic_tool_without_wildcard(tmp_path):
             approval="on_mutation",
         ),
         skill_registry=_Registry({"strict": _skill(tmp_path, execution=execution)}),
-        agent_registry=_Registry({"general": SimpleNamespace(domain="general")}),
+        agent_registry=_Registry({"north": SimpleNamespace(domain="general")}),
         tool_registry=_Registry({"browser": object()}),
     )
 

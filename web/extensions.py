@@ -12,6 +12,7 @@ import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from agents.constants import NORTH_AGENT
 from approval.models import Card
 from config.browser_profiles import BrowserProfile, SetupProgress, discover_browser_profiles
 from flows.exceptions import FlowNotFoundError, FlowParseError
@@ -61,7 +62,6 @@ class SkillCreate(BaseModel):
     description: str = Field(min_length=1, max_length=2_000)
     instructions: str = Field(min_length=1, max_length=8_000)
     domains: list[str] = Field(default_factory=lambda: ["general"])
-    executor: str = "general"
     tools: list[str] = Field(default_factory=list)
     approval: str = Field(default="never", pattern="^(never|on_mutation|before_step|always)$")
     inputs: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
@@ -159,7 +159,6 @@ def _execution_view(execution) -> dict[str, Any] | None:
     if execution is None:
         return None
     return {
-        "agent": execution.agent,
         "tools": list(execution.tools),
         "inputs": execution.inputs,
         "outputs": execution.outputs,
@@ -174,17 +173,11 @@ def _validate_execution_dependencies(execution, domains: list[str]) -> None:
         return
     services = current_services()
     if services.agent_registry is not None:
-        try:
-            agent = services.agent_registry.get(execution.agent)
-        except Exception:
-            raise HTTPException(status_code=422, detail=f"Unknown executor {execution.agent!r}") from None
-        if agent.domain not in domains:
+        north = services.agent_registry.get(NORTH_AGENT)
+        if north.domain not in domains:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    f"Executor {execution.agent!r} has domain {agent.domain!r}, which is not "
-                    "listed in the skill domains"
-                ),
+                detail=f"North only uses skills that serve {north.domain!r}; add it to the skill's domains",
             )
     if services.tool_registry is not None:
         for tool_name in execution.tools:
@@ -230,7 +223,6 @@ async def create_skill(body: SkillCreate) -> dict[str, Any]:
     if reason:
         raise HTTPException(status_code=422, detail=reason)
     execution = {
-        "agent": body.executor.strip(),
         "tools": body.tools,
         "approval": body.approval,
         "inputs": body.inputs,
@@ -753,7 +745,7 @@ async def create_flow_schedule(name: str, body: FlowScheduleCreate) -> dict[str,
     scheduler, _, _ = _schedule_tools()
     result = await _as_user(
         scheduler,
-        {"task": flow.description or f"Run the {name} flow.", "agent": "general", "flow": name, **_set_fields(body)},
+        {"task": flow.description or f"Run the {name} flow.", "agent": NORTH_AGENT, "flow": name, **_set_fields(body)},
     )
     if not result.success:
         raise HTTPException(status_code=422, detail=result.error or "Could not schedule this flow")
@@ -823,7 +815,7 @@ async def start_flow_run(name: str, body: FlowRunRequest) -> dict[str, Any]:
         run_id=run_id,
         flow_name=name,
         task_id=task_id,
-        agent="general",
+        agent=NORTH_AGENT,
         flow_fingerprint=flow_fingerprint(flow, skills.get if skills is not None else None),
         test_mode=test_mode,
         trigger=trigger,

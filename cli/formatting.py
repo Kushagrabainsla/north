@@ -214,8 +214,8 @@ def _format_plan_table(plan_steps: list[dict], dod_evals: list[dict] | None = No
 def _format_turn_summary(turn: dict) -> str:
     """Format a compact, Claude Code-style one-line collapsible summary for a turn."""
     parts = []
-    agents = turn.get("agents") or ([turn.get("domain")] if turn.get("domain") else [])
-    agent_str = ", ".join(agents) if agents else "general"
+    agents = turn.get("agents") or []
+    agent_str = ", ".join(agents) if agents else "north"
 
     tools = turn.get("tools") or []
     tool_count = len(tools)
@@ -258,14 +258,8 @@ def _format_turn_details(turn: dict) -> list[str]:
         "[bright_black](Ctrl+O to collapse)[/bright_black]"
     ]
 
-    domain = turn.get("domain")
-    if domain:
-        flag = " [dim](complex)[/dim]" if turn.get("is_consequential") else " [dim](direct)[/dim]"
-        lines.append(f"  │  [dim green]✓[/dim green]  [dim]classified:[/dim] [cyan]{domain}[/cyan]{flag}")
-
     agents = turn.get("agents") or []
     if agents:
-        lines.append(f"  │  [dim green]✓[/dim green]  [dim]plan ready:[/dim] [cyan]{', '.join(agents)}[/cyan]")
         model_str = f" [dim]on [cyan]{turn.get('model')}[/cyan][/dim]" if turn.get("model") else ""
         lines.append(
             f"  │  [bright_black]●[/bright_black]  [cyan]{', '.join(agents)}[/cyan] "

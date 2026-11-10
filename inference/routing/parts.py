@@ -84,7 +84,6 @@ COMPACT_SUFFIX = "compact"
 
 _TINY_STRUCTURED_PARTS = ("critic", "north_star_checker")
 _BACKGROUND_PARTS = ("extraction_pipeline", "episode_consolidator", "skill_distiller")
-_PROSE_PARTS = ("synthesizer", "context_injector")
 
 # The context a serious coding task needs before it is worth starting.
 _CODING_CONTEXT = 200_000
@@ -97,11 +96,6 @@ _BACKGROUND_FLOOR = 0.30
 DEFAULT_PART_PROFILES: dict[str, PartProfile] = {
     # The expensive one. Everything else exists so this can have the best model.
     "coder": PartProfile("coder", frozenset({TOOLS}), _CODING_CONTEXT, Order.CODING),
-    # Small JSON, but it gates every task - cheap, yet not from the bottom.
-    "planner": PartProfile(
-        "planner", frozenset({STRUCTURED}), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR
-    ),
-    "synthesizer": PartProfile("synthesizer", frozenset(), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR),
     # Decides for the user in autonomous mode. Small JSON, but it acts in their
     # place, so it is ranked on judgement rather than drawn from the cheap group.
     "approval_decider": PartProfile("approval_decider", frozenset({STRUCTURED}), 0, Order.INTELLIGENCE),

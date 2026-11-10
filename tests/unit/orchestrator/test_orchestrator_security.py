@@ -14,7 +14,7 @@ from approval.models import ApprovalDecision, Card, CardField, CardFieldType, Ca
 from approval.store import ApprovalStore
 from orchestrator.constants import MAX_CONCURRENT_TASKS
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
-from orchestrator.models import IntentClassification, TaskRequest
+from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
 
 
@@ -25,12 +25,12 @@ def _orchestrator(approval_store: ApprovalStore | None = None) -> Orchestrator:
     stream_manager.emit = AsyncMock()
     stream_manager.emit_done = AsyncMock()
     approval_store_ = approval_store or ApprovalStore()
+    agent = MagicMock()
+    agent.name = "north"
     return Orchestrator(
         ledger=ledger,
-        agent_registry=MagicMock(),
+        agent=agent,
         north_star_checker=MagicMock(),
-        execution_planner=MagicMock(),
-        task_context_store=MagicMock(),
         failure_handler=MagicMock(),
         interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream_manager),
         stream_manager=stream_manager,
@@ -53,9 +53,8 @@ async def test_north_star_inference_failure_proceeds_but_records_the_gap() -> No
     """
     orch = _orchestrator()
     orch._north_star_checker.check_alignment = AsyncMock(side_effect=OrchestratorError("inference down"))
-    classification = IntentClassification(is_consequential=True, domain="finance", reasoning="r", confidence=1.0)
 
-    await orch._stage_north_star("t1", "wire money", classification)  # must not raise
+    await orch._stage_north_star("t1", "transfer money to my savings", "")  # must not raise
 
     actions = [call.args[0].action for call in orch._ledger.write.call_args_list]
     assert "north_star_check_failed" in actions
@@ -68,17 +67,27 @@ async def test_north_star_conflict_still_blocks_the_task() -> None:
     orch = _orchestrator()
     orch._north_star_checker.check_alignment = AsyncMock(return_value=(False, "conflicts with savings goal", "r"))
     orch._interaction.request_decision = AsyncMock(return_value=SimpleNamespace(status=ApprovalDecision.REJECTED))
-    classification = IntentClassification(is_consequential=True, domain="finance", reasoning="r", confidence=1.0)
 
     with pytest.raises(NorthStarConflictError):
-        await orch._stage_north_star("t1", "wire money", classification)
+        await orch._stage_north_star("t1", "transfer money to my savings", "")
 
 
 async def test_north_star_aligned_proceeds() -> None:
     orch = _orchestrator()
     orch._north_star_checker.check_alignment = AsyncMock(return_value=(True, None, "fine"))
-    classification = IntentClassification(is_consequential=True, domain="finance", reasoning="r", confidence=1.0)
-    await orch._stage_north_star("t1", "wire money", classification)  # must not raise
+    await orch._stage_north_star("t1", "transfer money to my savings", "")  # must not raise
+    orch._north_star_checker.check_alignment.assert_awaited_once()
+
+
+async def test_an_ask_that_acts_on_nothing_outside_north_skips_the_goal_check() -> None:
+    """The goal check is a model call; a question needs none (it was gated by a planner model before)."""
+    orch = _orchestrator()
+    orch._north_star_checker.check_alignment = AsyncMock()
+
+    await orch._stage_north_star("t1", "what is on my calendar today?", "")
+
+    orch._north_star_checker.check_alignment.assert_not_awaited()
+    assert orch._stream_manager.emit.await_count == 0
 
 
 # ── #17: capacity check is atomic ────────────────────────────────────────────

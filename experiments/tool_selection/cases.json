@@ -28,7 +28,6 @@
   {"id": "task-status", "prompt": "Check whether task abc123 has completed or failed", "expected": ["get_task_status"], "kind": "single"},
   {"id": "sessions", "prompt": "List every task that is still running in the background", "expected": ["get_active_sessions"], "kind": "single"},
   {"id": "new-tool", "prompt": "Create and hot-load a new North capability", "expected": ["create_tool"], "kind": "single"},
-  {"id": "new-agent", "prompt": "Create a new travel specialist agent with its own prompt", "expected": ["create_agent"], "kind": "single"},
   {"id": "new-skill", "prompt": "Save this successful workflow as a reusable procedural skill", "expected": ["create_skill"], "kind": "single"},
   {"id": "load-skill", "prompt": "Load the full instructions for the systematic-debugging skill", "expected": ["use_skill"], "kind": "single"},
   {"id": "plan", "prompt": "Record these implementation steps and mark the first one in progress", "expected": ["update_plan"], "kind": "single"},

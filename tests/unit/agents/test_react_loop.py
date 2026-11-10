@@ -91,7 +91,7 @@ async def test_mcp_dispatch_retains_north_context_without_forwarding_it_to_the_e
             }
         ),
     )
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     call = ToolCall(name=tool.name, call_id="gmail-search", params={"query": "LinkedIn job alerts"})
     _, output, success, _ = await agent._execute_call(
         call, AgentPayload(task_id="email-check", prompt="Read one alert", workspace=str(tmp_path)), {tool.name: tool}
@@ -101,7 +101,7 @@ async def test_mcp_dispatch_retains_north_context_without_forwarding_it_to_the_e
     client.call_tool.assert_awaited_once_with("search_gmail_messages", call.params)
 
 
-@pytest.mark.parametrize("name", ["general"])
+@pytest.mark.parametrize("name", ["north"])
 async def test_agent_run_returns_valid_result(name: str, tmp_path: Path) -> None:
     """Each agent must return a valid AgentResult when LLM responds with a message."""
     from agents.models import AgentResult
@@ -134,7 +134,7 @@ async def test_final_answer_content_is_preserved(tmp_path: Path) -> None:
                 cost_usd=0.001,
             )
 
-    agent = _load_agent("general", tmp_path, FixedTextRouter())
+    agent = _load_agent("north", tmp_path, FixedTextRouter())
     result = await agent.run(AgentPayload(task_id="t1", prompt="Research auth."))
     assert "Research complete" in result.output
     assert result.cost_usd == pytest.approx(0.001)
@@ -173,7 +173,7 @@ async def test_tool_call_then_final_answer_takes_two_iterations(tmp_path: Path) 
                 tokens_out=5,
             )
 
-    agent = _load_agent("general", tmp_path, ToolThenMessageRouter())
+    agent = _load_agent("north", tmp_path, ToolThenMessageRouter())
     result = await agent.run(AgentPayload(task_id="t2", prompt="Design something."))
     assert call_count == 2
     assert result.output == "Done after tool."
@@ -200,7 +200,7 @@ async def test_each_model_turn_emits_prompt_section_attribution(tmp_path: Path) 
             )
 
     stream = RecordingStream()
-    agent = _load_agent("general", tmp_path, UsageRouter())
+    agent = _load_agent("north", tmp_path, UsageRouter())
     agent.deps.stream_manager = stream
     payload = AgentPayload(task_id="profile-task", prompt="inspect", context="earlier turn")
 
@@ -257,7 +257,7 @@ async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path
 
     stream = RecordingStream()
     router = SlowEvidenceRouter()
-    agent = _load_agent("general", tmp_path, router)
+    agent = _load_agent("north", tmp_path, router)
     agent.deps.stream_manager = stream
     agent.deps.tool_registry.register(EvidenceTool())
 
@@ -298,7 +298,7 @@ async def test_quick_evidence_manifest_keeps_locators_not_tool_content(tmp_path:
             self.events.append((event, data))
 
     stream = RecordingStream()
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     agent.deps.stream_manager = stream
     payload = AgentPayload(task_id="quick-evidence", prompt="inspect", execution_profile="quick_readonly")
     call = ToolCall(
@@ -332,7 +332,7 @@ async def test_quick_profile_refuses_mutation_before_it_happens(tmp_path: Path) 
             self.called = True
             return ToolOutput(success=True)
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     tool = MutatingTool()
     payload = AgentPayload(task_id="quick-mutation", prompt="inspect", execution_profile="quick_readonly")
 
@@ -360,7 +360,7 @@ async def test_flow_read_only_policy_blocks_mutation_before_it_happens(tmp_path:
             self.called = True
             return ToolOutput(success=True)
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     tool = MutatingTool()
     payload = AgentPayload(
         task_id="flow-read-only",
@@ -405,7 +405,7 @@ async def test_a_flow_steps_change_goes_to_the_approval_layer(
     tool.approvals.decide = AsyncMock(
         return_value=Decision(Verdict.ALLOW if allowed else Verdict.REFUSE, "test", status=None)
     )
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     payload = AgentPayload(task_id="flow-approval", prompt="change", skills=["review-item"])
 
     _call, _result, success, _images = await agent._safe_execute_call(
@@ -442,7 +442,7 @@ async def test_quick_profile_escalates_after_tool_failure(tmp_path: Path) -> Non
             return ToolCallResponse(type="message", content="recovered", calls=[], model_used="mock")
 
     stream = RecordingStream()
-    agent = _load_agent("general", tmp_path, FailureThenAnswerRouter())
+    agent = _load_agent("north", tmp_path, FailureThenAnswerRouter())
     agent.deps.stream_manager = stream
     payload = AgentPayload(task_id="quick-failure", prompt="inspect", execution_profile="quick_readonly")
 
@@ -484,7 +484,7 @@ async def test_tool_result_injected_into_next_request(tmp_path: Path) -> None:
                 tokens_out=5,
             )
 
-    agent = _load_agent("general", tmp_path, InspectingRouter())
+    agent = _load_agent("north", tmp_path, InspectingRouter())
     await agent.run(AgentPayload(task_id="t3", prompt="Run tests."))
 
     tool_messages = [m for m in received_messages_on_second_call if m.get("role") == "tool"]
@@ -532,7 +532,7 @@ async def test_cost_accumulates_across_iterations(tmp_path: Path) -> None:
                 cost_usd=0.01,
             )
 
-    agent = _load_agent("general", tmp_path, CostRouter())
+    agent = _load_agent("north", tmp_path, CostRouter())
     result = await agent.run(AgentPayload(task_id="t4", prompt="Implement x."))
     assert call_count == 3
     assert result.cost_usd == pytest.approx(0.03)
@@ -559,7 +559,7 @@ async def test_max_iterations_returns_graceful_fallback(tmp_path: Path) -> None:
                 tokens_out=5,
             )
 
-    agent = _load_agent("general", tmp_path, NeverFinishesRouter())
+    agent = _load_agent("north", tmp_path, NeverFinishesRouter())
     agent._deps.agent_max_iterations = 3
 
     result = await agent.run(AgentPayload(task_id="t5", prompt="Never ends."))
@@ -604,7 +604,7 @@ async def test_unknown_tool_call_returns_error_and_loop_continues(tmp_path: Path
                 tokens_out=5,
             )
 
-    agent = _load_agent("general", tmp_path, UnknownToolRouter())
+    agent = _load_agent("north", tmp_path, UnknownToolRouter())
     result = await agent.run(AgentPayload(task_id="t6", prompt="Run tests."))
 
     assert result.output == "Recovered after error."
@@ -629,7 +629,7 @@ async def test_empty_tool_calls_list_breaks_loop(tmp_path: Path) -> None:
                 tokens_out=5,
             )
 
-    agent = _load_agent("general", tmp_path, EmptyCallsRouter())
+    agent = _load_agent("north", tmp_path, EmptyCallsRouter())
     result = await agent.run(AgentPayload(task_id="t7", prompt="Research x."))
     # Loop breaks → returns the iteration-limit fallback
     assert isinstance(result.output, str)
@@ -642,7 +642,7 @@ async def test_empty_tool_calls_list_breaks_loop(tmp_path: Path) -> None:
 
 def test_system_prompt_cached_on_first_access(tmp_path: Path) -> None:
     """System prompt must be the same object on repeated calls (cached, no repeated disk reads)."""
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     p1 = agent._load_system_prompt()
     p2 = agent._load_system_prompt()
     assert p1 is p2
@@ -650,7 +650,7 @@ def test_system_prompt_cached_on_first_access(tmp_path: Path) -> None:
 
 def test_system_prompt_includes_tool_creation_policy(tmp_path: Path) -> None:
     """Tool creation policy must be appended to every agent's system prompt."""
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     assert "create_tool" in agent._load_system_prompt(), "the prompt must include the tool creation policy"
 
 
@@ -661,7 +661,7 @@ def test_system_prompt_includes_tool_creation_policy(tmp_path: Path) -> None:
 
 async def test_pre_loaded_context_bypasses_store(tmp_path: Path) -> None:
     """When payload.context is set, _load_context must return it without touching the store."""
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     payload = AgentPayload(task_id="t1", prompt="x", context="pre-loaded research context")
     loaded = await agent._load_context(payload)
     assert loaded == "pre-loaded research context"
@@ -669,7 +669,7 @@ async def test_pre_loaded_context_bypasses_store(tmp_path: Path) -> None:
 
 async def test_empty_context_store_produces_empty_context(tmp_path: Path) -> None:
     """When the context store has no documents, _load_context must return empty string."""
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     # tmp_path has no context docs - store returns empty strings
     payload = AgentPayload(task_id="t1", prompt="x")
     loaded = await agent._load_context(payload)
@@ -677,7 +677,7 @@ async def test_empty_context_store_produces_empty_context(tmp_path: Path) -> Non
 
 
 async def test_context_loading_records_content_free_section_boundaries(tmp_path: Path) -> None:
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     payload = AgentPayload(task_id="t1", prompt="x", context="previous conversation")
 
     await agent._load_context(payload, selected_skills=[])
@@ -691,7 +691,7 @@ async def test_engineering_context_includes_repository_evidence_identity(tmp_pat
             return "## Repository evidence identity\n- Git commit: `abc123`"
 
     monkeypatch.setattr("agents.base.repository_identity", lambda workspace: Identity())
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     agent.domain = "engineering"  # the feature is keyed on the domain
     payload = AgentPayload(task_id="repo-revision", prompt="inspect", workspace=str(tmp_path))
 
@@ -723,7 +723,7 @@ async def test_context_loading_emits_content_free_memory_telemetry(tmp_path: Pat
         async def emit(self, task_id: str, event: str, data: dict) -> None:
             self.events.append((event, data))
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     stream = RecordingStream()
     agent.deps.memory = Memory()
     agent.deps.stream_manager = stream
@@ -744,7 +744,7 @@ async def test_context_loading_emits_content_free_memory_telemetry(tmp_path: Pat
 
 def test_task_message_includes_task_id(tmp_path: Path) -> None:
     """The user message built by the agent must include the task ID."""
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     payload = AgentPayload(task_id="task-abc-123", prompt="Implement login.")
     msg = agent._build_task_message(payload, context="", scored_tools=[])
     assert "task-abc-123" in msg
@@ -757,7 +757,7 @@ def test_task_message_names_this_tasks_notes_folder_in_north_home(tmp_path: Path
     home is elsewhere: "remember this" ended in "That path is blocked".
     """
     home = move_north_home(tmp_path / "data")
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     msg = agent._build_task_message(AgentPayload(task_id="t1", prompt="Save my plan."), context="", scored_tools=[])
 
     notes = msg.split("## Notes Directory\n", 1)[1].split("\n", 1)[0]
@@ -769,7 +769,7 @@ def test_a_task_with_no_folder_chosen_is_told_so_instead_of_its_folder_being_cal
     tmp_path: Path,
 ) -> None:
     """Agents called their empty scratch folder "your workspace" and guessed a repository path (issue #76, M7)."""
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     own = AgentPayload(task_id="t1", prompt="whats this repo do", workspace=handoff_dir_for("t1"))
     chosen = AgentPayload(task_id="t1", prompt="whats this repo do", workspace="/srv/shop")
 
@@ -782,7 +782,7 @@ def test_a_task_with_no_folder_chosen_is_told_so_instead_of_its_folder_being_cal
 
 
 def test_task_message_includes_prompt(tmp_path: Path) -> None:
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     payload = AgentPayload(task_id="t1", prompt="Run the full test suite.")
     msg = agent._build_task_message(payload, context="", scored_tools=[])
     assert "Run the full test suite." in msg
@@ -812,7 +812,7 @@ def _tool_map():
 
 
 async def test_a_tool_is_given_the_way_to_mark_its_task_as_acting(tmp_path):
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     store = _RecordingStore()
     agent._deps.running_task_store = store
 
@@ -824,7 +824,7 @@ async def test_a_tool_is_given_the_way_to_mark_its_task_as_acting(tmp_path):
 
 
 async def test_nothing_to_mark_without_a_store(tmp_path):
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     agent._deps.running_task_store = None
 
     assert agent._before_change(AgentPayload(task_id="t1", prompt="p")) is None
@@ -838,7 +838,7 @@ async def test_nothing_to_mark_without_a_store(tmp_path):
 async def test_explicit_tool_name_never_dropped_by_semantic_filter(tmp_path):
     from unittest.mock import AsyncMock, MagicMock
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
 
     def _tool(name: str):
         t = MagicMock()
@@ -884,7 +884,7 @@ async def test_explicit_tool_name_never_dropped_by_semantic_filter(tmp_path):
 
 async def test_task_selection_uses_global_catalog_not_agent_mapping(tmp_path: Path) -> None:
     """Semantic relevance trims schemas without turning the result into an allowlist."""
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
 
     def _tool(name: str):
         t = MagicMock()
@@ -926,7 +926,7 @@ async def test_task_selection_uses_global_catalog_not_agent_mapping(tmp_path: Pa
 
 
 async def test_find_tools_loads_a_missed_global_tool(tmp_path: Path) -> None:
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     photo = _AbsentFileTool()
     photo.name = "take_photo"
     photo.description = "Capture a photograph with a connected camera"
@@ -970,7 +970,7 @@ async def test_multimodal_tool_image_context(tmp_path: Path) -> None:
                 },
             )
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     tool_map = {"mock_vision": MockVisionTool()}
 
     # 1. Verify _call_tool extracts base64_image and mime_type from result.data
@@ -1030,7 +1030,7 @@ async def test_execute_calls_ordered_preserves_causal_chunks(tmp_path: Path) -> 
             execution_order.append("read")
             return ToolOutput(success=True, data={"read": True})
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     from config.approval_mode import ApprovalMode
     from tests.conftest import bind_approvals
 
@@ -1064,7 +1064,7 @@ async def test_browser_reads_do_not_run_while_a_human_handoff_waits(tmp_path: Pa
             return ToolOutput(success=True)
 
     store = ApprovalStore()
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     agent.deps.interaction = UserInteraction(store)
     calls = [
         ToolCall(name="browser_read", call_id="before", params={"stage": "before"}),
@@ -1120,7 +1120,7 @@ async def test_a_tool_that_takes_the_workspace_lock_itself_is_not_run_under_it(t
         name = "holds_its_lock"
         locks_workspace_itself = False  # an ordinary mutating tool: the loop serializes it under the lock
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     payload = AgentPayload(prompt="test", task_id="t1", workspace=str(tmp_path))
     tool_map = {"lands_itself": bind_approvals(LandsItself(), ApprovalMode.YOLO)}
 
@@ -1141,7 +1141,7 @@ async def test_a_tool_that_takes_the_workspace_lock_itself_is_not_run_under_it(t
 
 async def test_append_tool_call_exchange_contiguous_tool_roles_with_visuals(tmp_path: Path) -> None:
     """All role='tool' messages must precede any visual user messages for OpenAI protocol compliance."""
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     messages: list[dict] = []
 
     results = [
@@ -1173,7 +1173,7 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
 
     from skills.models import Skill
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
 
     def _tool(name: str):
         t = MagicMock()
@@ -1240,7 +1240,7 @@ async def test_flow_skill_contract_hard_limits_tools_and_find_tools(tmp_path: Pa
     """A required skill's allowlist cannot be widened by retrieval or find_tools."""
     from unittest.mock import AsyncMock, MagicMock
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
 
     def _tool(name: str):
         tool = MagicMock()
@@ -1271,7 +1271,7 @@ async def test_flow_skill_contract_hard_limits_tools_and_find_tools(tmp_path: Pa
 async def test_only_explicit_test_skills_can_load_candidate_procedures(tmp_path: Path) -> None:
     from skills.models import Skill
 
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     skill = Skill(
         name="custom",
         description="Use when reviewing custom items.",
@@ -1350,26 +1350,26 @@ def _call_then_finish(tool_name: str):
 async def test_not_found_does_not_count_against_the_tool(tmp_path: Path) -> None:
     """`read_file` decayed to the lowest-ranked tool the researcher had, purely
     from being asked whether an optional file existed and answering correctly."""
-    agent = _load_agent("general", tmp_path, _call_then_finish("read_file"))
+    agent = _load_agent("north", tmp_path, _call_then_finish("read_file"))
     _registering(agent, _AbsentFileTool())
-    before = await agent._deps.confidence_tracker.get_score("general", "read_file")
+    before = await agent._deps.confidence_tracker.get_score("north", "read_file")
 
     await agent.run(AgentPayload(task_id="t-nf", prompt="Look for a file."))
     await asyncio.sleep(0.05)  # confidence is recorded on a spawned task
 
-    after = await agent._deps.confidence_tracker.get_score("general", "read_file")
+    after = await agent._deps.confidence_tracker.get_score("north", "read_file")
     assert after == before, "answering 'not found' is not a malfunction"
 
 
 async def test_a_real_tool_error_still_counts_against_the_tool(tmp_path: Path) -> None:
-    agent = _load_agent("general", tmp_path, _call_then_finish("read_file"))
+    agent = _load_agent("north", tmp_path, _call_then_finish("read_file"))
     _registering(agent, _BrokenTool())
-    before = await agent._deps.confidence_tracker.get_score("general", "read_file")
+    before = await agent._deps.confidence_tracker.get_score("north", "read_file")
 
     await agent.run(AgentPayload(task_id="t-err", prompt="Look for a file."))
     await asyncio.sleep(0.05)
 
-    after = await agent._deps.confidence_tracker.get_score("general", "read_file")
+    after = await agent._deps.confidence_tracker.get_score("north", "read_file")
     assert after < before, "a tool that actually broke must lose confidence"
 
 
@@ -1399,7 +1399,7 @@ class _CapturingRouter(MockInferenceRouter):
 
 async def _capture(tmp_path: Path, scores: list[tuple[str, float]]) -> _CapturingRouter:
     router = _CapturingRouter()
-    agent = _load_agent("general", tmp_path, router)
+    agent = _load_agent("north", tmp_path, router)
     for name in ("alpha_tool", "beta_tool", "gamma_tool"):
         tool = _AbsentFileTool()
         tool.name = name
@@ -1484,7 +1484,7 @@ async def test_a_short_rate_limit_mid_run_is_waited_out_and_earlier_steps_are_ke
     tmp_path: Path, no_rate_limit_grace
 ) -> None:
     router = _RateLimitedOnce(limits=2, retry_after=0.01)
-    agent = _load_agent("general", tmp_path, router)
+    agent = _load_agent("north", tmp_path, router)
     agent.deps.tool_registry.register(_CountingTool())
 
     result = await agent.run(AgentPayload(task_id="t1", prompt="count once"))
@@ -1497,7 +1497,7 @@ async def test_a_short_rate_limit_mid_run_is_waited_out_and_earlier_steps_are_ke
 async def test_a_rate_limit_with_no_retry_time_still_fails_the_run(tmp_path: Path, no_rate_limit_grace) -> None:
     from inference.exceptions import AllModelsRateLimitedError
 
-    agent = _load_agent("general", tmp_path, _RateLimitedOnce(limits=1, retry_after=None))
+    agent = _load_agent("north", tmp_path, _RateLimitedOnce(limits=1, retry_after=None))
     agent.deps.tool_registry.register(_CountingTool())
 
     with pytest.raises(AllModelsRateLimitedError):
@@ -1507,7 +1507,7 @@ async def test_a_rate_limit_with_no_retry_time_still_fails_the_run(tmp_path: Pat
 async def test_a_rate_limit_that_outlasts_the_waits_fails_the_run(tmp_path: Path, no_rate_limit_grace) -> None:
     from inference.exceptions import AllModelsRateLimitedError
 
-    agent = _load_agent("general", tmp_path, _RateLimitedOnce(limits=10, retry_after=0.01))
+    agent = _load_agent("north", tmp_path, _RateLimitedOnce(limits=10, retry_after=0.01))
     agent.deps.tool_registry.register(_CountingTool())
 
     with pytest.raises(AllModelsRateLimitedError):

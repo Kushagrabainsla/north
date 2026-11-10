@@ -67,9 +67,9 @@ def _agent(tmp_path: Path, model: _Model, runs: AgentRunStore, notes: _ReadsNote
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
     )
     deps.agent_run_store = runs
-    from agents.general.agent import GeneralAgent
+    from agents.north.agent import NorthAgent
 
-    return GeneralAgent(AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml"), deps)
+    return NorthAgent(AgentConfig.from_yaml(AGENTS_DIR / "north" / "config.yaml"), deps)
 
 
 async def _paused_after_one_read(tmp_path: Path) -> tuple[_Model, AgentRunStore, _ReadsNotes]:
@@ -112,13 +112,13 @@ async def test_only_a_run_stopped_from_outside_is_continued(tmp_path: Path) -> N
     runs = AgentRunStore(tmp_path / "tasks.db")
     for run_id, status in (("paused", "cancelled"), ("cut_off", "interrupted"), ("broke", "failed")):
         payload = AgentPayload(task_id=f"t-{run_id}", prompt=PROMPT, run_id=run_id)
-        await runs.start(payload, "general")
+        await runs.start(payload, "north")
         await runs.save_checkpoint(run_id, {"messages": [], "messages_read": 0, "step": 1, "evidence": {}})
         await runs.finish_with_error(run_id, status, "stopped")
-    await runs.start(AgentPayload(task_id="t-unsaved", prompt=PROMPT, run_id="unsaved"), "general")
+    await runs.start(AgentPayload(task_id="t-unsaved", prompt=PROMPT, run_id="unsaved"), "north")
     await runs.finish_with_error("unsaved", "cancelled", "stopped before its first step")
 
-    assert await runs.continuable_run("t-paused", "general", PROMPT) == "paused"
-    assert await runs.continuable_run("t-cut_off", "general", PROMPT) == "cut_off"
-    assert await runs.continuable_run("t-broke", "general", PROMPT) is None
-    assert await runs.continuable_run("t-unsaved", "general", PROMPT) is None
+    assert await runs.continuable_run("t-paused", "north", PROMPT) == "paused"
+    assert await runs.continuable_run("t-cut_off", "north", PROMPT) == "cut_off"
+    assert await runs.continuable_run("t-broke", "north", PROMPT) is None
+    assert await runs.continuable_run("t-unsaved", "north", PROMPT) is None

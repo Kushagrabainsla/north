@@ -144,8 +144,8 @@ def validate_flow_capabilities(
             warnings.append(f"{prefix}: candidate skill {step.skill!r} is available for test runs only")
         execution = skill.execution
         if execution is None:
-            # Advisory skills are valid instruction sources. They run through
-            # the general agent with the same safe mutation gate as inline
+            # Advisory skills are valid instruction sources. They run on
+            # north with the same safe mutation gate as inline
             # instructions, but cannot declare tool or I/O contracts.
             continue
 
@@ -167,19 +167,14 @@ def validate_flow_capabilities(
             )
         )
 
+        # North runs every step; the skill's `execution.agent` no longer chooses one.
         if agent_registry is None:
-            warnings.append(f"{prefix}: executor {execution.agent!r} could not be checked")
+            warnings.append(f"{prefix}: whether north may use skill {step.skill!r} could not be checked")
         else:
-            try:
-                agent = agent_registry.get(execution.agent)
-            except Exception:
-                errors.append(f"{prefix}: unknown skill executor {execution.agent!r}")
-            else:
-                if not skill.available_to(agent.domain) and not (candidate_allowed and agent.domain in skill.domains):
-                    errors.append(
-                        f"{prefix}: skill {step.skill!r} is not active for its executor "
-                        f"{execution.agent!r} in domain {agent.domain!r}"
-                    )
+            north = agent_registry.north
+            if not skill.available_to(north.domain) and not (candidate_allowed and north.domain in skill.domains):
+                serves = sorted(skill.domains)
+                errors.append(f"{prefix}: skill {step.skill!r} is not one north uses (it serves {serves})")
 
         try:
             tool_names = resolve_execution_tools(execution, step.inputs)

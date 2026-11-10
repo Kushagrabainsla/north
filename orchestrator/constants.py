@@ -24,10 +24,6 @@ QUEUE_POLL_INTERVAL_SECONDS = 3.0
 # whose heartbeat has gone stale past settings.stuck_task_max_age_seconds.
 WATCHDOG_POLL_INTERVAL_SECONDS = 600
 
-# Below this confidence the north star check is skipped to avoid interrupting
-# the user on borderline-classified tasks (e.g. "schedule a reminder").
-NORTH_STAR_CONFIDENCE_THRESHOLD = 0.7
-
 # Minimum seconds between reactive pool refreshes triggered by agent failures  -
 # prevents refresh storms when many agents fail concurrently.
 POOL_REFRESH_COOLDOWN = 60.0

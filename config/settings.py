@@ -130,9 +130,6 @@ class Settings(BaseSettings):
     # Port for the local approval-callback server. Separate from the API port so a
     # second instance (or an unrelated process on the default) can be moved aside.
     callback_port: int = Field(default=8001, ge=1, le=65535)
-    planner_max_attempts: int = Field(default=3, ge=1)
-    planner_retry_delay_seconds: float = Field(default=6.0, ge=0.5)
-    planner_retry_backoff_factor: float = Field(default=1.5, ge=1.0)
 
     # Sandboxed execution (#6): run bash-tool commands inside a Docker container that
     # only sees the workspace, with the network off and memory/CPU/PID limits. Off by

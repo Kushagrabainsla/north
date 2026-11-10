@@ -17,7 +17,7 @@ from tools.universal.use_flow import UseFlowTool
 
 
 class FakeAgent:
-    name = "general"
+    name = "north"
     domain = "general"
     config = SimpleNamespace()
     broken = False  # set on the class: the test run's step then fails
@@ -29,8 +29,12 @@ class FakeAgent:
 
 
 class FakeAgents:
+    @property
+    def north(self):
+        return FakeAgent()
+
     def get(self, name: str):
-        if name != "general":
+        if name != "north":
             raise KeyError(name)
         return FakeAgent()
 
@@ -271,22 +275,22 @@ async def test_create_flow_rejects_direct_tool_steps(tmp_path):
     assert "reference only skills" in out.error
 
 
-async def test_create_flow_checks_live_skills_and_skill_owned_executor(tmp_path):
+async def test_create_flow_checks_live_skills_and_that_north_uses_them(tmp_path):
     tool, registry, skills_registry, _agents, _runs = _manager(tmp_path)
     missing_skill = _steps()
     missing_skill[0]["skill"] = "missing"
-    bad_directory = tmp_path / "skills" / "bad-executor"
-    bad_directory.mkdir()
-    (bad_directory / "SKILL.md").write_text(
+    coding_directory = tmp_path / "skills" / "coding-only"
+    coding_directory.mkdir()
+    (coding_directory / "SKILL.md").write_text(
         (tmp_path / "skills" / "review-item" / "SKILL.md")
         .read_text(encoding="utf-8")
-        .replace("name: review-item", "name: bad-executor")
-        .replace("agent: general", "agent: missing"),
+        .replace("name: review-item", "name: coding-only")
+        .replace("domains: [general]", "domains: [engineering]"),
         encoding="utf-8",
     )
     skills_registry.reload()
-    missing_agent = _steps()
-    missing_agent[0]["skill"] = "bad-executor"
+    not_offered = _steps()
+    not_offered[0]["skill"] = "coding-only"
 
     unknown_skill = await tool.run(
         ToolInput(
@@ -298,20 +302,39 @@ async def test_create_flow_checks_live_skills_and_skill_owned_executor(tmp_path)
             }
         )
     )
-    unknown_agent = await tool.run(
+    unused_skill = await tool.run(
         ToolInput(
             params={
                 "action": "create",
-                "name": "unknown-agent",
-                "description": "Reference an unavailable executor.",
-                "steps": missing_agent,
+                "name": "coding-skill",
+                "description": "Reference a skill north is not offered.",
+                "steps": not_offered,
             }
         )
     )
 
     assert not unknown_skill.success and "unknown skill" in unknown_skill.error
-    assert not unknown_agent.success and "unknown skill executor" in unknown_agent.error
+    assert not unused_skill.success and "not one north uses" in unused_skill.error
     assert registry.names() == []
+
+
+async def test_a_skill_naming_the_old_agent_still_makes_a_flow_that_runs_on_north(tmp_path):
+    """Skills written before north was the one agent say `agent: general`; they keep working."""
+    tool, registry, *_ = _manager(tmp_path)
+
+    out = await tool.run(
+        ToolInput(
+            params={
+                "action": "create",
+                "name": "old-skill-flow",
+                "description": "Uses a skill that names the old agent.",
+                "steps": _steps(),
+            }
+        )
+    )
+
+    assert out.success, out.error
+    assert "old-skill-flow" in registry.names()
 
 
 async def test_a_new_flow_that_fails_its_test_stays_a_draft_until_one_passes(tmp_path):

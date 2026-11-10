@@ -226,10 +226,8 @@ async def test_steering_sends_a_message_into_the_running_task():
     approval_store_ = approval_store
     orch = Orchestrator(
         ledger=ledger_writer,
-        agent_registry=MagicMock(),
+        agent=MagicMock(),
         north_star_checker=MagicMock(),
-        execution_planner=MagicMock(),
-        task_context_store=MagicMock(),
         failure_handler=MagicMock(),
         interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream_mgr),
         stream_manager=stream_mgr,

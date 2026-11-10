@@ -21,6 +21,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from agents.constants import NORTH_AGENT
 from agents.models import AgentDependencies
 from agents.registry import AgentRegistry
 from approval.approval_memory import ApprovalMemory
@@ -82,8 +83,6 @@ from orchestrator.nightly_check import nightly_check, registered_checkout
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.reconcile import recover_interrupted_tasks
-from orchestrator.router import ExecutionPlanner
-from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.verify_command import detect_verify_command
 from orchestrator.watchdog import watch_stuck_tasks
 from policies.self_edit import SelfEditPolicy
@@ -103,7 +102,6 @@ from tools.specialized.coding_shell import BashShell
 from tools.specialized.kasa_devices import move_logins_to_secrets as move_kasa_logins_to_secrets
 from tools.tool_index import ToolIndex
 from tools.universal.cancel_schedule import CancelScheduleTool
-from tools.universal.create_agent import CreateAgentTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
@@ -232,7 +230,7 @@ def _build_tool_registry(
     approvals: Approvals | None = None,
     skill_registry: SkillRegistry | None = None,
     skill_selector: SkillSelector | None = None,
-) -> tuple[ToolRegistry, CreateAgentTool]:
+) -> ToolRegistry:
     learned_tools_dir = settings.north_home / "learned" / "tools"
     learned_tools_dir.mkdir(parents=True, exist_ok=True)
     # Every tool the registry holds gets `approvals`, so every call that changes
@@ -253,7 +251,6 @@ def _build_tool_registry(
     )
     mutation_root = settings.north_home / "mutations"
     source_edit_policy = SelfEditPolicy(learned_tools_dir, mutation_root)
-    agent_edit_policy = SelfEditPolicy(settings.north_home / "agents", mutation_root)
     # The four schedule verbs travel together: an agent that can create a
     # schedule must also be able to show, change and remove one, or the user can
     # only ever add.
@@ -280,12 +277,6 @@ def _build_tool_registry(
             tools_dir=learned_tools_dir,
         )
     )
-    create_agent_tool = CreateAgentTool(
-        cron_store=deps.cron_store,
-        agents_dir=settings.north_home / "agents",
-        self_edit_policy=agent_edit_policy,
-    )
-    tool_registry.register(create_agent_tool)
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
     if deps.fact_store is not None:
         tool_registry.register(ForgetTool(deps.fact_store, deps.context_store))
@@ -307,7 +298,7 @@ def _build_tool_registry(
             allowed_domains=tuple(settings.sandbox_allowed_domains) or None,
         )
     )
-    return tool_registry, create_agent_tool
+    return tool_registry
 
 
 def _build_skills(deps) -> tuple[SkillRegistry, SkillSelector]:
@@ -450,15 +441,7 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry, interaction: UserIntera
 
 
 def _build_agent_registry(agent_deps: AgentDependencies) -> AgentRegistry:
-    registry = AgentRegistry(
-        agents_dir=_AGENTS_DIR,
-        user_agents_dir=settings.north_home / "agents",
-        deps=agent_deps,
-    )
-    # Break the circular dependency: agents need the registry to delegate sub-tasks,
-    # but the registry needs agent_deps to instantiate agents.
-    agent_deps.agent_registry = registry
-    return registry
+    return AgentRegistry(agents_dir=_AGENTS_DIR, deps=agent_deps)
 
 
 def _build_extraction_pipeline(deps) -> ExtractionPipeline:
@@ -484,31 +467,18 @@ def _build_orchestrator(
 ) -> Orchestrator:
     return Orchestrator(
         ledger=deps.ledger,
-        agent_registry=agent_registry,
+        agent=agent_registry.get(NORTH_AGENT),
         north_star_checker=NorthStarChecker(
             memory=deps.memory,
             inference_router=deps.cost_tracker,
         ),
-        execution_planner=ExecutionPlanner(
-            agent_registry=agent_registry,
-            inference_router=deps.cost_tracker,
-            tool_registry=tool_registry,
-            north_settings=settings,
-        ),
-        task_context_store=deps.task_context_store,
-        failure_handler=FailureHandler(
-            task_context_store=deps.task_context_store,
-            stream_manager=deps.stream_manager,
-        ),
+        failure_handler=FailureHandler(stream_manager=deps.stream_manager),
         interaction=interaction,
         stream_manager=deps.stream_manager,
         approval_store=deps.approval_store,
         north_settings=deps.north_settings,
-        synthesizer=ResultSynthesizer(inference_router=deps.cost_tracker, memory=deps.memory),
         tracked_router=deps.cost_tracker,
-        episodic_store=deps.episodic_store,
         tool_registry=tool_registry,
-        tool_input_factory=ToolInput,
         extraction_pipeline=extraction_pipeline,
         running_task_store=deps.running_task_store,
         stuck_task_max_age_seconds=settings.stuck_task_max_age_seconds,
@@ -518,7 +488,6 @@ def _build_orchestrator(
         approval_memory=approval_memory,
         plan_store=deps.plan_store,
         task_inbox=deps.task_inbox,
-        agent_run_store=deps.agent_run_store,
     )
 
 
@@ -751,16 +720,11 @@ async def _run_scheduled_task(
     orchestrator: Orchestrator,
     prompt: str,
     *,
-    forced_agent: str | None = None,
     poll_seconds: float = _SCHEDULED_POLL_SECONDS,
     timeout_seconds: float = _SCHEDULED_TIMEOUT_SECONDS,
     job_cancelled: Callable[[], Awaitable[bool]] = _not_cancelled,
 ) -> None:
     """Start a scheduled task and wait to see whether it worked.
-
-    ``forced_agent`` preserves the agent stored on the schedule; routing the
-    prompt again can silently replace a file-producing specialist with a chat
-    agent that returns text but writes nothing.
 
     Only a clean task completion returns success. Cancellation is propagated to
     the job as cancellation; exhausted recovery and an overlong in-flight task
@@ -770,9 +734,7 @@ async def _run_scheduled_task(
     A job you cancel while this waits stops the task too; a shutdown leaves the
     task to resume at the next start.
     """
-    response = await orchestrator.submit_task(
-        TaskRequest(prompt=prompt, source=LedgerSource.CRON, forced_agent=forced_agent)
-    )
+    response = await orchestrator.submit_task(TaskRequest(prompt=prompt, source=LedgerSource.CRON))
     try:
         await _watch_scheduled_task(orchestrator, response.task_id, poll_seconds, timeout_seconds)
     except asyncio.CancelledError:
@@ -822,9 +784,6 @@ def _launch_background_tasks(
 
     async def _nightly_cleanup() -> str:
         """north's own housekeeping: the one step of the built-in nightly-cleanup flow."""
-        n = await deps.task_context_store.cleanup_stale_tasks(
-            active_task_ids=orchestrator.active_task_ids,
-        )
         now = utcnow()
         completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)
         failed_before = now - datetime.timedelta(days=settings.task_cleanup_failed_days)
@@ -862,7 +821,7 @@ def _launch_background_tasks(
             else 0
         )
         summary = (
-            f"removed {n} stale rows, pruned {pruned} ledger entries"
+            f"pruned {pruned} ledger entries"
             f", {pruned_runs} agent runs, {pruned_flow_runs} flow runs, {stopped_runs} old stopped runs"
             f", {decisions} routing decisions, {handoffs} handoff directories"
             f"{f', retired {len(retired)} learned skill(s)' if retired else ''}"
@@ -909,12 +868,7 @@ def _launch_background_tasks(
         skill = str((job.payload or {}).get("skill") or "").strip()
         skill_hint = f" Use the '{skill}' skill before acting." if skill else ""
         scheduled_prompt = f"[scheduled]{skill_hint}\n{job.task}"
-        await _run_scheduled_task(
-            orchestrator,
-            scheduled_prompt,
-            forced_agent=job.agent,
-            job_cancelled=cancelled_by_you,
-        )
+        await _run_scheduled_task(orchestrator, scheduled_prompt, job_cancelled=cancelled_by_you)
 
     cron_scheduler = CronScheduler(
         processor=deps.job_processor,
@@ -1040,17 +994,6 @@ async def _shutdown(
     await deps.cost_tracker.aclose()
 
 
-def _warn_unknown_cron_agents(agent_registry: AgentRegistry) -> None:
-    known = set(agent_registry.names())
-    for entry in V1_CRON_ENTRIES:
-        if entry.agent not in known and entry.agent != "system":
-            logger.warning(
-                "V1 cron entry %r references unknown agent %r - job will fail at dispatch",
-                entry.name,
-                entry.agent,
-            )
-
-
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -1122,7 +1065,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("loading flows")
     flow_registry = _build_flows()
     deps.approval_policy = approval_policy
-    tool_registry, create_agent_tool = _build_tool_registry(deps, approvals, skill_registry, skill_selector)
+    tool_registry = _build_tool_registry(deps, approvals, skill_registry, skill_selector)
     # Rebind the schedule tool after flows are loaded so scheduled flow names
     # are validated at creation time just like named skills.
     tool_registry.register(
@@ -1170,14 +1113,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("building tool index")
     tool_index = _build_tool_index(deps)
 
-    _step("scanning agent registry")
+    _step("loading north")
     agent_deps = _build_agent_deps(deps, tool_registry, approvals.interaction)
     agent_deps.tool_index = tool_index
     agent_deps.skill_registry = skill_registry
     agent_deps.skill_selector = skill_selector
     agent_deps.flow_registry = flow_registry
     agent_registry = _build_agent_registry(agent_deps)
-    create_agent_tool._agent_registry = agent_registry  # late-wire after registry is built
     create_skill_tool._agent_registry = agent_registry
     # Flows execute agents with exact skills, so their management and runner
     # tools are registered only after both live registries exist.
@@ -1232,8 +1174,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             tool_registry=tool_registry,
         )
     )
-    _step(f"registered agents: {agent_registry.names()}")
-    _warn_unknown_cron_agents(agent_registry)
 
     _step("seeding confidence defaults")
     global_tools = sorted(tool_registry.all_tool_names())

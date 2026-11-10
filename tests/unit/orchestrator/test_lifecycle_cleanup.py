@@ -7,7 +7,7 @@ from orchestrator.plan_store import PlanStore
 
 
 def test_failure_handler_clear_all():
-    handler = FailureHandler(task_context_store=None)
+    handler = FailureHandler()
     handler.increment_retry_count("task_1", "agent_a")
     handler.increment_retry_count("task_1", "agent_b")
     handler.increment_retry_count("task_2", "agent_a")

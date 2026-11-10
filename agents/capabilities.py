@@ -13,31 +13,17 @@ if TYPE_CHECKING:
 
 
 def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
-    """Build a lean summary of the tools, agents, and flows registered in North.
+    """Build a lean summary of the tools and flows registered in North.
 
-    Queries runtime registries so whenever a new tool, subagent, or flow is
+    Queries runtime registries so whenever a new tool or flow is
     added, North knows it exists without carrying every tool description.
     """
     lines: list[str] = [
         "## Platform Capabilities & Ecosystem Overview",
-        "North is an autonomous personal operating system with dynamic"
-        " tools, specialized agents, and procedural skills:",
+        "North is an autonomous personal operating system with dynamic tools and procedural skills:",
     ]
 
-    # 1. Specialized Agents
-    agent_registry = getattr(deps, "agent_registry", None)
-    if agent_registry is not None:
-        try:
-            agents = agent_registry.all()
-            if agents:
-                lines.append("\n### Specialized Agents")
-                for ag in sorted(agents, key=lambda a: a.name):
-                    accepts = ", ".join(ag.config.accepts[:5]) if ag.config.accepts else ag.domain
-                    lines.append(f"- **{ag.name}** (domain: `{ag.domain}`): accepts [{accepts}]")
-        except Exception:
-            pass
-
-    # 2. Stable, lean awareness catalog. Full descriptions and parameter schemas
+    # 1. Stable, lean awareness catalog. Full descriptions and parameter schemas
     # are retrieved per task; names are enough for the model to know what exists.
     tool_registry = getattr(deps, "tool_registry", None)
     if tool_registry is not None:
@@ -55,7 +41,7 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
     # use, matching ones with their descriptions; the full catalog here was about
     # 2,700 tokens on every step, and it showed skills the agent may not use.
 
-    # 3. Declarative Flows
+    # 2. Declarative Flows
     flow_registry = getattr(deps, "flow_registry", None)
     if flow_registry is not None:
         try:
@@ -67,7 +53,7 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
         except Exception:
             pass
 
-    # 4. Meta-Capabilities & Self-Extension
+    # 3. Meta-Capabilities & Self-Extension
     lines.append("\n### Meta-Capabilities (Self-Extension)")
     lines.append(
         "- **create_tool**: Stage a Python tool candidate, validate and test it, then activate it with confirmation."
@@ -80,7 +66,6 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
         "- **create_flow**: Compose active skills into a candidate process, then validate and test it "
         "before activation."
     )
-    lines.append("- **create_agent**: Create new specialized sub-agents with custom prompts and configs at runtime.")
     lines.append("- **schedule_task**: Run an active flow later, once or on a routine or fixed interval.")
     lines.append("- **use_skill**: Access a reusable procedure that may call several atomic tools.")
     lines.append("- **run_flow**: Test or execute a validated declarative flow with persisted checkpoints.")
@@ -88,8 +73,7 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
     lines.append(
         "\nWhen asked what North can do, answer accurately using the platform capabilities above. "
         "The execution hierarchy is flow to skill to tool: flows reference only skills; executable skills own "
-        "their agent, exact tools, I/O contract, approval floor, and success checks; tools provide atomic "
-        "operations. North can delegate tasks to its specialized agents, "
-        "or create new tools and agents on the fly when new capabilities are needed."
+        "their exact tools, I/O contract, approval floor, and success checks; tools provide atomic "
+        "operations. North can create new tools, skills and flows when new capabilities are needed."
     )
     return "\n".join(lines)

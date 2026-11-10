@@ -1,4 +1,8 @@
-"""Main Orchestrator - ties Stages 1–4.
+"""Main Orchestrator: runs each task on north, the one agent, from start to its ending.
+
+A task goes straight to north. The goal check runs first for an ask that acts
+outside north. There is no planner: one used to classify every task with a model
+call, about 4 seconds before every answer, to pick the one agent there is.
 
 See docs/CODING_STYLE.md Sections 2.5, 4.1, 6, 10.2, 14.
 """
@@ -7,17 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import time
 from collections.abc import Callable
-from functools import partial
-from pathlib import Path
 from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
 from agents.inbox import TaskInbox
-from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, UserInteraction
 from approval.approval_memory import ApprovalMemory
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS
@@ -27,74 +27,45 @@ from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.exceptions import missing_resource
 from ledger import TASK_ENDINGS, LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
-from orchestrator.agent_runs import AgentRunStore
 from orchestrator.constants import (
     MAX_CONCURRENT_TASKS,
     MAX_QUEUE_BACKOFF_SECONDS,
-    NORTH_STAR_CONFIDENCE_THRESHOLD,
     POOL_REFRESH_COOLDOWN,
     QUEUE_POLL_INTERVAL_SECONDS,
     STRATEGY_CMD_RE,
 )
 from orchestrator.exceptions import (
-    DeclaredArtifactMissingError,
     NorthStarConflictError,
     OrchestratorError,
     TaskCapacityError,
 )
 from orchestrator.failure_handler import FailureHandler, classify_error
-from orchestrator.handoff_artifacts import primary_artifact_path
-from orchestrator.handoff_artifacts import read_artifact as _read_artifact
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.journal import TaskJournal
-from orchestrator.model_attribution import models_used_by
 from orchestrator.model_scarcity import (
     MODEL_SCARCITY_MESSAGE as _MODEL_SCARCITY_MESSAGE,
 )
 from orchestrator.model_scarcity import (
     AgentFailure,
 )
-from orchestrator.model_scarcity import (
-    has_model_scarcity as _has_model_scarcity,
-)
 from orchestrator.models import (
-    ExecutionMode,
-    ExecutionPlan,
-    IntentClassification,
     TaskRequest,
     TaskResponse,
 )
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.result_audit import ResultAuditor
-from orchestrator.router import ExecutionPlanner
 from orchestrator.running_tasks import RunningTaskStore
 from orchestrator.stream import EventStreamManager
-from orchestrator.synthesizer import ResultSynthesizer
-from orchestrator.task_context import TaskContextStore
+from orchestrator.task_intent import execution_profile, is_consequential
 from utils.edit_scope import EditAuthorizer
-from utils.execution_context import ExecutionIdentity, bind_execution
-from utils.handoff import declared_artifact_paths, ensure_handoff_dir, handoff_dir_for, missing_artifact_paths
+from utils.handoff import ensure_handoff_dir, handoff_dir_for
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
 from utils.tasks import spawn
-from utils.time import format_timestamp, localnow, utcnow
-from utils.tools import (
-    ToolDispatchRegistryPort,
-    ToolInputFactory,
-    ToolNotFoundError,
-)
+from utils.time import format_timestamp, utcnow
+from utils.tools import ToolDispatchRegistryPort
 
 logger = logging.getLogger(__name__)
-
-# Max characters of a handoff artifact injected into a downstream agent's context.
-_HANDOFF_ARTIFACT_MAX_CHARS: int = 6000
-# The run a tool call north makes directly, with no agent, is recorded under.
-DIRECT_TOOL_AGENT = "tool_executor"
-
-
-def _direct_call(plan: ExecutionPlan) -> str:
-    """The plan's direct call, as the agent that takes over is told it."""
-    return f"`{plan.direct_tool}` was called with {json.dumps(plan.direct_tool_params, default=str)}"
 
 
 def _task_folder(task_id: str, chosen: str) -> str:
@@ -104,24 +75,6 @@ def _task_folder(task_id: str, chosen: str) -> str:
     every task without a chosen folder wrote there: a recording landed in `~`.
     """
     return chosen or handoff_dir_for(task_id)
-
-
-def _declared_artifact_paths(agent: Agent, task_id: str, date: str) -> list[str]:
-    """An agent's declared outputs as concrete paths, so scheduled work can prove it
-    produced the durable thing the dashboard reads instead of treating a model
-    answer as equivalent."""
-    return declared_artifact_paths(agent.config.produces, task_id, date)
-
-
-_BEST_OF_N_TEST_TIMEOUT: int = 300
-# Timeout for the orchestrator-run Definition-of-Done verification oracle (B2).
-# Safe, FIXED verification commands the orchestrator may auto-run as an executable
-# oracle. Each command string is a literal (never built from repo content, so no
-# shell-injection surface) that invokes a standard test runner; the tuple is
-# (project marker file, optional substring the marker must contain, command).
-
-
-# Checkbox task line under the spec's "## Tasks" heading, e.g. "- [ ] 1. Do X".
 
 
 # Ledger status recorded for each approval-card decision. Answers to questions are
@@ -142,20 +95,15 @@ class Orchestrator:
     def __init__(
         self,
         ledger: LedgerWriter,
-        agent_registry: AgentRegistry,
+        agent: Agent,
         north_star_checker: NorthStarChecker,
-        execution_planner: ExecutionPlanner,
-        task_context_store: TaskContextStore,
         failure_handler: FailureHandler,
         interaction: UserInteraction,
         stream_manager: EventStreamManager,
         approval_store: ApprovalStore,
         north_settings: NorthSettings | None = None,
-        synthesizer: ResultSynthesizer | None = None,
         tracked_router: CostTracker | None = None,
-        episodic_store: Any | None = None,
         tool_registry: ToolDispatchRegistryPort | None = None,
-        tool_input_factory: ToolInputFactory | None = None,
         extraction_pipeline: Any | None = None,
         running_task_store: RunningTaskStore | None = None,
         stuck_task_max_age_seconds: int = 86_400,
@@ -165,43 +113,32 @@ class Orchestrator:
         approval_memory: ApprovalMemory | None = None,
         plan_store: Any | None = None,
         task_inbox: TaskInbox | None = None,
-        agent_run_store: AgentRunStore | None = None,
     ) -> None:
         self._ledger = ledger
-        # Where a tool call north makes directly is recorded as a run, as an agent's is.
-        self._agent_run_store = agent_run_store
-        # What you send a task while it works, shared with its agents (CODING_STYLE §15.4).
+        # What you send a task while it works, shared with north (CODING_STYLE §15.4).
         self._inbox = task_inbox or TaskInbox()
-        # The request each task in flight was started with, to answer a message that arrives after its agents did.
+        # The request each task in flight was started with, to answer a message that arrives after north did.
         self._requests: dict[str, TaskRequest] = {}
         # Everything that reports on a task writes through one journal: durable
         # ledger entry plus the live event, never one without the other.
         self._journal = TaskJournal(ledger=ledger, stream_manager=stream_manager)
-        self._agent_registry = agent_registry
+        # North, the one agent every task runs on.
+        self._agent = agent
         self._north_star_checker = north_star_checker
-        self._execution_planner = execution_planner
-        self._task_context_store = task_context_store
         self._failure_handler = failure_handler
         self._stream_manager = stream_manager
         self._approval_store = approval_store
         self._north_settings = north_settings
-        # The approval layer's one card channel, shared with tools, flows and agents.
+        # The approval layer's one card channel, shared with tools and flows.
         self._interaction = interaction
-        self._synthesizer = synthesizer
         self._tracked_router = tracked_router
-        # Tasks one of whose agents ended blocked, so the task's ending row says so (see _finish_task).
+        # Tasks north ended blocked, so the task's ending row says so (see _finish_task).
         self._blocked_tasks: set[str] = set()
         # What else ends when you cancel a task: the runs it started, such as a flow's test run.
         self._on_cancelled: list[Callable[[str], object]] = []
-        self._episodic_store = episodic_store
+        # Closes what a task's tools opened (a browser window, say) when the task ends.
         self._tool_registry = tool_registry
-        # Composition-injected factory that builds a tool-call envelope
-        # (``tools.models.ToolInput``) without the orchestrator importing the
-        # concrete tool layer. ``None`` is tolerated so tests that never dispatch
-        # a tool can omit it; dispatch paths guard on it explicitly.
-        self._tool_input_factory = tool_input_factory
-        # Task-scoped plan store: the conductor seeds it from the agreed spec's
-        # tasks so the coder starts from (and resumes on) the agreed checklist.
+        # Task-scoped plan store: north's checklist for the task, cleared when it ends.
         self._plan_store = plan_store
         self._extraction_pipeline = extraction_pipeline
         self._running_task_store = running_task_store
@@ -848,7 +785,7 @@ class Orchestrator:
         return True
 
     async def _process_task(self, task_id: str, request: TaskRequest) -> None:
-        """Full pipeline: classify → north-star → route → execute."""
+        """Full pipeline: the goal check when the ask acts outside north, then north itself."""
         bind_task_id(task_id)  # attach correlation ID to every log line in this context
         # Agents are told this directory exists before they are asked to use it.
         # Creating it lazily, wherever a write happened to land first, meant a
@@ -883,27 +820,15 @@ class Orchestrator:
         # Strategy command shortcut - handle before full pipeline
         if await self._handle_strategy_command(task_id, request.prompt):
             return
-
-        # Manual agent trigger (`north agent run <name>`): run exactly that
-        # agent, bypassing classification and the planner so it is never re-routed.
-        if request.forced_agent:
-            await self._run_forced_agent(task_id, request)
-            return
-
         context = self._with_earlier_decisions(task_id, request.context)
-        classification, plan = await self._stage_plan(task_id, request.prompt, context)
-        # Stamp the domain on the running_task row so other agents
-        # can see which domain this session belongs to.
-        if self._running_task_store is not None:
-            await self._running_task_store.update_domain(task_id, classification.domain)
-        await self._stage_north_star(task_id, request.prompt, classification)
-        await self._stage_execute(
+        await self._stage_north_star(task_id, request.prompt, context)
+        await self._run_north(
             task_id,
             request.prompt,
-            plan,
-            request.workspace,
-            context=context,
-            edit_scope=request.edit_scope,
+            _task_folder(task_id, request.workspace),
+            context,
+            request.edit_scope,
+            profile=execution_profile(request.prompt, request.workspace),
         )
 
     def _with_earlier_decisions(self, task_id: str, context: str) -> str:
@@ -932,7 +857,6 @@ class Orchestrator:
 
     async def _reject_conflicting_task(self, task_id: str, task_start: float, error: Exception) -> None:
         logger.warning("Task %s rejected: conflicts with North Star goals", task_id)
-        await self._mark_task_failed(task_id)
         await self._stream_manager.emit(task_id, "task_rejected", {"reason": str(error)})
         await self._record_task_failure(task_id, task_start, str(error), LedgerStatus.CANCELLED, "north_star_conflict")
         await self._stream_manager.emit_done(task_id)
@@ -940,7 +864,6 @@ class Orchestrator:
     async def _report_task_failure(self, task_id: str, task_start: float, error: Exception) -> None:
         error_type = classify_error(error)
         if not missing_resource(error):
-            await self._mark_task_failed(task_id)
             logger.error("Task %s failed: %s", task_id, error, exc_info=True)
             await self._stream_manager.emit(task_id, "task_failed", {"error": str(error), "error_type": error_type})
             await self._record_task_failure(task_id, task_start, str(error), LedgerStatus.FAILED, error_type)
@@ -971,10 +894,6 @@ class Orchestrator:
             return False
         running = await self._running_task_store.get(task_id)
         return running is not None and running.has_side_effects
-
-    async def _mark_task_failed(self, task_id: str) -> None:
-        with contextlib.suppress(Exception):
-            await self._task_context_store.update_task_status(task_id, "failed")
 
     async def _queue_for_model_recovery(self, task_id: str, error: Exception) -> bool:
         """Queue the task to run again when the model or network is back. False only without a queue.
@@ -1047,88 +966,6 @@ class Orchestrator:
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 await asyncio.shield(self._running_task_store.clear(task_id))
 
-    async def _stage_plan(
-        self, task_id: str, prompt: str, context: str = ""
-    ) -> tuple[IntentClassification, ExecutionPlan]:
-        """Stages 1+3: Classify intent and build execution plan in one LLM call; a task that resumes keeps its plan."""
-        if (saved := await self._saved_plan(task_id)) is not None:
-            classification, plan = saved
-        else:
-            await self._stream_manager.emit(task_id, "classifying", {"prompt": prompt})
-
-            classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id, context=context)
-
-            await self._journal.record(
-                task_id,
-                f"classified_as_{'consequential' if classification.is_consequential else 'trivial'}",
-                output=classification.reasoning,
-                # Stamp the domain so the episode consolidator can tag each task's
-                # episode without re-deriving it (used for per-agent gating).
-                agent_output={"domain": classification.domain},
-                event="classified",
-                payload={
-                    "is_consequential": classification.is_consequential,
-                    "domain": classification.domain,
-                    "reasoning": classification.reasoning,
-                },
-            )
-            await self._save_plan(task_id, classification, plan)
-        await self._stream_manager.emit(
-            task_id,
-            "routed",
-            {
-                "agents": plan.agents,
-                "parallel_groups": plan.parallel_groups,
-                "mode": plan.mode.value,
-            },
-        )
-        await self._task_context_store.initialize_task(task_id, plan.agents)
-        return classification, plan
-
-    async def _saved_plan(self, task_id: str) -> tuple[IntentClassification, ExecutionPlan] | None:
-        """The plan a task made before it was paused or cut off: it resumes with it (CODING_STYLE §15.5)."""
-        if self._running_task_store is None:
-            return None
-        stored = await self._running_task_store.get(task_id)
-        if stored is None or not stored.plan:
-            return None
-        saved = json.loads(stored.plan)
-        return IntentClassification.model_validate(saved["classification"]), ExecutionPlan.model_validate(saved["plan"])
-
-    async def _save_plan(self, task_id: str, classification: IntentClassification, plan: ExecutionPlan) -> None:
-        if self._running_task_store is not None:
-            saved = {"classification": classification.model_dump(mode="json"), "plan": plan.model_dump(mode="json")}
-            await self._running_task_store.save_plan(task_id, json.dumps(saved))
-
-    async def _run_forced_agent(self, task_id: str, request: TaskRequest) -> None:
-        """Run a single named agent directly, bypassing classification and the planner.
-
-        Backs `north agent run <name>`: a manual, explicit agent trigger runs exactly
-        that agent's ReAct loop - it is not re-routed by the planner. The name is
-        validated at the API boundary, so the agent is known-registered here.
-        """
-        agent = self._agent_registry.get(request.forced_agent)
-        workspace = _task_folder(task_id, request.workspace)
-        required_artifacts = (
-            _declared_artifact_paths(agent, task_id, localnow().date().isoformat())
-            if request.source is LedgerSource.CRON
-            else []
-        )
-        await self._task_context_store.initialize_task(task_id, [agent.name])
-        await self._stream_manager.emit(task_id, "executing", {"agents": [agent.name]})
-        failures = await self._execute_agent_group(
-            task_id,
-            request.prompt,
-            [agent],
-            workspace,
-            context=request.context,
-            edit_scope=request.edit_scope,
-            required_artifacts={agent.name: required_artifacts},
-        )
-        if failures:
-            await self._report_execution_failures(task_id, failures)
-        await self._finish_task(task_id, failures=failures, total_agents=1)
-
     async def _handle_alignment_conflict(self, task_id: str, tension: str) -> None:
         """Prompt user for approval when a North Star conflict is detected.
 
@@ -1153,32 +990,14 @@ class Orchestrator:
         if decided.status != ApprovalDecision.APPROVED:
             raise NorthStarConflictError(tension or "North Star conflict")
 
-    async def _stage_north_star(
-        self,
-        task_id: str,
-        prompt: str,
-        classification: IntentClassification,
-    ) -> None:
-        """Stage 2: North Star alignment check (consequential tasks only)."""
-        if not classification.is_consequential:
-            return
+    async def _stage_north_star(self, task_id: str, prompt: str, context: str) -> None:
+        """The goal check, for an ask that acts outside north (CODING_STYLE §7).
 
-        # Skip when the classifier is uncertain to avoid false interruptions on
-        # borderline tasks (e.g. "schedule a reminder" - local? external?).
-        if classification.confidence < NORTH_STAR_CONFIDENCE_THRESHOLD:
-            logger.info(
-                "Skipping north star check for task %s - classifier confidence %.2f < %.2f threshold",
-                task_id,
-                classification.confidence,
-                NORTH_STAR_CONFIDENCE_THRESHOLD,
-            )
-            await self._stream_manager.emit(
-                task_id,
-                "north_star_aligned",
-                {"reasoning": "skipped: low-confidence consequential classification"},
-            )
+        Whether it does is read from the ask's words (`task_intent.is_consequential`);
+        a model judges only whether it fits your goals.
+        """
+        if not is_consequential(prompt, context):
             return
-
         await self._stream_manager.emit(task_id, "north_star_checking", {})
         try:
             aligned, tension, reasoning = await self._north_star_checker.check_alignment(prompt, task_id=task_id)
@@ -1215,155 +1034,6 @@ class Orchestrator:
 
         await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": reasoning})
 
-    async def _skip_agent_with_failed_deps(self, task_id: str, name: str, failed_deps: list[str]) -> None:
-        """Record an agent as skipped because its dependencies failed."""
-        logger.warning(
-            "Skipping agent '%s' in task %s - dependencies failed: %s",
-            name,
-            task_id,
-            failed_deps,
-        )
-        # Mark failed in the task context so any read() waiting on this agent's
-        # output errors out immediately instead of blocking until timeout.
-        await self._task_context_store.update_agent_status(task_id, name, "failed")
-        await self._stream_manager.emit(task_id, "agent_skipped", {"agent": name, "failed_dependencies": failed_deps})
-        await self._journal.write(
-            LedgerEntry.new(
-                source=LedgerSource.AGENT,
-                task_id=task_id,
-                agent=name,
-                action="agent_skipped",
-                output=f"Skipped - dependencies failed: {', '.join(failed_deps)}",
-                status=LedgerStatus.FAILED,
-                error_type="dependency_failure",
-            )
-        )
-
-    async def _execute_hierarchical_groups(
-        self,
-        task_id: str,
-        prompt: str,
-        plan: ExecutionPlan,
-        workspace: str,
-        context: str = "",
-        edit_scope: EditAuthorizer | None = None,
-    ) -> list[str]:
-        """Execute agents in hierarchical mode, passing results from earlier steps.
-
-        Agents whose declared dependencies already failed are skipped (and
-        counted as failures) rather than run with missing upstream context.
-        Agents without declared dependencies always run. After each stage the
-        actual handoff artifacts it produced (spec.md, context.md, ...) are read
-        and injected verbatim into downstream context, and any artifact a stage
-        was expected to produce but didn't is surfaced (#3 enforced handoff).
-        """
-        all_failures: list[str] = []
-        accumulated_snippets: list[str] = []
-        for group in plan.parallel_groups:
-            runnable: list[str] = []
-            for name in group:
-                failed_deps = [d for d in plan.dependencies.get(name, []) if d in all_failures]
-                if failed_deps:
-                    all_failures.append(name)
-                    await self._skip_agent_with_failed_deps(task_id, name, failed_deps)
-                else:
-                    runnable.append(name)
-            if not runnable:
-                continue
-
-            agents = [self._agent_registry.get(name) for name in runnable]
-            prior_context = "\n\n".join(accumulated_snippets)
-            effective_prompt = (
-                f"{prompt}\n\n## Results from earlier steps\n{prior_context}" if prior_context else prompt
-            )
-            failed = await self._execute_agent_group(
-                task_id,
-                effective_prompt,
-                agents,
-                workspace,
-                context=context,
-                execution_profile=plan.execution_profile,
-                edit_scope=edit_scope,
-            )
-            all_failures.extend(failed)
-
-            all_data = await self._task_context_store.get_all(task_id)
-            new_snippets = [
-                f"[{name}]: {str((all_data.get(name) or {}).get('output', ''))[:_HANDOFF_ARTIFACT_MAX_CHARS]}"
-                for name in runnable
-                if (all_data.get(name) or {}).get("output")
-            ]
-            accumulated_snippets.extend(new_snippets)
-
-            # Inject the actual predecessor artifacts (not just the output summary)
-            # so downstream agents design/build from the real spec/context, and flag
-            # any expected artifact that a successful stage failed to write.
-            succeeded = [n for n in runnable if n not in all_failures]
-            artifact_snippets, missing = await self._collect_handoff_artifacts(task_id, succeeded)
-            accumulated_snippets.extend(artifact_snippets)
-            for name in missing:
-                await self._warn_missing_handoff_artifact(task_id, name)
-        return all_failures
-
-    def _primary_artifact_path(self, agent_name: str, task_id: str) -> Path | None:
-        """Resolve a stage's primary declared handoff artifact (its first `produces`)."""
-        agent = self._agent_registry.get(agent_name)
-        produces = getattr(agent.config, "produces", None) or []
-        return primary_artifact_path(produces, handoff_dir_for(task_id))
-
-    async def _collect_handoff_artifacts(self, task_id: str, agent_names: list[str]) -> tuple[list[str], list[str]]:
-        """Read each stage's primary artifact; return (context snippets, names missing it)."""
-        snippets: list[str] = []
-        missing: list[str] = []
-        for name in agent_names:
-            path = self._primary_artifact_path(name, task_id)
-            if path is None:
-                continue
-            content = await asyncio.to_thread(_read_artifact, path, _HANDOFF_ARTIFACT_MAX_CHARS)
-            if content:
-                snippets.append(f"## {name}'s handoff artifact ({path.name})\n{content}")
-            else:
-                missing.append(name)
-        return snippets, missing
-
-    async def _warn_missing_handoff_artifact(self, task_id: str, agent_name: str) -> None:
-        """Surface (ledger + stream) a stage that finished without its expected artifact."""
-        path = self._primary_artifact_path(agent_name, task_id)
-        artifact = path.name if path is not None else "its handoff artifact"
-        logger.warning("handoff: %s completed without writing %s (task %s)", agent_name, artifact, task_id)
-        await self._journal.record(
-            task_id,
-            "handoff_artifact_missing",
-            agent=agent_name,
-            output=f"{agent_name} finished without writing its expected handoff artifact ({artifact}).",
-            payload={"agent": agent_name, "artifact": artifact},
-        )
-
-    async def _execute_parallel_groups(
-        self,
-        task_id: str,
-        prompt: str,
-        plan: ExecutionPlan,
-        workspace: str,
-        context: str = "",
-        edit_scope: EditAuthorizer | None = None,
-    ) -> list[str]:
-        """Execute agents in parallel groups."""
-        all_failures: list[str] = []
-        for group in plan.parallel_groups:
-            agents = [self._agent_registry.get(name) for name in group]
-            failed = await self._execute_agent_group(
-                task_id,
-                prompt,
-                agents,
-                workspace,
-                context=context,
-                execution_profile=plan.execution_profile,
-                edit_scope=edit_scope,
-            )
-            all_failures.extend(failed)
-        return all_failures
-
     async def _record_task_failure(
         self, task_id: str, task_start: float, output: str, status: str, error_type: str | None = None
     ) -> None:
@@ -1393,8 +1063,6 @@ class Orchestrator:
         duration_ms: int | None = None,
     ) -> None:
         """Park exhausted work visibly instead of burying it as a completed skip."""
-        with contextlib.suppress(Exception):
-            await self._task_context_store.update_task_status(task_id, "needs_attention")
         task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
         await self._journal.write(
             LedgerEntry.new(
@@ -1415,259 +1083,35 @@ class Orchestrator:
         )
         await self._stream_manager.emit_done(task_id)
 
-    async def _report_execution_failures(self, task_id: str, failures: list[str]) -> None:
-        """Format and emit a message showing which agents failed to complete.
-
-        Not when a model was unavailable: the task waits and runs again, so nothing
-        is final, and each retry used to leave one more "did not complete" note
-        above the answer the last try gave. The note ends with a blank line, so a
-        later answer streamed after it starts its own paragraph rather than
-        running on from "missing.".
-        """
-        if _has_model_scarcity(failures):
-            return
-        names = ", ".join(f"`{n}`" for n in failures)
-        note = (
-            f"\n\n> **Note:** {len(failures)} agent(s) did not complete: {names}. Partial results may be missing.\n\n"
-        )
-        await self._stream_manager.emit(task_id, "token", {"text": note})
-
-    async def _stage_execute(
-        self,
-        task_id: str,
-        prompt: str,
-        plan: ExecutionPlan,
-        workspace: str = "",
-        context: str = "",
-        edit_scope: EditAuthorizer | None = None,
-    ) -> None:
-        """Stage 4: execute the task, then optionally synthesize.
-
-        Coding is not a pipeline of north's own agents: a code task goes to the general agent, which hands
-        the coding to the user's installed coding agents (`coding_agent`). Everything runs through the
-        generic sequential or parallel executors.
-        """
-        workspace = _task_folder(task_id, workspace)
-        await self._heartbeat(task_id)
-
-        if plan.mode == ExecutionMode.SINGLE_TOOL and plan.direct_tool:
-            await self._execute_single_tool(task_id, prompt, plan, workspace, context=context, edit_scope=edit_scope)
-            return
-
-        await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
-
-        if plan.mode == ExecutionMode.HIERARCHICAL:
-            all_failures = await self._execute_hierarchical_groups(
-                task_id, prompt, plan, workspace, context=context, edit_scope=edit_scope
-            )
-        else:
-            all_failures = await self._execute_parallel_groups(
-                task_id, prompt, plan, workspace, context=context, edit_scope=edit_scope
-            )
-
-        if all_failures:
-            await self._report_execution_failures(task_id, all_failures)
-
-        await self._maybe_synthesize(task_id, plan.agents, plan.mode, failures=all_failures)
-
-        # Episodes are written by the background EpisodeConsolidator (single writer)
-        # from the ledger, covering success, failure, and cancellation uniformly.
-        await self._finish_task(task_id, failures=all_failures, total_agents=len(plan.agents))
-
-    async def _execute_single_tool(
-        self,
-        task_id: str,
-        prompt: str,
-        plan: ExecutionPlan,
-        workspace: str,
-        context: str = "",
-        edit_scope: EditAuthorizer | None = None,
-    ) -> None:
-        """Execute a single tool call directly, bypassing the agent layer.
-
-        ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`. It is
-        stamped onto ``ToolInput.edit_scope`` (never ``params``) so a mutating tool
-        dispatched directly - e.g. a routed ``write_file`` -
-        enforces the same scope it would inside an agent. ``None`` (the default)
-        leaves edits unrestricted, preserving prior behavior.
-
-        The call is a run of its own, like an agent's: its tool_called and
-        tool_result events and its ledger row carry the run, so the task's record
-        shows what was called, with what, and what it answered. Without that an
-        approved order cancellation left "0 tool events" and no trace of the call.
-        """
-        await self._stream_manager.emit(task_id, "executing", {"agents": []})
-        run = AgentPayload(task_id=task_id, prompt=prompt, workspace=workspace)
-        if (failed := await self._answered_before(task_id, plan)) is None:
-            with bind_execution(ExecutionIdentity(run.run_id)):
-                failed = await self._call_tool_directly(run, plan, edit_scope)
-        # A direct call that failed, other than by your refusal, goes to the agent,
-        # which reads the error and tries again. Shown the error itself, the
-        # planner's "screen=Alienware" ended the task, though a step that read the
-        # screens' names, "AW3425DWM" among them, would have done it.
-        if failed is not None:
-            await self._fall_back_to_agent(task_id, prompt, workspace, context, edit_scope, failed)
-            return
-        await self._finish_task(task_id, skip_extraction=True)
-
-    async def _call_tool_directly(
-        self, run: AgentPayload, plan: ExecutionPlan, edit_scope: EditAuthorizer | None
-    ) -> str | None:
-        """Run the plan's one tool as *run* and record it; what it answered if the agent should take over."""
-        task_id, name = run.task_id, str(plan.direct_tool)
-        if self._agent_run_store is not None:
-            await self._agent_run_store.start(run, DIRECT_TOOL_AGENT)
-        started = time.monotonic()
-        await self._stream_manager.emit(task_id, "tool_called", {"tool": name, "params": plan.direct_tool_params})
-        sent = _direct_call(plan)
-        try:
-            if self._tool_registry is None:
-                raise ToolNotFoundError("No tool registry available.")
-            if self._tool_input_factory is None:
-                raise ToolNotFoundError("No tool input factory available.")
-            tool = self._tool_registry.get(name)
-            params = {**plan.direct_tool_params}
-            if run.workspace and "workspace" not in params:
-                params["workspace"] = run.workspace
-            if task_id and "task_id" not in params:
-                params["task_id"] = task_id
-            acting = self._running_task_store
-            result = await tool.execute(
-                self._tool_input_factory(
-                    params=params,
-                    edit_scope=edit_scope,
-                    granted_workspace=run.workspace or None,
-                    before_change=partial(acting.mark_side_effect, task_id) if acting is not None else None,
-                )
-            )
-        except ToolNotFoundError:
-            logger.warning("single_tool fallback: tool %r not found, re-routing to agent", name)
-            await self._end_direct_run(run, name, f"There is no tool named {name}.", fall_back=True)
-            return ""
-        except Exception as exc:
-            logger.warning("Direct tool execution error in task %s: %s", task_id, exc, exc_info=True)
-            await self._end_direct_run(run, name, f"{exc}", fall_back=True)
-            return f"{sent} and raised: {exc}"
-        if not result.success and result.failure_kind != "refused":
-            await self._end_direct_run(run, name, f"{result.error}", fall_back=True)
-            return f"{sent} and answered: {result.error}"
-        # No image-interpretation branch here on purpose: every tool that returns
-        # an image (take_screenshot, take_photo) is in the planner's
-        # _INTERPRETATION_TOOLS set, so it can never be routed to single-tool
-        # mode - it always runs inside an agent's ReAct loop, which feeds the
-        # image to the model as a proper image message. A second synthesis path
-        # here would be unreachable and worse.
-        output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
-        if not result.success:
-            self._blocked_tasks.add(task_id)  # you refused the change: the task is blocked, as an agent's would be
-        await self._end_direct_run(
-            run, name, output, success=result.success, duration_ms=int((time.monotonic() - started) * 1000)
-        )
-        return None
-
-    async def _answered_before(self, task_id: str, plan: ExecutionPlan) -> str | None:
-        """What the plan's direct call answered before the task was paused or cut off, if the agent took over.
-
-        A task that resumes does not make the call again (CODING_STYLE §15.5): the agent it fell back to
-        continues where it stopped.
-        """
-        if self._agent_run_store is None:
-            return None
-        runs = await self._agent_run_store.list_for_task(task_id)
-        fell_back = [run for run in runs if run.agent == DIRECT_TOOL_AGENT and run.status == "failed"]
-        return f"{_direct_call(plan)} and answered: {fell_back[-1].error}" if fell_back else None
-
-    async def _end_direct_run(
-        self,
-        run: AgentPayload,
-        tool: str,
-        answer: str,
-        *,
-        success: bool = False,
-        fall_back: bool = False,
-        duration_ms: int | None = None,
-    ) -> None:
-        """Record what the direct call answered and close its run.
-
-        A call the agent takes over ends the run failed and writes no answer: the
-        agent's own answer is the task's. Otherwise *answer* is the task's answer.
-        """
-        event: dict[str, Any] = {"tool": tool, "success": success}
-        event["formatted" if success else "error"] = answer
-        await self._stream_manager.emit(run.task_id, "tool_result", event)
-        store = self._agent_run_store
-        if fall_back:
-            if store is not None:
-                await store.finish_with_error(run.run_id, "failed", answer)
-            return
-        await self._journal.record(
-            run.task_id,
-            "agent_completed",
-            source=LedgerSource.AGENT,
-            agent=DIRECT_TOOL_AGENT,
-            output=answer,
-            tools_used=[tool],
-            event="token",
-            payload={"text": answer},
-        )
-        if store is not None:
-            await store.complete(
-                run.run_id,
-                AgentResult(
-                    output=answer,
-                    summary=answer[:300],
-                    tools_used=[tool],
-                    successful_tools=[tool] if success else [],
-                    duration_ms=duration_ms,
-                ),
-            )
-
-    async def _fall_back_to_agent(
+    async def _run_north(
         self,
         task_id: str,
         prompt: str,
         workspace: str,
         context: str,
         edit_scope: EditAuthorizer | None,
-        attempt: str,
-    ) -> None:
-        """Run the task with the general agent, told what the direct attempt answered, if there was one."""
-        fallback = self._execution_planner.build_fallback_plan("general", task_id)
-        if attempt:
-            context = f"{context}\n\n## A direct tool call already failed\n{attempt}".strip()
-        await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
-        failures = await self._execute_parallel_groups(
-            task_id, prompt, fallback, workspace, context=context, edit_scope=edit_scope
-        )
-        if failures:
-            await self._report_execution_failures(task_id, failures)
-        await self._finish_task(task_id, failures=failures, total_agents=len(fallback.agents))
-
-    async def _finish_task(
-        self,
-        task_id: str,
         *,
-        skip_extraction: bool = False,
-        failures: list[str] | None = None,
-        total_agents: int = 0,
+        profile: str = "standard",
     ) -> None:
+        """Run the task on north, then write how it ended."""
+        await self._heartbeat(task_id)
+        await self._stream_manager.emit(task_id, "executing", {"agents": [self._agent.name]})
+        failure = await self._run_agent(task_id, prompt, workspace, context, profile, edit_scope)
+        await self._finish_task(task_id, failure=failure)
+
+    async def _finish_task(self, task_id: str, *, failure: AgentFailure | None = None) -> None:
         """Write the terminal ledger entry and emit done events.
 
-        Model scarcity queues the entire task. Otherwise every-agent failure ends
-        FAILED; partial failures use a distinct
-        terminal action so the history never presents them as clean success.
+        A model that was not available queues the task to run again; any other
+        failure ends it FAILED, with the reason.
         """
-        failures = failures or []
-        scarcity = _has_model_scarcity(failures)
         request = self._requests.get(task_id)
+        scarcity = failure is not None and failure.error_type == "model_unavailable"
         if not scarcity and request is not None and self._inbox.take_unread(task_id):
             await self._answer_late_messages(task_id, request)
             return
         if scarcity:
-            blocked_agents = ", ".join(
-                str(failure) for failure in failures if getattr(failure, "error_type", None) == "model_unavailable"
-            )
-            unavailable = RuntimeError(f"{_MODEL_SCARCITY_MESSAGE}; blocked agents: {blocked_agents}")
+            unavailable = RuntimeError(_MODEL_SCARCITY_MESSAGE)
             if await self._queue_for_model_recovery(task_id, unavailable):
                 return
             await self._record_task_needs_attention(
@@ -1676,17 +1120,11 @@ class Orchestrator:
                 error_type="model_unavailable",
             )
             return
-        all_failed = total_agents > 0 and len(failures) >= total_agents
         task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
-        if all_failed:
-            action, status, err = "task_failed", LedgerStatus.FAILED, "agent_failure"
-        elif failures:
-            action, status, err = "task_completed_with_failures", LedgerStatus.COMPLETED, None
+        if failure is not None:
+            action, status, err = "task_failed", LedgerStatus.FAILED, failure.error_type or "agent_failure"
         else:
             action, status, err = "task_completed", LedgerStatus.COMPLETED, None
-        output_parts: list[str] = []
-        if failures:
-            output_parts.append(f"Failed agents: {', '.join(failures)}")
         # The work ended but what was asked did not happen: the Tasks page listed these as
         # "completed" and counted them as finished work while the chat said BLOCKED (finding P11).
         if task_id in self._blocked_tasks and err is None:
@@ -1697,44 +1135,31 @@ class Orchestrator:
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
                 action=action,
-                output=" | ".join(output_parts) or None,
+                output=failure.reason if failure is not None else None,
                 status=status,
                 error_type=err,
                 cost_usd=task_cost_usd,
             )
         )
-        if all_failed:
+        if failure is not None:
             await self._stream_manager.emit(
                 task_id,
                 "task_failed",
-                {
-                    "error": f"All agents failed: {', '.join(failures)}",
-                    "error_type": "agent_failure",
-                    "cost_usd": task_cost_usd,
-                },
+                {"error": failure.reason, "error_type": err, "cost_usd": task_cost_usd},
             )
         else:
-            await self._stream_manager.emit(
-                task_id,
-                "task_completed",
-                {
-                    "cost_usd": task_cost_usd,
-                    "failed_agents": [str(f) for f in failures],
-                },
-            )
+            await self._stream_manager.emit(task_id, "task_completed", {"cost_usd": task_cost_usd})
         await self._stream_manager.emit_done(task_id)
-        # Trigger extraction immediately after agent tasks so preferences stated
+        # Trigger extraction immediately after a task so preferences stated
         # mid-task land in judgement_rules.md before the next task starts.
-        # Single-tool tasks (deterministic, no agent reasoning) are skipped  -
-        # they produce no signal worth extracting.
-        if self._extraction_pipeline is not None and not skip_extraction:
+        if self._extraction_pipeline is not None:
             spawn(self._extraction_pipeline.run_once(), name="extraction_run_once")
 
     async def _answer_late_messages(self, task_id: str, request: TaskRequest) -> None:
-        """Answer, in this task, messages you sent after its agents had answered (CODING_STYLE §15.4).
+        """Answer, in this task, messages you sent after north had answered (CODING_STYLE §15.4).
 
-        The general agent reads every message from the inbox and is told what the
-        task already did and said, so it acts on what is new instead of starting over.
+        North reads every message from the inbox and is told what the task already
+        did and said, so it acts on what is new instead of starting over.
         """
         entries = await self._ledger.query(LedgerFilters(task_id=task_id, order_asc=True, limit=500))
         answered = "\n\n".join(
@@ -1749,143 +1174,58 @@ class Orchestrator:
         ).strip()
         # Live views show the answer being written; the one above is about to be replaced.
         await self._stream_manager.emit(task_id, "stream_reset", {})
-        await self._fall_back_to_agent(
-            task_id, request.prompt, _task_folder(task_id, request.workspace), context, request.edit_scope, ""
+        await self._run_north(
+            task_id, request.prompt, _task_folder(task_id, request.workspace), context, request.edit_scope
         )
 
-    async def _maybe_synthesize(
-        self,
-        task_id: str,
-        agents: list[str],
-        mode: ExecutionMode = ExecutionMode.PARALLEL,
-        failures: list[str] | None = None,
-    ) -> None:
-        """Synthesize outputs from multiple agents into one response, if applicable."""
-        if failures:
-            return  # Partial data - skip synthesis to avoid a confidently wrong summary.
-        if self._synthesizer is None or len(agents) < 2:
-            return
-        if mode not in (ExecutionMode.PARALLEL, ExecutionMode.HIERARCHICAL):
-            return
-
-        all_data = await self._task_context_store.get_all(task_id)
-        agent_outputs = {agent: (all_data.get(agent) or {}).get("output", "") for agent in agents}
-
-        synthesized = await self._synthesizer.synthesize(agent_outputs, task_id)
-        if synthesized is None:
-            return
-
-        # The task's answer, so on the ledger like every other result. Only streamed,
-        # it was gone once the stream closed: the dashboard and Telegram showed one
-        # agent's answer, and a reader that opened late saw nothing of it.
-        await self._journal.record(
-            task_id,
-            "task_synthesis",
-            source=LedgerSource.AGENT,
-            agent="synthesizer",
-            output=synthesized,
-            payload={"output": synthesized, "agents": agents},
-        )
-
-    async def _execute_agent_group(
+    async def _run_agent(
         self,
         task_id: str,
         prompt: str,
-        agents: list[Agent],
-        workspace: str = "",
-        context: str = "",
-        allow_delegation: bool = True,
-        execution_profile: str = "standard",
-        edit_scope: EditAuthorizer | None = None,
-        required_artifacts: dict[str, list[str]] | None = None,
-    ) -> list[str]:
-        """Run a parallel group of agents concurrently; handle per-agent failures.
+        workspace: str,
+        context: str,
+        profile: str,
+        edit_scope: EditAuthorizer | None,
+    ) -> AgentFailure | None:
+        """Run north on the task; how it failed after every retry, or None when it answered.
 
-        Returns the names of any agents that failed after all retries. Pass
-        ``allow_delegation=False`` to run the agents in report-only mode (the
-        conductor uses this for the reviewer so it never delegates a fix back to the
-        coder - the orchestrator owns that fix loop).
-
-        ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`. When set
-        it is stamped onto every payload so mutating file tools enforce it; ``None``
-        (the default) leaves edits unrestricted, preserving prior behavior.
-
-        ``required_artifacts`` is also server-owned. Scheduled forced-agent work
-        uses it to validate declared files before any successful completion event
-        or user notification is emitted.
+        ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`, stamped
+        onto the payload so mutating file tools enforce it.
         """
         await self._heartbeat(task_id)
-        # Per-agent payloads: an agent declaring `distinct_from` in its config (e.g.
-        # the reviewer, distinct_from: coder) is run with the other agent's model in
-        # exclude_models, so it is a genuine independent second opinion.
-        payloads = [
-            AgentPayload(
-                task_id=task_id,
-                prompt=prompt,
-                workspace=workspace,
-                # The task's own workspace, from the request - the server grants it.
-                granted_workspace=workspace or "",
-                context=context,
-                execution_profile=execution_profile,
-                exclude_models=await self._exclude_models_for(task_id, agent),
-                allow_delegation=allow_delegation,
-                edit_scope=edit_scope,
-                required_artifacts=(required_artifacts or {}).get(agent.name, []),
-            )
-            for agent in agents
-        ]
-        results = await asyncio.gather(
-            *[self._run_agent_with_retry(agent, p) for agent, p in zip(agents, payloads, strict=False)],
-            return_exceptions=True,
+        payload = AgentPayload(
+            task_id=task_id,
+            prompt=prompt,
+            workspace=workspace,
+            # The task's own workspace, from the request - the server grants it.
+            granted_workspace=workspace or "",
+            context=context,
+            execution_profile=profile,
+            edit_scope=edit_scope,
         )
-
-        failed: list[str] = []
-        for agent, payload, result in zip(agents, payloads, results, strict=False):
-            if isinstance(result, asyncio.CancelledError):
-                # A cancelled task means cancel_task() was called - propagate
-                # so the outer _process_task handler can write the ledger entry.
-                raise result
-            if isinstance(result, Exception):
-                error_type = classify_error(result)
-                logger.error(
-                    "Agent '%s' failed in task '%s' - error_type=%s: %s",
-                    agent.name,
-                    task_id,
-                    error_type,
-                    result,
-                    exc_info=result,
+        try:
+            result = await self._run_agent_with_retry(self._agent, payload)
+        except asyncio.CancelledError:
+            # A cancelled task means cancel_task() was called - propagate
+            # so the outer _process_task handler can write the ledger entry.
+            raise
+        except Exception as exc:
+            error_type = classify_error(exc)
+            logger.error("north failed in task '%s' - error_type=%s: %s", task_id, error_type, exc, exc_info=exc)
+            await self._journal.write(
+                LedgerEntry.new(
+                    source=LedgerSource.AGENT,
+                    task_id=task_id,
+                    agent=self._agent.name,
+                    action="agent_execution_failed",
+                    output=str(exc),
+                    status=LedgerStatus.FAILED,
+                    error_type=error_type,
                 )
-                failed.append(AgentFailure(agent.name, error_type))
-                await self._journal.write(
-                    LedgerEntry.new(
-                        source=LedgerSource.AGENT,
-                        task_id=task_id,
-                        agent=agent.name,
-                        action="agent_execution_failed",
-                        output=str(result),
-                        status=LedgerStatus.FAILED,
-                        error_type=error_type,
-                    )
-                )
-            else:
-                await self._handle_agent_result(task_id, agent, result, payload)
-        return failed
-
-    async def _models_used_by(self, task_id: str, agent_names: set[str]) -> list[str]:
-        """Models the named agents used in this task, from completed ledger entries."""
-        return await models_used_by(self._ledger, task_id, agent_names)
-
-    async def _exclude_models_for(self, task_id: str, agent: Agent) -> list[str]:
-        """Models *agent* must avoid this run, from its config's `distinct_from`.
-
-        Looks up the model(s) the named agents already used for this task so, e.g.,
-        the reviewer is forced onto a different model than the coder. Returns [] when
-        there is nothing to exclude.
-        """
-        distinct_from = getattr(agent.config, "distinct_from", None) or []
-        if not isinstance(distinct_from, list) or not distinct_from:
-            return []
-        return await self._models_used_by(task_id, set(distinct_from))
+            )
+            return AgentFailure(str(exc), error_type)
+        await self._handle_agent_result(task_id, self._agent, result, payload)
+        return None
 
     def _maybe_refresh_catalog_background(self) -> None:
         if self._tracked_router is None:
@@ -1922,26 +1262,8 @@ class Orchestrator:
             t0 = time.monotonic()
             try:
                 result = await agent.run(payload)
-                missing_artifacts = await asyncio.to_thread(
-                    missing_artifact_paths,
-                    payload.required_artifacts,
-                )
-                if missing_artifacts:
-                    message = f"{agent.name} completed without writing: {', '.join(missing_artifacts)}"
-                    await self._journal.record(
-                        task_id,
-                        "declared_artifact_missing",
-                        source=LedgerSource.AGENT,
-                        agent=agent.name,
-                        status=LedgerStatus.FAILED,
-                        output=message,
-                        error_type="artifact_missing",
-                        payload={"agent": agent.name, "artifacts": missing_artifacts},
-                    )
-                    raise DeclaredArtifactMissingError(message)
                 result.duration_ms = int((time.monotonic() - t0) * 1000)
                 self._failure_handler.clear_retry_count(task_id, agent.name)
-                await self._task_context_store.update_agent_status(task_id, agent.name, "completed")
                 await self._stream_manager.emit(
                     task_id,
                     "agent_completed",
@@ -1992,26 +1314,12 @@ class Orchestrator:
     async def _handle_agent_result(
         self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload | None = None
     ) -> None:
-        """Write result to task context, ledger, and notify user if needed."""
+        """Write the result to the ledger, and tell you, or ask you, as it needs."""
         await self._auditor.audit(task_id, agent, result, payload)
         # Verification/self-repair can refine the result after Agent.run() first
         # persisted it. Keep the run index aligned with the final audited output.
         if result.run_id and agent.deps.agent_run_store is not None:
             await agent.deps.agent_run_store.complete(result.run_id, result)
-        await self._task_context_store.write(
-            task_id=task_id,
-            agent=agent.name,
-            key="result",
-            value=result.data,
-            status="completed",
-        )
-        await self._task_context_store.write(
-            task_id=task_id,
-            agent=agent.name,
-            key="output",
-            value=result.output,
-            status="completed",
-        )
         if isinstance(result.data, dict) and result.data.get("outcome_status") == "blocked":
             self._blocked_tasks.add(task_id)
 
@@ -2045,7 +1353,7 @@ class Orchestrator:
                 type=card_type,
                 task_id=task_id,
                 agent=agent.name,
-                title=f"{agent.name.capitalize()} Agent - Action Required",
+                title=f"{agent.name.capitalize()} - Action Required",
                 message=result.question or result.output,
                 options=result.question_options if result.has_question else ["Approve", "Reject"],
             )
@@ -2059,8 +1367,8 @@ class Orchestrator:
             )
 
 
-# Ledger actions that carry an answer to the task: each agent's, and the one combining them.
-_ANSWER_ACTIONS = frozenset({"agent_completed", "task_synthesis"})
+# The ledger action that carries north's answer to the task.
+_ANSWER_ACTIONS = frozenset({"agent_completed"})
 _DECISIONS = frozenset(ApprovalDecision)
 _PLAIN_YES_NO = frozenset(APPROVAL_DEFAULT_OPTIONS)
 

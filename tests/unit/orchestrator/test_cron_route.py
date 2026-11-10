@@ -425,7 +425,7 @@ async def test_a_schedule_made_from_the_api_carries_its_flow(store, flows) -> No
         entry = await create()
 
     assert entry.flow == "briefing"
-    assert entry.agent == "general"
+    assert entry.agent == "north"
     assert (await store.get(entry.name))["flow"] == "briefing"
 
 

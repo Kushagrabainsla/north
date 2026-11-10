@@ -6,7 +6,6 @@ from agents.tool_results import (
     extract_success,
     failed_json,
     failure_kind,
-    is_delegation_failure,
 )
 
 
@@ -20,9 +19,5 @@ def test_success_and_failure_kind_fall_back_safely() -> None:
     assert failure_kind("not json") == "error"
 
 
-def test_delegation_failure_and_failed_payload() -> None:
-    assert is_delegation_failure(json.dumps({"delegation_failed": True}))
-    assert not is_delegation_failure(json.dumps({}))
-    assert not is_delegation_failure("not json")
-
+def test_failed_payload() -> None:
     assert json.loads(failed_json("boom")) == {"success": False, "error": "boom"}

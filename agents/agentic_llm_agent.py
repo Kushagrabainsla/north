@@ -21,7 +21,6 @@ from typing import Any
 from agents.capabilities import build_platform_capabilities_summary
 from agents.constants import (
     _TOOL_RESULT_MIN_FIELD_CHARS,
-    MAX_DELEGATION_DEPTH,
     MAX_TOOL_RESULT_CHARS,
 )
 from agents.context_compaction import (
@@ -36,25 +35,22 @@ from agents.context_compaction import (
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.reasoning import ReasoningStreamSplitter, strip_reasoning
-from agents.schemas import ASK_USER_SCHEMA, FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA, delegate_task_schema
+from agents.schemas import ASK_USER_SCHEMA, FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA
 from agents.tool_output_reduction import salient_excerpt
 from agents.tool_results import extract_success as _extract_success
 from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
-from agents.tool_results import is_delegation_failure as _is_delegation_failure
 from approval.interaction import CardEvent
 from approval.models import Card, CardField, CardType, DecidedBy
 from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import AllModelsRateLimitedError, ContextTooLargeError, is_model_unavailable_error
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from tools._path import handoff_dir_for, personal_dir
 from tools.base import Tool
 from tools.models import ToolInput
 from tools.output_spill import overflow_note, store_overflow
 from tools.retrieval import tool_index_documents
 from tools.universal.offered_before import OFFERED_SCOPE
-from utils.edit_scope import narrow_workspace
 from utils.execution_context import current_execution
 from utils.tasks import spawn
 from utils.text import normalize_dashes
@@ -72,7 +68,7 @@ _ASK_USER_NO_ANSWER = (
 )
 
 # Agent-loop built-ins, not registry tools - excluded from tool-reliability tracking.
-_INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user", "find_tools"})
+_INTERNAL_TOOLS = frozenset({"request_approval", "ask_user", "find_tools"})
 # Questions on one ask_user card: enough for a flow's setup, few enough to answer at a glance.
 _MAX_QUESTIONS = 8
 
@@ -83,7 +79,7 @@ _SOFT_BUDGETS: dict[str, tuple[int, int]] = {"quick_readonly": (3, 6)}
 
 _QUICK_READONLY_POLICY = """## Quick read-only execution
 This run is a bounded direct-answer inspection. Do not create handoff artifacts,
-write files, delegate, or mutate external state. Put the useful findings in the
+write files, or mutate external state. Put the useful findings in the
 final answer. North records a compact manifest of successful evidence lookups
 automatically, so do not duplicate tool output into an audit file.
 """
@@ -111,9 +107,7 @@ _RATE_LIMIT_GRACE_SECONDS = 1.0
 _MESSAGE_WHILE_WORKING = "The user sent this while you were working on the task. Take it into account from here on:"
 
 
-def _tool_schemas(
-    tool_map: dict[str, Tool], *, allow_delegation: bool, allow_questions: bool = True, agent_names: Sequence[str] = ()
-) -> list[dict]:
+def _tool_schemas(tool_map: dict[str, Tool], *, allow_questions: bool = True) -> list[dict]:
     """Every tool definition sent to the model this turn.
 
     Sorted by name, not by confidence. Tool definitions are the largest stable
@@ -122,14 +116,8 @@ def _tool_schemas(
     between runs and threw the cache away. The ranking still reaches the model,
     as text, in the reliability hints at the end of the task message where it
     costs nothing.
-
-    `agent_names` is sorted for the same reason: the registry returns insertion
-    order, which would reorder the delegation schema between runs and cost the
-    cached prefix that sorting the tools above exists to protect.
     """
     internal = [FIND_TOOLS_SCHEMA, *((REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA) if allow_questions else ())]
-    if allow_delegation:
-        internal.insert(0, delegate_task_schema(sorted(agent_names)))
     return [tool_map[name].schema() for name in sorted(tool_map)] + internal
 
 
@@ -312,18 +300,6 @@ class AgenticLLMAgent(LLMAgent):
             result_str = item[1]
             images = item[3] if len(item) > 3 else []
             content = result_str
-            # A genuine delegation failure must never be paraphrased into success.
-            # Inject a hard instruction into the tool result the model reads next
-            # so it surfaces the failure via ask_user instead of inventing
-            # progress. Only fires on the `delegation_failed` marker - control-flow
-            # guardrails (depth/cycle limits) deliberately omit it so they keep
-            # their "summarise and finish" instruction instead.
-            if call.name == "delegate_task" and _is_delegation_failure(result_str):
-                content += (
-                    "\n\n[SYSTEM: The delegation failed. You MUST NOT claim it succeeded "
-                    "or that any sub-agent is still working. Call ask_user to inform the "
-                    "user of the failure and ask how to proceed.]"
-                )
             messages.append(
                 {
                     "role": "tool",
@@ -377,8 +353,7 @@ class AgenticLLMAgent(LLMAgent):
 
         results = await self._execute_calls_ordered(calls, payload, tool_map)
         # Where results enter the conversation, and the one place they are
-        # bounded: every tool, delegate_task's sub-agent answer and every error
-        # alike. The run history and the model then see the same text.
+        # bounded: every tool's answer and every error alike. The run history and the model then see the same text.
         results = [
             (call, _bound_tool_result(result_str, call.name), success, images)
             for call, result_str, success, images in results
@@ -488,7 +463,7 @@ class AgenticLLMAgent(LLMAgent):
             else:
                 # Mutating calls run one at a time, in order. Each takes the
                 # workspace lock itself, for the change alone (Tool.execute):
-                # never across an approval wait, a delegation or a run it starts.
+                # never across an approval wait or a run it starts.
                 for index, call in chunk:
                     results[index] = await self._safe_execute_call(call, payload, tool_map)
 
@@ -500,7 +475,6 @@ class AgenticLLMAgent(LLMAgent):
 
         Before, not after, and it is allowed to fail the call: marked after a whole turn,
         a restart in the middle of one looked like a task that had done nothing, and ran it again.
-        A delegated sub-agent's tools mark the same task, so delegating marks nothing itself.
         """
         store = self._deps.running_task_store
         if store is None or not payload.task_id:
@@ -518,7 +492,7 @@ class AgenticLLMAgent(LLMAgent):
         if payload.execution_profile == "quick_readonly" and is_mutating:
             return _failed_call(
                 call,
-                RuntimeError("Mutating and delegated tools are unavailable in the quick read-only profile."),
+                RuntimeError("Mutating tools are unavailable in the quick read-only profile."),
             )
         if is_mutating and payload.mutation_policy == "deny":
             return _failed_call(
@@ -534,8 +508,6 @@ class AgenticLLMAgent(LLMAgent):
             return _failed_call(call, exc)
 
     def _is_mutating_call(self, call: ToolCall, tool_map: dict[str, Tool]) -> bool:
-        if call.name == "delegate_task":
-            return True  # a sub-agent may mutate shared files or state
         tool = tool_map.get(call.name)
         return bool(tool and tool_mutates(tool, call.params))
 
@@ -587,12 +559,7 @@ class AgenticLLMAgent(LLMAgent):
                 if payload.execution_profile == "quick_readonly"
                 else tool_map
             )
-            tools = _tool_schemas(
-                visible_tools,
-                allow_delegation=payload.allow_delegation and payload.execution_profile != "quick_readonly",
-                allow_questions=payload.allow_questions,
-                agent_names=self._delegatable_agent_names(),
-            )
+            tools = _tool_schemas(visible_tools, allow_questions=payload.allow_questions)
             token_cb = self._make_token_callback(payload.task_id)
 
             try:
@@ -639,7 +606,7 @@ class AgenticLLMAgent(LLMAgent):
             evidence = await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
             if payload.execution_profile == "quick_readonly":
                 if any(self._is_mutating_call(call, tool_map) for call in response.calls):
-                    await self._escalate_execution_profile(payload, "mutating_or_delegated_tool")
+                    await self._escalate_execution_profile(payload, "mutating_tool")
                 elif any(not success for _, success in evidence):
                     await self._escalate_execution_profile(payload, "tool_failure")
             for call, (name, success) in zip(response.calls, evidence, strict=True):
@@ -661,10 +628,9 @@ class AgenticLLMAgent(LLMAgent):
         """Save where the conversation has got to, after each step, so a stopped run continues from here.
 
         Resume started the agent over and redid the glob and every read it had made (issue #76, M19).
-        A delegated run is not saved: its parent asks again, and that run starts afresh.
         """
         store = self._deps.agent_run_store
-        if store is None or payload.parent_run_id is not None:
+        if store is None:
             return
         state = {"messages": messages, "messages_read": messages_read, "step": step, "evidence": tally.evidence()}
         await store.save_checkpoint(payload.run_id, state)
@@ -695,8 +661,8 @@ class AgenticLLMAgent(LLMAgent):
             logger.debug("heartbeat failed for task %s", payload.task_id, exc_info=True)
 
     def _reads_messages(self, payload: AgentPayload) -> bool:
-        """Only the agents the orchestrator runs read your messages; a delegate's caller already has them."""
-        return self._deps.task_inbox is not None and bool(payload.task_id) and payload.delegation_depth == 0
+        """A task's run reads the messages you send it while it works."""
+        return self._deps.task_inbox is not None and bool(payload.task_id)
 
     async def _read_your_messages(self, payload: AgentPayload, messages: list[dict], read: int) -> int:
         """Add what you sent the task after the first *read* messages to the conversation; returns the new count."""
@@ -819,7 +785,6 @@ class AgenticLLMAgent(LLMAgent):
                 tools,
                 payload.task_id,
                 token_cb,
-                payload.exclude_models,
             )
         except ContextTooLargeError:
             compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
@@ -832,7 +797,6 @@ class AgenticLLMAgent(LLMAgent):
                 tools,
                 payload.task_id,
                 token_cb,
-                payload.exclude_models,
             )
 
     def _init_conversation(
@@ -963,7 +927,6 @@ class AgenticLLMAgent(LLMAgent):
         tools: list[dict],
         task_id: str,
         token_callback: Callable[[str], Awaitable[None]] | None,
-        exclude_models: list[str] | None = None,
     ) -> Any:
         return await self._deps.inference_router.complete_with_tools(
             ToolCallRequest(
@@ -972,7 +935,6 @@ class AgenticLLMAgent(LLMAgent):
                 component=self.name,
                 task_id=task_id,
                 run_id=(current.run_id if (current := current_execution()) is not None else None),
-                exclude_models=exclude_models or [],
             ),
             token_callback=token_callback,
         )
@@ -985,10 +947,6 @@ class AgenticLLMAgent(LLMAgent):
     ) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
         """Execute one tool call and return (call, result_json, success, images)."""
         params = dict(call.params)
-        if call.name == "delegate_task":
-            result_str = await self._delegate_task(payload, params)
-            success = json.loads(result_str).get("success", False)
-            return call, result_str, success, []
         if call.name in {"request_approval", "ask_user"} and not payload.allow_questions:
             return (
                 call,
@@ -1144,185 +1102,10 @@ class AgenticLLMAgent(LLMAgent):
             f"## Task\n{payload.prompt}\n"
         )
 
-    def _delegatable_agent_names(self) -> list[str]:
-        """The agents `delegate_task` may name, from the live registry.
-
-        Empty when there is no registry, which makes the schema say only that
-        the caller must use a registered agent. Advertising a guess here is what
-        this replaced: four invented names that raised on use.
-        """
-        registry = self._deps.agent_registry
-        if registry is None:
-            return []
-        try:
-            return list(registry.names())
-        except Exception:
-            logger.warning("Could not read agent names for delegate_task schema", exc_info=True)
-            return []
-
     def _make_token_callback(self, task_id: str) -> Callable[[str], Awaitable[None]] | None:
         if self._deps.stream_manager is None or not task_id:
             return None
         return _TokenRelay(self._deps.stream_manager, task_id)
-
-    async def _delegate_task(self, payload: AgentPayload, params: dict[str, Any]) -> str:
-        """Run a specialist sub-agent and return its output as a tool result."""
-        if not payload.allow_delegation:
-            return _failed_json(
-                "Delegation is disabled for this run. Write your PASS/FAIL verdict, the "
-                "report, and review_result.json, then stop - the system routes any fixes."
-            )
-        if payload.delegation_depth >= MAX_DELEGATION_DEPTH:
-            return _failed_json(
-                f"Delegation depth limit ({MAX_DELEGATION_DEPTH}) reached - "
-                "you cannot delegate further. Write a final summary of what was "
-                "accomplished, what was attempted, and what remains unresolved, "
-                "then return that as your answer."
-            )
-
-        agent_name = str(params.get("agent", "general"))
-        if agent_name in payload.delegation_chain:
-            return _failed_json(
-                f"Delegation cycle detected - '{agent_name}' is already in the "
-                f"current chain {payload.delegation_chain}. "
-                "Summarise what you have and return your best result instead of delegating again."
-            )
-
-        registry = self._deps.agent_registry
-        if registry is None:
-            return await self._delegation_failed(payload, agent_name, "Agent registry not available for delegation.")
-
-        task = str(params.get("task", ""))
-        if not task:
-            return _failed_json("delegate_task requires a non-empty 'task' parameter.")
-
-        try:
-            agent = registry.get(agent_name)
-        except Exception:
-            try:
-                agent = registry.get("general")
-            except Exception:
-                return await self._delegation_failed(
-                    payload, agent_name, f"Agent '{agent_name}' not found and no 'general' fallback."
-                )
-
-        # An explicit workspace in the delegation params wins; otherwise the
-        # sub-agent inherits the parent's. The delegate_task schema nests
-        # metadata under "context", so accept a workspace from either place.
-        context = params.get("context") if isinstance(params.get("context"), dict) else {}
-        workspace = str(params.get("workspace") or context.get("workspace") or payload.workspace or "")
-
-        sub_payload = AgentPayload(
-            task_id=payload.task_id,
-            parent_run_id=payload.run_id,
-            prompt=task,
-            workspace=workspace,
-            # The model chose `workspace`; the server-granted folder can only narrow.
-            granted_workspace=narrow_workspace(payload.granted_workspace, workspace),
-            # The sub-agent inherits the run's framing: the caller's context
-            # (conversation history / webhook data) and any
-            # model-independence constraint. Without these it silently reverted to
-            # defaults and lost the conversation it was delegated within.
-            context=payload.context,
-            execution_profile=payload.execution_profile,
-            exclude_models=list(payload.exclude_models),
-            delegation_depth=payload.delegation_depth + 1,
-            delegation_chain=[*payload.delegation_chain, self.name],
-            # The task's edit scope is server-owned and must bind delegated
-            # sub-agents too, so a delegate cannot escape the caller's permitted
-            # modules/paths. None (unrestricted) propagates unchanged.
-            edit_scope=payload.edit_scope,
-        )
-        resolved_agent_name = str(getattr(agent, "name", agent_name))
-        try:
-            if self._deps.stream_manager is not None:
-                await self._deps.stream_manager.emit(
-                    payload.task_id,
-                    "agent_started",
-                    {
-                        "agent": resolved_agent_name,
-                        "task": task[:100],
-                        "run_id": sub_payload.run_id,
-                        "parent_run_id": sub_payload.parent_run_id,
-                        "attempt": sub_payload.attempt,
-                    },
-                )
-            result = await agent.run(sub_payload)
-            if self._deps.stream_manager is not None:
-                await self._deps.stream_manager.emit(
-                    payload.task_id,
-                    "agent_completed",
-                    {
-                        "agent": resolved_agent_name,
-                        "summary": result.summary,
-                        "duration_ms": result.duration_ms,
-                        "run_id": result.run_id,
-                        "parent_run_id": result.parent_run_id,
-                        "attempt": result.attempt,
-                    },
-                )
-            blocked = isinstance(result.data, dict) and result.data.get("outcome_status") == "blocked"
-            return json.dumps(
-                {
-                    "success": not blocked,
-                    **({"blocked": True} if blocked else {}),
-                    "run_id": result.run_id,
-                    "output": result.output,
-                    "summary": result.summary,
-                }
-            )
-        except Exception as exc:
-            if self._deps.stream_manager is not None:
-                await self._deps.stream_manager.emit(
-                    payload.task_id,
-                    "agent_failed",
-                    {
-                        "agent": resolved_agent_name,
-                        "error": str(exc)[:500],
-                        "run_id": sub_payload.run_id,
-                        "parent_run_id": sub_payload.parent_run_id,
-                        "attempt": sub_payload.attempt,
-                    },
-                )
-            logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
-            if is_model_unavailable_error(exc):
-                await self._record_delegation_failure(payload, agent_name, str(exc), error_type="model_unavailable")
-                raise
-            return await self._delegation_failed(payload, agent_name, str(exc))
-
-    async def _delegation_failed(self, payload: AgentPayload, agent_name: str, error: str) -> str:
-        """Record a genuine delegation failure and return a marked failure result.
-
-        Used for failures the user must hear about (agent missing, sub-agent
-        crashed) - not for control-flow guardrails (depth/cycle limits) where
-        the model is told to summarise and finish. The ``delegation_failed``
-        marker is what the ReAct loop keys on to inject the ask_user directive,
-        so guardrails (which use plain ``_failed_json``) never trigger it.
-        """
-        await self._record_delegation_failure(payload, agent_name, error)
-        return json.dumps({"success": False, "error": error, "delegation_failed": True})
-
-    async def _record_delegation_failure(
-        self, payload: AgentPayload, agent_name: str, error: str, *, error_type: str = "DelegationError"
-    ) -> None:
-        """Write a ledger entry so a failed delegation is never silently dropped."""
-        ledger = self._deps.ledger
-        if ledger is None:
-            return
-        try:
-            await ledger.write(
-                LedgerEntry.new(
-                    source=LedgerSource.AGENT,
-                    task_id=payload.task_id,
-                    agent=agent_name,
-                    action="delegation_failed",
-                    status=LedgerStatus.FAILED,
-                    output=f"Delegation from '{self.name}' to '{agent_name}' failed: {error}",
-                    error_type=error_type,
-                )
-            )
-        except Exception as exc:  # never let audit-trail writes break the agent loop
-            logger.warning("Failed to record delegation failure for task '%s': %s", payload.task_id, exc)
 
     async def _surface_card(
         self,

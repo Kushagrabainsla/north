@@ -79,10 +79,8 @@ async def test_the_correction_pass_is_told_what_was_done_and_cannot_ask_again() 
 def test_a_run_that_may_not_ask_is_not_offered_the_question_tools() -> None:
     names = lambda schemas: {s.get("function", s).get("name") for s in schemas}  # noqa: E731
 
-    assert {"ask_user", "request_approval"} <= names(_tool_schemas({}, allow_delegation=False))
-    assert not {"ask_user", "request_approval"} & names(
-        _tool_schemas({}, allow_delegation=False, allow_questions=False)
-    )
+    assert {"ask_user", "request_approval"} <= names(_tool_schemas({}))
+    assert not {"ask_user", "request_approval"} & names(_tool_schemas({}, allow_questions=False))
 
 
 @pytest.mark.asyncio

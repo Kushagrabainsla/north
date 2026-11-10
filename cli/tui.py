@@ -690,9 +690,6 @@ class NorthApp(App[None]):
         # SSE event name → handler. Adding an event = adding one _on_* method
         # and one entry here; no change to the dispatch path itself.
         self._event_handlers: dict[str, Callable[[str, dict], Awaitable[None]]] = {
-            "classifying": self._on_classifying,
-            "classified": self._on_classified,
-            "routed": self._on_routed,
             "north_star_checking": self._on_north_star_checking,
             "north_star_aligned": self._on_north_star_noop,
             "north_star_check_skipped": self._on_north_star_noop,
@@ -815,18 +812,16 @@ class NorthApp(App[None]):
 
     def _draw_banner(self) -> None:
         # Top-anchored: the banner is the first thing in the log; chat flows
-        # downward beneath it and the input stays pinned at the bottom. Agent
-        # discovery is async, so the banner is composed in a worker.
+        # downward beneath it and the input stays pinned at the bottom. The
+        # dials are fetched async, so the banner is composed in a worker.
         self.run_worker(self._draw_banner_async(), exclusive=False)
 
-    def _write_banner_lines(self, log: RichLog, toolsets: list[str] | None = None) -> None:
+    def _write_banner_lines(self, log: RichLog) -> None:
         backend = f"textual · {os.environ.get('TERM', 'unknown')}"
         cwd = self.workspace or os.getcwd()
         home = str(Path.home())
         if cwd.startswith(home):
             cwd = "~" + cwd[len(home) :]
-
-        tools = toolsets if toolsets is not None else getattr(self, "_cached_agent_toolsets", None)
 
         log.write("")
         log.write(f"  {wordmark()}  [bright_black]personal operating system[/bright_black]")
@@ -835,9 +830,6 @@ class NorthApp(App[None]):
         log.write(f"  [bright_black]backend[/bright_black]   {backend}")
         log.write(f"  [bright_black]cwd[/bright_black]       {cwd}")
         log.write(f"  [bright_black]strategy[/bright_black]  {self._strategy}")
-        if tools:
-            shown = ", ".join(tools[:10]) + ("…" if len(tools) > 10 else "")
-            log.write(f"  [bright_black]toolsets[/bright_black]  {shown}")
         if self._autonomy:
             badge = f"  {YOLO_BADGE}" if self._autonomy == ApprovalMode.YOLO else ""
             log.write(f"  [bright_black]autonomy[/bright_black]  {self._autonomy}{badge}")
@@ -847,24 +839,7 @@ class NorthApp(App[None]):
     async def _draw_banner_async(self) -> None:
         log = self.query_one("#log", RichLog)
         await self._refresh_dials()
-        self._cached_agent_toolsets = await self._fetch_agents()
-        self._write_banner_lines(log, self._cached_agent_toolsets)
-
-    async def _fetch_agents(self) -> list[str]:
-        """Best-effort list of registered agent names, shown as 'toolsets' in the
-        banner. Returns an empty list if the server is unreachable."""
-        try:
-            async with self._http() as c:
-                r = await c.get(
-                    f"{self.base_url}/orchestrator/agents",
-                    headers=self.headers,
-                    timeout=5.0,
-                )
-                data = r.json()
-                names = [a.get("name", "") for a in data if a.get("name")]
-                return sorted(n for n in names if n)
-        except Exception:
-            return []
+        self._write_banner_lines(log)
 
     async def _set_dial(self, url: str, key: str, value: str | None, ok: str = "") -> None:
         """Set a live dial (power/autonomy) via the settings endpoint.
@@ -1143,26 +1118,6 @@ class NorthApp(App[None]):
         if handler is not None:
             await handler(task_id, data)
 
-    async def _on_classifying(self, task_id: str, data: dict) -> None:
-        self._set_status("classifying…")
-        self._update_turn_phase(task_id, "classifying")
-
-    async def _on_classified(self, task_id: str, data: dict) -> None:
-        domain = data.get("domain", "")
-        is_consequential = bool(data.get("is_consequential"))
-        if task_id in self._current_turn_activity:
-            self._current_turn_activity[task_id]["domain"] = domain
-            self._current_turn_activity[task_id]["is_consequential"] = is_consequential
-        self._set_status(f"routing → {domain}…")
-        self._update_turn_phase(task_id, f"routing · {domain}" if domain else "routing")
-
-    async def _on_routed(self, task_id: str, data: dict) -> None:
-        agents = data.get("agents") or []
-        if task_id in self._current_turn_activity:
-            self._current_turn_activity[task_id]["agents"] = list(agents)
-        self._set_status(f"running {', '.join(agents) or 'general'}…")
-        self._update_turn_phase(task_id, f"running · {', '.join(agents) or 'general'}")
-
     async def _on_north_star_checking(self, task_id: str, data: dict) -> None:
         self._set_status("checking goals…")
         self._update_turn_phase(task_id, "checking goals")
@@ -1196,7 +1151,7 @@ class NorthApp(App[None]):
             self._agent_start_times.setdefault(task_id, time.monotonic())
         agent = data.get("agent", "")
         agents = data.get("agents") or []
-        label = ", ".join(agents) if agents else agent or "general"
+        label = ", ".join(agents) if agents else agent or "north"
         if task_id in self._current_turn_activity:
             if agents:
                 self._current_turn_activity[task_id]["agents"] = list(agents)
@@ -1984,8 +1939,6 @@ class NorthApp(App[None]):
         return {
             "task_id": task_id,
             "prompt": text,
-            "domain": "",
-            "is_consequential": False,
             "agents": [],
             "model": self._model,
             "thought_duration": 0.0,
@@ -2057,10 +2010,6 @@ class NorthApp(App[None]):
         await self._set_dial(
             "/orchestrator/settings", "autonomy", _slash_argument(text), ok="  [bright_black]autonomy[/bright_black] "
         )
-
-    async def _slash_agents(self, text: str) -> None:
-        agents = await self._fetch_agents()
-        self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))
 
     async def _slash_decisions(self, text: str) -> None:
         """Recent decisions: who decided, why, and the memory it used, as the approvals page shows them."""
@@ -2607,7 +2556,6 @@ _SLASH_HANDLERS: dict[str, Callable[[NorthApp, str], Awaitable[None]]] = {
     "/cost": NorthApp._slash_cost,
     "/power": NorthApp._slash_power,
     "/autonomy": NorthApp._slash_autonomy,
-    "/agents": NorthApp._slash_agents,
     "/decisions": NorthApp._slash_decisions,
     "/queue": NorthApp._slash_queue,
     "/jobs": NorthApp._slash_jobs,

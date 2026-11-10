@@ -48,15 +48,11 @@ class AgentPayload(BaseModel):
     # these skills are loaded in full and form part of the execution contract.
     skills: list[str] = Field(default_factory=list)
     # Only the flow runner sets this for a test invocation of exact named skills.
-    # Candidates remain excluded from ordinary semantic selection and delegation.
+    # Candidates remain excluded from ordinary semantic selection.
     allow_candidate_skills: bool = Field(default=False, exclude=True)
     # Exact server-owned tool allowlist for an executable skill. None keeps the
     # normal task-time catalog behavior; an empty list means no external tools.
     allowed_tools: list[str] | None = None
-    # Durable outputs a scheduled agent must write before its result can be
-    # accepted. Resolved by the orchestrator from AgentConfig.produces; never
-    # supplied by model output.
-    required_artifacts: list[str] = Field(default_factory=list, exclude=True)
     # Server-owned: "deny" makes this run read-only. Whether an allowed change
     # asks first is the approval layer's call (Tool.execute), never this field's.
     mutation_policy: Literal["allow", "deny"] = "allow"
@@ -67,27 +63,16 @@ class AgentPayload(BaseModel):
     # model-visible prompt.
     context_sections: dict[str, str] = Field(default_factory=dict, exclude=True)
     workspace: str = ""  # root directory for filesystem/shell tools
-    # The folder the server granted this run. Unlike `workspace`, which a
-    # delegating model can choose, this is only ever set by the server - the
-    # task's own workspace - and narrowed, never widened, on delegation. It is
-    # what "an edit inside the task's folder" is measured against. Empty means
-    # no folder was granted.
+    # The folder the server granted this run, only ever set by the server - the
+    # task's own workspace. It is what "an edit inside the task's folder" is
+    # measured against. Empty means no folder was granted.
     granted_workspace: str = Field(default="", exclude=True)
     # Server-selected execution shape. ``quick_readonly`` gets an efficiency
     # reminder after a small number of turns/tools, but that reminder is soft:
     # the agent may continue when evidence is still missing.
     execution_profile: str = "standard"
-    delegation_depth: int = 0  # incremented on each delegate_task call; capped at MAX_DELEGATION_DEPTH
-    delegation_chain: list[str] = Field(default_factory=list)  # ordered agent names in this call chain
-    # Model ids this run must avoid, so the agent is forced onto a different model
-    # (e.g. a reviewer excluding the coder's model). Threaded into every inference
-    # call the agent makes. Empty = no constraint.
-    exclude_models: list[str] = Field(default_factory=list)
-    # When False, delegate_task is neither offered to the model nor executed for this
-    # run. The conductor sets this on the reviewer so it reports only and never
-    # delegates a fix back to the coder - the orchestrator owns that fix loop, and a
-    # second delegation path would duplicate work and bypass the bounded cap.
-    allow_delegation: bool = True
+    # 1 for a run another run started (a coding agent's run inside north's), else 0.
+    delegation_depth: int = 0
     # Whether the run may ask the user (ask_user, request_approval). A correction
     # pass after a finished run may not: it repeats nothing the run already did,
     # questions included. Actions still go to the approval layer as always.
@@ -139,21 +124,15 @@ class AgentResult(BaseModel):
 class AgentConfig(BaseModel):
     """Declarative agent configuration loaded from `agents/<name>/config.yaml`.
 
-    Schema mirrors README Section 7.2. `class_name` defaults to `<TitleCase>Agent`
-    when omitted in YAML.
+    `domain` is the tag of the skills the agent is offered. `class_name`
+    defaults to `<TitleCase>Agent` when omitted in YAML.
     """
 
     agent: str
     domain: str
-    accepts: list[str] = Field(default_factory=list)
-    produces: list[str] = Field(default_factory=list)
     output_format: str = "structured_json"
     version: str = "1.0.0"
     class_name: str | None = None
-    # Agent names this agent must NOT share a model with (Copilot /subagents style).
-    # The orchestrator translates this into per-run exclude_models so, e.g., the
-    # reviewer is a genuine second opinion on a different model than the coder.
-    distinct_from: list[str] = Field(default_factory=list)
 
     @property
     def resolved_class_name(self) -> str:
@@ -182,9 +161,6 @@ class AgentDependencies:
     confidence_tracker: ConfidenceTracker
     stream_manager: StreamEmitter | None = field(default=None)
     episodic_store: Any | None = field(default=None)
-    # Injected after construction to break the circular dependency:
-    # agent_registry → agent_deps → agent_registry.
-    agent_registry: Any | None = field(default=None)
     # The approval layer's one card channel, shared with tools, flows and the
     # orchestrator. Required for request_approval and ask_user.
     interaction: UserInteraction | None = field(default=None)

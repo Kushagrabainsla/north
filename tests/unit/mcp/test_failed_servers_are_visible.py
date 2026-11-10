@@ -55,7 +55,7 @@ async def test_a_server_that_failed_to_start_is_named_with_why(tmp_path: Path, m
 
 async def test_the_agent_searching_for_its_tools_is_told_it_failed(tmp_path: Path, move_north_home) -> None:
     registry = await _started(tmp_path, move_north_home)
-    agent = _load_agent("general", tmp_path)
+    agent = _load_agent("north", tmp_path)
     agent._deps.tool_registry = registry
 
     out = json.loads(await agent._find_tools({"query": "crm customer account"}, {}, None))

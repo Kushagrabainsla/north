@@ -51,9 +51,6 @@ export function Dashboard() {
       <Panel title="Sessions" label="Recent" to="/sessions" className="wide-panel">
         {data.conversations.length ? <div className="conversation-strip">{data.conversations.map(session => <NavLink to={`/sessions/${session.id}`} className="conversation-card" key={session.id}><span className="conversation-glyph"><MessageSquare size={16}/></span><b>{session.title}</b><small>{session.source === "cli" ? "CLI · " : ""}{timeAgo(session.updated_at)}</small></NavLink>)}</div> : <Empty>Start your first session.</Empty>}
       </Panel>
-      <Panel title="Agents" label={`${data.agents.length} available`} to="/agents">
-        <div className="agent-cloud">{data.agents.slice(0, 8).map(agent => <span key={agent.name}><i/>{agent.name}</span>)}</div>
-      </Panel>
       <Panel title={todaysBriefing ? "Today's briefing" : "Latest briefing"} label="Daily intelligence" to="/artifacts" className="wide-panel briefing-panel">
         {briefing ? <div className="briefing-summary"><div className="sun-mark"><Sun size={18}/></div><div><b>{briefing.name}</b><p>{todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}</p></div><NavLink to="/artifacts" className="primary-button">Open artifact</NavLink></div> : <Empty>No briefing has been generated yet.</Empty>}
       </Panel>

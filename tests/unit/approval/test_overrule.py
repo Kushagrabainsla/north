@@ -49,10 +49,8 @@ def _orchestrator(store: ApprovalStore, memory: ApprovalMemory | None = None) ->
     stream.emit = AsyncMock()
     return Orchestrator(
         ledger=ledger,
-        agent_registry=MagicMock(),
+        agent=MagicMock(),
         north_star_checker=MagicMock(),
-        execution_planner=MagicMock(),
-        task_context_store=MagicMock(),
         failure_handler=MagicMock(),
         interaction=UserInteraction(store, stream_manager=stream),
         stream_manager=stream,

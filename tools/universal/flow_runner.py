@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from agents.constants import NORTH_AGENT
 from agents.models import AgentPayload
 from approval import ApprovalDecision
 from approval.continuation import CardOutcome
@@ -26,7 +27,7 @@ from flows.validation import (
 )
 from inference.exceptions import missing_resource
 from skills.checks import run_checks
-from utils.handoff import declared_artifact_paths, ensure_handoff_dir, missing_artifact_paths
+from utils.handoff import ensure_handoff_dir, missing_artifact_paths
 from utils.tasks import spawn
 from utils.time import localnow
 
@@ -252,7 +253,7 @@ class FlowRunner:
         *,
         run_id: str | None = None,
         task_id: str = "",
-        agent: str = "general",
+        agent: str = NORTH_AGENT,
         inputs: dict[str, Any] | None = None,
         test_mode: bool = False,
         trigger: str = "",
@@ -339,7 +340,7 @@ class FlowRunner:
         *,
         run_id: str | None = None,
         task_id: str = "",
-        agent: str = "general",
+        agent: str = NORTH_AGENT,
         inputs: dict[str, Any] | None = None,
         test_mode: bool = False,
         trigger: str = "",
@@ -456,7 +457,9 @@ class FlowRunner:
                     outputs=outputs,
                     error=f"Step '{step.name}' needs valid inputs: {exc}",
                 )
-            selected_agent_name = execution.agent if execution else "general"
+            # North runs every step. A skill's `execution.agent` is kept as written (it is part of
+            # the fingerprint an active flow was tested under) but no longer chooses anything.
+            selected_agent_name = NORTH_AGENT
             allowed_tools = resolve_execution_tools(execution, step.inputs) if execution else ()
             # The step's own approval, never the skill's declared baseline
             # (execution.approval): a flow step must be able to require
@@ -531,7 +534,6 @@ class FlowRunner:
                             # "on_mutation" needs nothing here: every change a step
                             # makes already goes to the approval layer.
                             mutation_policy="deny" if approval == "never" else "allow",
-                            allow_delegation=False,
                         )
                     )
                 except Exception as exc:
@@ -561,27 +563,7 @@ class FlowRunner:
                         outputs=outputs,
                         error=f"Step '{step.name}' could not finish: {result.summary or result.output}"[:2_000],
                     )
-
-                # What the agent promises to leave behind (its config's `produces`) is
-                # the durable result a schedule exists for. A model saying it wrote the
-                # file is not the file: unattended runs fail when it is absent, so a
-                # briefing that was never saved is not recorded as a success.
-                declared = declared_artifact_paths(
-                    getattr(selected_agent.config, "produces", None) or [],
-                    step_task_id,
-                    localnow().date().isoformat(),
-                )
-                missing = missing_artifact_paths(declared)
-                if missing and run.trigger == "schedule":
-                    return self._store.update(
-                        run.run_id,
-                        status="paused",
-                        current_step=index,
-                        outputs=outputs,
-                        error=f"Skill step '{step.name}': {selected_agent_name} completed without writing: "
-                        + ", ".join(missing),
-                    )
-                written = [path for path in declared if path not in missing]
+                written: list[str] = []
 
                 contract_output = _contract_output(result, output_schema)
                 output_errors = schema_errors(contract_output, output_schema, path="output")
@@ -597,9 +579,8 @@ class FlowRunner:
                         ),
                     )
 
-                # A skill can promise files in its structured output, too. Verify
-                # that contract with the same helper as configured `produces`;
-                # prose and schema-valid paths are not evidence of saved work.
+                # A skill can promise files in its structured output. Verify that
+                # they exist: prose and schema-valid paths are not evidence of saved work.
                 artifact_schema = output_schema.get("properties", {}).get("artifacts", {})
                 if artifact_schema.get("type") == "array" and artifact_schema.get("items", {}).get("type") == "string":
                     if "artifacts" not in contract_output and _final_json(result) is None:

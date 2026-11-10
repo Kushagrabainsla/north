@@ -61,9 +61,9 @@ def parse_execution_contract(raw: object) -> SkillExecution | None:
     unknown = set(raw) - known
     if unknown:
         raise ValueError(f"Unknown execution fields: {sorted(unknown, key=str)}. Use only {sorted(known)}.")
+    # Not read: north runs every step. Kept as written, since an active flow's
+    # fingerprint includes it (skills from before north was the one agent say "general").
     agent = str(raw.get("agent") or "").strip()
-    if not agent:
-        raise ValueError("execution.agent is required")
     tools = raw.get("tools", [])
     if not isinstance(tools, list) or any(not isinstance(name, str) or not name.strip() for name in tools):
         raise ValueError("execution.tools must be a list of tool names")

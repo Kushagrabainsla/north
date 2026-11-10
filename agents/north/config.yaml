@@ -1,0 +1,6 @@
+agent: north
+# The tag of the skills north is offered (everyday work); `engineering` skills are not offered.
+domain: general
+output_format: structured_json
+version: 1.0.0
+class_name: NorthAgent

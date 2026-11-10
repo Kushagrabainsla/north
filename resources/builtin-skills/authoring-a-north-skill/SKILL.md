@@ -20,8 +20,7 @@ domains: [general, engineering]
 - **`positive_prompts`**: three or more requests that must pick this skill, worded the way a person would. **`negative_prompts`**: nearby requests that must not ("summarize this one article", "save this article"). They are the skill's test.
 
 ## Only for a skill that a flow will run: `execution`
-A flow step runs a skill through its execution contract, and every field is required:
-- `agent`: `general`.
+A flow step runs a skill through its execution contract, on north, and every field is required:
 - `tools`: the exact tools it may use, and no more.
 - `approval`: `never` (it changes nothing), `on_mutation` (ask before each change), or `before_step` (ask once before the step runs).
 - `inputs` and `outputs`: JSON object schemas with `type`, `properties` and `required`; the final answer must match `outputs`.
@@ -43,7 +42,6 @@ instructions: |
   4. Write the digest to the output path (`write_file`), newest article first, with the date at the top.
   5. Answer with the digest path and how many articles it covers.
 execution:
-  agent: general
   tools: [list_dir, read_file, write_file]
   approval: on_mutation
   inputs:

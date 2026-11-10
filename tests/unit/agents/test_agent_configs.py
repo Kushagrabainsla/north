@@ -74,7 +74,7 @@ def test_agents_do_not_own_tool_allowlists(name: str) -> None:
 
 
 def test_general_prompt_requires_flow_intake_before_creation() -> None:
-    prompt = (AGENTS_DIR / "general" / "prompts" / "system.md").read_text(encoding="utf-8")
+    prompt = (AGENTS_DIR / "north" / "prompts" / "system.md").read_text(encoding="utf-8")
     assert "resolve all missing setup choices with `ask_user`" in prompt
     assert "manual only, one-time, or recurring" in prompt
     assert "before `create_flow:create`" in prompt
@@ -87,7 +87,7 @@ def test_general_prompt_requires_flow_intake_before_creation() -> None:
 @pytest.mark.parametrize(
     "relative_path",
     [
-        "agents/general/prompts/system.md",
+        "agents/north/prompts/system.md",
         "resources/builtin-skills/browser-research-and-extraction/SKILL.md",
         "resources/builtin-skills/authoring-a-north-flow/SKILL.md",
     ],
@@ -105,7 +105,7 @@ def test_browser_prompts_select_profile_and_reuse_existing_login(relative_path: 
 def test_the_general_prompt_does_not_deny_the_bash_tool_it_is_given() -> None:
     """It said "You do NOT have a `bash` tool" while bash was offered; replies about shell use contradicted
     themselves (issue #76, A13). It now says what bash is for, and that repository edits go to coding_agent."""
-    prompt = (AGENTS_DIR / "general" / "prompts" / "system.md").read_text(encoding="utf-8")
+    prompt = (AGENTS_DIR / "north" / "prompts" / "system.md").read_text(encoding="utf-8")
 
     assert "do NOT have a `bash` tool" not in prompt
     assert "coding_agent" in prompt
@@ -115,7 +115,7 @@ def test_the_general_prompt_offers_only_what_north_can_take_or_do() -> None:
     """It said the agent always had `take_screenshot` and to ignore turns that said capture failed, and replies
     offered "paste a screenshot into the chat" above a composer that takes only text files, and a photo with a camera
     north cannot use off macOS (issue #76, W11)."""
-    prompt = (AGENTS_DIR / "general" / "prompts" / "system.md").read_text(encoding="utf-8")
+    prompt = (AGENTS_DIR / "north" / "prompts" / "system.md").read_text(encoding="utf-8")
 
     assert "ignore the past limitation" not in prompt
     assert "When `take_screenshot` is among your tools" in prompt

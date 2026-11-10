@@ -233,16 +233,16 @@ async def test_two_schedules_whose_text_slugs_alike_do_not_overwrite(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_removing_an_agent_cascades_only_its_schedules(tmp_path) -> None:
+async def test_a_schedule_saved_for_the_old_general_agent_reads_as_north(tmp_path) -> None:
+    """The one agent was called "general"; opening the store renames it, once, and touches nothing else."""
     store = UserCronStore(tmp_path / "jobs.db")
-    await store.add("user_one", "personal", "first", 9, 0, None)
-    await store.add("user_two", "personal", "second", 10, 0, None)
-    await store.add("user_keep", "general", "keep", 11, 0, None)
+    await store.add("daily_brief", "general", "brief", 9, 0, None)
+    await store.add("cleanup", "system", "clean", 3, 0, None)
 
-    removed = await store.remove_for_agent("personal")
+    reopened = UserCronStore(tmp_path / "jobs.db")
 
-    assert set(removed) == {"user_one", "user_two"}
-    assert [row["name"] for row in await store.list()] == ["user_keep"]
+    agents = {row["name"]: row["agent"] for row in await reopened.list()}
+    assert agents == {"daily_brief": "north", "cleanup": "system"}
 
 
 # ---- name, prompt, and key are three different things ----

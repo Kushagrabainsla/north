@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from agents.constants import NORTH_AGENT
 from flows.exceptions import FlowNotFoundError
 from flows.validation import schedulable_flow_error
 from jobs.cron_store import UNSET
@@ -260,7 +261,7 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
     name = body.name or await store.unique_name(body.label or body.flow)
     await store.add(
         name=name,
-        agent="general",
+        agent=NORTH_AGENT,
         task=flow.description,
         flow=body.flow,
         hour=body.hour or 0,

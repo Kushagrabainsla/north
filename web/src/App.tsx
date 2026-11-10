@@ -2,7 +2,6 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Layout } from "./components";
 import { Chat, Sessions } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
-import { Agents } from "./pages/Agents";
 import { Approvals } from "./pages/Approvals";
 import { Artifacts } from "./pages/Artifacts";
 import { Memory } from "./pages/Memory";
@@ -39,7 +38,6 @@ export function App() {
     <Route path="/schedule" element={<Navigate to="/flows" replace/>}/>
     <Route path="/approvals" element={<Approvals/>}/>
     <Route path="/memory" element={<Memory/>}/>
-    <Route path="/agents" element={<Agents/>}/>
     <Route path="/skills" element={<Skills/>}/>
     <Route path="/flows" element={<Flows/>}/>
     <Route path="/tools" element={<Tools/>}/>

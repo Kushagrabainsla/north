@@ -68,7 +68,7 @@ def _flow_yaml(name: str, status: str) -> str:
 
 
 class FakeAgent:
-    name = "general"
+    name = "north"
     domain = "general"
     config = SimpleNamespace(produces=[])
 
@@ -80,13 +80,17 @@ class FakeAgents:
     def __init__(self) -> None:
         self.agent = FakeAgent()
 
+    @property
+    def north(self):
+        return self.agent
+
     def get(self, name: str):
-        if name != "general":
+        if name != "north":
             raise KeyError(name)
         return self.agent
 
     def names(self) -> list[str]:
-        return ["general"]
+        return ["north"]
 
 
 class FakeJobs:

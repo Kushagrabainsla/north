@@ -31,7 +31,9 @@ def _tested(name: str, **params) -> dict:
 def test_authoring_schema_exposes_exact_contract_fields_and_fixed_intents():
     properties = CreateSkillTool.parameters_schema["properties"]
     contract = properties["execution"]
-    assert set(contract["required"]) == {"agent", "tools", "approval", "inputs", "outputs", "success_criteria"}
+    assert set(contract["required"]) == {"tools", "approval", "inputs", "outputs", "success_criteria"}
+    # North runs every skill: there is no agent for a contract to name.
+    assert "agent" not in contract["properties"]
     assert contract["additionalProperties"] is False
     assert "review" in properties["intents"]["items"]["enum"]
 

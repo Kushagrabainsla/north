@@ -72,11 +72,9 @@ async def test_full_sse_lifecycle_renders_without_crashing():
         tid = "task_test"
         app._user_task_ids.add(tid)
         events = [
-            ("classifying", {}),
-            ("classified", {"domain": "general", "is_consequential": True}),
-            ("routed", {"agents": ["general"]}),
+            ("executing", {"agents": ["north"]}),
             ("model", {"model": "meta-llama/llama-4-scout-17b:free"}),
-            ("agent_started", {"agent": "coder", "task": "do the thing"}),
+            ("agent_started", {"agent": "north", "task": "do the thing"}),
             ("tool_called", {"tool": "web_search", "params": {"query": "x", "workspace": "/tmp"}}),
             ("tool_result", {"tool": "web_search", "success": True, "formatted": "a\nb"}),
             ("reasoning", {"text": "thinking"}),

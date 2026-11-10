@@ -70,14 +70,9 @@ YOLO_BADGE = f"[{THEME['danger']}]⚠ YOLO[/{THEME['danger']}]"
 
 # ── Pipeline step rendering (task progress table) ───────────────────────────
 _STEP_ICONS: dict[str, str] = {
-    "classifying": "●",
-    "classified": "✓",
-    "classified_as_trivial": "✓",
     "north_star_checking": "●",
     "north_star_aligned": "✓",
     "north_star_conflict": "▲",
-    "routing": "●",
-    "routed": "✓",
     "executing": "●",
     "agent_started": "●",
     "agent_completed": "✓",
@@ -89,14 +84,9 @@ _STEP_ICONS: dict[str, str] = {
 }
 
 _STEP_LABELS: dict[str, str] = {
-    "classifying": "classifying…",
-    "classified": "classified",
-    "classified_as_trivial": "quick task",
     "north_star_checking": "checking goals…",
     "north_star_aligned": "goals aligned",
     "north_star_conflict": "goal conflict",
-    "routing": "planning…",
-    "routed": "plan ready",
     "executing": "running agents…",
     "waiting_for_model": "waiting for model capacity…",
     "task_queued": "queued (waiting for models)…",
@@ -173,7 +163,6 @@ _SLASH_COMMANDS: dict[str, str] = {
     "/context": "inspect active context and goal documents",
     "/clear": "clear the conversation log",
     "/cost": "show session tokens and cost",
-    "/agents": "list registered agents",
     "/decisions": "recent decisions: who decided, why, and the memory it used",
     "/power": "show or set the model-selection dial (eco|cruise|sport)",
     "/autonomy": "list the approval modes, or set one (/autonomy <mode>)",

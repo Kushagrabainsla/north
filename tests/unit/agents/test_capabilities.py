@@ -9,7 +9,6 @@ from agents.capabilities import build_platform_capabilities_summary
 
 def test_build_platform_capabilities_summary_empty_deps() -> None:
     deps = MagicMock()
-    deps.agent_registry = None
     deps.tool_registry = None
     deps.skill_registry = None
     deps.flow_registry = None
@@ -20,13 +19,6 @@ def test_build_platform_capabilities_summary_empty_deps() -> None:
 
 def test_build_platform_capabilities_summary_with_registries() -> None:
     deps = MagicMock()
-
-    # Mock agent
-    mock_agent = MagicMock()
-    mock_agent.name = "coder"
-    mock_agent.domain = "engineering"
-    mock_agent.config.accepts = ["code", "bugfix"]
-    deps.agent_registry.all.return_value = [mock_agent]
 
     # Mock tool
     mock_tool = MagicMock()
@@ -49,7 +41,6 @@ def test_build_platform_capabilities_summary_with_registries() -> None:
 
     summary = build_platform_capabilities_summary(deps)
 
-    assert "coder" in summary
     assert "gh" in summary
     assert "debug_workflow" not in summary  # the task message lists the skills an agent may use
     assert "job-application-review" in summary
@@ -58,4 +49,4 @@ def test_build_platform_capabilities_summary_with_registries() -> None:
     assert "Available Tool Names" in summary
     assert "find_tools" in summary
     assert "create_tool" in summary
-    assert "create_agent" in summary
+    assert "create_agent" not in summary  # north is the one agent; it makes no others

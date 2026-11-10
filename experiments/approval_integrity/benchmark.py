@@ -100,7 +100,7 @@ async def _direct_card_replay(tmp: Path) -> str:
     def card() -> Card:
         return Card.new(
             type=CardType.APPROVAL,
-            agent="general",
+            agent="north",
             title="Approval",
             message="Archive the three finished briefing notes?",
             options=["Approve", "Reject"],
@@ -133,7 +133,7 @@ def _registry(tmp: Path, mode: ApprovalMode, store: ApprovalStore):
     policy = ApprovalPolicy(mode_provider=lambda: mode, unattended=UnattendedPolicy())
     approvals = Approvals(policy, UserInteraction(store))
     with patch.object(settings, "north_home", tmp / "north_home"):
-        registry, _ = _build_tool_registry(deps, approvals)
+        registry = _build_tool_registry(deps, approvals)
     return registry
 
 

@@ -56,14 +56,14 @@ class _SaveNote(Tool):
 
 
 async def _outcome(tmp_path: Path, *turns: ToolCallResponse, tools: tuple[Tool, ...] = ()) -> str:
-    from agents.general.agent import GeneralAgent
     from agents.models import AgentConfig
+    from agents.north.agent import NorthAgent
     from tests.unit.agents.test_react_loop import AGENTS_DIR
 
     deps = _make_deps(tmp_path, _Scripted(*turns))
     for tool in tools:
         deps.tool_registry.register(bind_approvals(tool, ApprovalMode.YOLO))
-    agent = GeneralAgent(AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml"), deps)
+    agent = NorthAgent(AgentConfig.from_yaml(AGENTS_DIR / "north" / "config.yaml"), deps)
     result = await agent.run(AgentPayload(task_id="t1", prompt="p", allowed_tools=[t.name for t in tools] or None))
     return result.data["outcome_status"]
 
@@ -109,7 +109,7 @@ async def test_a_task_whose_work_was_blocked_ends_marked_blocked() -> None:
     orchestrator = _orchestrator()
     orchestrator._blocked_tasks.add("t1")
 
-    await orchestrator._finish_task("t1", skip_extraction=True)
+    await orchestrator._finish_task("t1")
 
     writes = orchestrator._ledger.write.await_args_list
     [ending] = [c.args[0] for c in writes if c.args[0].action == "task_completed"]

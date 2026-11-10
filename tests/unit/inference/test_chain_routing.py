@@ -241,13 +241,13 @@ class TestPowerDial:
         assert self._order("eco")[0] in ("glm-5-2", "minimax-m3")
 
     def test_sport_orders_a_cheap_part_on_quality(self) -> None:
-        """The planner is cheapest-first by default; sport ranks it on quality.
+        """The goal check is cheapest-first by default; sport ranks it on quality.
 
         It needs structured output rather than tools, so the strongest model that
         declares structured output leads - price no longer enters the ordering.
         """
-        cheapest_first = self._order("cruise", "planner")
-        assert self._order("sport", "planner")[0] == "no-tools-model"
+        cheapest_first = self._order("cruise", "north_star_checker")
+        assert self._order("sport", "north_star_checker")[0] == "no-tools-model"
         assert cheapest_first[0] != "no-tools-model"
 
     def test_the_dial_never_relaxes_a_requirement(self) -> None:

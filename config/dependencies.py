@@ -45,7 +45,6 @@ if TYPE_CHECKING:
     from orchestrator.plan_store import PlanStore
     from orchestrator.running_tasks import RunningTaskStore
     from orchestrator.stream import EventStreamManager
-    from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
 
 
@@ -73,7 +72,6 @@ class Dependencies:
     cron_store: UserCronStore
     confidence_tracker: ConfidenceTracker
     episodic_store: EpisodicStore
-    task_context_store: TaskContextStore
     running_task_store: RunningTaskStore
     plan_store: PlanStore
     agent_run_store: AgentRunStore
@@ -302,7 +300,6 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     from orchestrator.plan_store import PlanStore
     from orchestrator.running_tasks import RunningTaskStore
     from orchestrator.stream import EventStreamManager
-    from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
 
     north_settings = north_settings or _default_north_settings()
@@ -395,7 +392,6 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         cron_store=UserCronStore(settings.north_home / "jobs.db"),
         confidence_tracker=confidence_tracker,
         episodic_store=episodic_store,
-        task_context_store=TaskContextStore(db_path=tasks_db),
         running_task_store=RunningTaskStore(settings.north_home / "running_tasks.db"),
         plan_store=PlanStore(),
         agent_run_store=agent_run_store,

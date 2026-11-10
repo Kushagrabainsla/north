@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from agents.constants import NORTH_AGENT
 from flows.validation import schedulable_flow_error
 from jobs.models import Job, JobPriority, JobType
 from jobs.scheduler import CronEntry
@@ -132,9 +133,9 @@ class ScheduleTaskTool(Tool):
             return ToolOutput(success=False, error=BOTH)
         if not flow and not message:
             return ToolOutput(success=False, error=NO_FLOW)
-        # Every schedule is run by the general agent through its flow: what it does
-        # is the flow's business, so there is no agent or skill to choose here.
-        agent, skill = "general", ""
+        # Every schedule is run by north through its flow: what it does is the
+        # flow's business, so there is no agent or skill to choose here.
+        agent, skill = NORTH_AGENT, ""
         task = str(input.params.get("task", "")).strip()
         if message:
             # A reminder is its text: nothing to run, test or keep afterwards.

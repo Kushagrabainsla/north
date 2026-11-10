@@ -2,24 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 MODEL_SCARCITY_MESSAGE = "model pool exhausted - retry when model access recovers"
 
 
-class AgentFailure(str):
-    """A failed agent name tagged with its classified error type.
+@dataclass(frozen=True)
+class AgentFailure:
+    """Why north failed a task after every retry, and the kind of failure it was.
 
-    It remains a ``str`` so legacy failure-list consumers retain their existing
-    joining, equality, and truthiness behavior.
+    ``model_unavailable`` queues the task to run again when a model is back.
     """
 
-    error_type: str | None
-
-    def __new__(cls, agent_name: str, error_type: str | None = None) -> AgentFailure:
-        obj = super().__new__(cls, agent_name)
-        obj.error_type = error_type
-        return obj
-
-
-def has_model_scarcity(failures: list[str]) -> bool:
-    """Return true when any agent was blocked by temporary model availability."""
-    return any(getattr(failure, "error_type", None) == "model_unavailable" for failure in failures)
+    reason: str
+    error_type: str | None = None

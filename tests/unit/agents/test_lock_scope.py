@@ -65,11 +65,11 @@ async def test_a_card_waiting_in_one_session_does_not_stall_anothers_write(tmp_p
     released = asyncio.Event()
     waiting = bind_approvals(_WaitsForYou(), ApprovalMode.ASK, store=_store_that_waits(released))
     saves = bind_approvals(_Saves(), ApprovalMode.YOLO)
-    session_a = asyncio.create_task(_calls(_load_agent("general", tmp_path), waiting, tmp_path, "task-a"))
+    session_a = asyncio.create_task(_calls(_load_agent("north", tmp_path), waiting, tmp_path, "task-a"))
     await asyncio.sleep(0.2)  # A's card is up and nobody answers it
 
     try:
-        [(_, _, ok, _)] = await asyncio.wait_for(_calls(_load_agent("general", tmp_path), saves, tmp_path, "task-b"), 2)
+        [(_, _, ok, _)] = await asyncio.wait_for(_calls(_load_agent("north", tmp_path), saves, tmp_path, "task-b"), 2)
         assert ok
     finally:
         released.set()
@@ -89,12 +89,12 @@ async def test_a_run_a_tool_starts_can_change_the_folder_its_parent_works_in(tmp
         parameters_schema = {"type": "object", "properties": {}}
 
         async def run(self, input: ToolInput) -> ToolOutput:
-            [(_, _, ok, _)] = await _calls(_load_agent("general", tmp_path), nested, tmp_path, "task-a", "step")
+            [(_, _, ok, _)] = await _calls(_load_agent("north", tmp_path), nested, tmp_path, "task-a", "step")
             return ToolOutput(success=ok, data={})
 
     maker = bind_approvals(MakesAFlow(), ApprovalMode.YOLO)
 
-    [(_, _, ok, _)] = await asyncio.wait_for(_calls(_load_agent("general", tmp_path), maker, tmp_path, "task-a"), 2)
+    [(_, _, ok, _)] = await asyncio.wait_for(_calls(_load_agent("north", tmp_path), maker, tmp_path, "task-a"), 2)
 
     assert ok
 

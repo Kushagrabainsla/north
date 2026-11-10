@@ -160,8 +160,8 @@ async def test_agent_execute_call_threads_scope_to_tool(tmp_path: Path) -> None:
     WriteFileTool through the agent's own dispatch path and blocks the write."""
     from unittest.mock import MagicMock
 
-    from agents.general.agent import GeneralAgent
     from agents.models import AgentDependencies
+    from agents.north.agent import NorthAgent
     from inference.models import ToolCall
     from memory import FileContextStore
     from tools.confidence import ConfidenceTracker
@@ -175,7 +175,7 @@ async def test_agent_execute_call_threads_scope_to_tool(tmp_path: Path) -> None:
     )
     from agents.models import AgentConfig
 
-    agent = GeneralAgent(
+    agent = NorthAgent(
         AgentConfig(agent="researcher", domain="engineering"),
         deps,
     )

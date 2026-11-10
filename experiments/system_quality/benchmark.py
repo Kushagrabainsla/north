@@ -13,8 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from agents.tool_output_reduction import salient_excerpt
-from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
-from orchestrator.router import _execution_profile
+from orchestrator.task_intent import execution_profile
 from orchestrator.verification import evidence_sufficiency_violations
 
 _CASES_PATH = Path(__file__).with_name("cases.json")
@@ -39,21 +38,8 @@ def _metric(outcomes: list[dict[str, Any]]) -> dict[str, Any]:
 def evaluate_routing(cases: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     outcomes = []
     for case in cases:
-        classification = IntentClassification(
-            is_consequential=False,
-            domain="engineering",
-            reasoning="benchmark label",
-            confidence=float(case["confidence"]),
-        )
-        plan = ExecutionPlan(
-            task_id=case["id"],
-            agents=["general"],
-            parallel_groups=[["general"]],
-            dependencies={},
-            mode=ExecutionMode.SINGLE_AGENT,
-            engineering_kind=case["engineering_kind"],
-        )
-        actual = _execution_profile(case["prompt"], classification, plan)
+        # Every case asks about the repository the task was given.
+        actual = execution_profile(case["prompt"], workspace="/repo")
         outcomes.append(
             {
                 "id": case["id"],

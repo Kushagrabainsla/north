@@ -235,9 +235,3 @@ def test_the_flow_guides_example_runs_the_skill_guides_example(tmp_path) -> None
 
     assert report.errors == ()
     assert call["test_inputs"]
-
-
-def test_the_agent_guides_example_is_a_complete_create_agent_call() -> None:
-    call = yaml.safe_load(_block(_guide("authoring-a-north-agent"), "yaml", "action: create"))
-    assert re.fullmatch(r"[a-z][a-z0-9_]*", call["name"])
-    assert call["description"] and call["accepts"] and call["system_prompt"].strip()

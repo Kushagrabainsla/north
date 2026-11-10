@@ -149,6 +149,8 @@ class UserCronStore:
                 # Every stored zone was only the Settings zone at the time it was made. Empty now means
                 # "follow Settings", so a reminder made before the zone changed moves with it.
                 conn.execute("UPDATE user_cron_entries SET tz = NULL")
+            # The one agent was called "general"; it is north, and runs every schedule.
+            conn.execute("UPDATE user_cron_entries SET agent = 'north' WHERE agent = 'general'")
 
     async def add(
         self,
@@ -285,21 +287,6 @@ class UserCronStore:
     def _remove_sync(self, name: str) -> bool:
         with open_db_connection(self._db_path) as conn:
             return conn.execute("DELETE FROM user_cron_entries WHERE name = ?", (name,)).rowcount > 0
-
-    async def remove_for_agent(self, agent: str) -> list[str]:
-        """Delete every stored schedule assigned to *agent* and return its names.
-
-        The select and delete share one transaction so callers never observe a
-        partial cascade. Completed job history is stored separately and remains
-        untouched.
-        """
-        return await asyncio.to_thread(self._remove_for_agent_sync, agent)
-
-    def _remove_for_agent_sync(self, agent: str) -> list[str]:
-        with open_db_connection(self._db_path) as conn:
-            names = [row[0] for row in conn.execute("SELECT name FROM user_cron_entries WHERE agent = ?", (agent,))]
-            conn.execute("DELETE FROM user_cron_entries WHERE agent = ?", (agent,))
-            return names
 
     async def get(self, name: str) -> dict | None:
         row = await asyncio.to_thread(self._get_sync, name)

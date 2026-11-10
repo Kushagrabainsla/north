@@ -8,22 +8,18 @@ const run = (events: [string, Record<string, unknown>?][]) =>
   events.reduce<Step[]>((steps, [event, data]) => foldStep(steps, event, data), []);
 
 describe("a task's live steps", () => {
-  it("names the plan, the agent and its model, and each tool call as it ended, in plain words", () => {
+  it("names north's model and each tool call as it ended, in plain words", () => {
     const steps = run([
-      ["classified", { domain: "general", is_consequential: false }],
-      ["routed", { agents: ["general"] }],
-      ["agent_started", { agent: "general" }],
+      ["agent_started", { agent: "north" }],
       ["model", { model: "gpt-oss-120b" }],
       ["tool_called", { tool: "web_search", params: { workspace: "/long/path/that/is/noise", query: "sales 2025" } }],
       ["tool_result", { tool: "web_search", success: true, formatted: "3 results\nfirst…" }],
-      ["agent_completed", { agent: "general", summary: "done" }],
+      ["agent_completed", { agent: "north", summary: "done" }],
     ]);
     expect(steps.map(s => `${s.icon} ${s.text}`)).toEqual([
-      "✓ Understood: a general request",
-      "✓ Planned: general",
-      "◎ general agent on gpt-oss-120b",
+      "◎ Started on gpt-oss-120b",
       "✓ Web search: sales 2025 → 3 results first…",
-      "✓ general agent finished",
+      "✓ Finished",
     ]);
     expect(steps.filter(s => s.active)).toEqual([]);
   });
@@ -47,20 +43,26 @@ describe("a task's live steps", () => {
   });
 
   it("keeps only the newest step active, and marks the last one failed when the task fails", () => {
-    const working = run([["agent_started", { agent: "general" }], ["tool_called", { tool: "bash", params: { command: "pytest" } }]]);
+    const working = run([["agent_started", { agent: "north" }], ["tool_called", { tool: "bash", params: { command: "pytest" } }]]);
     expect(working.map(s => s.active)).toEqual([false, true]);
-    expect(run([...[["agent_started", { agent: "general" }]] as [string, Record<string, unknown>][], ["task_failed", {}]])[0].icon).toBe("✗");
+    expect(run([...[["agent_started", { agent: "north" }]] as [string, Record<string, unknown>][], ["task_failed", {}]])[0].icon).toBe("✗");
   });
 
-  it("shows what the task waits on, and a delegated agent as a branch", () => {
-    const steps = run([["question_required", {}], ["agent_started", { agent: "general", parent_run_id: "r1" }]]);
+  it("shows what the task waits on, and a coding agent north started as a branch", () => {
+    const steps = run([["question_required", {}], ["agent_started", { agent: "claude", parent_run_id: "r1" }]]);
     expect(steps[0]).toEqual({ icon: "?", text: "Waiting for your answer", active: false });
-    expect(steps[1].text).toBe("↳ general agent started");
+    expect(steps[1].text).toBe("↳ claude started");
+  });
+
+  it("has no planner steps: north starts on the task at once", () => {
+    for (const gone of ["classifying", "classified", "routing", "routed"]) {
+      expect(STEP_EVENTS).not.toContain(gone);
+    }
   });
 
   it("ignores events it has no line for, and subscribes to every event it folds", () => {
     expect(foldStep([], "prompt_profile", {})).toEqual([]);
-    // Nothing on the server emits failover; a switched model shows as the next "agent on" line.
+    // Nothing on the server emits failover; a switched model shows on the "Started on" line.
     expect(STEP_EVENTS).not.toContain("failover");
     expect(STEP_EVENTS).toContain("tool_called");
     expect(STEP_EVENTS).toContain("question_required");
@@ -69,7 +71,7 @@ describe("a task's live steps", () => {
 
 describe("what North is doing and thinking", () => {
   it("is the step in progress, else the last one", () => {
-    const steps = run([["classifying"], ["tool_called", { tool: "web_search", params: { query: "roles" } }]]);
+    const steps = run([["agent_started", { agent: "north" }], ["tool_called", { tool: "web_search", params: { query: "roles" } }]]);
     expect(currentActivity(steps)).toBe("Web search: roles");
     expect(currentActivity(foldStep(steps, "tool_result", { tool: "web_search" }))).toBe("Web search: roles");
     expect(currentActivity([])).toBe("");

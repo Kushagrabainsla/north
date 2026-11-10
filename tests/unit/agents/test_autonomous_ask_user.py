@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 from agents.agentic_llm_agent import AgenticLLMAgent
-from agents.general.agent import GeneralAgent
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
+from agents.north.agent import NorthAgent
 from agents.schemas import ASK_USER_SCHEMA
 from approval.interaction import UserInteraction
 from approval.models import ApprovalDecision
@@ -39,8 +39,8 @@ def _agent(tmp_path: Path, mode: ApprovalMode, decider: StubDecider, store: Appr
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
         interaction=UserInteraction(store, policy=policy),
     )
-    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
-    return GeneralAgent(config, deps)
+    config = AgentConfig.from_yaml(AGENTS_DIR / "north" / "config.yaml")
+    return NorthAgent(config, deps)
 
 
 def _ask(agent: AgenticLLMAgent, question: str = "Which DB?", options=("Postgres", "SQLite")):

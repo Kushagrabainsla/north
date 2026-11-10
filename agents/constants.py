@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-# How deep one agent may hand work to another before north refuses.
-MAX_DELEGATION_DEPTH = 10
+# North is the one agent: every task, flow step and schedule runs on it.
+NORTH_AGENT = "north"
 
 # Cap JSON-serialised tool results injected back into the conversation.
 # ~40k chars ≈ 10k tokens - generous but bounded.

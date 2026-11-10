@@ -142,9 +142,6 @@ a { color: inherit; text-decoration: none; }
 .conversation-card b, .conversation-card small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; }
 .conversation-card small { color: var(--faint); margin-top: 5px; }
 .conversation-glyph { color: var(--accent); display: block; margin-bottom: 12px; }
-.agent-cloud { display: flex; flex-wrap: wrap; gap: 7px; }
-.agent-cloud span { border: 1px solid var(--line); border-radius: 20px; padding: 5px 8px; font-size: 9px; }
-.agent-cloud i { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-right: 6px; }
 .briefing-panel { background: linear-gradient(120deg, rgba(42,35,18,.7), rgba(16,19,22,.95)); }
 .briefing-summary .primary-button { margin-left: auto; font-size: 10px; }
 .sun-mark { width: 38px; height: 38px; flex: 0 0 38px; aspect-ratio: 1; border: 1px solid rgba(255,201,105,.3); color: var(--amber); border-radius: 50%; display: grid; place-items: center; }
@@ -551,8 +548,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 .conversation-card { padding: 11px; border: 0; border-radius: 0; background: var(--surface); }
 .conversation-card:hover { background: var(--surface-2); }
 .conversation-glyph { margin-bottom: 9px; }
-.agent-cloud { gap: 5px; }
-.agent-cloud span, .skill-chip, .tag-list span { border-radius: 3px; }
+.skill-chip, .tag-list span { border-radius: 3px; }
 .sun-mark, .online-orb { border-radius: 4px; box-shadow: none; }
 .activity-line { gap: 1px; border: 1px solid var(--line); background: var(--line); }
 .activity-line > div { padding: 9px; background: var(--surface); }
@@ -981,8 +977,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 .conversation-card:hover { background: var(--surface-2); }
 .conversation-card b { font-size: 11px; }
 .conversation-card small { font-size: 9px; }
-.agent-cloud { gap: 6px; }
-.agent-cloud span, .skill-chip, .tag-list span { border-radius: 5px; }
+.skill-chip, .tag-list span { border-radius: 5px; }
 .activity-line { gap: 1px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--line-strong); }
 .activity-line > div { padding: 10px; background: var(--surface); }
 

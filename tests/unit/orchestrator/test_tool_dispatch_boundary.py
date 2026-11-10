@@ -8,10 +8,6 @@ import. These tests pin the behaviour that boundary must preserve:
   the injected wiring is sound;
 * ``tools.exceptions.ToolNotFoundError`` is catchable through the platform
   ``utils.tools.ToolNotFoundError`` contract the orchestrator imports;
-* direct single-tool success formats through ``format_output`` and marks a side
-  effect for a mutating tool;
-* a missing tool - or a missing input factory - re-routes to the agent fallback;
-* the injected factory carries ``edit_scope`` on the dedicated field only;
 * the work committer builds its git envelopes through the injected factory.
 """
 
@@ -22,7 +18,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestrator.orchestrator import Orchestrator
 from tools.exceptions import ToolNotFoundError as ConcreteToolNotFound
 from tools.models import ToolInput
 from utils.tools import (
@@ -33,10 +28,6 @@ from utils.tools import (
 from utils.tools import (
     ToolInput as ToolInputPort,
 )
-
-
-async def _async_noop(*_args: Any, **_kwargs: Any) -> None:
-    return None
 
 
 class _RecordingTool:
@@ -54,59 +45,6 @@ class _RecordingTool:
 
     def format_output(self, _data):
         return "formatted-output"
-
-
-def _bare_orchestrator(*, registry, factory) -> Orchestrator:
-    orch = Orchestrator.__new__(Orchestrator)  # bypass heavy __init__; exercise one method
-    orch._tool_registry = registry
-    orch._tool_input_factory = factory
-    orch._running_task_store = None
-    orch._agent_run_store = None
-    orch._blocked_tasks = set()
-    orch._stream_manager = MagicMock()
-    orch._stream_manager.emit = _async_noop
-    orch._journal = MagicMock()
-    orch._journal.record = _async_noop
-    orch._finish_task = _async_noop
-    return orch
-
-
-def _with_tool(answer) -> tuple[Orchestrator, dict[str, Any], list[str]]:
-    """An orchestrator whose one tool answers *answer* (or raises it), recording output and fallbacks."""
-
-    class _Tool:
-        is_mutating = False
-
-        async def execute(self, _tool_input):
-            if isinstance(answer, Exception):
-                raise answer
-            return answer
-
-        def format_output(self, _data):  # pragma: no cover - not reached on failure
-            return "unused"
-
-    registry = MagicMock()
-    registry.get.return_value = _Tool()
-    orch = _bare_orchestrator(registry=registry, factory=ToolInput)
-    recorded: dict[str, Any] = {}
-    fallbacks: list[str] = []
-
-    async def _record(task_id, *_a, **kw):
-        recorded["output"] = kw.get("output")
-
-    async def _fall_back(task_id, prompt, workspace, context, edit_scope, attempt):
-        fallbacks.append(attempt)
-
-    orch._journal.record = _record
-    orch._fall_back_to_agent = _fall_back
-    return orch, recorded, fallbacks
-
-
-def _plan(tool: str = "write_file") -> MagicMock:
-    plan = MagicMock()
-    plan.direct_tool = tool
-    plan.direct_tool_params = {"path": "x", "content": "y"}
-    return plan
 
 
 class TestConcreteClassesSatisfyDispatchPorts:
@@ -140,141 +78,3 @@ class TestCompatibleNotFoundContract:
             assert str(caught) == "missing"
         else:  # pragma: no cover - failure path
             pytest.fail("platform contract did not catch the concrete error")
-
-
-class TestDirectSingleToolExecution:
-    async def test_success_formats_output_through_the_tool(self) -> None:
-        tool = _RecordingTool()
-        registry = MagicMock()
-        registry.get.return_value = tool
-        recorded: dict[str, Any] = {}
-
-        orch = _bare_orchestrator(registry=registry, factory=ToolInput)
-
-        async def _record(task_id, *_a, **kw):
-            recorded["output"] = kw.get("output")
-
-        orch._journal.record = _record
-
-        await orch._execute_single_tool("t1", "prompt", _plan(), workspace=".", context="")
-
-        assert recorded["output"] == "formatted-output"
-        # The injected factory carried params through; workspace/task_id stamped.
-        assert tool.captured["params"]["workspace"] == "."
-        assert tool.captured["params"]["task_id"] == "t1"
-
-    async def test_a_refused_call_ends_with_the_refusal_and_never_asks_again(self) -> None:
-        orch, recorded, fallbacks = _with_tool(
-            MagicMock(success=False, data={}, error="Brightness change cancelled by user.", failure_kind="refused")
-        )
-
-        await orch._execute_single_tool("t1", "prompt", _plan(), workspace=".", context="")
-
-        assert recorded["output"] == "Tool error: Brightness change cancelled by user."
-        assert fallbacks == []
-
-    async def test_a_failed_call_goes_to_the_agent_with_what_it_answered(self) -> None:
-        """The planner's screen="Alienware" matched no screen; an agent reading the names finds AW3425DWM."""
-        orch, recorded, fallbacks = _with_tool(
-            MagicMock(success=False, data={}, error="No screen matches 'Alienware'.", failure_kind="error")
-        )
-
-        await orch._execute_single_tool("t1", "prompt", _plan("screen_brightness"), workspace=".", context="")
-
-        assert fallbacks == [
-            '`screen_brightness` was called with {"path": "x", "content": "y"} and answered: '
-            "No screen matches 'Alienware'."
-        ]
-        assert recorded == {}
-
-    async def test_a_call_that_raises_goes_to_the_agent_too(self) -> None:
-        orch, _recorded, fallbacks = _with_tool(RuntimeError("osascript did not answer"))
-
-        await orch._execute_single_tool("t1", "prompt", _plan("screen_brightness"), workspace=".", context="")
-
-        assert fallbacks == [
-            '`screen_brightness` was called with {"path": "x", "content": "y"} and raised: osascript did not answer'
-        ]
-
-    async def test_mutating_tool_success_marks_side_effect(self) -> None:
-        class _MutatingTool(_RecordingTool):
-            is_mutating = True
-
-        registry = MagicMock()
-        registry.get.return_value = _MutatingTool()
-
-        orch = _bare_orchestrator(registry=registry, factory=ToolInput)
-        store = MagicMock()
-        marked: dict[str, str] = {}
-
-        async def _mark(task_id):
-            marked["task_id"] = task_id
-
-        store.mark_side_effect = _mark
-        orch._running_task_store = store
-
-        await orch._execute_single_tool("t-mut", "prompt", _plan(), workspace=".", context="")
-        assert marked["task_id"] == "t-mut"
-
-    async def test_scope_rides_the_dedicated_field_only(self) -> None:
-        tool = _RecordingTool()
-        registry = MagicMock()
-        registry.get.return_value = tool
-
-        class _Guard:
-            def authorize(self, _path):  # satisfies utils.edit_scope.EditAuthorizer
-                return None
-
-        guard = _Guard()
-
-        orch = _bare_orchestrator(registry=registry, factory=ToolInput)
-        await orch._execute_single_tool("t1", "prompt", _plan(), workspace=".", context="", edit_scope=guard)  # type: ignore[arg-type]
-
-        assert tool.captured["edit_scope"] is guard
-        assert "edit_scope" not in tool.captured["params"]
-
-
-class TestMissingToolFallsBackToAgent:
-    async def test_missing_tool_reroutes_to_agent(self) -> None:
-        registry = MagicMock()
-        registry.get.side_effect = ConcreteToolNotFound("nope")
-
-        orch = _bare_orchestrator(registry=registry, factory=ToolInput)
-        fallback_plan = MagicMock()
-        fallback_plan.agents = ["general"]
-        orch._execution_planner = MagicMock()
-        orch._execution_planner.build_fallback_plan.return_value = fallback_plan
-        calls: dict[str, Any] = {}
-
-        async def _groups(task_id, prompt, plan, workspace, context="", edit_scope=None):
-            calls["plan"] = plan
-            return []
-
-        orch._execute_parallel_groups = _groups
-        orch._report_execution_failures = _async_noop
-
-        await orch._execute_single_tool("t1", "prompt", _plan("ghost"), workspace=".", context="")
-
-        orch._execution_planner.build_fallback_plan.assert_called_once_with("general", "t1")
-        assert calls["plan"] is fallback_plan
-
-    async def test_missing_factory_reroutes_to_agent(self) -> None:
-        registry = MagicMock()
-        registry.get.return_value = _RecordingTool()
-
-        orch = _bare_orchestrator(registry=registry, factory=None)
-        fallback_plan = MagicMock()
-        fallback_plan.agents = ["general"]
-        orch._execution_planner = MagicMock()
-        orch._execution_planner.build_fallback_plan.return_value = fallback_plan
-        rerouted: dict[str, bool] = {}
-
-        async def _groups(*_a, **_kw):
-            rerouted["hit"] = True
-            return []
-
-        orch._execute_parallel_groups = _groups
-        orch._report_execution_failures = _async_noop
-
-        await orch._execute_single_tool("t1", "prompt", _plan(), workspace=".", context="")
-        assert rerouted["hit"] is True

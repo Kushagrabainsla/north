@@ -200,7 +200,7 @@ async def test_a_reminder_is_scheduled_as_a_flow_not_as_a_prompt(tool, store) ->
     assert result.success, result.error
     (row,) = await store.list()
     assert row["flow"] == "stretch-reminder"
-    assert row["agent"] == "general" and not row["skill"]
+    assert row["agent"] == "north" and not row["skill"]
 
 
 @pytest.mark.asyncio

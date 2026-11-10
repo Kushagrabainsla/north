@@ -8,7 +8,6 @@ Each area owns a module; importing it registers its routes on the shared
 from __future__ import annotations
 
 from orchestrator.api import (  # noqa: F401  (importing registers each area's routes)
-    agents,
     approval,
     confidence,
     context,

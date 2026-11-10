@@ -33,7 +33,7 @@ NEEDLE = "record 1500: the one the user asked about"
 
 
 def _agent(tmp_path: Path):
-    from agents.general.agent import GeneralAgent
+    from agents.north.agent import NorthAgent
 
     deps = AgentDependencies(
         context_store=FileContextStore(tmp_path / "context"),
@@ -41,7 +41,7 @@ def _agent(tmp_path: Path):
         tool_registry=ToolRegistry(auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
     )
-    return GeneralAgent(AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml"), deps)
+    return NorthAgent(AgentConfig.from_yaml(AGENTS_DIR / "north" / "config.yaml"), deps)
 
 
 async def _enter(agent, tmp_path: Path, call: ToolCall, tools: dict[str, Tool]) -> dict[str, Any]:
@@ -89,20 +89,6 @@ async def test_a_huge_error_enters_within_the_cap_and_still_reads_as_a_failure(t
 
     assert result["success"] is False
     assert result["failure_kind"] == "error"
-
-
-async def test_a_sub_agents_long_answer_enters_within_the_cap(tmp_path: Path, monkeypatch) -> None:
-    agent = _agent(tmp_path)
-
-    async def long_answer(payload, params) -> str:
-        return json.dumps({"success": True, "run_id": "r2", "output": "finding\n" * 30_000, "summary": "done"})
-
-    monkeypatch.setattr(agent, "_delegate_task", long_answer)
-
-    result = await _enter(agent, tmp_path, ToolCall(name="delegate_task", call_id="c3", params={"task": "x"}), {})
-
-    assert result["success"] is True
-    assert result["_handle"]
 
 
 def test_status_fields_survive_when_everything_else_is_reduced() -> None:

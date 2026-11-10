@@ -59,7 +59,6 @@ def test_key_skills_present():
         "adding-a-north-tool",
         "authoring-a-north-flow",
         "authoring-a-north-skill",
-        "authoring-a-north-agent",
         "scheduling-north-work",
         "preparing-job-applications",
         "submitting-an-approved-job-application",
@@ -85,13 +84,12 @@ def test_research_skill_serves_general_not_engineering():
     assert not skill.available_to("engineering")
 
 
-def test_browser_and_self_extension_guidance_reaches_the_general_agent():
+def test_browser_and_self_extension_guidance_reaches_north():
     for name in (
         "browser-research-and-extraction",
         "adding-a-north-tool",
         "authoring-a-north-flow",
         "authoring-a-north-skill",
-        "authoring-a-north-agent",
         "scheduling-north-work",
     ):
         assert _REGISTRY.get(name).available_to("general"), name

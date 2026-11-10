@@ -10,8 +10,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from inference.exceptions import is_model_unavailable_error
-from orchestrator.exceptions import DeclaredArtifactMissingError
-from orchestrator.task_context import TaskContextStore
 
 if TYPE_CHECKING:
     from orchestrator.stream import EventStreamManager
@@ -21,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Error types where a retry cannot succeed: the failure is deterministic
 # (missing prompt file, bad pool name) or the model pool is exhausted, so
 # retrying just burns time and cost.
-_NON_RETRYABLE_ERROR_TYPES = frozenset({"artifact_missing", "config_error", "model_unavailable"})
+_NON_RETRYABLE_ERROR_TYPES = frozenset({"config_error", "model_unavailable"})
 
 
 def classify_error(exc: Exception) -> str:
@@ -47,9 +45,6 @@ def classify_error(exc: Exception) -> str:
     # recognised rather than falling through to logic_error.
     if is_model_unavailable_error(exc):
         return "model_unavailable"
-
-    if isinstance(exc, DeclaredArtifactMissingError):
-        return "artifact_missing"
 
     msg = str(exc).lower()
     name = type(exc).__name__
@@ -83,12 +78,10 @@ class FailureHandler:
 
     def __init__(
         self,
-        task_context_store: TaskContextStore,
         stream_manager: EventStreamManager | None = None,
         max_retries: int = 3,
         base_cooldown_seconds: float = 2.0,
     ) -> None:
-        self._task_context_store = task_context_store
         self._stream_manager = stream_manager
         self.max_retries = max_retries
         self.base_cooldown_seconds = base_cooldown_seconds
@@ -114,8 +107,7 @@ class FailureHandler:
     async def handle_failure(self, task_id: str, agent_name: str, exception: Exception) -> bool:
         """Processes an agent failure.
 
-        Updates the agent's task context status to failed, decides if a retry
-        is allowed, and executes the cooldown delay.
+        Decides if a retry is allowed, and waits out the cooldown before it.
 
         Returns:
             True if a retry should be attempted, False otherwise.
@@ -144,7 +136,6 @@ class FailureHandler:
             )
 
         if not retryable:
-            await self._task_context_store.update_agent_status(task_id, agent_name, "failed")
             logger.error(
                 "Agent '%s' failed in task '%s' - error_type=%s is not retryable: %s",
                 agent_name,
@@ -157,7 +148,6 @@ class FailureHandler:
             return False
 
         if attempt >= self.max_retries:
-            await self._task_context_store.update_agent_status(task_id, agent_name, "failed")
             logger.error(
                 "Agent '%s' failed in task '%s' - error_type=%s, retries exhausted (%d/%d): %s",
                 agent_name,

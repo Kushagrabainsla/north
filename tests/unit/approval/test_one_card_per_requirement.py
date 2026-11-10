@@ -14,8 +14,8 @@ import json
 from pathlib import Path
 
 from agents.agentic_llm_agent import AgenticLLMAgent
-from agents.general.agent import GeneralAgent
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
+from agents.north.agent import NorthAgent
 from approval.approvals import Request
 from approval.interaction import UserInteraction
 from approval.models import ApprovalDecision
@@ -74,7 +74,7 @@ def _agent(tmp_path: Path, mode: ApprovalMode, store: ApprovalStore, *tools: Too
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
         interaction=UserInteraction(store, policy=approval_policy(mode)),
     )
-    return GeneralAgent(AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml"), deps)
+    return NorthAgent(AgentConfig.from_yaml(AGENTS_DIR / "north" / "config.yaml"), deps)
 
 
 async def _call(agent: AgenticLLMAgent, name: str, params: dict) -> dict:

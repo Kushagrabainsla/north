@@ -23,12 +23,9 @@ const HIDDEN_PARAMS = new Set(["workspace", "task_id"]);
 const CARD_TOOLS = new Set(["ask_user"]);
 
 const LABELS: Record<string, [string, string]> = {
-  classifying: ["●", "Reading your request"],
-  classified_as_trivial: ["✓", "A quick one"],
   north_star_checking: ["●", "Checking it against your goals"],
   north_star_aligned: ["✓", "Fits your goals"],
   north_star_conflict: ["▲", "Goes against one of your goals"],
-  routing: ["●", "Planning"],
   executing: ["●", "Working"],
   waiting_for_model: ["○", "Waiting for a model"],
   task_queued: ["○", "Waiting for a model to be free"],
@@ -45,7 +42,7 @@ const LABELS: Record<string, [string, string]> = {
 /** Every event the fold reacts to; the page subscribes to exactly these. */
 export const STEP_EVENTS = [
   ...Object.keys(LABELS),
-  "classified", "routed", "agent_started", "model", "tool_called", "tool_result", "agent_completed", "task_failed",
+  "agent_started", "model", "tool_called", "tool_result", "agent_completed", "task_failed",
 ];
 
 const truncate = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
@@ -81,13 +78,13 @@ export function foldStep(steps: Step[], event: string, data: Record<string, any>
     [...settled(steps), { icon, text, active, ...(tool ? { tool } : {}) }].slice(-MAX_STEPS);
   switch (event) {
     case "agent_started":
-      return push("◎", `${branch}${data.agent || "An"} agent started`);
+      // North's own run; a coding agent it starts shows as a branch.
+      return push("◎", branch ? `↳ ${data.agent || "A coding agent"} started` : "Started");
     case "model": {
       // Names the model on the running agent's step rather than adding a step.
       const index = steps.map(s => s.icon === "◎" && s.active).lastIndexOf(true);
       if (index < 0 || !data.model) return steps;
-      const agent = steps[index].text.replace(/^↳ /, "").split(" ")[0];
-      return steps.map((s, i) => (i === index ? { ...s, text: `${branch}${agent} agent on ${data.model}` } : s));
+      return steps.map((s, i) => (i === index ? { ...s, text: `${s.text} on ${data.model}` } : s));
     }
     case "tool_called": {
       const tool = String(data.tool || "tool");
@@ -104,13 +101,7 @@ export function foldStep(steps: Step[], event: string, data: Record<string, any>
       return steps.map((s, i) => (i === index ? { ...s, icon, text: `${s.text}${resultPreview(data)}`, active: false } : s));
     }
     case "agent_completed":
-      return push("✓", `${branch}${data.agent || "The"} agent finished`, false);
-    case "classified":
-      return push("✓", data.domain ? `Understood: a ${data.domain} request` : "Understood", false);
-    case "routed": {
-      const agents = (data.agents || []).join(", ");
-      return push("✓", agents ? `Planned: ${agents}` : "Planned", false);
-    }
+      return push("✓", branch ? `↳ ${data.agent || "The coding agent"} finished` : "Finished", false);
     case "task_failed":
       return steps.length ? steps.map((s, i) => (i === steps.length - 1 ? { ...s, icon: "✗", active: false } : s)) : steps;
     default: {

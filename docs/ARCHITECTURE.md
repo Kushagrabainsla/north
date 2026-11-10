@@ -111,7 +111,7 @@ north extends itself through a small hierarchy. Choosing the right entity is the
 | **Skill** | Reusable procedural knowledge (a `SKILL.md`) that can own an executor and several atomic tools | advisory in ordinary tasks; server-enforced execution contract when selected by a flow | selected semantically for a task or explicitly by a flow step | no extra call when suggested; one agent run when invoked by a flow | there is a known-good procedure for a class of work ("how to debug a flaky test") |
 | **Flow** | An ordered sequence of skill invocations with inputs and approval boundaries | coordinates skills; never calls tools directly | explicitly run or triggered by a schedule after evidence-backed activation | one agent run per skill step | several reusable procedures must complete in a controlled order |
 | **Policy** | An authoritative *rule* (a `resources/policies/*.md`) | binding - overrides task/skill/user on conflict | deterministic, by agent name (`applies_to`), injected high (system prompt), always on | no extra model call | a cross-cutting rule must *always* hold (safety guardrails, clean-code) |
-| **Agent** | A separate model call with its own context and mission | its own instructions | chosen by the planner or by an executable skill contract | a full model call + handoff | the work needs a *different model*, *context isolation*, or is a distinct autonomous *mission* - not merely a different persona (that's a skill/policy) |
+| **Agent** | north itself: the one model loop every task runs in | its system prompt | always north | the task's model calls | there is one; a specialism is a skill, and coding goes to the installed coding agents |
 | **Schedule** | A durable time trigger for an active flow, skill, or task | starts work but does not define its procedure | one-shot, interval, wall-clock, or cron timing | no model cost until it fires | known work should begin later or recur |
 
 The execution hierarchy is **flow -> skill -> tool**. A flow stores no executor or tool choice. An executable skill declares its agent, exact tool allowlist, input/output object schemas, minimum approval, and success criteria; the runner resolves all of them through the skill fingerprint. Skills teach; policies bind. Flow approval modes are server-enforced at the tool boundary, so a read-only skill step cannot mutate merely because its prose was misunderstood. A policy is only as strong as the model that reads it, so critical policies are also backed by deterministic enforcement (approval-gated mutating tools, the Definition-of-Done gate) - see `resources/policies/` and `agents/policy.py`.
@@ -324,7 +324,7 @@ This week:  Finish architecture spec, start Phase 2 of hallucination project
 When two north stars conflict, the Orchestrator surfaces the tension to the user rather than resolving it silently.
 
 #### soul.md
-north's persona: its voice, values, curiosity, and sense of humour. Unlike the other documents - which describe the *user* - `soul.md` describes *north itself*. It is read by `MemoryGateway.read_persona()` and injected as a stable preamble into every agent's system prompt and the response synthesizer, so north keeps one consistent character across every task. A shipped default lives in `prompts/soul.md`; editing `~/.north/context/soul.md` (via `north context edit soul`) overrides it.
+north's persona: its voice, values, curiosity, and sense of humour. Unlike the other documents - which describe the *user* - `soul.md` describes *north itself*. It is read by `MemoryGateway.read_persona()` and injected as a stable preamble into north's system prompt, so north keeps one consistent character across every task. A shipped default lives in `prompts/soul.md`; editing `~/.north/context/soul.md` (via `north context edit soul`) overrides it.
 
 ### 5.4 Extraction Pipeline
 
@@ -439,53 +439,38 @@ CREATE TABLE episodes (
 
 ## 6. The Orchestrator
 
-The Orchestrator is the brain of north. It sits between the Perception Layer and the Agent Layer. Its job: receive intent, read context, check alignment, decompose into work, coordinate parallel execution, manage shared state, and handle failure.
+The Orchestrator is the brain of north. It sits between the Perception Layer and the agent. Its job: receive a task, check it against your goals when it acts outside north, run it on north, and handle failure.
 
 ### 6.1 Request Flow
 
-Every input goes through four stages in order:
+Every task goes straight to north. There is no planner: one used to classify every task and pick an agent with a model call, about 4 seconds in front of every answer (median of 75 real tasks, up to 12), to choose the one agent there was.
 
 ```
-Input arrives directly from Perception Layer (voice or text)
+Input arrives (dashboard, terminal, Telegram, a schedule, a webhook)
        |
        v
-Stages 1+3 combined: ExecutionPlanner.plan_all() (single LLM call, reasoning pool)
-  -> classifies intent (trivial or consequential?) AND builds execution plan
-  -> trivial:       skip Stage 2, proceed directly to Stage 4
-  -> consequential: proceed to Stage 2
-  -> Ledger write: source=system, action="classified as [trivial|consequential]"
-  -> Ledger write: source=system, action="routed", agents=[...]
-
-  Note: Stages 1 and 3 are merged into one LLM call in ExecutionPlanner.plan_all()
-  to save cost and latency.  The IntentClassification and ExecutionPlan are returned
-  together.  A separate IntentClassifier class no longer exists.
+North Star check - only when the ask acts outside north
+  -> task_intent.is_consequential(): the ask's words (send, apply, buy, delete, create a flow/skill/tool),
+     with the session goal and recent dialogue, so "yes, go ahead" after "send it" counts
+  -> reads north_stars.md; aligns: go on; conflicts: a card, and nothing runs until you decide
+  -> Ledger write: north_star_check_[aligned|conflict]
        |
        v
-Stage 2: North Star Check (reasoning pool) - consequential tasks only
-  -> reads north_stars.md via ContextStore
-  -> aligns:    proceed to Stage 4
-  -> conflicts: surface tension card to user, await decision before continuing
-  -> Ledger write: source=system, action="north_star_check: [aligned|conflict]"
-       |
-       v
-Stage 4: Parallel Execution
-  -> spins up agent groups in dependency order
-  -> manages shared state via Task Context Object
-  -> assembles final output when all groups complete
-  -> routes output to Approval Layer
+North runs the task (AgenticLLMAgent's ReAct loop)
+  -> a plain overview of the chosen repository runs with the quick read-only profile
+  -> every change goes to the Approval Layer as it is made
+  -> Ledger write: agent_completed, then task_completed or task_failed
 ```
 
-### 6.2 Intent Classification
+### 6.2 Trivial and consequential
 
-Intent classification is one dimension of `ExecutionPlanner.plan_all()` (reasoning pool), not a separate call or class. The same LLM response that builds the execution plan also labels the task trivial or consequential.
+**Trivial:** questions, lookups, summaries, plans. No north star check; the answer is shown when north finishes.
 
-**Trivial:** informational queries, simple lookups, article summaries, grocery lists, meal plans. No north star check. Routes directly to the appropriate agent and surfaces an Information card when done.
-
-**Consequential:** irreversible actions (booking, buying, deleting), time-consuming actions (blocks calendar), resource-consuming actions (costs money), goal-adjacent actions (directly touches north_stars.md). Goes through north star check. Requires an Approval card.
+**Consequential:** sending, applying, buying, deleting, or creating north's own flows, skills and tools. Checked against your goals first; the changes themselves still ask through the Approval Layer.
 
 ### 6.3 Trivial Task Output Path
 
-Trivial tasks skip the north star check and the Approval card. After the agent completes:
+Trivial tasks skip the north star check and the Approval card. After north completes:
 - The result is written to the Ledger with `status: completed`
 - An Information card notification is sent to the user
 - The result is shown in the CLI output or the TUI activity feed
@@ -792,82 +777,37 @@ Agents are domain specialists. Each knows one domain and operates only within it
 
 ### 7.1 Agent Set
 
-The agent set is discovered from the `/agents` folder at startup (§7.2), so it evolves
-without code changes. The current set:
+North is the one agent:
 
-| Agent | Domain | Responsibilities |
-|-------|--------|-----------------|
-| General | General purpose | Everything: chat, research, writing, smart home, and code, which it hands to the installed Claude Code / Codex |
+| Agent | Responsibilities |
+|-------|-----------------|
+| north | Everything: chat, research, writing, smart home, and code, which it hands to the installed Claude Code / Codex |
 
-One agent. A specialism is a skill on it (news briefing, wellness coaching, smart home control, job applications), never an agent of its own: an agent that is only a prompt is a skill. The multi-agent plan modes, the result synthesizer and `delegate_task` remain in code for a registry with more than one agent.
+A specialism is a skill on north (news briefing, wellness coaching, smart home control, job applications), never an agent of its own: an agent that is only a prompt is a skill. There are no personal agents, no delegation between agents, no multi-agent plans and no result synthesizer.
 
-The agent subclasses `AgenticLLMAgent` (a ReAct loop with native function calling).
+North subclasses `AgenticLLMAgent` (a ReAct loop with native function calling).
 
 ### 7.2 Folder Structure
 
-Each agent is a self-contained folder dropped into `/agents`. The Orchestrator scans this directory on startup and hot-reloads when it detects new or modified folders.
-
 ```
 /agents
-  /general
-    agent.py              <- core logic (usually a thin AgenticLLMAgent/LLMAgent subclass)
-    config.yaml           <- declaration: agent, domain, accepted keywords
+  /north
+    agent.py              <- NorthAgent, a thin AgenticLLMAgent subclass
+    config.yaml           <- agent: north, and the tag of the skills it is offered
     prompts/
-      system.md           <- system prompt defining the agent's expertise
-  (news briefings, wellness coaching and smart home control are skills on the general agent,
-   not agents: an agent that is only a prompt is a skill)
-  (no coding agents of its own: code tasks go to the general agent, which hands them to the installed
-   Claude Code / Codex through `coding_agent`; see docs/design/coding-agents.md)
+      system.md           <- north's system prompt
 ```
 
-**config.yaml example:**
+**config.yaml:**
 ```yaml
-agent: general
-domain: general
-accepts:                   # routing keywords matched against the prompt
-  - "question"
-  - "plan"
-  - "research"
+agent: north
+domain: general            # north is offered skills tagged `general`; `engineering` ones are not
 output_format: structured_json
 version: 1.0.0
-class_name: CoderAgent     # the Agent subclass in agent.py
+class_name: NorthAgent
 ```
 
-### 7.3 Agent Registration
-
-Two paths to register an agent. Both result in the same outcome: a folder in `/agents` that the Orchestrator picks up automatically.
-
-**Path 1: Manual drop**
-```bash
-git clone https://github.com/someone/north-agent-legal ./agents/legal
-# Orchestrator hot-reloads, agent immediately available for routing
-```
-
-**Path 2: Scaffold generator**
-```bash
-north agent create
-```
-
-Interactive prompt:
-```
-Agent name: legal
-Domain: legal
-Model pool (fast_cheap / reasoning): reasoning
-Tools needed: web_search, document_reader
-Tasks it accepts: contract_review, compliance_check
-
-Created /agents/legal/
-   agent.py        <- boilerplate logic ready to customize
-   config.yaml     <- pre-filled from your answers
-   prompts/
-     system.md     <- LLM-generated starter prompt for legal domain
-   README.md       <- agent overview (domain, pool, accepted keywords)
-```
-
-`north agent create` also adds the new domain to `prompts/planner.md` so the orchestrator can
-route to it.
-
-The generator uses a reasoning pool call to produce a reasonable starting `system.md` based on the declared domain and tasks. The agent has a running start, not a blank page.
+Skills and flows saved before north was the one agent name `agent: general` in their execution contract. North reads none of it (it runs every step), and keeps it as written: an active flow's fingerprint includes it, and changing it would send the flow back to be tested.
 
 ### 7.4 Global Tool Catalog
 
@@ -931,7 +871,7 @@ The previous approach required the model to produce a raw JSON string matching a
 ```
 messages = [system_prompt, user_message_with_task_and_context]
 tools    = [typed function defs from tool.schema() for each tool]
-           + [request_approval, ask_user, delegate_task]
+           + [request_approval, ask_user, find_tools]
 
 loop (max iterations, configurable, default 40):
   compact older tool results in messages to preserve context window
@@ -1050,7 +990,7 @@ A part that needs tools still needs tools at every setting. Under manual routing
 
 ### 8.4 Parts, not priorities
 
-A request says what it is through its `component` label (`coder`, `planner`, `approval_decider`, ...), and the router picks the model from that part's profile (`inference/routing/parts.py`) plus what the request itself needs (tools, JSON, context size). There is no per-call priority: `PoolPriority` and the pool router it steered were removed (b28c64d, #48).
+A request says what it is through its `component` label (`north`, `approval_decider`, `critic`, ...), and the router picks the model from that part's profile (`inference/routing/parts.py`) plus what the request itself needs (tools, JSON, context size). There is no per-call priority: `PoolPriority` and the pool router it steered were removed (b28c64d, #48).
 
 Agents carry no model pool either. An agent's `model_pool` setting, and the pool the orchestrator's tiering gave each task, never reached routing under the chain router; both were removed (#48). An old `config.yaml` that still names one loads as before.
 
@@ -1090,7 +1030,7 @@ north inference models           # the models north can reach, by capability
 
 ### 8.6 JSON Mode
 
-All callers that expect a structured JSON response (planner, north star checker, extraction pipeline, context injection router) pass `json_mode=True` in their `CompletionRequest`.  The router forwards this as `response_format: {type: json_object}` in the OpenRouter request body.
+All callers that expect a structured JSON response (north star checker, extraction pipeline, context injection router) pass `json_mode=True` in their `CompletionRequest`.  The router forwards this as `response_format: {type: json_object}` in the OpenRouter request body.
 
 This eliminates the entire class of "Failed to parse classifier output as JSON" errors that arose when models wrapped responses in markdown fences or produced partial output.  The model is still instructed to produce JSON via its system prompt; `json_mode` is a belt-and-suspenders guarantee at the provider level.
 
@@ -1412,7 +1352,6 @@ north context add --url "https://example.com/article"
 # Agent management
 north agents
 north agent create
-north agent run health --task "meal plan for today"
 
 # Ledger
 north ledger                             # recent entries
@@ -1559,7 +1498,7 @@ A job enqueued with a future `scheduled_at` will sit as `pending` until the job 
 
 Triggered by signals rather than time.  v1 now supports two event sources:
 
-**Webhook ingestion** - external services send `POST /orchestrator/webhooks/{source}` with an `X-Webhook-Secret` header and a JSON body containing a `prompt` and optional `context` field.  The Orchestrator submits this as a task with `source: webhook` and the prompt prefixed with `[webhook:{source}]` so the planner can route it correctly.
+**Webhook ingestion** - external services send `POST /orchestrator/webhooks/{source}` with an `X-Webhook-Secret` header and a JSON body containing a `prompt` and optional `context` field.  The Orchestrator submits this as a task with `source: webhook` and the prompt prefixed with `[webhook:{source}]` so north knows where it came from.
 
 ```bash
 # A Gmail push notification triggers the job agent:

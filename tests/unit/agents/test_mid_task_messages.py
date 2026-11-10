@@ -39,7 +39,7 @@ class _Router(MockInferenceRouter):
 
 
 def _agent(tmp_path: Path, router: _Router, inbox: TaskInbox):
-    agent = _load_agent("general", tmp_path, router)
+    agent = _load_agent("north", tmp_path, router)
     agent._deps.task_inbox = inbox
     return agent
 
@@ -72,18 +72,6 @@ async def test_a_message_sent_while_it_answers_makes_it_answer_again_with_it(tmp
 
 
 @pytest.mark.asyncio
-async def test_a_delegated_agent_leaves_your_messages_to_its_caller(tmp_path: Path) -> None:
-    inbox = TaskInbox()
-    inbox.open(TASK)
-    inbox.post(TASK, "use the 2025 numbers instead")
-    router = _Router(inbox)
-
-    await _agent(tmp_path, router, inbox).run(AgentPayload(task_id=TASK, prompt="Look it up.", delegation_depth=1))
-
-    assert not any("2025" in text for text in _texts(router.requests[0]))
-    assert inbox.take_unread(TASK) == ["use the 2025 numbers instead"]
-
-
 def test_every_agent_reads_every_message_and_unread_ones_are_handed_over_once() -> None:
     inbox = TaskInbox()
     inbox.open(TASK)

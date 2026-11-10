@@ -23,9 +23,6 @@ def running_task_store(tmp_path) -> RunningTaskStore:
 
 
 def _orch(running_task_store: RunningTaskStore | None = None):
-    registry = MagicMock()
-    registry.names.return_value = ["coder", "reviewer"]
-    registry.get.side_effect = lambda n: type("A", (), {"name": n})()
     stream = MagicMock()
     stream.emit = AsyncMock()
     stream.emit_done = AsyncMock()
@@ -36,10 +33,8 @@ def _orch(running_task_store: RunningTaskStore | None = None):
     approval_store_ = ApprovalStore()
     return Orchestrator(
         ledger=ledger,
-        agent_registry=registry,
+        agent=type("A", (), {"name": "north"})(),
         north_star_checker=MagicMock(),
-        execution_planner=MagicMock(),
-        task_context_store=MagicMock(),
         failure_handler=MagicMock(),
         interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream),
         stream_manager=stream,
@@ -107,8 +102,8 @@ async def test_model_scarcity_queues_task(running_task_store: RunningTaskStore) 
     req = TaskRequest(prompt="write code", source=LedgerSource.PROMPT)
     await running_task_store.mark_running("t1", req, attempt=0)
 
-    # Mock _stage_plan to raise AllModelsRateLimitedError
-    orch._stage_plan = AsyncMock(side_effect=AllModelsRateLimitedError("No models available"))
+    # North's run raises AllModelsRateLimitedError
+    orch._run_north = AsyncMock(side_effect=AllModelsRateLimitedError("No models available"))
 
     await orch._process_task("t1", req)
 
@@ -127,19 +122,15 @@ async def test_model_scarcity_queues_task(running_task_store: RunningTaskStore) 
 
 
 @pytest.mark.asyncio
-async def test_agent_level_model_scarcity_queues_the_whole_task(running_task_store: RunningTaskStore) -> None:
+async def test_north_failing_for_want_of_a_model_queues_the_task(running_task_store: RunningTaskStore) -> None:
     orch = _orch(running_task_store)
     writes = _record_writes(orch)
-    req = TaskRequest(prompt="delegate research", source=LedgerSource.PROMPT)
+    req = TaskRequest(prompt="research it", source=LedgerSource.PROMPT)
     await running_task_store.mark_running("t1", req)
 
     from orchestrator.model_scarcity import AgentFailure
 
-    await orch._finish_task(
-        "t1",
-        failures=[AgentFailure("researcher", "model_unavailable")],
-        total_agents=2,
-    )
+    await orch._finish_task("t1", failure=AgentFailure("no model", "model_unavailable"))
 
     assert (await running_task_store.get("t1")).status == "queued"
     assert writes[-1].action == "task_queued"
@@ -155,7 +146,7 @@ async def test_a_task_waiting_for_a_model_never_runs_out_of_attempts(running_tas
     req = TaskRequest(prompt="write code", source=LedgerSource.PROMPT)
     await running_task_store.mark_running("t1", req, attempt=50)
 
-    orch._stage_plan = AsyncMock(side_effect=AllModelsRateLimitedError("No models available"))
+    orch._run_north = AsyncMock(side_effect=AllModelsRateLimitedError("No models available"))
 
     await orch._process_task("t1", req)
 
@@ -169,7 +160,7 @@ async def test_a_task_waiting_for_the_network_is_queued_too(running_task_store: 
     req = TaskRequest(prompt="write code", source=LedgerSource.PROMPT)
     await running_task_store.mark_running("t1", req)
 
-    orch._stage_plan = AsyncMock(side_effect=ConnectionError("network is unreachable"))
+    orch._run_north = AsyncMock(side_effect=ConnectionError("network is unreachable"))
 
     await orch._process_task("t1", req)
 

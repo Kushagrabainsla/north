@@ -4,7 +4,7 @@ import { post } from "./api";
 import { fileName, noticeBody, noticePreview, savedFile } from "./notices";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
 import type { AgentRun, Conversation, InferenceCategory, Notice } from "./types";
-import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Bot, Lightbulb, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Lightbulb, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
 
@@ -53,7 +53,7 @@ const primaryNav: [string, string, LucideIcon, boolean?][] = [
   ["/", "Dashboard", LayoutDashboard], ["/sessions", "Sessions", MessagesSquare], ["/tasks", "Tasks", CheckSquare],
   ["/artifacts", "Artifacts", FileText],
   ["/approvals", "Approvals", ShieldAlert],
-  ["/memory", "Memory", Brain], ["/agents", "Agents", Bot],
+  ["/memory", "Memory", Brain],
   ["/lights", "Devices", Lightbulb],
 ];
 

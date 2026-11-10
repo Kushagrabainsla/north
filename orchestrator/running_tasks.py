@@ -42,9 +42,7 @@ CREATE TABLE IF NOT EXISTS running_tasks (
     has_side_effects INTEGER NOT NULL DEFAULT 0,
     status           TEXT NOT NULL DEFAULT 'running',
     domain           TEXT NOT NULL DEFAULT 'general',
-    description      TEXT NOT NULL DEFAULT '',
-    forced_agent     TEXT NOT NULL DEFAULT '',
-    plan             TEXT NOT NULL DEFAULT ''
+    description      TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -53,11 +51,6 @@ _MIGRATION_ADD_SIDE_EFFECTS = "ALTER TABLE running_tasks ADD COLUMN has_side_eff
 _MIGRATION_ADD_STATUS = "ALTER TABLE running_tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'running'"
 _MIGRATION_ADD_DOMAIN = "ALTER TABLE running_tasks ADD COLUMN domain TEXT NOT NULL DEFAULT 'general'"
 _MIGRATION_ADD_DESCRIPTION = "ALTER TABLE running_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''"
-# The agent a task was told to run (a schedule's agent): without it a task that ran
-# again went through the planner and could land on an agent that writes nothing.
-_MIGRATION_ADD_FORCED_AGENT = "ALTER TABLE running_tasks ADD COLUMN forced_agent TEXT NOT NULL DEFAULT ''"
-# The task's plan, so a task that resumes carries on with it instead of planning again (CODING_STYLE §15.5).
-_MIGRATION_ADD_PLAN = "ALTER TABLE running_tasks ADD COLUMN plan TEXT NOT NULL DEFAULT ''"
 
 
 @dataclass(frozen=True)
@@ -73,7 +66,6 @@ class RunningTask:
     status: str = "running"  # "running" | "paused" | "queued" | "retrying"
     domain: str = "general"
     description: str = ""
-    plan: str = ""  # JSON of the task's classification and plan, once it has one
 
 
 class RunningTaskStore:
@@ -93,10 +85,6 @@ class RunningTaskStore:
                 conn.execute(_MIGRATION_ADD_DOMAIN)
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(_MIGRATION_ADD_DESCRIPTION)
-            with contextlib.suppress(sqlite3.OperationalError):
-                conn.execute(_MIGRATION_ADD_FORCED_AGENT)
-            with contextlib.suppress(sqlite3.OperationalError):
-                conn.execute(_MIGRATION_ADD_PLAN)
 
     async def mark_running(
         self, task_id: str, request: TaskRequest, *, attempt: int = 0, domain: str = "general"
@@ -110,9 +98,8 @@ class RunningTaskStore:
             conn.execute(
                 """
                 INSERT INTO running_tasks
-                    (task_id, prompt, source, workspace, context, attempt, started_at, heartbeat_at, status, domain,
-                     forced_agent)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                    (task_id, prompt, source, workspace, context, attempt, started_at, heartbeat_at, status, domain)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     prompt=excluded.prompt,
                     source=excluded.source,
@@ -121,8 +108,7 @@ class RunningTaskStore:
                     attempt=excluded.attempt,
                     heartbeat_at=excluded.heartbeat_at,
                     status='running',
-                    domain=excluded.domain,
-                    forced_agent=excluded.forced_agent
+                    domain=excluded.domain
                 """,
                 (
                     task_id,
@@ -134,17 +120,8 @@ class RunningTaskStore:
                     now,
                     now,
                     domain,
-                    request.forced_agent or "",
                 ),
             )
-
-    async def save_plan(self, task_id: str, plan: str) -> None:
-        """Keep the task's plan with it, for as long as it can resume."""
-        await asyncio.to_thread(self._save_plan_sync, task_id, plan)
-
-    def _save_plan_sync(self, task_id: str, plan: str) -> None:
-        with open_db_connection(self._db_path) as conn:
-            conn.execute("UPDATE running_tasks SET plan=? WHERE task_id=?", (plan, task_id))
 
     async def heartbeat(self, task_id: str) -> None:
         """Advance a task's heartbeat to now. No-op if the task is not registered."""
@@ -246,17 +223,6 @@ class RunningTaskStore:
         with open_db_connection(self._db_path) as conn:
             conn.execute("DELETE FROM running_tasks WHERE task_id = ?", (task_id,))
 
-    async def update_domain(self, task_id: str, domain: str) -> None:
-        """Set the domain for a running task (called after intent classification)."""
-        await asyncio.to_thread(self._update_domain_sync, task_id, domain)
-
-    def _update_domain_sync(self, task_id: str, domain: str) -> None:
-        with open_db_connection(self._db_path) as conn:
-            conn.execute(
-                "UPDATE running_tasks SET domain = ? WHERE task_id = ?",
-                (domain, task_id),
-            )
-
     async def list_active(self, exclude_task_id: str | None = None) -> list[dict]:
         """Return dicts of currently running tasks, newest first, for agent awareness.
 
@@ -314,7 +280,6 @@ class RunningTaskStore:
             source=source,
             workspace=row["workspace"] or "",
             context=row["context"] or "",
-            forced_agent=row["forced_agent"] or None,
         )
         domain = str(row["domain"]) if "domain" in row else "general"
         description = str(row["description"]) if "description" in row else ""
@@ -328,5 +293,4 @@ class RunningTaskStore:
             status=str(row["status"]),
             domain=domain,
             description=description,
-            plan=str(row["plan"] or ""),
         )

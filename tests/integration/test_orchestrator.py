@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -32,7 +31,6 @@ from orchestrator.orchestrator import Orchestrator
 from orchestrator.result_audit import ResultAuditor
 from orchestrator.running_tasks import RunningTaskStore
 from orchestrator.stream import EventStreamManager
-from orchestrator.task_context import TaskContextStore
 
 # Import shared test utilities from conftest
 from tests.conftest import MockInferenceRouter
@@ -81,11 +79,9 @@ def _make_auditor(tmp_path: Path, *, self_repair: bool = True, critic: bool = Fa
 
 
 def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter, ApprovalStore]:
-    """Build a minimal Orchestrator wired to tmp_path with mock inference."""
+    """Build a minimal Orchestrator, on the real north agent, wired to tmp_path with mock inference."""
     from agents.registry import AgentRegistry
     from orchestrator.north_star import NorthStarChecker
-    from orchestrator.router import ExecutionPlanner
-    from orchestrator.synthesizer import ResultSynthesizer
 
     ledger = SQLiteLedgerWriter(tmp_path / "ledger.db")
     inference = MockInferenceRouter()
@@ -93,7 +89,6 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
     SQLiteJobProcessor(tmp_path / "jobs.db")
     stream = EventStreamManager()
     approval = ApprovalStore()
-    task_ctx = TaskContextStore(db_path=tmp_path / "tasks.db")
 
     agents_dir = Path(__file__).parent.parent.parent / "agents"
     tool_registry = ToolRegistry(auto_register=False)
@@ -108,25 +103,15 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
         interaction=UserInteraction(approval),
     )
     agent_registry = AgentRegistry(agents_dir=agents_dir, deps=agent_deps)
-    agent_deps.agent_registry = agent_registry
 
-    failure_handler = FailureHandler(
-        task_context_store=task_ctx,
-        stream_manager=stream,
-    )
-
-    approval_store_ = approval
     orch = Orchestrator(
         ledger=ledger,
-        agent_registry=agent_registry,
+        agent=agent_registry.north,
         north_star_checker=NorthStarChecker(LocalMemoryGateway(context_store), inference),
-        execution_planner=ExecutionPlanner(agent_registry, inference, tool_registry),
-        task_context_store=task_ctx,
-        failure_handler=failure_handler,
-        interaction=UserInteraction(approval_store_, notifier=TerminalNotifier(), stream_manager=stream),
+        failure_handler=FailureHandler(stream_manager=stream),
+        interaction=UserInteraction(approval, notifier=TerminalNotifier(), stream_manager=stream),
         stream_manager=stream,
-        approval_store=approval_store_,
-        synthesizer=ResultSynthesizer(inference_router=inference, memory=LocalMemoryGateway(context_store)),
+        approval_store=approval,
     )
     return orch, ledger, approval
 
@@ -167,86 +152,6 @@ async def test_task_pipeline_completes(tmp_path):
     entries = await ledger.query(LedgerFilters(task_id=response.task_id))
     actions = [e.action for e in entries]
     assert "task_completed" in actions
-
-
-@pytest.mark.asyncio
-async def test_forced_agent_runs_that_agent_and_skips_planner(tmp_path):
-    """A forced_agent task must run exactly that agent and bypass classification."""
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    response = await orch.submit_task(
-        TaskRequest(prompt="do the thing", source=LedgerSource.PROMPT, forced_agent="general")
-    )
-    await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
-
-    entries = await ledger.query(LedgerFilters(task_id=response.task_id))
-    actions = [e.action for e in entries]
-    # The planner is bypassed: no intent-classification entry is written.
-    assert not any(a.startswith("classified_as_") for a in actions)
-    # Exactly the requested agent ran.
-    ran = {e.agent for e in entries if e.action == "agent_completed"}
-    assert ran == {"general"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("artifact_contents", [None, ""])
-async def test_scheduled_agent_missing_declared_artifact_fails_before_notification(
-    tmp_path, monkeypatch, artifact_contents
-):
-    """A Telegram-sized answer is not a substitute for the file the dashboard reads."""
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    agent = orch._agent_registry.get("general")
-    artifact = tmp_path / "news" / "missing.md"
-    if artifact_contents is not None:
-        artifact.parent.mkdir()
-        artifact.write_text(artifact_contents, encoding="utf-8")
-    monkeypatch.setattr(agent.config, "produces", [str(artifact)])
-    run_agent = AsyncMock(return_value=AgentResult(output="Here is the news.", summary="Briefing complete."))
-    monkeypatch.setattr(agent, "run", run_agent)
-    inform = AsyncMock()
-    monkeypatch.setattr(orch._interaction, "inform", inform)
-
-    await orch._run_forced_agent(
-        "task_missing_artifact",
-        TaskRequest(prompt="brief me", source=LedgerSource.CRON, forced_agent="general"),
-    )
-
-    entries = await ledger.query(LedgerFilters(task_id="task_missing_artifact"))
-    actions = {entry.action for entry in entries}
-    assert "declared_artifact_missing" in actions
-    assert "agent_execution_failed" in actions
-    assert "task_failed" in actions
-    assert "agent_completed" not in actions
-    run_agent.assert_awaited_once()
-    inform.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_scheduled_agent_with_declared_artifact_completes_and_notifies(tmp_path, monkeypatch):
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    agent = orch._agent_registry.get("general")
-    artifact = tmp_path / "news" / "briefing.md"
-    artifact.parent.mkdir()
-    artifact.write_text("# Daily briefing\n", encoding="utf-8")
-    monkeypatch.setattr(agent.config, "produces", [str(artifact)])
-    monkeypatch.setattr(
-        agent,
-        "run",
-        AsyncMock(return_value=AgentResult(output="Saved the briefing.", summary="Briefing complete.")),
-    )
-    inform = AsyncMock()
-    monkeypatch.setattr(orch._interaction, "inform", inform)
-
-    await orch._run_forced_agent(
-        "task_with_artifact",
-        TaskRequest(prompt="brief me", source=LedgerSource.CRON, forced_agent="general"),
-    )
-
-    entries = await ledger.query(LedgerFilters(task_id="task_with_artifact"))
-    actions = {entry.action for entry in entries}
-    assert "agent_completed" in actions
-    assert "task_completed" in actions
-    assert "declared_artifact_missing" not in actions
-    inform.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -328,123 +233,9 @@ async def test_strategy_command_completes_without_agent(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_north_star_skipped_on_low_confidence(tmp_path):
-    """When the planner returns confidence < 0.7, north star check must be skipped."""
-    import unittest.mock as mock
-
-    from orchestrator.constants import NORTH_STAR_CONFIDENCE_THRESHOLD as _NORTH_STAR_CONFIDENCE_THRESHOLD
-    from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
-
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-
-    low_conf = IntentClassification(
-        is_consequential=True,
-        domain="general",
-        reasoning="borderline",
-        confidence=_NORTH_STAR_CONFIDENCE_THRESHOLD - 0.1,
-    )
-    dummy_plan = ExecutionPlan(
-        task_id="t1",
-        agents=["general"],
-        parallel_groups=[["general"]],
-        dependencies={},
-        mode=ExecutionMode.SINGLE_AGENT,
-    )
-
-    # Patch plan_all to return our low-confidence classification
-    with (
-        mock.patch.object(orch._execution_planner, "plan_all", return_value=(low_conf, dummy_plan)),
-        mock.patch.object(orch._north_star_checker, "check_alignment") as mock_check,
-    ):
-        response = await orch.submit_task(TaskRequest(prompt="send an email", source=LedgerSource.PROMPT))
-        await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
-        # check_alignment must NOT have been called
-        mock_check.assert_not_called()
-
-
 # ---------------------------------------------------------------------------
 # Task context store
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_task_context_write_and_read(tmp_path):
-    """What an agent writes must come back through get_all(), grouped by agent.
-
-    get_all() is the read path the orchestrator actually uses - for handoff
-    context, synthesis, and retry reconstruction. The store has no blocking
-    read: agents are sequenced by the orchestrator, never suspended on
-    each other here.
-    """
-    store = TaskContextStore(db_path=tmp_path / "tasks.db")
-    await store.initialize_task("t1", ["agent_a", "agent_b"])
-    await store.write("t1", "agent_a", "answer", 42)
-    await store.write("t1", "agent_b", "output", {"text": "done"})
-
-    everything = await store.get_all("t1")
-
-    assert everything["agent_a"]["answer"] == 42
-    assert everything["agent_b"]["output"] == {"text": "done"}
-    # _status bookkeeping rows stay out of the returned payload.
-    assert "_status" not in everything["agent_a"]
-
-
-@pytest.mark.asyncio
-async def test_task_context_cleanup_removes_old_rows(tmp_path):
-    """cleanup_stale_tasks() must delete rows older than the retention window."""
-    import datetime
-
-    store = TaskContextStore(db_path=tmp_path / "tasks.db")
-
-    # Write a row with an artificially old timestamp
-    from utils.db import open_db_connection
-
-    db = tmp_path / "tasks.db"
-    await store.initialize_task("old_task", ["agent_x"])
-
-    # Back-date the written_at to 10 days ago
-    old_ts = (utcnow() - datetime.timedelta(days=10)).isoformat()
-
-    def _backdate():
-        with open_db_connection(db) as conn:
-            conn.execute("UPDATE task_state SET written_at = ? WHERE task_id = ?", (old_ts, "old_task"))
-            conn.commit()
-
-    await asyncio.to_thread(_backdate)
-
-    removed = await store.cleanup_stale_tasks(active_task_ids=frozenset(), completed_retention_days=7)
-    assert removed > 0
-
-    # Verify rows are gone
-    def _count():
-        with open_db_connection(db) as conn:
-            return conn.execute("SELECT COUNT(*) FROM task_state WHERE task_id = 'old_task'").fetchone()[0]
-
-    count = await asyncio.to_thread(_count)
-    assert count == 0
-
-
-@pytest.mark.asyncio
-async def test_task_context_cleanup_skips_active(tmp_path):
-    """cleanup_stale_tasks() must not delete rows for active task_ids."""
-    import datetime
-
-    store = TaskContextStore(db_path=tmp_path / "tasks.db")
-    await store.initialize_task("active_task", ["agent_y"])
-
-    db = tmp_path / "tasks.db"
-    old_ts = (utcnow() - datetime.timedelta(days=10)).isoformat()
-
-    def _backdate():
-        with open_db_connection(db) as conn:
-            conn.execute("UPDATE task_state SET written_at = ? WHERE task_id = ?", (old_ts, "active_task"))
-            conn.commit()
-
-    await asyncio.to_thread(_backdate)
-
-    removed = await store.cleanup_stale_tasks(active_task_ids=frozenset(["active_task"]), completed_retention_days=7)
-    assert removed == 0
 
 
 # ---------------------------------------------------------------------------
@@ -537,43 +328,6 @@ async def test_extraction_pipeline_advances_watermark(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_delegate_task_blocked_at_depth_limit(tmp_path):
-    """_delegate_task() must return a failure JSON when delegation_depth >= limit."""
-    import json
-
-    from agents.constants import MAX_DELEGATION_DEPTH as _MAX_DELEGATION_DEPTH
-    from agents.general.agent import GeneralAgent
-    from agents.models import AgentConfig
-
-    _AGENTS_DIR = Path(__file__).parent.parent.parent / "agents"
-    context_store = FileContextStore(tmp_path / "context")
-    inference = MockInferenceRouter()
-    tool_registry = ToolRegistry(auto_register=False)
-    confidence_tracker = ConfidenceTracker(db_path=tmp_path / "tools.db")
-
-    agent_deps = AgentDependencies(
-        context_store=context_store,
-        inference_router=inference,
-        tool_registry=tool_registry,
-        confidence_tracker=confidence_tracker,
-    )
-
-    config = AgentConfig.from_yaml(_AGENTS_DIR / "general" / "config.yaml")
-    agent = GeneralAgent(config, agent_deps)
-
-    deep_payload = AgentPayload(
-        task_id="t1",
-        prompt="do something",
-        delegation_depth=_MAX_DELEGATION_DEPTH,  # already at the limit
-    )
-
-    result_str = await agent._delegate_task(deep_payload, {"agent": "general", "task": "do something"})
-    result = json.loads(result_str)
-    assert result["success"] is False
-    assert "depth limit" in result["error"].lower()
-
-
 # ---------------------------------------------------------------------------
 # Episodic store pruning
 # ---------------------------------------------------------------------------
@@ -585,7 +339,6 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
     import datetime
 
     from memory.episodic import _RETENTION_DAYS, EpisodicStore
-    from utils.db import open_db_connection
 
     store = EpisodicStore(db_path=tmp_path / "episodic.db")
 
@@ -634,86 +387,24 @@ async def test_episodic_search_filters_by_domain(tmp_path):
     assert await store.search("parser", allowed_domains=frozenset()) == []
 
 
-# ---------------------------------------------------------------------------
-# Direct/Single Tool execution
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_single_tool_passes_task_id(tmp_path):
-    """_execute_single_tool must pass task_id to the tool params."""
-    import unittest.mock as mock
-
-    from orchestrator.models import ExecutionMode, ExecutionPlan
-    from tools.models import ToolInput
-
-    orch, _, _ = _make_orchestrator(tmp_path)
-
-    # Set up a dummy tool registry with a mock tool
-    mock_tool = mock.MagicMock()
-    mock_tool.name = "test_tool"
-    mock_tool.execute = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
-    mock_tool.format_output = mock.MagicMock(return_value="success")
-
-    orch._tool_registry = mock.MagicMock()
-    orch._tool_registry.get.return_value = mock_tool
-    orch._tool_input_factory = ToolInput
-
-    plan = ExecutionPlan(
-        task_id="t1",
-        agents=[],
-        parallel_groups=[],
-        dependencies={},
-        mode=ExecutionMode.SINGLE_TOOL,
-        direct_tool="test_tool",
-        direct_tool_params={"arg1": "val1"},
-    )
-
-    await orch._execute_single_tool(
-        task_id="t1",
-        prompt="run test_tool",
-        plan=plan,
-        workspace=str(tmp_path),
-    )
-
-    mock_tool.execute.assert_called_once()
-    tool_input = mock_tool.execute.call_args[0][0]
-    assert tool_input.params["task_id"] == "t1"
-    assert tool_input.params["workspace"] == str(tmp_path)
-    assert tool_input.params["arg1"] == "val1"
-
-
 @pytest.mark.asyncio
 async def test_a_task_with_no_chosen_folder_works_in_its_own_folder(tmp_path):
     """Not the folder north was started in: north runs from the home folder, and tasks wrote there."""
-    import unittest.mock as mock
-
-    from orchestrator.models import ExecutionMode, ExecutionPlan
-    from tools.models import ToolInput
     from utils.handoff import handoff_dir_for
 
     orch, _, _ = _make_orchestrator(tmp_path)
-    mock_tool = mock.MagicMock()
-    mock_tool.execute = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
-    mock_tool.format_output = mock.MagicMock(return_value="done")
-    orch._tool_registry = mock.MagicMock()
-    orch._tool_registry.get.return_value = mock_tool
-    orch._tool_input_factory = ToolInput
-    plan = ExecutionPlan(
-        task_id="t1",
-        agents=[],
-        parallel_groups=[],
-        dependencies={},
-        mode=ExecutionMode.SINGLE_TOOL,
-        direct_tool="write_file",
-        direct_tool_params={"path": "notes.md", "content": "x"},
-    )
+    payloads = []
 
-    await orch._stage_execute("t1", "save a note", plan, workspace="")
+    async def run(payload):
+        payloads.append(payload)
+        return AgentResult(output="Saved.", summary="Saved.", data={})
 
-    tool_input = mock_tool.execute.call_args[0][0]
-    assert tool_input.granted_workspace == handoff_dir_for("t1")
-    assert tool_input.params["workspace"] == handoff_dir_for("t1")
+    orch._agent.run = run
+
+    await orch._run_pipeline("t1", TaskRequest(prompt="save a note"))
+
+    assert payloads[0].workspace == handoff_dir_for("t1")
+    assert payloads[0].granted_workspace == handoff_dir_for("t1")
 
 
 # ---------------------------------------------------------------------------
@@ -1028,7 +719,6 @@ class _VerdictRouter:
         self.calls = 0
 
     async def complete(self, request):  # noqa: ANN001
-        from types import SimpleNamespace
 
         self.calls += 1
         return SimpleNamespace(text=self._verdict, cost_usd=0.0)
@@ -1088,141 +778,9 @@ async def test_critic_fails_open_on_bad_json(tmp_path):
     assert result.output == "A partial answer."  # unchanged, no crash
 
 
-@pytest.mark.asyncio
-async def test_single_tool_marks_side_effect_when_mutating(tmp_path):
-    import unittest.mock as mock
-
-    from orchestrator.models import ExecutionMode, ExecutionPlan
-    from orchestrator.running_tasks import RunningTaskStore
-    from tools.models import ToolInput
-
-    orch, _, _ = _make_orchestrator(tmp_path)
-    store = RunningTaskStore(tmp_path / "rt.db")
-    orch._running_task_store = store  # type: ignore[attr-defined]
-    await store.mark_running("t1", TaskRequest(prompt="turn off the lamp", source=LedgerSource.PROMPT))
-
-    tool = mock.MagicMock()
-    tool.name = "kasa"
-    tool.is_mutating = True
-
-    async def acts(tool_input):  # a real tool awaits this just before it changes anything
-        await tool_input.before_change()
-        return mock.MagicMock(success=True, data={})
-
-    tool.execute = acts
-    tool.format_output = mock.MagicMock(return_value="ok")
-    orch._tool_registry = mock.MagicMock()
-    orch._tool_registry.get.return_value = tool
-    orch._tool_input_factory = ToolInput
-
-    plan = ExecutionPlan(
-        task_id="t1",
-        agents=[],
-        parallel_groups=[],
-        dependencies={},
-        mode=ExecutionMode.SINGLE_TOOL,
-        direct_tool="kasa",
-        direct_tool_params={},
-    )
-    await orch._execute_single_tool(task_id="t1", prompt="p", plan=plan, workspace=str(tmp_path))
-
-    assert (await store.list_all())[0].has_side_effects is True
-
-
-@pytest.mark.asyncio
-async def test_single_tool_no_side_effect_when_readonly(tmp_path):
-    import unittest.mock as mock
-
-    from orchestrator.models import ExecutionMode, ExecutionPlan
-    from orchestrator.running_tasks import RunningTaskStore
-    from tools.models import ToolInput
-
-    orch, _, _ = _make_orchestrator(tmp_path)
-    store = RunningTaskStore(tmp_path / "rt.db")
-    orch._running_task_store = store  # type: ignore[attr-defined]
-    await store.mark_running("t1", TaskRequest(prompt="what time is it", source=LedgerSource.PROMPT))
-
-    tool = mock.MagicMock()
-    tool.name = "get_time"
-    tool.is_mutating = False
-    tool.execute = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
-    tool.format_output = mock.MagicMock(return_value="noon")
-    orch._tool_registry = mock.MagicMock()
-    orch._tool_registry.get.return_value = tool
-    orch._tool_input_factory = ToolInput
-
-    plan = ExecutionPlan(
-        task_id="t1",
-        agents=[],
-        parallel_groups=[],
-        dependencies={},
-        mode=ExecutionMode.SINGLE_TOOL,
-        direct_tool="get_time",
-        direct_tool_params={},
-    )
-    await orch._execute_single_tool(task_id="t1", prompt="p", plan=plan, workspace=str(tmp_path))
-
-    assert (await store.list_all())[0].has_side_effects is False
-
-
 # ---------------------------------------------------------------------------
 # Enforced handoff (#3): inject real artifacts, flag missing ones
 # ---------------------------------------------------------------------------
-
-
-def _declare_handoff_artifact(orch, monkeypatch) -> None:
-    """Make `notes_agent` an agent that declares one produced file, whatever agents are installed."""
-    config = SimpleNamespace(produces=["{handoff_dir}/notes/summary.md"])
-    monkeypatch.setattr(orch._agent_registry, "get", lambda name: SimpleNamespace(config=config))
-
-
-@pytest.mark.asyncio
-async def test_handoff_injects_real_artifact(tmp_path, monkeypatch):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(tmp_path / "hand" / tid))
-    _declare_handoff_artifact(orch, monkeypatch)
-
-    spec = tmp_path / "hand" / "t1" / "notes" / "summary.md"
-    spec.parent.mkdir(parents=True)
-    spec.write_text("# Spec\nUse a ring buffer keyed by session id.\n")
-
-    snippets, missing = await orch._collect_handoff_artifacts("t1", ["notes_agent"])
-
-    assert missing == []
-    assert len(snippets) == 1
-    assert "ring buffer keyed by session id" in snippets[0]  # real file content, not a summary
-    assert "summary.md" in snippets[0]
-
-
-@pytest.mark.asyncio
-async def test_handoff_flags_missing_artifact(tmp_path, monkeypatch):
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(tmp_path / "hand" / tid))
-    _declare_handoff_artifact(orch, monkeypatch)
-
-    # No summary.md written.
-    snippets, missing = await orch._collect_handoff_artifacts("t1", ["notes_agent"])
-    assert snippets == []
-    assert missing == ["notes_agent"]
-
-    await orch._warn_missing_handoff_artifact("t1", "notes_agent")
-    actions = [e.action for e in await ledger.query(LedgerFilters(task_id="t1"))]
-    assert "handoff_artifact_missing" in actions
-
-
-@pytest.mark.asyncio
-async def test_handoff_empty_artifact_counts_as_missing(tmp_path, monkeypatch):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(tmp_path / "hand" / tid))
-    _declare_handoff_artifact(orch, monkeypatch)
-
-    spec = tmp_path / "hand" / "t1" / "notes" / "summary.md"
-    spec.parent.mkdir(parents=True)
-    spec.write_text("   \n")  # whitespace only
-
-    snippets, missing = await orch._collect_handoff_artifacts("t1", ["notes_agent"])
-    assert snippets == []
-    assert missing == ["notes_agent"]
 
 
 # ---------------------------------------------------------------------------
@@ -1404,11 +962,11 @@ async def test_pause_preserves_recovery_row_after_pipeline_cancellation(tmp_path
 
     started = asyncio.Event()
 
-    async def block_plan(*_args, **_kwargs):
+    async def block_plan(*_args, **_kwargs):  # north is running
         started.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(orch, "_stage_plan", block_plan)
+    monkeypatch.setattr(orch, "_run_north", block_plan)
     pipeline = asyncio.create_task(orch._process_task("t_pause_race", request))
     orch._active_tasks["t_pause_race"] = pipeline
     await started.wait()
@@ -1473,45 +1031,6 @@ async def test_a_task_resumed_after_a_pause_reads_as_running(tmp_path):
     task = await orch.get_task("t1")
 
     assert task is not None and task.status == "pending"
-
-
-@pytest.mark.asyncio
-async def test_the_answer_combining_several_agents_is_kept_and_shown(tmp_path):
-    """Only streamed, the combined answer was gone once the stream closed; the dashboard showed one agent's."""
-    from unittest.mock import AsyncMock
-
-    from orchestrator.api_context import ApiServices, bind_services
-    from web import api as web_api
-
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    for agent, answer in (("researcher", "found three sources"), ("writer", "drafted the summary")):
-        await ledger.write(
-            LedgerEntry.new(
-                source=LedgerSource.AGENT,
-                task_id="t1",
-                agent=agent,
-                action="agent_completed",
-                output=answer,
-                status=LedgerStatus.COMPLETED,
-            )
-        )
-    orch._task_context_store.get_all = AsyncMock(
-        return_value={"researcher": {"output": "found three sources"}, "writer": {"output": "drafted the summary"}}
-    )
-    orch._synthesizer.synthesize = AsyncMock(return_value="Three sources, summarised.")
-
-    await orch._maybe_synthesize("t1", ["researcher", "writer"])
-
-    entries = await ledger.query(LedgerFilters(task_id="t1"))
-    assert [e.output for e in entries if e.action == "task_synthesis"] == ["Three sources, summarised."]
-
-    class _NoRuns:
-        async def list_for_task(self, task_id):
-            return []
-
-    with bind_services(ApiServices(orchestrator=orch, ledger=ledger, agent_run_store=_NoRuns())):
-        detail = await web_api._task_detail("t1")
-    assert detail["output"] == "Three sources, summarised."
 
 
 def _pending_question(approval, task_id: str, card_id: str):

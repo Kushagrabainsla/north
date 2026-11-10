@@ -178,6 +178,9 @@ class ApprovalMemory:
             _drop_message_keyed_decisions(conn)
             ensure_decisions_table(conn)
             _drop_normalized_fingerprints(conn)
+            # The one agent was called "general"; it is north. Past decisions are
+            # offered to the memory decider by agent, so they follow the name.
+            conn.execute("UPDATE decisions SET agent = 'north' WHERE agent = 'general'")
         # fingerprint -> decision, loaded lazily and kept in sync on record().
         self._cache: dict[str, str] | None = None
 

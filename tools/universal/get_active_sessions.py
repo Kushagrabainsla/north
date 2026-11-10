@@ -1,9 +1,8 @@
-"""GetActiveSessionsTool - discover other running sessions and their domains.
+"""GetActiveSessionsTool - discover the other tasks running right now.
 
-Agents use this tool to find out what other tasks are currently running --
-their domain, description, and how long they've been active. This enables
-coordination between sessions (e.g. a health agent checking whether the
-finance agent is also running before making recommendations).
+North uses this tool to find out what other tasks are currently running --
+what each is about and how long it has been active -- so one task's advice
+does not cross another's.
 
 See docs/CODING_STYLE.md Section 16.1.
 """
@@ -22,7 +21,7 @@ class GetActiveSessionsTool(Tool):
     name = "get_active_sessions"
     description = (
         "List every other task (session) that is currently running right now, "
-        "including their domain, description, and how long they've been active. "
+        "with what each is about and how long it has been active. "
         "Use this to check what else is happening concurrently before making "
         "recommendations or decisions that might overlap with another session. "
         "Your own task is excluded from the results."
@@ -46,7 +45,7 @@ class GetActiveSessionsTool(Tool):
             age = _format_age(s.get("started_at", ""))
             desc = s.get("description", "")
             desc_suffix = f" — {desc}" if desc else ""
-            lines.append(f"- `{s['task_id']}` [{s['domain']}]{desc_suffix} (started {age})")
+            lines.append(f"- `{s['task_id']}`{desc_suffix} (started {age})")
         return "\n".join(lines)
 
     async def run(self, input: ToolInput) -> ToolOutput:

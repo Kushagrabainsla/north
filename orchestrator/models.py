@@ -5,29 +5,12 @@ See docs/CODING_STYLE.md Section 9.7.
 
 from __future__ import annotations
 
-from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from ledger.models import LedgerSource
 from utils.edit_scope import EditAuthorizer
-
-
-class ExecutionPath(StrEnum):
-    """Routing path tier: FAST for simple/single-stage tasks; DEEP for multi-stage pipelines."""
-
-    FAST = "fast"
-    DEEP = "deep"
-
-
-class ExecutionMode(StrEnum):
-    """Execution structure chosen by the router for a given task."""
-
-    SINGLE_TOOL = "single_tool"  # one deterministic tool call, no agent
-    SINGLE_AGENT = "single_agent"  # one agent's ReAct loop
-    PARALLEL = "parallel"  # independent agents fan out simultaneously
-    HIERARCHICAL = "hierarchical"  # agents run in dependency order
 
 
 def _not_blank(prompt: str) -> str:
@@ -37,7 +20,7 @@ def _not_blank(prompt: str) -> str:
 
 
 # What a task's prompt may be, for every way one arrives. A prompt of only spaces
-# passed the length check, and the planner and an agent ran (39k input tokens) to
+# passed the length check, and north ran (39k input tokens) to
 # say "The task came through empty" (issue #76, M21).
 Prompt = Annotated[str, Field(min_length=1, max_length=32_768), AfterValidator(_not_blank)]
 
@@ -54,10 +37,6 @@ class TaskRequest(BaseModel):
     # Optional client-supplied key to dedupe re-deliveries (e.g. a webhook id).
     # When omitted, the orchestrator derives one from source+prompt.
     idempotency_key: str | None = None
-    # When set, run this specific agent directly, bypassing intent classification
-    # and the planner. Backs `north agent run <name>` so a manual agent trigger
-    # invokes exactly that agent instead of being re-routed by the planner.
-    forced_agent: str | None = None
     # Server-owned edit scope for this task. When set, the orchestrator threads it
     # onto every AgentPayload it creates, and mutating file tools enforce it before
     # writing. None (the default) leaves edits unrestricted, preserving the behavior
@@ -71,41 +50,3 @@ class TaskResponse(BaseModel):
     task_id: str
     status: str
     created_at: str
-
-
-class IntentClassification(BaseModel):
-    """Result of intent classification."""
-
-    is_consequential: bool
-    domain: str
-    reasoning: str
-    confidence: float = 1.0  # 0–1; below 0.7 skips the north star check to avoid false interruptions
-    execution_path: ExecutionPath = ExecutionPath.FAST
-    # No north-star fields here on purpose. The planner prompt is never given the
-    # user's goals, so anything it said about alignment was a guess with no input;
-    # those fields sat on this model unread, waiting for someone to trust them.
-    # NorthStarChecker reads north_stars.md and makes that judgement (Stage 2).
-
-
-class ExecutionPlan(BaseModel):
-    """The plan built by the router indicating execution steps."""
-
-    task_id: str
-    agents: list[str]
-    parallel_groups: list[list[str]]
-    dependencies: dict[str, list[str]]
-    mode: ExecutionMode = ExecutionMode.SINGLE_AGENT
-    execution_path: ExecutionPath = ExecutionPath.FAST
-    direct_tool: str | None = None
-    direct_tool_params: dict[str, Any] = Field(default_factory=dict)
-    # For engineering tasks: the classified kind (question/research/bugfix/refactor/
-    # feature). Empty for non-engineering plans. Lets the DoD gate apply kind-specific
-    # evidence checks (e.g. a bugfix should carry reproduction + regression evidence).
-    engineering_kind: str = ""
-    # Server-owned runtime shape. Quick read-only work receives a soft budget;
-    # everything else uses the unrestricted standard profile.
-    execution_profile: str = "standard"
-
-    def with_task_id(self, new_task_id: str) -> ExecutionPlan:
-        """Return a copy of this plan with task_id replaced."""
-        return self.model_copy(update={"task_id": new_task_id})

@@ -227,16 +227,6 @@ class TaskStepFeed:
         icon = "✓" if data.get("success", True) else "✗"
         self.steps.append((icon, f"  {tool}{_result_preview(data)}", True))
 
-    def _on_classified(self, data: dict[str, Any]) -> None:
-        domain = data.get("domain", "")
-        shape = "complex" if data.get("is_consequential", False) else "direct"
-        label = f"classified: [cyan]{domain}[/cyan] [dim]({shape})[/dim]" if domain else "classified"
-        self.steps.append(("✓", label, True))
-
-    def _on_routed(self, data: dict[str, Any]) -> None:
-        agents = ", ".join(data.get("agents", []))
-        self.steps.append(("✓", f"plan ready: [cyan]{agents}[/cyan]" if agents else "plan ready", True))
-
     def _on_self_repair_started(self, data: dict[str, Any]) -> None:
         # The answer streamed so far is about to be replaced.
         self._tokens = ""
@@ -308,8 +298,6 @@ _EVENT_HANDLERS: dict[str, Callable[[TaskStepFeed, dict[str, Any]], None]] = {
     "task_synthesis": TaskStepFeed._on_task_synthesis,
     "tool_called": TaskStepFeed._on_tool_called,
     "tool_result": TaskStepFeed._on_tool_result,
-    "classified": TaskStepFeed._on_classified,
-    "routed": TaskStepFeed._on_routed,
     "approval_required": TaskStepFeed._on_approval_required,
     "self_repair_started": TaskStepFeed._on_self_repair_started,
     "self_repair_done": TaskStepFeed._on_self_repair_done,

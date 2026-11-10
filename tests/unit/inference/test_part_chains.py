@@ -64,7 +64,10 @@ def test_every_part_north_ships_is_described() -> None:
     from inference.routing.parts import DEFAULT_PART_PROFILES
 
     assert "coder" in DEFAULT_PART_PROFILES
-    assert "planner" in DEFAULT_PART_PROFILES
+    assert "north_star_checker" in DEFAULT_PART_PROFILES
+    # No planner and no synthesizer: north answers every task itself.
+    assert "planner" not in DEFAULT_PART_PROFILES
+    assert "synthesizer" not in DEFAULT_PART_PROFILES
     for name, profile in DEFAULT_PART_PROFILES.items():
         assert profile.part == name, f"{name} carries the wrong part label"
         # Both are rendered on the page; neither may be empty.

@@ -1,4 +1,4 @@
-"""The orchestrator takes a message for a running task into it (CODING_STYLE §15.4)."""
+"""The orchestrator takes a message for a running task into north's run (CODING_STYLE §15.4)."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class _Recording(MockInferenceRouter):
 def _wired(tmp_path):
     orch, ledger, _ = _make_orchestrator(tmp_path)
     router = _Recording()
-    deps = orch._agent_registry.get("general")._deps
+    deps = orch._agent._deps
     deps.task_inbox = orch._inbox
     deps.inference_router = router
     return orch, ledger, router
@@ -35,7 +35,7 @@ def _user_texts(request) -> str:
 
 
 @pytest.mark.asyncio
-async def test_a_message_sent_after_its_agents_answered_is_answered_in_the_same_task(tmp_path) -> None:
+async def test_a_message_sent_after_north_answered_is_answered_in_the_same_task(tmp_path) -> None:
     orch, ledger, router = _wired(tmp_path)
     finish = orch._finish_task
     sent: list[bool] = []
@@ -46,9 +46,7 @@ async def test_a_message_sent_after_its_agents_answered_is_answered_in_the_same_
         await finish(task_id, **kwargs)
 
     orch._finish_task = finish_after_a_late_message
-    response = await orch.submit_task(
-        TaskRequest(prompt="Summarise sales", source=LedgerSource.PROMPT, forced_agent="general")
-    )
+    response = await orch.submit_task(TaskRequest(prompt="Summarise sales", source=LedgerSource.PROMPT))
     await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
 
     entries = await ledger.query(LedgerFilters(task_id=response.task_id, limit=500))
@@ -64,7 +62,7 @@ async def test_a_message_sent_after_its_agents_answered_is_answered_in_the_same_
 @pytest.mark.asyncio
 async def test_a_finished_or_unknown_task_takes_no_message(tmp_path) -> None:
     orch, ledger, _ = _wired(tmp_path)
-    response = await orch.submit_task(TaskRequest(prompt="Hello", source=LedgerSource.PROMPT, forced_agent="general"))
+    response = await orch.submit_task(TaskRequest(prompt="Hello", source=LedgerSource.PROMPT))
     await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
     running = orch._active_tasks.get(response.task_id)
     if running is not None:

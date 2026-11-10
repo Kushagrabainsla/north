@@ -106,7 +106,7 @@ def test_a_correction_is_not_a_reason_to_forget() -> None:
     north replaces a corrected fact by itself once the task ends, so the agent is
     told to leave corrections alone and to forget only when asked to.
     """
-    prompt = (Path(__file__).parents[3] / "agents" / "general" / "prompts" / "system.md").read_text(encoding="utf-8")
+    prompt = (Path(__file__).parents[3] / "agents" / "north" / "prompts" / "system.md").read_text(encoding="utf-8")
 
     assert "replaces the old fact by itself, so acknowledge it and do nothing more" in prompt
     assert "Call `forget` only when the user asks you to forget something" in prompt

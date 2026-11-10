@@ -73,7 +73,9 @@ async def test_skill_api_creates_a_structured_learned_skill(tmp_path) -> None:
     created = tmp_path / "skills" / "review-job-match" / "SKILL.md"
     assert created.exists()
     assert "domains:" in created.read_text(encoding="utf-8")
-    assert result["execution"]["agent"] == "general"
+    # North runs every skill: a new one names no agent.
+    assert "agent" not in result["execution"]
+    assert "agent:" not in created.read_text(encoding="utf-8")
     assert result["execution"]["approval"] == "never"
 
 

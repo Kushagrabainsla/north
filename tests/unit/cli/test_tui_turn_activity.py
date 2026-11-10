@@ -14,8 +14,7 @@ _HEADERS = {"X-North-Secret": "x"}
 def test_format_turn_summary_with_tools_and_thoughts() -> None:
     turn = {
         "prompt": "inspect sqlite db",
-        "domain": "general",
-        "agents": ["general"],
+        "agents": ["north"],
         "thought_duration": 1.85,
         "thought_tokens": 45,
         "tools": [
@@ -33,17 +32,15 @@ def test_format_turn_summary_with_tools_and_thoughts() -> None:
 
 
 def test_format_turn_summary_direct_answer() -> None:
-    turn = {"prompt": "hello", "domain": "general", "agents": []}
+    turn = {"prompt": "hello", "agents": []}
     summary = _format_turn_summary(turn)
-    assert "general agent" in summary or "direct answer" in summary
+    assert "north agent" in summary
 
 
 def test_format_turn_details_breakdown() -> None:
     turn = {
         "prompt": "fix bug in auth",
-        "domain": "coding",
-        "is_consequential": True,
-        "agents": ["coder", "tester"],
+        "agents": ["north"],
         "model": "stealth/ox-alpha",
         "thought_duration": 2.1,
         "thought_tokens": 80,
@@ -61,8 +58,8 @@ def test_format_turn_details_breakdown() -> None:
     details = _format_turn_details(turn)
     text = "\n".join(details)
     assert "Execution Details" in text
-    assert "classified:" in text and "coding" in text and "(complex)" in text
-    assert "plan ready:" in text and "coder, tester" in text
+    assert "classified:" not in text and "plan ready:" not in text  # there is no planner
+    assert "north" in text and "stealth/ox-alpha" in text
     assert "patch_file" in text and "path='auth.py'" in text
     assert "verify(pytest tests/unit/auth/)" in text and "PASS" in text
     assert "Ctrl+O to collapse" in text
@@ -81,8 +78,6 @@ async def test_turn_activity_lifecycle_and_details_toggle():
         app._current_turn_activity[tid] = {
             "task_id": tid,
             "prompt": "check files",
-            "domain": "",
-            "is_consequential": False,
             "agents": [],
             "model": "",
             "thought_duration": 0.0,
@@ -95,10 +90,8 @@ async def test_turn_activity_lifecycle_and_details_toggle():
         }
 
         # Stream lifecycle events
-        await app._handle_event("classified", {"task_id": tid, "domain": "general", "is_consequential": False})
-        await app._handle_event("routed", {"task_id": tid, "agents": ["general"]})
         await app._handle_event("model", {"task_id": tid, "model": "stealth/ox-alpha"})
-        await app._handle_event("agent_started", {"task_id": tid, "agent": "general"})
+        await app._handle_event("agent_started", {"task_id": tid, "agent": "north"})
         await app._handle_event("tool_called", {"task_id": tid, "tool": "search_files", "params": {"pattern": "def"}})
         await app._handle_event(
             "tool_result",
@@ -112,7 +105,7 @@ async def test_turn_activity_lifecycle_and_details_toggle():
         assert len(app._turns) == 1
         turn = app._turns[0]
         assert turn["prompt"] == "check files"
-        assert turn["domain"] == "general"
+        assert turn["agents"] == ["north"]
         assert len(turn["tools"]) == 1
         assert turn["tools"][0]["tool"] == "search_files"
         assert turn["output"] == "All files checked."

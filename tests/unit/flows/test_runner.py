@@ -21,7 +21,7 @@ from utils.time import localnow
 
 
 class FakeAgent:
-    name = "general"
+    name = "north"
     domain = "general"
     config = SimpleNamespace()
 
@@ -42,6 +42,10 @@ class FakeAgent:
 class FakeAgents:
     def __init__(self, agent: FakeAgent) -> None:
         self.agent = agent
+
+    @property
+    def north(self):
+        return self.agent
 
     def get(self, name: str):
         if name != self.agent.name:
@@ -222,7 +226,6 @@ steps:
     assert agent.payloads[0].skills == ["review-item"]
     assert agent.payloads[0].allowed_tools == []
     assert agent.payloads[0].mutation_policy == "deny"
-    assert not agent.payloads[0].allow_delegation
 
 
 async def test_runner_pauses_before_always_approved_step_and_resumes_at_checkpoint(tmp_path):
@@ -400,22 +403,6 @@ steps:
     assert fired.task_id == "job-1"
 
 
-class ProducingAgent(FakeAgent):
-    """An agent whose config promises a file, and which keeps or breaks the promise."""
-
-    def __init__(self, tmp_path, *, writes: bool) -> None:
-        super().__init__()
-        self.target = tmp_path / "briefings" / f"{localnow().date().isoformat()}.md"
-        self.config = SimpleNamespace(produces=[str(tmp_path / "briefings" / "{date}.md")])
-        self._writes = writes
-
-    async def run(self, payload):
-        if self._writes:
-            self.target.parent.mkdir(parents=True, exist_ok=True)
-            self.target.write_text("today's briefing", encoding="utf-8")
-        return await super().run(payload)
-
-
 _ONE_STEP = """name: demo
 description: Demo flow
 steps:
@@ -477,7 +464,6 @@ async def test_artifact_failure_resumes_with_corrected_evidence_and_records_veri
     target = tmp_path / "fit.md"
     target.write_text("Saved assessment.")
     agent = ArtifactAgent([str(tmp_path / "typo" / "fit.md")])
-    agent.config = SimpleNamespace(produces=[str(target)])
     runner = FlowRunner(
         _flow(tmp_path, _ONE_STEP), FakeAgents(agent), _artifact_skills(tmp_path), FlowRunStore(tmp_path / "runs.db")
     )
@@ -546,42 +532,6 @@ async def test_artifact_objects_are_not_mistaken_for_local_file_paths(tmp_path):
     )
     run = await runner.run("demo")
     assert run.status == "completed" and run.outputs[0]["data"]["artifacts"] == []
-
-
-async def test_a_scheduled_run_pauses_when_the_agent_never_wrote_its_declared_file(tmp_path):
-    agent = ProducingAgent(tmp_path, writes=False)
-    store = FlowRunStore(tmp_path / "runs.db")
-    tool = RunFlowTool(FlowRunner(_flow(tmp_path, _ONE_STEP), FakeAgents(agent), _skills(tmp_path), store))
-
-    out = await tool.run_scheduled("demo", "job-1")
-
-    assert not out.success
-    run = store.get(out.data["run_id"])
-    assert run.status == "paused"
-    assert "completed without writing" in run.error
-    assert str(agent.target) in run.error
-
-
-async def test_a_scheduled_run_succeeds_and_records_the_file_it_wrote(tmp_path):
-    agent = ProducingAgent(tmp_path, writes=True)
-    store = FlowRunStore(tmp_path / "runs.db")
-    tool = RunFlowTool(FlowRunner(_flow(tmp_path, _ONE_STEP), FakeAgents(agent), _skills(tmp_path), store))
-
-    out = await tool.run_scheduled("demo", "job-1")
-
-    assert out.success
-    assert store.get(out.data["run_id"]).outputs[0]["data"]["artifacts"] == [str(agent.target)]
-
-
-async def test_a_hand_started_run_is_not_failed_for_a_missing_file(tmp_path):
-    agent = ProducingAgent(tmp_path, writes=False)
-    store = FlowRunStore(tmp_path / "runs.db")
-    tool = RunFlowTool(FlowRunner(_flow(tmp_path, _ONE_STEP), FakeAgents(agent), _skills(tmp_path), store))
-
-    out = await tool.run(ToolInput(params={"name": "demo"}))
-
-    assert out.success
-    assert store.get(out.data["run_id"]).outputs[0]["data"]["artifacts"] == []
 
 
 async def test_an_agent_cannot_claim_its_run_was_scheduled(tmp_path):

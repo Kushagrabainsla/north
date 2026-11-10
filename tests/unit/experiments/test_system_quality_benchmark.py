@@ -6,7 +6,7 @@ from experiments.system_quality.benchmark import run_benchmark
 def test_every_system_quality_case_passes() -> None:
     result = run_benchmark()
 
-    assert result["overall"] == {"passed": 30, "total": 30, "accuracy": 1.0}
+    assert result["overall"] == {"passed": 29, "total": 29, "accuracy": 1.0}
     assert all(not metric["failures"] for metric in result["metrics"].values())
 
 

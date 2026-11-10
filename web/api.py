@@ -1438,7 +1438,6 @@ async def dashboard() -> dict[str, Any]:
         current_services().require("conversation_store").list(limit=6),
         asyncio.to_thread(_list_artifacts_sync, 100),
     )
-    agents = current_services().require("agent_registry").all()
     settings = current_services().require("north_settings")
     today = localnow().date()
     recent_artifacts = artifacts[:6]
@@ -1466,7 +1465,6 @@ async def dashboard() -> dict[str, Any]:
         "notices": _notices(),
         "active_tasks": [task.model_dump(mode="json") for task in active],
         "conversations": [_conversation_payload(item) for item in conversations],
-        "agents": [{"name": agent.name, "domain": agent.domain} for agent in agents],
         "jobs": [
             {
                 "job_id": job.job_id,

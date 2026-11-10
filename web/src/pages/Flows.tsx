@@ -274,10 +274,6 @@ function FlowStepCard({
       {execution && (
         <div className="flow-contract">
           <span>
-            <b>Executor</b>
-            {execution.agent}
-          </span>
-          <span>
             <b>Allowed tools</b>
             {execution.tools.length ? execution.tools.join(", ") : "None"}
           </span>
@@ -479,10 +475,7 @@ function RunRow({
           <dl className="run-details">
             {run.steps.map((step) => (
                 <div key={step.step}>
-                  <dt>
-                    {step.step}
-                    {step.agent && ` · ${step.agent}`}
-                  </dt>
+                  <dt>{step.step}</dt>
                   <dd>
                     {step.summary || step.output || stepFallback(step)}
                     {step.artifacts.length > 0 &&

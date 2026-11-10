@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from agents.constants import NORTH_AGENT
 from policies.self_edit import SelfEditPolicy
 from skills.exceptions import SkillParseError
 from skills.models import SKILL_FILENAME, SkillIntent, SkillSource
@@ -94,18 +95,17 @@ class CreateSkillTool(Tool):
             "execution": {
                 "type": "object",
                 "description": (
-                    "Optional flow-execution contract containing agent, exact tools, input/output object "
+                    "Optional flow-execution contract containing exact tools, input/output object "
                     "schemas, minimum approval, and success_criteria. Required before a flow can use the skill."
                 ),
                 "properties": {
-                    "agent": {"type": "string"},
                     "tools": {"type": "array", "items": {"type": "string"}},
                     "approval": {"type": "string", "enum": ["never", "on_mutation", "before_step"]},
                     "inputs": {"type": "object", "description": "JSON object schema for required runtime inputs."},
                     "outputs": {"type": "object", "description": "JSON object schema for the final result."},
                     "success_criteria": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                 },
-                "required": ["agent", "tools", "approval", "inputs", "outputs", "success_criteria"],
+                "required": ["tools", "approval", "inputs", "outputs", "success_criteria"],
                 "additionalProperties": False,
             },
             "positive_prompts": {
@@ -422,15 +422,9 @@ class CreateSkillTool(Tool):
 
     def _execution_error(self, execution, domains) -> str:
         if self._agent_registry is not None:
-            try:
-                agent = self._agent_registry.get(execution.agent)
-            except Exception:
-                return f"Execution contract names unknown agent '{execution.agent}'."
-            if agent.domain not in domains:
-                return (
-                    f"Execution agent '{execution.agent}' has domain '{agent.domain}', which is not "
-                    "listed in the skill domains."
-                )
+            north = self._agent_registry.get(NORTH_AGENT)
+            if north.domain not in domains:
+                return f"North only uses skills that serve '{north.domain}'; add it to the skill's domains."
         if self._tool_registry is not None:
             for name in execution.tools:
                 if name.startswith("$input."):

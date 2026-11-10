@@ -44,7 +44,7 @@ class _ThreeSteps(MockInferenceRouter):
 
 @pytest.mark.asyncio
 async def test_each_step_beats_the_heartbeat(tmp_path: Path) -> None:
-    agent = _load_agent("general", tmp_path, _ThreeSteps())
+    agent = _load_agent("north", tmp_path, _ThreeSteps())
     store = _Store()
     agent._deps.running_task_store = store
 

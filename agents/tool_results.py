@@ -25,14 +25,6 @@ def failure_kind(tool_result: str) -> str:
         return "error"
 
 
-def is_delegation_failure(tool_result: str) -> bool:
-    """Return whether delegation genuinely failed, ignoring control-flow guards."""
-    try:
-        return bool(json.loads(tool_result).get("delegation_failed", False))
-    except (json.JSONDecodeError, AttributeError):
-        return False
-
-
 def failed_json(message: str) -> str:
     """Serialize a failed tool result carrying *message*."""
     return json.dumps({"success": False, "error": message})

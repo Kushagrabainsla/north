@@ -3,7 +3,6 @@ import { api, del, post } from "../api";
 import { Empty, ErrorNotice, Loading, MarkdownPane, Modal, PageHeader, Status } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { Agent } from "./Agents";
 import { ContentTextarea, SkillDetail, SkillSummary, ToolSummary } from "./capabilities";
 
 export interface SkillCreateDraft {
@@ -11,7 +10,6 @@ export interface SkillCreateDraft {
   description: string;
   domains: string;
   instructions: string;
-  executor: string;
   tools: string[];
   approval: "never" | "on_mutation" | "before_step";
   inputs: string;
@@ -24,7 +22,6 @@ export const emptySkill = (): SkillCreateDraft => ({
   description: "",
   domains: "general",
   instructions: "",
-  executor: "general",
   tools: [],
   approval: "never",
   inputs: "",
@@ -51,7 +48,6 @@ export function Skills() {
   const dialog = useDialog();
   const skills = useResource<SkillSummary[]>("/web/api/skills", 10000);
   const tools = useResource<ToolSummary[]>("/web/api/tools", 10000);
-  const agents = useResource<Agent[]>("/orchestrator/agents", 10000);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [creating, setCreating] = useState(false);
@@ -103,7 +99,6 @@ export function Skills() {
           .split(",")
           .map((domain) => domain.trim())
           .filter(Boolean),
-        executor: draft.executor,
         tools: draft.tools,
         approval: draft.approval,
         inputs: fieldSchema(draft.inputs),
@@ -160,14 +155,13 @@ export function Skills() {
     draft.name.trim() &&
     draft.description.trim() &&
     draft.instructions.trim() &&
-    draft.executor &&
     draft.successCriteria.trim();
   return (
     <div className="page capability-page">
       <PageHeader
         eyebrow="Procedures"
         title="Skills"
-        subtitle="Inspect and edit the playbooks North injects into specialist work."
+        subtitle="Inspect and edit the playbooks North follows."
         actions={
           <button className="primary-button" onClick={startCreating}>
             + New skill
@@ -223,22 +217,6 @@ export function Skills() {
                     setDraft({ ...draft, description: event.target.value })
                   }
                 />
-              </label>
-              <label>
-                Executor
-                <select
-                  value={draft.executor}
-                  onChange={(event) =>
-                    setDraft({ ...draft, executor: event.target.value })
-                  }
-                >
-                  {(agents.data || []).map((agent) => (
-                    <option key={agent.name} value={agent.name}>
-                      {agent.name} · {agent.domain}
-                    </option>
-                  ))}
-                </select>
-                <small>The agent this skill always uses.</small>
               </label>
               <label>
                 Minimum approval

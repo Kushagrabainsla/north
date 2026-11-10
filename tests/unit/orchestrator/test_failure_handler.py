@@ -1,18 +1,10 @@
-"""Unit tests for FailureHandler.
-
-Covers two bugs fixed in failure_handler.py:
-
-1. handle_failure does NOT set the agent context status to 'failed' on
-   retriable failures - only on the terminal attempt.
-2. handle_failure clears the retry counter after exhausting retries to
-   prevent unbounded memory growth.
+"""Unit tests for FailureHandler: when an agent failure is retried, and how errors are classified.
 
 See docs/CODING_STYLE.md Sections 5.2, 6.7, 10.3, 11, 13, 14.1.
 """
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -22,8 +14,6 @@ from orchestrator.failure_handler import (
     FailureHandler,
     classify_error,
 )
-from orchestrator.task_context import TaskContextStore
-from utils.db import open_db_connection
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -35,86 +25,31 @@ def _make_handler(
     *,
     max_retries: int = 3,
     base_cooldown_seconds: float = 0.0,
-) -> tuple[FailureHandler, TaskContextStore]:
-    """Return (handler, task_context_store)."""
-    task_context_store = TaskContextStore(db_path=tmp_path / "tasks.db")
-
-    handler = FailureHandler(
-        task_context_store=task_context_store,
-        stream_manager=None,
-        max_retries=max_retries,
-        base_cooldown_seconds=base_cooldown_seconds,
-    )
-    return handler, task_context_store
-
-
-def _read_agent_status(db_path: Path, task_id: str, agent: str) -> str:
-    """Read the _status row value for an agent directly from SQLite."""
-    with open_db_connection(db_path) as conn:
-        row = conn.execute(
-            "SELECT status FROM task_state WHERE task_id=? AND agent=? AND key='_status'",
-            (task_id, agent),
-        ).fetchone()
-    return row["status"] if row else "missing"
+) -> FailureHandler:
+    return FailureHandler(stream_manager=None, max_retries=max_retries, base_cooldown_seconds=base_cooldown_seconds)
 
 
 # ---------------------------------------------------------------------------
-# Bug 1: handle_failure status update timing
+# Retry decisions
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_handle_failure_does_not_mark_failed_on_retriable_attempt(
-    tmp_path: Path,
-) -> None:
-    """Agent status must NOT be set to 'failed' on a retriable failure attempt.
+async def test_handle_failure_retries_until_the_terminal_attempt(tmp_path: Path) -> None:
+    handler = _make_handler(tmp_path, max_retries=2, base_cooldown_seconds=0.0)
 
-    Parallel agents waiting on task context keys raise OrchestratorError
-    immediately if the source agent's _status row is 'failed'. The status must
-    only transition to 'failed' once max_retries is exhausted.
-    """
-    handler, store = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
-    await store.initialize_task("t1", ["finance"])
-
-    # First failure - attempt 1 < max_retries 3, so must be retriable
-    should_retry = await handler.handle_failure("t1", "finance", RuntimeError("rate limit"))
-    assert should_retry is True, "Expected retry=True on first failure"
-
-    status = await asyncio.to_thread(_read_agent_status, tmp_path / "tasks.db", "t1", "finance")
-    assert status == "pending", (
-        f"Agent status was '{status}' after retriable failure - should remain 'pending' until max_retries is exhausted"
-    )
-
-
-@pytest.mark.asyncio
-async def test_handle_failure_marks_failed_only_on_terminal_attempt(
-    tmp_path: Path,
-) -> None:
-    """Agent status must be set to 'failed' exactly on the terminal attempt."""
-    handler, store = _make_handler(tmp_path, max_retries=2, base_cooldown_seconds=0.0)
-    await store.initialize_task("t1", ["finance"])
-
-    # Attempt 1 - retriable
-    r1 = await handler.handle_failure("t1", "finance", RuntimeError("err"))
-    assert r1 is True
-
-    # Attempt 2 - terminal (attempt == max_retries)
-    r2 = await handler.handle_failure("t1", "finance", RuntimeError("err"))
-    assert r2 is False
-
-    status = await asyncio.to_thread(_read_agent_status, tmp_path / "tasks.db", "t1", "finance")
-    assert status == "failed", f"Agent status was '{status}' after terminal failure - expected 'failed'"
+    assert await handler.handle_failure("t1", "north", RuntimeError("err")) is True
+    assert await handler.handle_failure("t1", "north", RuntimeError("err")) is False
 
 
 @pytest.mark.asyncio
 async def test_handle_failure_returns_true_before_max_retries(tmp_path: Path) -> None:
     """handle_failure must return True for every attempt strictly before max_retries."""
-    handler, store = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
-    await store.initialize_task("t1", ["router"])
+    handler = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
 
-    r1 = await handler.handle_failure("t1", "router", RuntimeError("e"))
-    r2 = await handler.handle_failure("t1", "router", RuntimeError("e"))
-    r3 = await handler.handle_failure("t1", "router", RuntimeError("e"))
+    r1 = await handler.handle_failure("t1", "north", RuntimeError("e"))
+    r2 = await handler.handle_failure("t1", "north", RuntimeError("e"))
+    r3 = await handler.handle_failure("t1", "north", RuntimeError("e"))
 
     assert r1 is True
     assert r2 is True
@@ -133,8 +68,7 @@ async def test_retry_count_cleared_after_terminal_failure(tmp_path: Path) -> Non
     A long-running process handling many task failures would leak memory
     indefinitely without this cleanup because _retry_counts is an unbounded dict.
     """
-    handler, store = _make_handler(tmp_path, max_retries=2, base_cooldown_seconds=0.0)
-    await store.initialize_task("t1", ["finance"])
+    handler = _make_handler(tmp_path, max_retries=2, base_cooldown_seconds=0.0)
 
     await handler.handle_failure("t1", "finance", RuntimeError("attempt 1"))
     await handler.handle_failure("t1", "finance", RuntimeError("attempt 2 - terminal"))
@@ -147,8 +81,7 @@ async def test_retry_count_cleared_after_terminal_failure(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_retry_count_preserved_between_retriable_failures(tmp_path: Path) -> None:
     """Retry counts must accumulate between retriable failures."""
-    handler, store = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
-    await store.initialize_task("t1", ["finance"])
+    handler = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
 
     await handler.handle_failure("t1", "finance", RuntimeError("attempt 1"))
 
@@ -159,8 +92,7 @@ async def test_retry_count_preserved_between_retriable_failures(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_retry_count_increments_per_failure(tmp_path: Path) -> None:
     """Retry counter must increment with each failure, not reset or skip values."""
-    handler, store = _make_handler(tmp_path, max_retries=5, base_cooldown_seconds=0.0)
-    await store.initialize_task("t1", ["search"])
+    handler = _make_handler(tmp_path, max_retries=5, base_cooldown_seconds=0.0)
 
     for expected in range(1, 4):
         await handler.handle_failure("t1", "search", RuntimeError("err"))
@@ -171,7 +103,7 @@ async def test_retry_count_increments_per_failure(tmp_path: Path) -> None:
 
 def test_clear_retry_count_is_idempotent(tmp_path: Path) -> None:
     """clear_retry_count must not raise when called on a key that doesn't exist."""
-    handler, _ = _make_handler(tmp_path)
+    handler = _make_handler(tmp_path)
     # Should not raise
     handler.clear_retry_count("nonexistent-task", "nonexistent-agent")
 
@@ -202,8 +134,7 @@ def test_classify_error_tags(exc: Exception, expected: str) -> None:
 @pytest.mark.asyncio
 async def test_handle_failure_does_not_retry_filesystem_errors(tmp_path: Path) -> None:
     """A deterministic filesystem failure (missing file) must not be retried (B3)."""
-    handler, store = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
-    await store.initialize_task("t1", ["coder"])
+    handler = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
 
     should_retry = await handler.handle_failure("t1", "coder", FileNotFoundError("prompts/system.md"))
 
@@ -247,8 +178,7 @@ async def test_handle_failure_does_not_retry_model_unavailable(tmp_path: Path) -
     hits the same wall, so a model-unavailable failure must not be retried."""
     from inference.exceptions import AllModelsRateLimitedError
 
-    handler, store = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
-    await store.initialize_task("t1", ["reviewer"])
+    handler = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
 
     should_retry = await handler.handle_failure(
         "t1", "reviewer", AllModelsRateLimitedError("No completion models are available")
