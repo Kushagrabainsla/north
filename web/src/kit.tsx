@@ -143,6 +143,14 @@ export function Menu({ items, label = "More actions" }: { items: MenuItem[]; lab
   </details>;
 }
 
+/** Pages about this thing, as one quiet line of links: "Views: What runs when · Runs this week". Nothing when there are none. */
+export function RelatedLinks({ label, links }: { label: string; links: { label: string; to: string }[] }) {
+  if (!links.length) return null;
+  return <nav className="kit-related" aria-label={label}><span>{label}</span>
+    {links.map(link => <Link key={link.to} to={link.to}>{link.label}</Link>)}
+  </nav>;
+}
+
 // ── Sections ────────────────────────────────────────────────────────────────
 
 /** A line or paragraph of ordinary text. */

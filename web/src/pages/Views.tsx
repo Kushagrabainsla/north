@@ -9,7 +9,7 @@ import { del, post } from "../api";
 import { PageHeader, timeAgo } from "../components";
 import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
-import { Button, confirmDelete, EntityTable, Loading, Menu, Notice, ResourceView, Stack, type Column } from "../kit";
+import { Button, confirmDelete, EntityTable, Loading, Menu, Notice, RelatedLinks, ResourceView, Stack, type Column } from "../kit";
 import { ViewSurface, type ViewMessage } from "../views";
 
 interface About { kind: "flow" | "skill" | "tool"; name: string }
@@ -30,6 +30,16 @@ const COLUMNS: Column[] = [
   { key: "reads", label: "Reads" },
   { key: "updated", label: "Updated", width: "120px" },
 ];
+
+/** The views north made about one flow, skill or tool. */
+export const viewsAbout = (views: ViewListing[], kind: About["kind"], name: string) =>
+  views.filter(view => view.about?.kind === kind && view.about.name === name);
+
+/** A line of links to the views about a flow, skill or tool, at the top of its dialog; nothing when it has none. */
+export function ViewsAbout({ kind, name }: { kind: About["kind"]; name: string }) {
+  const views = useResource<ViewListing[]>(name ? "/web/api/views" : null);
+  return <RelatedLinks label="Views" links={viewsAbout(views.data || [], kind, name).map(view => ({ label: view.title, to: `/views/${view.id}` }))}/>;
+}
 
 export function Views() {
   const resource = useResource<ViewListing[]>("/web/api/views");

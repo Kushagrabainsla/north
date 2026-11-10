@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { ActionBar, Button, EntityTable, Field, KeyValues, ListRow, Notice, Panel, ResourceView, Status, Tabs, confirmDelete, statusTone } from "./kit";
+import { ActionBar, Button, EntityTable, Field, KeyValues, ListRow, Notice, Panel, RelatedLinks, ResourceView, Status, Tabs, confirmDelete, statusTone } from "./kit";
 
 const html = (element: ReturnType<typeof createElement>) =>
   renderToStaticMarkup(createElement(MemoryRouter, null, element));
@@ -155,5 +155,14 @@ describe("less text", () => {
     expect(panel).not.toContain("What this panel is for.");
     expect(panel).toMatch(/<h2><a href="\/tasks"[^>]*>Recent<\/a><\/h2>/);
     expect(panel).not.toContain("View all");
+  });
+});
+
+describe("related links", () => {
+  it("are one line of links, and nothing at all when there are none", () => {
+    const line = html(createElement(RelatedLinks, { label: "Views", links: [{ label: "What runs when", to: "/views/schedules-board" }] }));
+    expect(line).toContain('<nav class="kit-related" aria-label="Views"><span>Views</span>');
+    expect(line).toMatch(/<a href="\/views\/schedules-board"[^>]*>What runs when<\/a>/);
+    expect(html(createElement(RelatedLinks, { label: "Views", links: [] }))).toBe("");
   });
 });

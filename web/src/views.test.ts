@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { resolvePath, ViewSurface, type ViewComponent, type ViewMessage } from "./views";
+import { viewsAbout } from "./pages/Views";
 
 const surface = (components: ViewComponent[], data: unknown = {}): ViewMessage[] => [
   { version: "v0.9", createSurface: { surfaceId: "s", catalogId: "north:kit/v1" } },
@@ -65,5 +66,15 @@ describe("a view", () => {
     expect(resolvePath(data, "/a/b~1c/1")).toBe(20);
     expect(resolvePath(data, "1", "/a/b~1c")).toBe(20);
     expect(resolvePath(data, "/missing/x")).toBeUndefined();
+  });
+});
+
+describe("the views about a flow, skill or tool", () => {
+  it("are the ones tied to that kind and name", () => {
+    const view = (id: string, about: { kind: "flow" | "skill" | "tool"; name: string } | null) =>
+      ({ id, title: id, description: "", about, updated_at: "", reads: [], actions: 0 });
+    const views = [view("a", { kind: "flow", name: "nightly-cleanup" }), view("b", { kind: "skill", name: "nightly-cleanup" }), view("c", null)];
+    expect(viewsAbout(views, "flow", "nightly-cleanup").map(v => v.id)).toEqual(["a"]);
+    expect(viewsAbout(views, "tool", "nightly-cleanup")).toEqual([]);
   });
 });

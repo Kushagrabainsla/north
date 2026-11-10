@@ -91,6 +91,15 @@
 .kit-note a { color: var(--accent); }
 .kit-pane-label { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--faint); font: 500 11px var(--mono); }
 
+/* A dialog's small label above its title: a quiet word, as on a panel. */
+.kit-dialog-label { color: var(--faint); font: 400 11px var(--mono); letter-spacing: 0; text-transform: none; }
+
+/* ── Related links: one quiet line ── */
+.kit-related { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 10px 18px; border-bottom: 1px solid var(--line); color: var(--faint); font-size: 12px; }
+.kit-related a { color: var(--text); text-decoration: none; }
+.kit-related a::after { content: " →"; color: var(--faint); }
+.kit-related a:hover, .kit-related a:hover::after { color: var(--accent); }
+
 /* ── Stack, key/values ── */
 .kit-stack { display: flex; flex-direction: column; min-width: 0; }
 .kit-stack-sm { gap: 8px; }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ViewsAbout } from "./Views";
 import { api, del, post } from "../api";
 import { Modal, PageHeader } from "../components";
 import { useResource } from "../hooks";
@@ -198,6 +199,7 @@ export function Tools() {
           ) : undefined
         }
       >
+        {selected && <ViewsAbout kind="tool" name={selected}/>}
         {detailLoading ? (
           <Loading />
         ) : (

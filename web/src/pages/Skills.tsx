@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ViewsAbout } from "./Views";
 import { api, del, post } from "../api";
 import { MarkdownPane, Modal, PageHeader } from "../components";
 import { useResource } from "../hooks";
@@ -376,6 +377,7 @@ export function Skills() {
           ) : undefined
         }
       >
+        {selected && <ViewsAbout kind="skill" name={selected}/>}
         {detailLoading ? (
           <Loading />
         ) : (

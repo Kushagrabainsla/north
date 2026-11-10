@@ -302,7 +302,7 @@ export function Modal({
       <div className="capability-modal-shell">
         <header className="capability-modal-header">
           <div>
-            <span>{eyebrow}</span>
+            <span className="kit-dialog-label">{eyebrow}</span>
             <h2>{title}</h2>
           </div>
           <div className="capability-modal-actions">

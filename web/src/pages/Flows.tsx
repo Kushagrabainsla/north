@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { ViewsAbout } from "./Views";
 import { X } from "lucide-react";
 import { api, del, patch, post } from "../api";
 import { formatDateTime, Modal, PageHeader, Panel } from "../components";
@@ -1274,6 +1275,7 @@ export function Flows() {
           </>
         }
       >
+        {selected && <ViewsAbout kind="flow" name={selected}/>}
         {message && (
           <div className="flow-modal-notice">
             <Notice tone={message.tone}>{message.text}</Notice>
