@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from coding_agents import Briefing, CodingAgentError, CodingRunner, FailureKind, Mode, RunReport
+from coding_agents import Briefing, CodingAgentError, CodingRunner, FailureKind, LandingState, Mode, RunReport
 from context.repo_instructions import load_repo_instructions
+from tools._path import git_repository
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from utils.prompts import load_prompt
@@ -27,6 +28,19 @@ logger = logging.getLogger(__name__)
 _MAX_OUTPUT_CHARS = 30_000
 _TITLE_CHARS = 160
 _NO_FOLDER = "No folder was granted to this task, so there is nothing for a coding agent to read."
+_IN_A_REPOSITORY = (
+    "this folder is a git repository. north does not change or explore code here itself: as your first step, "
+    "hand any code change, bug, investigation or review to `coding_agent` (mode `edit` to change it, `plan` to read)."
+)
+_NOT_DELEGATED = (
+    "You stopped without calling coding_agent, and this task's folder is a git repository. If the request needs "
+    "a code change, a bug fixed, or this code investigated, and that is not done, call coding_agent now. "
+    "If it needs none of that, give your final answer again."
+)
+_AFTER_REVIEW = (
+    "That review is an opinion, not a check. If it names a real bug, fix it with one coding_agent edit, then finish. "
+    "Findings that are only style, naming or extra tests go in your report. Tell the user what the reviewer said."
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +54,18 @@ class _Call:
     review: bool
 
 
+@dataclass
+class _Progress:
+    """What one task has done with the coding agents, for what must happen before it ends."""
+
+    called: bool = False
+    reminded: bool = False
+    reviewed: bool = False
+    review_wanted: bool = True
+    author: str = ""
+    landed: list[str] = field(default_factory=list)
+
+
 class CodingAgentTool(Tool):
     """Ask an installed coding agent to investigate, plan, or edit in an isolated copy."""
 
@@ -50,8 +76,7 @@ class CodingAgentTool(Tool):
         "Hand a coding task to an installed coding agent (Claude Code or Codex). Give it the whole "
         "task with the context it needs. mode 'plan' (the default) only reads the repository and answers: use "
         "it to investigate unfamiliar code, plan a change or review an approach. mode 'edit' makes the change "
-        "in an isolated copy and leaves it on a new branch for the user to review; nothing is applied to the "
-        "working tree."
+        "in an isolated copy; north then runs the project's tests and offers it to the user."
     )
 
     def __init__(
@@ -63,6 +88,7 @@ class CodingAgentTool(Tool):
         self._runner = runner
         self._instructions = instructions
         self._briefing = briefing
+        self._progress: dict[str, _Progress] = {}
         self.parameters_schema = {
             "type": "object",
             "properties": {
@@ -74,8 +100,8 @@ class CodingAgentTool(Tool):
                 },
                 "review": {
                     "type": "boolean",
-                    "description": "edit only: have the other coding agent, if installed, read the change first. "
-                    "Off unless the user asks for a review (default false)",
+                    "description": "edit only: when the task's edits are done, the other coding agent reads the "
+                    "whole result once. Set false only if the user said not to review (default true)",
                 },
                 "backend": {
                     "type": "string",
@@ -134,19 +160,55 @@ class CodingAgentTool(Tool):
             repo_instructions=await self._instructions(call.workspace) or "(none)",
             north_context=await self._north_context(call) or "(nothing relevant)",
         )
+        task_id = str(input.params.get("task_id") or "")
+        progress = self._progress.setdefault(task_id, _Progress())
+        progress.called = True
         try:
             report = await self._runner.run(
-                task_id=str(input.params.get("task_id") or ""),
+                task_id=task_id,
                 task=call.task,
                 workspace=call.workspace,
                 guidance=guidance,
                 backend=call.backend,
                 mode=call.mode,
-                review=call.review,
             )
         except CodingAgentError as exc:  # no usable agent, edit not set up, not a git repository
             return ToolOutput(success=False, error=str(exc))
+        if report.landing is not None and report.landing.state is LandingState.APPLIED:
+            progress.landed.append(call.task)
+            progress.author = report.backend
+            progress.review_wanted = progress.review_wanted and call.review
         return _output(report)
+
+    def task_note(self, workspace: str) -> str:
+        return _IN_A_REPOSITORY if git_repository(Path(workspace)) is not None else ""
+
+    async def before_task_ends(self, task_id: str, workspace: str) -> str:
+        """Hold a repository task until a coding agent has been asked, and have a finished change reviewed once."""
+        progress = self._progress.setdefault(task_id, _Progress())
+        if not workspace or git_repository(Path(workspace)) is None:
+            return ""
+        if not progress.called:
+            if progress.reminded:
+                return ""
+            progress.reminded = True
+            return _NOT_DELEGATED
+        if not progress.landed or progress.reviewed or not progress.review_wanted:
+            return ""
+        progress.reviewed = True
+        review = await self._runner.review_landed(
+            task_id=task_id,
+            task="\n\n".join(dict.fromkeys(progress.landed)),
+            workspace=str(Path(workspace).resolve()),
+            author=progress.author,
+        )
+        if review is None:
+            return ""
+        verdict = f"{review.reviewer} reviewed the finished change. Verdict: {review.verdict.value}."
+        return f"{verdict}\n{review.summary}\n\n{_AFTER_REVIEW}"
+
+    async def end_task(self, task_id: str) -> None:
+        self._progress.pop(task_id, None)
 
     async def _north_context(self, call: _Call) -> str:
         """The briefing for this task. It helps and never gates: if it cannot be had, the run goes without."""
@@ -190,7 +252,7 @@ class CodingAgentTool(Tool):
             mode = Mode(str(input.params.get("mode") or Mode.PLAN.value))
         except ValueError:
             return ToolOutput(success=False, error="mode must be 'plan' or 'edit'.")
-        review = input.params.get("review", False) is True
+        review = input.params.get("review", True) is not False
         return _Call(
             task=task, workspace=str(Path(input.granted_workspace).resolve()), backend=backend, mode=mode, review=review
         )

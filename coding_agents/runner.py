@@ -30,7 +30,7 @@ from coding_agents.models import (
     WorkChange,
     WorkTree,
 )
-from coding_agents.review import parse_review, review_guidance, review_task
+from coding_agents.review import landed_review_task, parse_review, review_guidance, review_task
 from utils.ids import generate_id
 
 logger = logging.getLogger(__name__)
@@ -280,12 +280,25 @@ class CodingRunner:
             return None
         try:
             diff = await self._workspaces.diff(change.tree)
+        except CodingAgentError:
+            return None
+        return await self._ask_reviewer(other, review_task(task, diff), change.tree.path, task_id)
+
+    async def review_landed(self, *, task_id: str, task: str, workspace: str, author: str) -> Review | None:
+        """The other agent's read of a task's finished change in *workspace*, or None when there is no other agent."""
+        other = await self._other_available(author)
+        if other is None:
+            return None
+        return await self._ask_reviewer(other, landed_review_task(task), workspace, task_id)
+
+    async def _ask_reviewer(self, reviewer: str, task: str, workspace: str, task_id: str) -> Review | None:
+        try:
             report = await self.run(
                 task_id=task_id,
-                task=review_task(task, diff),
-                workspace=change.tree.path,
+                task=task,
+                workspace=workspace,
                 guidance=review_guidance(),
-                backend=other,
+                backend=reviewer,
                 mode=Mode.PLAN,
                 fresh=True,
                 asking=False,  # a reviewer reads and reports; it is not the user's to ask
@@ -293,8 +306,8 @@ class CodingRunner:
         except CodingAgentError:
             return None
         if not report.outcome.ok:
-            return Review(other, ReviewVerdict.UNCLEAR, f"the review could not be completed: {report.outcome.error}")
-        return parse_review(other, report.outcome.text)
+            return Review(reviewer, ReviewVerdict.UNCLEAR, f"the review could not be completed: {report.outcome.error}")
+        return parse_review(reviewer, report.outcome.text)
 
     async def _other_available(self, author: str) -> str | None:
         """The first coding agent that is not *author* and can take a run now."""

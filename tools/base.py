@@ -180,6 +180,25 @@ class Tool(ABC):
         del input
         return ""
 
+    def task_note(self, workspace: str) -> str:
+        """A line for the task's system context about using this tool in *workspace*, or "".
+
+        A tool with a note is always offered for that task, whatever the retrieval picked: a task that
+        does not resemble the tool's description still needs it.
+        """
+        del workspace
+        return ""
+
+    async def before_task_ends(self, task_id: str, workspace: str) -> str:
+        """What the agent must still deal with before *task_id* may end, or "" when nothing.
+
+        The agent loop asks each tool when the model stops calling tools. A note goes back to the model
+        and the task carries on, so a step that must happen does not depend on the model remembering it.
+        A tool answers each thing once: asked again, it must let the task end.
+        """
+        del task_id, workspace
+        return ""
+
     async def end_task(self, task_id: str) -> None:
         """Close what this tool opened for *task_id*, once that task has ended, however it ended.
 

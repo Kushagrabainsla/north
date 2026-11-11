@@ -10,16 +10,19 @@ See docs/CODING_STYLE.md Section 16.1.
 from __future__ import annotations
 
 import asyncio
+import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from tools._path import deletes_a_root, edited_paths, git_repository, is_sensitive_path, named_paths
+from tools._path import deletes_a_root, edited_paths, git_repository, is_sensitive_path, named_paths, simple_commands
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import _os_sandbox
 from tools.specialized._egress import EgressProxy
+from tools.specialized._os_sandbox import RepositoryLimit
 from tools.specialized._sandbox import (
     SandboxConfig,
     build_run_argv,
@@ -32,6 +35,20 @@ _TIMEOUT = 30
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the
 # model's context window.  The tail is truncated with a visible marker.
 _MAX_OUTPUT_CHARS = 30_000
+_REFUSAL_TAIL = 2_000
+_GIT_TIMEOUT = 20
+# Each ignored path is a sandbox rule, and the kernel takes about 2 ms to compile one.
+_MAX_IGNORED_PATHS = 500
+# Programs that may write in a repository: git is how a change is committed and shipped, and `cd` only moves.
+_REPOSITORY_COMMANDS = frozenset({"git", "gh", "cd"})
+# Build folders that may not exist yet, kept writable when the project ignores them.
+_BUILD_OUTPUTS = ("build", "dist", "target", "out", "coverage", ".coverage", "htmlcov", ".gradle")
+_PLAIN_IGNORE_ENTRY = re.compile(r"/?[\w.-]+/?")
+_IF_REFUSED_HERE = "something printed a refusal. If it was a write in this folder, it did not happen. "
+_REPOSITORY_READ_ONLY = (
+    "`{root}` is a git repository, and north's own commands cannot write its files (only what git ignores). "
+    "To change code there, hand the work to coding_agent."
+)
 
 # These patterns are caught as a UX convenience - NOT a security boundary.
 # The approval gate above is the actual guard: the user sees the exact command
@@ -87,6 +104,52 @@ def _edited_repository(command: str, cwd: str | None) -> str:
         if (repository := git_repository(path)) is not None:
             return str(repository)
     return ""
+
+
+async def _git_lines(root: Path, *args: str) -> list[str]:
+    """The lines git prints, or none if it cannot be asked: then only the fixed generated names stay writable."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            str(root),
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_GIT_TIMEOUT)
+    except (OSError, TimeoutError):
+        return []
+    return [line.rstrip("/") for line in stdout.decode("utf-8", errors="replace").splitlines() if line]
+
+
+async def _repository_limit(command: str, where: str | None) -> RepositoryLimit | None:
+    """The repository *command* must not write into, or None when it runs outside one or is git itself.
+
+    North's own tools do not edit a repository (CODING_STYLE §16.1); reading a command cannot tell what it
+    writes, so the sandbox holds that. Git keeps working: committing and shipping are how a change leaves.
+    """
+    root = git_repository(Path(where)) if where else None
+    if root is None or all(words and words[0] in _REPOSITORY_COMMANDS for words in simple_commands(command)):
+        return None
+    ignored = await _git_lines(root, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory")
+    names = (*_BUILD_OUTPUTS, *_plain_ignore_entries(root))
+    # Both forms: a pattern like `dist/` matches only a folder, and these may not exist yet.
+    future = await _git_lines(root, "check-ignore", *names, *(f"{name}/" for name in names))
+    return RepositoryLimit(str(root), tuple(dict.fromkeys([*future, *ignored]))[:_MAX_IGNORED_PATHS])
+
+
+def _plain_ignore_entries(root: Path) -> list[str]:
+    """The plain names in the repository's `.gitignore`: output a build may create that is not there yet."""
+    try:
+        lines = (root / ".gitignore").read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    return [line.strip().strip("/") for line in lines if _PLAIN_IGNORE_ENTRY.fullmatch(line.strip())]
+
+
+def _all_output(output: ToolOutput) -> str:
+    return f"{output.error or ''}\n{output.data.get('stderr', '')}\n{output.data.get('stdout', '')}"
 
 
 def _cap(text: str) -> str:
@@ -228,8 +291,10 @@ class BashTool(Tool):
         """
         if not self._os_sandbox:
             return None
-        argv = self._os_sandbox.wrap(command, boundary, writable=False)
-        output = await self._spawn(argv, cwd, _PROBE_TIMEOUT, command=command)
+        # A throwaway temp folder: programs need one to start, and what lands in it is deleted here.
+        with tempfile.TemporaryDirectory(prefix="north-probe-") as scratch:
+            argv = self._os_sandbox.wrap(command, boundary, writable=False, scratch=scratch)
+            output = await self._spawn(argv, cwd, _PROBE_TIMEOUT, command=command)
         if output.data is None or output.data.get("returncode") != 0:
             return None
         if self._os_sandbox.denied(f"{output.data.get('stderr', '')}\n{output.data.get('stdout', '')}"):
@@ -237,7 +302,12 @@ class BashTool(Tool):
         return output
 
     async def _resolve_execution(
-        self, command: str, cwd: str | None, boundary: str | None, outside: tuple[str, ...]
+        self,
+        command: str,
+        cwd: str | None,
+        boundary: str | None,
+        outside: tuple[str, ...],
+        repository: RepositoryLimit | None = None,
     ) -> tuple[list[str] | None, str | None, str | None]:
         """Decide how to run *command*: (argv, host_cwd, error).
 
@@ -251,7 +321,9 @@ class BashTool(Tool):
         """
         if self._os_sandbox:
             port = await self._egress.start()
-            argv = self._os_sandbox.wrap(command, boundary, writable=True, proxy_port=port, also_writable=outside)
+            argv = self._os_sandbox.wrap(
+                command, boundary, writable=True, proxy_port=port, also_writable=outside, repository=repository
+            )
             return argv, cwd, None
         if not self._sandbox.enabled:
             return None, cwd, None
@@ -286,10 +358,22 @@ class BashTool(Tool):
         except (ValueError, TypeError):
             timeout = _TIMEOUT
 
-        exec_argv, exec_cwd, sandbox_error = await self._resolve_execution(command, cwd, boundary, outside)
+        limit = None
+        if self._os_sandbox and not input.isolated_copy:
+            limit = await _repository_limit(command, cwd or boundary)
+        exec_argv, exec_cwd, sandbox_error = await self._resolve_execution(command, cwd, boundary, outside, limit)
         if sandbox_error is not None:
             return ToolOutput(success=False, error=sandbox_error)
         output = await self._spawn(exec_argv, exec_cwd, timeout, command=command)
+        if limit is not None and self._os_sandbox and self._os_sandbox.denied(_all_output(output)):
+            note = _REPOSITORY_READ_ONLY.format(root=limit.root)
+            if output.success:
+                # A passing command can print a refusal that has nothing to do with the repository, and a pipe
+                # can hide one that does: it stays a success, and the note covers the second case.
+                output.data["stdout"] = f"{output.data.get('stdout', '')}\n[north: {_IF_REFUSED_HERE}{note}]"
+                return output
+            tail = _all_output(output).strip()[-_REFUSAL_TAIL:]
+            return ToolOutput(success=False, failure_kind="refused", data=output.data, error=f"{tail}\n{note}")
         if not output.success and self._os_sandbox and self._os_sandbox.denied(output.error or ""):
             # Refused, not broken: say how to ask, so the work is not dropped.
             where = f"in `{boundary}`" if boundary else "only in temp folders"

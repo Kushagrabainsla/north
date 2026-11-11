@@ -81,7 +81,7 @@ def _jsonl(lines: list[tuple[float, str]]) -> list[tuple[float, dict]]:
     return events
 
 
-def raw_claude(task: Task, prepared: Prepared, log: Path) -> ArmResult:
+def raw_claude(task: Task, prepared: Prepared, log: Path, extra: tuple[str, ...] = ()) -> ArmResult:
     code, lines, err = stream_process(
         [
             "claude",
@@ -94,6 +94,7 @@ def raw_claude(task: Task, prepared: Prepared, log: Path) -> ArmResult:
             "acceptEdits",
             "--allowedTools",
             "Bash",
+            *extra,
         ],
         prepared.path,
         task.timeout_s,

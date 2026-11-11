@@ -48,13 +48,19 @@ class StubRunner:
         self.problem = ""
         self.earlier_branches: tuple[str, ...] = ()
         self.calls: list[dict] = []
+        self.review_calls: list[dict] = []
         self._outcome = outcome or RunOutcome(ok=True, text="Add subtract() to calc.py.", session_id="s", turns=3)
         self._raises = raises
 
     missing = ""  # why no coding agent can take a run; "" when one can
+    landed_review: Review | None = None
 
     async def unavailable(self, wanted: str | None = None) -> str:
         return self.missing
+
+    async def review_landed(self, **kwargs) -> Review | None:
+        self.review_calls.append(kwargs)
+        return self.landed_review
 
     async def run(self, **kwargs) -> RunReport:
         self.calls.append(kwargs)
@@ -383,15 +389,112 @@ class TestTheOtherAgentsReview:
 
         assert "reviewed it" not in text and "review" not in data
 
-    async def test_the_review_is_off_unless_asked_for(self) -> None:
+    async def test_an_edit_is_not_reviewed_before_it_is_offered(self) -> None:
+        """The review waits for the end of the task: reviewing every edit spent the quota on half-done work."""
         runner = StubRunner(can_edit=True, change=CHANGE)
+
+        await _tool(runner).execute(_input(mode="edit"))
+
+        assert "review" not in runner.calls[0]
+
+
+class TestBeforeATaskEnds:
+    """What must happen before a task in a repository may end, whatever the model remembers."""
+
+    APPLIED = Landing(LandingState.APPLIED, "x")
+
+    @staticmethod
+    def _repository(tmp_path) -> str:
+        (tmp_path / ".git").mkdir()
+        return str(tmp_path)
+
+    async def _edited(self, runner: StubRunner, workspace: str, **params) -> CodingAgentTool:
         tool = _tool(runner)
+        await tool.execute(_input(workspace, mode="edit", **params))
+        return tool
 
-        await tool.execute(_input(mode="edit"))
-        await tool.execute(_input(mode="edit", review=True))
+    def _runner(self, landing: Landing | None = None) -> StubRunner:
+        return StubRunner(can_edit=True, change=CHANGE, verification=PASSED, landing=landing or self.APPLIED)
 
-        assert [call["review"] for call in runner.calls] == [False, True]
-        assert tool.parameters_schema["properties"]["review"]["type"] == "boolean"
+    async def test_a_repository_task_that_never_called_a_coding_agent_is_told_to(self, tmp_path) -> None:
+        note = await _tool(StubRunner()).before_task_ends("t1", self._repository(tmp_path))
+
+        assert "call coding_agent now" in note
+
+    async def test_it_is_told_only_once_so_a_plain_answer_can_still_end(self, tmp_path) -> None:
+        tool = _tool(StubRunner())
+        workspace = self._repository(tmp_path)
+
+        await tool.before_task_ends("t1", workspace)
+
+        assert await tool.before_task_ends("t1", workspace) == ""
+
+    async def test_a_task_outside_a_repository_is_left_alone(self, tmp_path) -> None:
+        assert await _tool(StubRunner()).before_task_ends("t1", str(tmp_path)) == ""
+
+    async def test_a_landed_change_is_reviewed_by_the_other_agent(self, tmp_path) -> None:
+        runner = self._runner()
+        runner.landed_review = Review("codex", ReviewVerdict.CONCERNS, "- calc.py: wrong sign")
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(runner, workspace)
+
+        note = await tool.before_task_ends("t1", workspace)
+
+        assert "codex reviewed" in note and "wrong sign" in note and "concerns" in note
+        assert runner.review_calls[0]["author"] == "claude"
+        assert runner.review_calls[0]["task"] == "Plan a subtract function."
+
+    async def test_the_review_happens_once_however_often_it_is_asked(self, tmp_path) -> None:
+        runner = self._runner()
+        runner.landed_review = Review("codex", ReviewVerdict.OK, "fine")
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(runner, workspace)
+
+        await tool.before_task_ends("t1", workspace)
+
+        assert await tool.before_task_ends("t1", workspace) == ""
+        assert len(runner.review_calls) == 1
+
+    async def test_a_change_kept_on_a_branch_is_not_reviewed(self, tmp_path) -> None:
+        runner = self._runner(Landing(LandingState.KEPT, "tests failed"))
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(runner, workspace)
+
+        assert await tool.before_task_ends("t1", workspace) == ""
+        assert runner.review_calls == []
+
+    async def test_the_user_can_turn_the_review_off(self, tmp_path) -> None:
+        runner = self._runner()
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(runner, workspace, review=False)
+
+        assert await tool.before_task_ends("t1", workspace) == ""
+        assert runner.review_calls == []
+
+    async def test_with_no_other_agent_nothing_is_said(self, tmp_path) -> None:
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(self._runner(), workspace)
+
+        assert await tool.before_task_ends("t1", workspace) == ""
+
+    async def test_a_finished_task_forgets_what_it_did(self, tmp_path) -> None:
+        runner = self._runner()
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(runner, workspace)
+
+        await tool.end_task("t1")
+
+        assert "call coding_agent now" in await tool.before_task_ends("t1", workspace)
+
+    def test_a_repository_gets_a_note_and_any_other_folder_none(self, tmp_path) -> None:
+        tool = _tool(StubRunner())
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        repository = tmp_path / "code"
+        repository.mkdir()
+
+        assert tool.task_note(str(plain)) == ""
+        assert "coding_agent" in tool.task_note(self._repository(repository))
 
 
 class TestAPausedRun:

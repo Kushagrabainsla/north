@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from tools.specialized._seatbelt import Seatbelt
+from tools.specialized._seatbelt import RepositoryLimit, Seatbelt
 
 
 class OsSandbox(Protocol):
@@ -28,12 +28,16 @@ class OsSandbox(Protocol):
         writable: bool,
         proxy_port: int | None = None,
         also_writable: tuple[str, ...] = (),
+        scratch: str | None = None,
+        repository: RepositoryLimit | None = None,
     ) -> list[str]:
         """The argv that runs *command* read-only, or writing only inside *workspace* and *also_writable*.
 
         It never reaches the network, except - when *writable* and given a
         *proxy_port* - the egress proxy on loopback, which the command is pointed at.
-        Credential folders are neither readable nor writable, whatever the folders."""
+        Credential folders are neither readable nor writable, whatever the folders.
+        *scratch*, a throwaway folder, is writable even read-only and is the command's temp folder.
+        *repository* keeps a git repository's own files unwritable, whatever else may be written."""
         ...
 
     @staticmethod

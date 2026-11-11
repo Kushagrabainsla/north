@@ -26,8 +26,10 @@ must have its own sandbox off.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from tools._path import is_north_scratch
@@ -40,6 +42,20 @@ _SECRET_DIRS = (".ssh", ".aws", ".gnupg", ".config", ".north")
 # Home-relative caches that package managers and compilers write to.
 _CACHE_DIRS = (".cache", ".npm", ".cargo", ".rustup", ".gradle", ".m2", "Library/Caches", ".local/share/uv")
 
+# What tools generate wherever they run, and no project keeps as code. Other ignored paths are asked of git.
+_GENERATED_NAMES = (
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    ".next",
+    ".turbo",
+)
+
 _TEMP_DIRS = ("/private/tmp", "/private/var/folders")
 _WRITABLE_DEVICES = ("/dev/null", "/dev/tty", "/dev/dtracehelper", "/dev/zero")
 
@@ -51,6 +67,29 @@ DENIAL_MARKERS = (
     "nodename nor servname",
     "network is unreachable",
 )
+
+
+@dataclass(frozen=True)
+class RepositoryLimit:
+    """A git repository a command may not write into, except git's own folder and what git ignores."""
+
+    root: str
+    ignored: tuple[str, ...] = ()
+
+
+def _regex_literal(path: str) -> str:
+    return re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", path)
+
+
+def _repository_rules(limit: RepositoryLimit) -> list[str]:
+    """Close the repository, then open what is not its code. Decided by the kernel, whatever program writes."""
+    root = os.path.realpath(limit.root)
+    kept = " ".join(f"(subpath {_quote(os.path.join(root, name))})" for name in (".git", *limit.ignored))
+    generated = "|".join(_regex_literal(name) for name in _GENERATED_NAMES)
+    return [
+        f"(deny file-write* (subpath {_quote(root)}))",
+        f'(allow file-write* {kept} (regex #"^{_regex_literal(root)}/(.*/)?({generated})(/|$)"))',
+    ]
 
 
 def available() -> bool:
@@ -79,8 +118,18 @@ class Seatbelt:
         writable: bool,
         proxy_port: int | None = None,
         also_writable: tuple[str, ...] = (),
+        scratch: str | None = None,
+        repository: RepositoryLimit | None = None,
     ) -> list[str]:
-        return wrap(command, workspace, writable=writable, proxy_port=proxy_port, also_writable=also_writable)
+        return wrap(
+            command,
+            workspace,
+            writable=writable,
+            proxy_port=proxy_port,
+            also_writable=also_writable,
+            scratch=scratch,
+            repository=repository,
+        )
 
     @staticmethod
     def denied(stderr: str) -> bool:
@@ -108,13 +157,17 @@ def profile(
     writable: bool,
     proxy_port: int | None = None,
     also_writable: tuple[str, ...] = (),
+    scratch: str | None = None,
+    repository: RepositoryLimit | None = None,
 ) -> str:
     """The Seatbelt profile for a command run in *workspace*.
 
     Later rules win, so each profile denies broadly and then allows narrowly.
     Paths are resolved first: the kernel matches real paths, and `/tmp` and
     `/var` are symlinks on macOS. *also_writable* are folders outside the
-    workspace you approved this command writing to.
+    workspace you approved this command writing to. *scratch* is a throwaway
+    folder, writable even read-only: what lands there is deleted afterwards, so
+    it changes nothing. *repository* closes a git repository to the command.
     """
     rules = ["(version 1)", "(allow default)", "(deny file-write*)"]
     allowed = [_quote(p) for p in _TEMP_DIRS]
@@ -126,6 +179,10 @@ def profile(
     rules.append(f'(allow file-write* {devices} (regex #"^/dev/ttys[0-9]+$"))')
     if allowed and writable:
         rules.append("(allow file-write* " + " ".join(f"(subpath {p})" for p in allowed) + ")")
+    if scratch:
+        rules.append(f"(allow file-write* (subpath {_quote(scratch)}))")
+    if repository and writable:
+        rules += _repository_rules(repository)
     secrets = " ".join(f"(subpath {_quote(p)})" for p in _secret_dirs())
     # Unwritable as well as unreadable: a workspace of the home folder used to
     # let an approved command write into ~/.ssh.
@@ -160,13 +217,25 @@ def wrap(
     writable: bool,
     proxy_port: int | None = None,
     also_writable: tuple[str, ...] = (),
+    scratch: str | None = None,
+    repository: RepositoryLimit | None = None,
 ) -> list[str]:
     """The argv that runs *command* under the chosen profile."""
     argv = [
         _SANDBOX_EXEC,
         "-p",
-        profile(workspace, writable=writable, proxy_port=proxy_port, also_writable=also_writable),
+        profile(
+            workspace,
+            writable=writable,
+            proxy_port=proxy_port,
+            also_writable=also_writable,
+            scratch=scratch,
+            repository=repository,
+        ),
     ]
-    if writable and proxy_port is not None:
-        argv += ["/usr/bin/env", *_proxy_env(proxy_port)]
+    env = _proxy_env(proxy_port) if writable and proxy_port is not None else []
+    if scratch:
+        env.append(f"TMPDIR={scratch}")
+    if env:
+        argv += ["/usr/bin/env", *env]
     return [*argv, "/bin/sh", "-c", command]

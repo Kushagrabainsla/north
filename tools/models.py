@@ -42,6 +42,8 @@ class ToolInput(BaseModel):
     approved: Any = Field(default=None, exclude=True)
     # Awaited just before the call changes anything, so a stop in the middle knows it may have.
     before_change: Any = Field(default=None, exclude=True)
+    # Set only by north's own test run, in a coding agent's throwaway copy, where a test may rewrite a tracked file.
+    isolated_copy: bool = Field(default=False, exclude=True)
 
 
 class ToolOutput(BaseModel):

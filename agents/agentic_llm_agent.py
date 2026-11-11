@@ -590,6 +590,12 @@ class AgenticLLMAgent(LLMAgent):
                     if self._deps.stream_manager is not None:
                         await self._deps.stream_manager.emit(payload.task_id, "stream_reset", {})
                     continue
+                if notes := await self._still_to_do(payload, tool_map):
+                    # A step is left that must not depend on the model remembering it: it goes on, with the note.
+                    messages += [{"role": "assistant", "content": content}, {"role": "user", "content": notes}]
+                    if self._deps.stream_manager is not None:
+                        await self._deps.stream_manager.emit(payload.task_id, "stream_reset", {})
+                    continue
                 return tally.answer(content, content[:_SUMMARY_CHARS])
 
             # Tool calls branch - execute the requested calls.
@@ -621,6 +627,14 @@ class AgenticLLMAgent(LLMAgent):
             "Iteration limit reached",
             outcome="blocked",
         )
+
+    async def _still_to_do(self, payload: AgentPayload, tool_map: dict[str, Tool]) -> str:
+        """What this run's tools say must happen before the task may end, or "" when nothing."""
+        if payload.execution_profile == "quick_readonly":
+            return ""
+        workspace = payload.granted_workspace or payload.workspace or ""
+        notes = [await tool.before_task_ends(payload.task_id, workspace) for tool in tool_map.values()]
+        return "\n\n".join(note for note in notes if note)
 
     async def _save_progress(
         self, payload: AgentPayload, messages: list[dict], messages_read: int, step: int, tally: _RunTally
@@ -1058,6 +1072,7 @@ class AgenticLLMAgent(LLMAgent):
         system_lines = []
         if payload.workspace and payload.workspace != handoff_dir_for(payload.task_id):
             system_lines.append(f"- workspace: {payload.workspace}")
+            system_lines += [f"- {note}" for tool, _ in scored_tools if (note := tool.task_note(payload.workspace))]
         else:
             # No folder was chosen: the task works in its own (CODING_STYLE §16.1.1). Called
             # "the workspace", it read as the user's: an agent reported "your workspace is

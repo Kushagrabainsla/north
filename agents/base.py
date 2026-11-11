@@ -438,6 +438,8 @@ class Agent(ABC):
         mandatory = set(_ESSENTIAL_TOOL_NAMES) & all_names
         mandatory.update(_mentioned_tool_names(selected_skills or [], all_names))
         mandatory.update(_tool_names_in_text(prompt, all_names))
+        if payload is not None and payload.workspace:
+            mandatory.update(t.name for t in registry_tools if t.task_note(payload.workspace))
 
         selected_names = set(all_names)
         index = self._deps.tool_index

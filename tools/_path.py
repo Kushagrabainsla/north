@@ -243,7 +243,7 @@ _COMMAND_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")"})
 _REDIRECTIONS = frozenset({">", ">>", ">|", "&>", "&>>"})
 
 
-def _simple_commands(command: str) -> list[list[str]]:
+def simple_commands(command: str) -> list[list[str]]:
     """*command* as its simple commands' words: `cd x && rm -rf y` is [["cd", "x"], ["rm", "-rf", "y"]]."""
     commands: list[list[str]] = [[]]
     for token in _shell_tokens(command):
@@ -272,7 +272,7 @@ def deletes_a_root(command: str) -> bool:
     path was refused unseen, while `rm -rf ~` and `rm -fr /` were not recognised
     (issue #76, A12).
     """
-    for words in _simple_commands(command):
+    for words in simple_commands(command):
         if words[0] == "sudo":
             words = words[1:]
         if not words or Path(words[0]).name != "rm":

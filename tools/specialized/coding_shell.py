@@ -25,6 +25,7 @@ class BashShell:
             ToolInput(
                 params={"command": command, "workspace": workspace, "timeout": timeout, "task_id": task_id},
                 granted_workspace=workspace,
+                isolated_copy=True,
             )
         )
         if output.failure_kind == "refused":

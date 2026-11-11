@@ -302,14 +302,32 @@ class TestBashOsSandbox:
 
     @pytest.mark.asyncio
     async def test_a_command_that_failed_in_the_read_only_probe_is_not_taken_as_read_only(self, tmp_path) -> None:
-        """Its failure (here: no scratch file) says nothing about whether it would change anything."""
+        """Its failure says nothing about whether it would change anything."""
         tool = self._tool()  # a rejecting store: asked, and the answer is no
 
-        out = await tool.execute(ToolInput(params={"command": self.NEEDS_A_SCRATCH_FILE, "workspace": str(tmp_path)}))
+        out = await tool.execute(ToolInput(params={"command": "exit 3", "workspace": str(tmp_path)}))
 
         assert out.failure_kind == "refused", (
             "it went to approval instead of passing its failed probe off as the result"
         )
+
+    @pytest.mark.asyncio
+    async def test_a_command_that_only_needs_a_temp_file_counts_as_read_only(self, tmp_path) -> None:
+        """Piped into `tail`, a probe with no temp folder exited 0 and passed off its failure as the result."""
+        tool = self._tool()  # a rejecting store: it must never be asked
+
+        command = f"{self.NEEDS_A_SCRATCH_FILE} | tail -1"
+        out = await tool.execute(ToolInput(params={"command": command, "workspace": str(tmp_path)}))
+
+        assert out.success and out.data["stdout"].strip() == "done"
+
+    @pytest.mark.asyncio
+    async def test_the_probes_temp_folder_is_the_only_new_place_it_can_write(self, tmp_path) -> None:
+        tool = self._tool()
+
+        out = await tool.execute(ToolInput(params={"command": "touch /tmp/north-probe-x", "workspace": str(tmp_path)}))
+
+        assert out.failure_kind == "refused"
 
     @pytest.mark.asyncio
     async def test_once_approved_that_command_runs_where_it_may_write_and_succeeds(self, tmp_path) -> None:
