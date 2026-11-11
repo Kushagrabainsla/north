@@ -16,8 +16,10 @@ response side.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -64,6 +66,16 @@ _DEFAULT_MAX_TOKENS_TOOLS = 64_000
 # other, and each read renews it. Writing costs 1.25x input, reading 0.1x or less.
 _CACHED: dict[str, str] = {"type": "ephemeral"}
 
+# Asked for on every agent step of a model that takes it. Without `display`, current
+# models return thinking blocks with empty text, and there is nothing to show.
+_THINKING: dict[str, str] = {"type": "adaptive", "display": "summarized"}
+
+# Claude's turns kept so its thinking can go back with them. A few KB each; the
+# oldest are dropped first, and a dropped one only costs that thinking.
+_MAX_KEPT_TURNS = 512
+# How the API says a thinking block no longer matches the conversation around it.
+_BOUND_ELSEWHERE = "bound to a different conversation"
+
 # Anthropic does not publish price via the Models API, so context window comes
 # from client.models.list() live, but price is this table - it is the one
 # thing about a Claude model this provider cannot discover at runtime.
@@ -73,7 +85,7 @@ _CACHED: dict[str, str] = {"type": "ephemeral"}
 # which fell to a $10/M guess: Haiku 5.5 input was charged 100 times over, and
 # north recorded $192.51 for calls that cost $12.86. A model missing from the
 # table is unpriced, not guessed at: its calls record no cost.
-# Source: Anthropic's pricing (claude-api skill reference), checked 2026-11-01.
+# Source: Anthropic's pricing (claude-api skill reference), checked 2026-11-10.
 
 
 @dataclass(frozen=True)
@@ -91,6 +103,8 @@ class _Rates:
 
 
 _PRICES: dict[str, _Rates] = {
+    "claude-fable-5-2": _Rates(8.00, 40.00, 0.20),
+    "claude-mythos-5-2": _Rates(8.00, 40.00, 0.20),
     "claude-fable-5-1": _Rates(10.00, 50.00, 0.25),
     "claude-mythos-5-1": _Rates(10.00, 50.00, 0.25),
     "claude-fable-5": _Rates(10.00, 50.00, 1.00),
@@ -100,7 +114,7 @@ _PRICES: dict[str, _Rates] = {
     "claude-opus-4-8": _Rates(5.00, 25.00, 0.50),
     "claude-opus-4-7": _Rates(5.00, 25.00, 0.50),
     "claude-opus-4-6": _Rates(5.00, 25.00, 0.50),
-    "claude-sonnet-5-5": _Rates(2.00, 10.00, 0.20),
+    "claude-sonnet-5-5": _Rates(2.00, 10.00, 0.10),
     "claude-sonnet-5": _Rates(2.00, 10.00, 0.20),
     "claude-sonnet-4-6": _Rates(3.00, 15.00, 0.30),
     "claude-haiku-5-5": _Rates(0.10, 0.50, 0.01),
@@ -179,6 +193,37 @@ def _to_anthropic_assistant_content(message: dict) -> list[dict]:
             }
         )
     return blocks or [{"type": "text", "text": ""}]
+
+
+def _kept_block(block: Any) -> dict | None:
+    """One block of Claude's turn as it goes back to the API; None for a kind north does not send back."""
+    if block.type == "thinking":
+        return {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
+    if block.type == "redacted_thinking":
+        return {"type": "redacted_thinking", "data": block.data}
+    if block.type == "text":
+        return {"type": "text", "text": block.text}
+    if block.type == "tool_use":
+        return {"type": "tool_use", "id": block.id, "name": block.name, "input": dict(block.input or {})}
+    return None
+
+
+def _turn_to_keep(message: Any) -> list[dict] | None:
+    """Claude's turn exactly as it wrote it, when it thought and then called a tool; else None.
+
+    The whole turn, not only its thinking: a block's signature covers what came before
+    it, and text between two thinking blocks is part of that.
+    """
+    blocks = [_kept_block(block) for block in message.content]
+    if any(block is None for block in blocks):
+        return None
+    kept = [block for block in blocks if block is not None]
+    kinds = {block["type"] for block in kept}
+    return kept if kinds & {"thinking", "redacted_thinking"} and "tool_use" in kinds else None
+
+
+def _tool_ids(content: list[dict]) -> list[str]:
+    return [block["id"] for block in content if block["type"] == "tool_use"]
 
 
 def _is_tool_result_message(message: dict) -> bool:
@@ -310,6 +355,12 @@ def _cost_fields(usage: _Usage, model_id: str) -> dict[str, Any]:
     }
 
 
+def _takes_adaptive_thinking(model: Any) -> bool:
+    """Whether the Models API says *model* takes adaptive thinking. Older models reject it with a 400."""
+    capabilities = getattr(model, "capabilities", None)
+    return capabilities is not None and bool(capabilities.thinking.types.adaptive.supported)
+
+
 def _raise_if_degenerate(message: Any, model_id: str, provider_name: str) -> None:
     if message.stop_reason == "refusal":
         detail = getattr(message, "stop_details", None)
@@ -328,18 +379,26 @@ def _tool_call_response(message: Any, model_id: str, provider_name: str) -> Tool
     _raise_if_degenerate(message, model_id, provider_name)
     calls: list[ToolCall] = []
     text_parts: list[str] = []
+    thoughts: list[str] = []
     for block in message.content:
         if block.type == "tool_use":
             calls.append(ToolCall(name=block.name, call_id=block.id, params=dict(block.input or {})))
         elif block.type == "text":
             text_parts.append(block.text)
+        elif block.type == "thinking":
+            thoughts.append(block.thinking)
     usage = _cost_fields(_usage_fields(message.usage), model_id)
+    reasoning = "".join(thoughts) or None
     if calls:
-        return ToolCallResponse(type="tool_calls", calls=calls, content=None, model_used=model_id, **usage)
+        return ToolCallResponse(
+            type="tool_calls", calls=calls, content=None, model_used=model_id, reasoning=reasoning, **usage
+        )
     content = "".join(text_parts)
     if not content:
         raise ModelDegenerateError(model_id, provider_name, reason="empty completion text and no tool calls")
-    return ToolCallResponse(type="message", calls=[], content=content, model_used=model_id, **usage)
+    return ToolCallResponse(
+        type="message", calls=[], content=content, model_used=model_id, reasoning=reasoning, **usage
+    )
 
 
 # ---------------------------------------------------------------------- #
@@ -395,6 +454,9 @@ class AnthropicProvider:
         self.name = "anthropic"
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._models: dict[str, ModelInfo] = {}
+        self._adaptive_models: set[str] = set()
+        # Claude's turns by the conversation that led to them: see `_with_kept_thinking`.
+        self._kept_turns: OrderedDict[str, list[dict]] = OrderedDict()
 
     def get_models(self) -> dict[str, ModelInfo]:
         return dict(self._models)
@@ -406,8 +468,11 @@ class AnthropicProvider:
         see `_PRICES` - the Models API does not publish it.
         """
         live: dict[str, ModelInfo] = {}
+        adaptive: set[str] = set()
         try:
             async for model in self._client.models.list():
+                if _takes_adaptive_thinking(model):
+                    adaptive.add(model.id)
                 price, price_known = _model_price(model.id)
                 context_window = int(getattr(model, "max_input_tokens", 0) or 200_000)
                 live[model.id] = ModelInfo(
@@ -428,6 +493,7 @@ class AnthropicProvider:
 
         if live:
             self._models = live
+            self._adaptive_models = adaptive
 
     async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
         # Sampling params (temperature/top_p/top_k) are not passed: current
@@ -478,29 +544,102 @@ class AnthropicProvider:
             kwargs["system"] = [{"type": "text", "text": system, "cache_control": _CACHED}]
         if request.tools:
             kwargs["tools"] = _to_anthropic_tools(request.tools)
+        if model_id in self._adaptive_models:
+            kwargs["thinking"] = _THINKING
+        tools = kwargs.get("tools")
+        key, kept = self._with_kept_thinking(model_id, system, tools, messages)
         try:
-            # messages/tools are plain dicts built by the translators above,
-            # matching how ToolCallRequest.messages/.tools arrive (see the
-            # module docstring) - the same "wire format as dict, not as the
-            # SDK's TypedDicts" choice this codebase makes for every provider.
-            async with self._client.messages.stream(
-                model=model_id,
-                max_tokens=_DEFAULT_MAX_TOKENS_TOOLS,
-                messages=messages,  # type: ignore[arg-type]
-                **kwargs,
-            ) as stream:
-                async for event in stream:
-                    if (
-                        event.type == "content_block_delta"
-                        and event.delta.type == "text_delta"
-                        and token_callback is not None
-                    ):
-                        await token_callback(event.delta.text)
-                message = await stream.get_final_message()
+            try:
+                message = await self._stream_turn(model_id, messages, kwargs, token_callback)
+            except anthropic.BadRequestError as e:
+                if not kept or _BOUND_ELSEWHERE not in str(e):
+                    raise
+                # Only reachable if the API sees a change north's own check did not.
+                # Its documented recovery: the same turns without the thinking, once.
+                logger.warning("Claude refused the thinking north kept for %s; sending the turns without it", model_id)
+                for used in kept:
+                    self._kept_turns.pop(used, None)
+                _, messages = _to_anthropic_messages(request.messages)
+                key, _ = self._with_kept_thinking(model_id, system, tools, messages)
+                message = await self._stream_turn(model_id, messages, kwargs, token_callback)
         except anthropic.APIError as e:
             _reraise_as_north_error(e, model_id, self.name)
             raise  # unreachable
-        return _tool_call_response(message, model_id, self.name)
+        response = _tool_call_response(message, model_id, self.name)
+        self._keep_turn(key, message)
+        return response
+
+    def _with_kept_thinking(
+        self, model_id: str, system: str, tools: list[dict] | None, messages: list[dict]
+    ) -> tuple[str, list[str]]:
+        """Put Claude's own turns back into *messages* where the conversation before them is unchanged.
+
+        North's transcript has no place for thinking (other providers read it too), so
+        each turn is kept here under a hash of the model, system prompt, tools and every
+        message before it. A turn goes back only when that hash still matches, which is
+        the API's own rule for a thinking block: compacting history, or a tool list that
+        changed, makes the hashes differ, and from there on the turns go back without
+        thinking rather than failing the request.
+
+        Returns the key for the turn this request will produce, and the keys used.
+        """
+        seen = hashlib.sha256(json.dumps([model_id, system, tools], sort_keys=True, default=str).encode())
+        used: list[str] = []
+        for message in messages:
+            if message["role"] == "assistant":
+                key = seen.hexdigest()
+                kept = self._kept_turns.get(key)
+                if kept is not None and _tool_ids(kept) == _tool_ids(message["content"]):
+                    message["content"] = kept
+                    self._kept_turns.move_to_end(key)
+                    used.append(key)
+            seen.update(json.dumps(message, sort_keys=True, default=str).encode())
+        return seen.hexdigest(), used
+
+    def _keep_turn(self, key: str, message: Any) -> None:
+        turn = _turn_to_keep(message)
+        if turn is None:
+            return
+        self._kept_turns[key] = turn
+        self._kept_turns.move_to_end(key)
+        while len(self._kept_turns) > _MAX_KEPT_TURNS:
+            self._kept_turns.popitem(last=False)
+
+    async def _stream_turn(
+        self,
+        model_id: str,
+        messages: list[dict],
+        kwargs: dict[str, Any],
+        token_callback: Callable[[str], Awaitable[None]] | None,
+    ) -> Any:
+        """One streamed turn. Thinking goes to *token_callback* inside <thought> tags, as other providers send it."""
+        in_thought = False
+        # messages/tools are plain dicts built by the translators above, matching
+        # how ToolCallRequest.messages/.tools arrive (see the module docstring) -
+        # the same "wire format as dict, not as the SDK's TypedDicts" choice this
+        # codebase makes for every provider.
+        async with self._client.messages.stream(
+            model=model_id,
+            max_tokens=_DEFAULT_MAX_TOKENS_TOOLS,
+            messages=messages,  # type: ignore[arg-type]
+            **kwargs,
+        ) as stream:
+            async for event in stream:
+                if event.type != "content_block_delta" or token_callback is None:
+                    continue
+                if event.delta.type == "thinking_delta":
+                    if not in_thought:
+                        in_thought = True
+                        await token_callback("<thought>")
+                    await token_callback(event.delta.thinking)
+                elif event.delta.type == "text_delta":
+                    if in_thought:
+                        in_thought = False
+                        await token_callback("</thought>")
+                    await token_callback(event.delta.text)
+            if in_thought and token_callback is not None:
+                await token_callback("</thought>")
+            return await stream.get_final_message()
 
     async def embed(self, model_id: str, request: EmbedRequest) -> EmbedResponse:
         raise InferenceError(f"{self.name} does not support embeddings")

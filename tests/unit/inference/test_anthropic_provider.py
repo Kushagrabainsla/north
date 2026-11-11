@@ -215,9 +215,9 @@ def test_input_is_charged_at_the_input_rate():
 
 
 def test_each_token_class_has_its_own_rate():
-    # Sonnet 5.5: input $2, cache read $0.20, cache write $2.50 (1.25x input), output $10.
+    # Sonnet 5.5: input $2, cache read $0.10, cache write $2.50 (1.25x input), output $10.
     usage = _billed(input_tokens=1_000, output_tokens=500, cache_read=20_000, cache_write=3_000)
-    assert _cost_usd(usage, "claude-sonnet-5-5") == pytest.approx((2_000 + 4_000 + 7_500 + 5_000) / 1e6)
+    assert _cost_usd(usage, "claude-sonnet-5-5") == pytest.approx((2_000 + 2_000 + 7_500 + 5_000) / 1e6)
 
 
 def test_a_long_haiku_5_5_prompt_is_charged_the_long_prompt_rate():
