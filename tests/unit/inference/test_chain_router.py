@@ -11,6 +11,7 @@ from inference.decisions import DecisionLog
 from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
+    ModelDegenerateError,
     PaymentRequiredError,
     ProviderUnavailableError,
 )
@@ -75,6 +76,68 @@ def _router(tmp_path, behaviour: dict[str, object]) -> tuple[ChainRouter, dict[s
 
 async def _call(provider, model_id: str):
     return await provider.respond(model_id)
+
+
+_TOOLS = requirements_from(estimated_tokens=1_000, needs_tools=True)
+
+
+@pytest.mark.asyncio
+async def test_one_empty_reply_is_asked_again_and_held_against_nobody(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("inference.routing.router._EMPTY_REPLY_PAUSE_SECONDS", 0)
+    router, _, _ = _router(tmp_path, {})
+    replies = iter([ModelDegenerateError("m", "p", reason="empty stream"), "answer"])
+
+    async def once_empty(provider, model_id: str):
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    first = await router.dispatch(component="coder", requirements=_TOOLS, call_fn=once_empty, capability="tool_calls")
+    second = await router.dispatch(component="coder", requirements=_TOOLS, call_fn=_call, capability="tool_calls")
+
+    assert first == "answer"
+    assert second == "opencode_zen:claude-fable-5.1", "the model was not suspended"
+
+
+@pytest.mark.asyncio
+async def test_two_empty_replies_in_a_row_count_against_the_model(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("inference.routing.router._EMPTY_REPLY_PAUSE_SECONDS", 0)
+    empty = ModelDegenerateError("m", "p", reason="empty stream")
+    router, providers, _ = _router(tmp_path, {"claude-fable-5.1": empty})
+
+    result = await router.dispatch(component="coder", requirements=_TOOLS, call_fn=_call, capability="tool_calls")
+
+    assert result == "openrouter:anthropic/claude-opus-5", "the walk moved on to the next model"
+    assert providers["opencode_zen"].calls == ["claude-fable-5.1", "claude-fable-5.1"]
+
+
+_FABLE_ZEN = Endpoint("claude-fable-5-1", "opencode_zen", "claude-fable-5.1", 1e-5, 5e-5)
+
+
+@pytest.mark.asyncio
+async def test_empty_replies_from_a_model_that_has_called_tools_only_cool_it_briefly(tmp_path, monkeypatch) -> None:
+    """The benchmark's stall: the only model, mid-task, suspended for an hour over two empty replies."""
+    monkeypatch.setattr("inference.routing.router._EMPTY_REPLY_PAUSE_SECONDS", 0)
+    router, providers, _ = _router(tmp_path, {})
+    await router.dispatch(component="coder", requirements=_TOOLS, call_fn=_call, capability="tool_calls")
+    providers["opencode_zen"]._behaviour["claude-fable-5.1"] = ModelDegenerateError("m", "p", reason="empty stream")
+
+    await router.dispatch(component="coder", requirements=_TOOLS, call_fn=_call, capability="tool_calls")
+
+    reason = router._availability.skip_reason(_FABLE_ZEN, "tool_calls")  # noqa: SLF001
+    assert reason is not None and reason.startswith("cooling down"), reason
+    assert router._availability._cooldowns.remaining(("claude-fable-5.1", "opencode_zen")) <= 60  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_empty_replies_from_a_model_that_never_called_tools_suspend_its_tool_calls(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("inference.routing.router._EMPTY_REPLY_PAUSE_SECONDS", 0)
+    router, _, _ = _router(tmp_path, {"claude-fable-5.1": ModelDegenerateError("m", "p", reason="empty stream")})
+
+    await router.dispatch(component="coder", requirements=_TOOLS, call_fn=_call, capability="tool_calls")
+
+    assert router._availability.skip_reason(_FABLE_ZEN, "tool_calls") == "tool_calls suspended on this model"  # noqa: SLF001
 
 
 @pytest.mark.asyncio

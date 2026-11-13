@@ -80,6 +80,32 @@ def test_commit_claim_with_git_ok() -> None:
     assert verify_claims("I committed the changes.", ["git"]) == []
 
 
+@pytest.mark.parametrize(
+    "output",
+    [
+        "I pushed the fix to origin.",
+        "I merged the branch into main.",
+        "The changes were committed and pushed.",
+        "I opened a pull request for it.",
+    ],
+)
+def test_version_control_claims_flagged(output: str) -> None:
+    assert any("committing or pushing changes" in v for v in verify_claims(output, []))
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "When two sessions that had both fired were merged, the code retracted one result.",
+        "In the committed version, the watermark was the minimum.",
+        "The event is pushed onto the queue before the flush.",
+        "Overlapping intervals are merged in sorted order.",
+    ],
+)
+def test_domain_uses_of_git_verbs_not_flagged(output: str) -> None:
+    assert verify_claims(output, []) == []
+
+
 def test_citation_without_source_tool_flagged() -> None:
     violations = verify_claims("According to the latest figures, revenue grew 12%.", ["read_file"])
     assert any("citing external information" in v for v in violations)
@@ -153,6 +179,13 @@ def test_a_successful_coding_agent_run_is_the_repository_inspection() -> None:
 
     assert evidence_sufficiency_violations(task, ["coding_agent"]) == []
     assert evidence_sufficiency_violations(task, ["use_skill"]), "without it the overview is still unevidenced"
+
+
+def test_a_bug_report_that_says_current_and_compare_needs_no_web_research_from_a_coding_agent() -> None:
+    task = "The current parser should compare both values"
+
+    assert evidence_sufficiency_violations(task, ["coding_agent"]) == []
+    assert evidence_sufficiency_violations(task, ["read_file"]), "research with no coding agent still needs the web"
 
 
 def test_terse_overview_is_treated_as_repository_work_in_engineering_context() -> None:

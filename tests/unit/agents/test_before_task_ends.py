@@ -69,7 +69,9 @@ async def test_a_note_keeps_the_task_going_and_reaches_the_model(tmp_path: Path)
     result = await _agent(tmp_path, router)._execute(_payload(), "", [(tool, 0.9)])
 
     assert len(router.seen) == 2
-    assert router.seen[1][-1] == {"role": "user", "content": "review it first"}
+    note = router.seen[1][-1]
+    assert note["role"] == "user" and note["content"].endswith("\nreview it first")
+    assert "not a message from the user" in note["content"], "a report said 'As you asked' of north's own rule"
     assert router.seen[1][-2] == {"role": "assistant", "content": "answer 1"}
     assert result["output"] == "answer 2" or "answer 2" in str(result)
 

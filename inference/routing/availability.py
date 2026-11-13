@@ -164,6 +164,8 @@ class AvailabilityView:
         # they are applied, so what the user is shown is the same state the walk
         # is acting on rather than a parallel account of it.
         self._status = status
+        # (model, provider, capability) each endpoint has answered with in this process.
+        self._served: set[tuple[str, str, str]] = set()
 
     @property
     def entitlements(self) -> EntitlementLedger:
@@ -193,9 +195,15 @@ class AvailabilityView:
         remaining = self._cooldowns.remaining((endpoint.provider_model_id, endpoint.provider))
         return remaining if remaining > 0 else None
 
-    def record_success(self, endpoint: Endpoint) -> None:
+    def record_success(self, endpoint: Endpoint, capability: str | None = None) -> None:
         self._entitlements.clear_tier(endpoint.provider, is_free=endpoint.is_free)
         self._health.record_success(endpoint.provider)
+        if capability is not None:
+            self._served.add((endpoint.provider_model_id, endpoint.provider, capability))
+
+    def has_served(self, endpoint: Endpoint, capability: str) -> bool:
+        """True when this endpoint has already answered a call that needed *capability*."""
+        return (endpoint.provider_model_id, endpoint.provider, capability) in self._served
 
     def apply(self, failure: Failure, endpoint: Endpoint, *, provider_down: bool = False) -> None:
         """Update availability from one classified failure, at its own scope and no wider.

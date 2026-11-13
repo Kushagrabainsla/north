@@ -98,7 +98,7 @@ class TestHowItIsCalled:
         sandbox = json.loads(argv[argv.index("--settings") + 1])["sandbox"]
 
         assert sandbox["enabled"] and sandbox["failIfUnavailable"] and not sandbox["allowUnsandboxedCommands"]
-        assert sandbox["network"] == {"strictAllowlist": True, "allowedDomains": []}
+        assert sandbox["network"] == {"strictAllowlist": True, "allowedDomains": [], "allowLocalBinding": True}
         assert {"~/.north", "~/.ssh", "~/.codex", "/custom/north-home"} <= set(sandbox["filesystem"]["denyRead"])
 
     async def test_the_task_goes_in_on_stdin_and_the_guidance_is_appended(self, make_fake_claude, workspace) -> None:
@@ -127,6 +127,15 @@ class TestHowItIsCalled:
 
         assert "NORTH_SECRET" not in names and "OPENAI_API_KEY" not in names
         assert "HOME" in names and "PATH" in names
+        assert "VIRTUAL_ENV" not in names
+
+    async def test_it_starts_in_the_projects_virtualenv(self, make_fake_claude, workspace) -> None:
+        (workspace / ".venv").mkdir()
+        (workspace / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+
+        await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace))
+
+        assert "VIRTUAL_ENV" in _call(workspace)["env"]
 
 
 class TestEditMode:
@@ -280,7 +289,9 @@ class TestStopping:
     async def test_a_run_that_never_ends_is_stopped_at_the_time_limit(
         self, make_fake_claude, workspace, monkeypatch
     ) -> None:
-        monkeypatch.setattr("coding_agents.claude.RUN_TIMEOUT_SECONDS", 0.5)
+        # Long enough for the fake to start and write its call file on a busy machine: at 0.5 s,
+        # with a benchmark running, the limit came first and there was no pid to check.
+        monkeypatch.setattr("coding_agents.claude.RUN_TIMEOUT_SECONDS", 3)
 
         outcome, _ = await _run(ClaudeBackend(str(make_fake_claude(hang=True))), _spec(workspace))
 

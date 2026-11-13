@@ -102,6 +102,19 @@ class TestWhenYouAgree:
         assert landing.state is LandingState.APPLIED
         assert "not verified" in card.message and "no test command was found" in card.message
 
+    async def test_tests_that_already_failed_do_not_stop_the_offer_and_the_card_says_so(self, repo) -> None:
+        change = await _change(repo)
+        store = ApprovalStore()
+        desk = LandingDesk(approvals(ApprovalMode.ASK, store=store))
+        already = Verification(
+            VerificationState.ALREADY_FAILING, "pytest -q", "the same tests fail without this change"
+        )
+
+        landing, card = await _land(desk, change, already, store, ApprovalDecision.APPROVED)
+
+        assert landing.state is LandingState.APPLIED
+        assert "some fail" in card.message and "the same tests fail without this change" in card.message
+
     async def test_yolo_applies_without_a_card(self, repo) -> None:
         change = await _change(repo)
 
@@ -142,8 +155,29 @@ class TestWhenItStaysOnTheBranch:
         landing, _ = await _land(LandingDesk(approvals(ApprovalMode.YOLO)), change)
 
         assert landing.state is LandingState.CONFLICT
+        assert landing.reason == "the same lines changed in your working tree: `calc.py`"
         assert (repo / "calc.py").read_text() == "def add(a, b):\n    return a + b  # you\n"
         assert change.tree.branch in _branches(repo)
+
+    async def test_a_file_the_change_adds_already_in_the_folder_is_named_not_called_the_same_lines(self, repo) -> None:
+        """Benchmark task 5: a clean tree, but the folder held the ignored files the change adds."""
+        (repo / ".gitignore").write_text("flipt\n")
+        _git(["add", ".gitignore"], repo)
+        _git(["commit", "-qm", "ignore"], repo)
+        workspaces = GitWorkspaces(repo.parent / "copies")
+        tree = await workspaces.create(str(repo), "coding-land")
+        Path(tree.path, ".gitignore").write_text("/flipt\n")  # as the agent did, so its new files are tracked
+        Path(tree.path, "cmd", "flipt").mkdir(parents=True)
+        Path(tree.path, "cmd", "flipt", "main.go").write_text("package main // agent\n")
+        change = await workspaces.finish(tree)
+        (repo / "cmd" / "flipt").mkdir(parents=True)
+        (repo / "cmd" / "flipt" / "main.go").write_text("package main // yours\n")
+
+        landing, _ = await _land(LandingDesk(approvals(ApprovalMode.YOLO)), change)
+
+        assert landing.state is LandingState.CONFLICT
+        assert landing.reason == "files it adds are already in your folder, untracked: `cmd/flipt/main.go`"
+        assert (repo / "cmd" / "flipt" / "main.go").read_text() == "package main // yours\n"
 
     async def test_when_nobody_can_be_asked_it_stays_on_the_branch(self, repo) -> None:
         change = await _change(repo)

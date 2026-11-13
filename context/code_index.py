@@ -9,8 +9,11 @@ Design (mirrors north's other embedding indexes - EmbeddingIndex, ToolIndex):
 - Symbol-aware chunking: Python is split per function / method / class-card via
   the AST; other languages fall back to overlapping line windows.
 - Incremental: each file's content hash is stored, so only changed files are
-  re-embedded on the next search. The first search over a workspace pays the
-  full embedding cost; later searches are cheap.
+  re-embedded on the next search. Each file is saved as soon as it is embedded.
+- Never blocks for long: the first build of a repository runs in the background
+  (on-device, about 0.26 s a chunk: 13 minutes for north's own 3,000 chunks), and
+  a search waits for it at most _SEARCH_WAIT_SECONDS, then searches what is done.
+  `building` says how far it is, so the caller can say the results are partial.
 - Bounded: a capped, shallowest-first set of source files is indexed, chunks are
   size-capped, and embeddings are batched, so a large repo can't explode cost.
 - Fails soft: any embedding error yields an empty result so the caller (the
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -59,6 +63,9 @@ _MAX_FILES: int = 300  # shallowest-first cap on files indexed per workspace
 _MAX_CHUNK_CHARS: int = 2000  # cap embedded/stored text per chunk
 _MAX_CHUNKS_PER_FILE: int = 60
 _EMBED_BATCH: int = 64  # texts per embed call (provider-agnostic safe batch)
+# How long a search waits for a running build before it searches the part that is done. Seaborn's first
+# search waited 6 minutes for the whole build.
+_SEARCH_WAIT_SECONDS: float = 15.0
 _WINDOW_LINES: int = 45  # line-window size for non-Python files
 _WINDOW_OVERLAP: int = 10
 
@@ -206,6 +213,12 @@ def _chunk_file(rel: str, text: str) -> list[tuple[int, int, str, str]]:
     return chunks[:_MAX_CHUNKS_PER_FILE]
 
 
+def _log_build_failure(build: asyncio.Task[None]) -> None:
+    """Log a background build that failed: no search may be waiting to see it."""
+    if not build.cancelled() and (error := build.exception()) is not None:
+        logger.warning("CodeIndex: the index build failed", exc_info=error)
+
+
 class CodeIndex:
     """Embeds source chunks per workspace for semantic retrieval; incremental by file hash."""
 
@@ -223,6 +236,10 @@ class CodeIndex:
         # workspace -> parsed [(path, start, end, symbol, text, vec)], invalidated on update.
         self._cache: dict[str, list[tuple[str, int, int, str, str, list[float]]]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # One build at a time for each workspace, kept here so it is not collected while it runs.
+        self._builds: dict[str, asyncio.Task[None]] = {}
+        # (files indexed, files to index) while a build runs.
+        self._progress: dict[str, tuple[int, int]] = {}
 
     def _lock_for(self, workspace: str) -> asyncio.Lock:
         return self._locks.setdefault(workspace, asyncio.Lock())
@@ -230,11 +247,12 @@ class CodeIndex:
     async def search(self, workspace: str, query: str, max_results: int = 5) -> list[tuple[str, int, int, str, str]]:
         """Return up to *max_results* ``(path, start, end, symbol, code)`` by similarity.
 
-        Refreshes the index for *workspace* first (only changed files re-embed).
+        Refreshes the index for *workspace* first (only changed files re-embed), waiting for that at most
+        _SEARCH_WAIT_SECONDS: past it, what is indexed so far is searched (see `building`).
         Returns [] on any embedding error so the caller can fall back to grep.
         """
         ws = str(Path(workspace).resolve())
-        await self._ensure_fresh(ws)
+        await self._fresh_enough(ws)
         try:
             q_embs = await self._embed_fn([query])
         except Exception:
@@ -280,8 +298,30 @@ class CodeIndex:
         except Exception:
             return None
 
+    def building(self, workspace: str) -> tuple[int, int] | None:
+        """(files indexed, files to index) while a build of *workspace* runs; None when none runs."""
+        ws = str(Path(workspace).resolve())
+        build = self._builds.get(ws)
+        if build is None or build.done():
+            return None
+        return self._progress.get(ws, (0, 0))
+
+    async def _fresh_enough(self, ws: str) -> None:
+        """Start the build of *ws*, or join the one that runs, and wait for it at most _SEARCH_WAIT_SECONDS."""
+        build = self._builds.get(ws)
+        if build is None or build.done():
+            build = asyncio.create_task(self._ensure_fresh(ws), name=f"code-index:{ws}")
+            build.add_done_callback(_log_build_failure)
+            self._builds[ws] = build
+        with contextlib.suppress(TimeoutError):  # past it, the build goes on and the search uses what is done
+            await asyncio.wait_for(asyncio.shield(build), _SEARCH_WAIT_SECONDS)
+
     async def _ensure_fresh(self, ws: str) -> None:
-        """Re-embed changed files and drop deleted ones for the resolved workspace *ws*."""
+        """Re-embed changed files and drop deleted ones for the resolved workspace *ws*.
+
+        Each file is saved as soon as it is embedded: a build that stops, or an embedding call that
+        fails, keeps every file done before it, and the next search goes on from there.
+        """
         async with self._lock_for(ws):
             root = Path(ws)
             if not root.is_dir():
@@ -293,36 +333,31 @@ class CodeIndex:
                 await asyncio.to_thread(self._delete_files_sync, ws, removed)
                 self._cache.pop(ws, None)
 
-            changed_any = False
-            files_to_embed = []
-            flat_texts = []
+            self._progress[ws] = (0, len(to_process))
+            try:
+                for done, (rel, _text, digest, chunks) in enumerate(to_process, start=1):
+                    rows = await self._embed_file(rel, chunks)
+                    if rows is None:
+                        return  # embeddings are down: the files left wait for the next search
+                    await asyncio.to_thread(self._upsert_file_sync, ws, rel, digest, rows)
+                    self._cache.pop(ws, None)
+                    self._progress[ws] = (done, len(to_process))
+            finally:
+                self._progress.pop(ws, None)
 
-            for rel, _text, digest, chunks in to_process:
-                if not chunks:
-                    await asyncio.to_thread(self._upsert_file_sync, ws, rel, digest, [])
-                    changed_any = True
-                else:
-                    files_to_embed.append((rel, digest, chunks))
-                    for c in chunks:
-                        flat_texts.append(f"{rel}\n{c[3]}")
-
-            if flat_texts:
-                all_embedded = await self._embed_batch_flat(flat_texts)
-                if all_embedded is not None and len(all_embedded) == len(flat_texts):
-                    offset = 0
-                    for rel, digest, chunks in files_to_embed:
-                        count = len(chunks)
-                        file_embedded = all_embedded[offset : offset + count]
-                        offset += count
-                        rows = [
-                            (start, end, symbol, chunk_text, json.dumps(vec))
-                            for (start, end, symbol, chunk_text), vec in zip(chunks, file_embedded, strict=False)
-                        ]
-                        await asyncio.to_thread(self._upsert_file_sync, ws, rel, digest, rows)
-                        changed_any = True
-
-            if changed_any:
-                self._cache.pop(ws, None)
+    async def _embed_file(
+        self, rel: str, chunks: list[tuple[int, int, str, str]]
+    ) -> list[tuple[int, int, str, str, str]] | None:
+        """The rows to store for one file's *chunks*; None when they could not be embedded."""
+        if not chunks:
+            return []
+        embedded = await self._embed_batch_flat([f"{rel}\n{chunk[3]}" for chunk in chunks])
+        if embedded is None or len(embedded) != len(chunks):
+            return None
+        return [
+            (start, end, symbol, chunk_text, json.dumps(vec))
+            for (start, end, symbol, chunk_text), vec in zip(chunks, embedded, strict=True)
+        ]
 
     def _scan_files_sync(
         self, root: Path, stored: dict[str, str]

@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from coding_agents.constants import VERIFY_TIMEOUT_SECONDS
 from tests.conftest import approving_store, bind_approvals, deciding, rejecting_store
-from tools.models import ToolInput
+from tools.models import ToolInput, ToolOutput
 from tools.specialized import _os_sandbox
 from tools.specialized.bash import BashTool
 
@@ -466,3 +467,28 @@ def test_a_platform_with_no_sandbox_asks_for_every_command(monkeypatch) -> None:
     monkeypatch.setattr(_os_sandbox, "_IMPLEMENTATIONS", ())
 
     assert BashTool(os_sandbox=True)._os_sandbox is None
+
+
+@pytest.mark.parametrize(("isolated_copy", "longest"), [(True, VERIFY_TIMEOUT_SECONDS), (False, 300)])
+async def test_only_norths_own_test_run_may_take_longer_than_five_minutes(
+    tmp_path: Path, monkeypatch, isolated_copy: bool, longest: int
+) -> None:
+    """Seaborn's suite was cut off at 300 s; a model's own command keeps that cap."""
+    seen: list[int] = []
+
+    async def spawn(self, argv, cwd, timeout, **_):
+        seen.append(timeout)
+        return ToolOutput(success=True, data={"returncode": 0, "stdout": "", "stderr": ""})
+
+    monkeypatch.setattr(BashTool, "_spawn", spawn)
+    tool = bind_approvals(BashTool(os_sandbox=False), store=approving_store())
+
+    await tool.execute(
+        ToolInput(
+            params={"command": "pytest -q", "workspace": str(tmp_path), "timeout": 10_000},
+            granted_workspace=str(tmp_path),
+            isolated_copy=isolated_copy,
+        )
+    )
+
+    assert seen == [longest]

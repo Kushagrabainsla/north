@@ -53,7 +53,7 @@ class LandingDesk:
             if await manager.apply_back(copy, lock=self._lock(tree.base)):
                 keep_branch = False
                 return Landing(LandingState.APPLIED)
-            return Landing(LandingState.CONFLICT, "the same lines changed in your working tree")
+            return Landing(LandingState.CONFLICT, await manager.refusal(copy) or "your working tree changed meanwhile")
         finally:
             await manager.remove(copy, keep_branch=keep_branch)
 
@@ -101,4 +101,6 @@ def _tests_line(verification: Verification) -> str:
     command = f" (`{verification.command}`)" if verification.command else ""
     if verification.state is VerificationState.PASSED:
         return f"Tests: passed{command}, run by north on the agent's copy."
+    if verification.state is VerificationState.ALREADY_FAILING:
+        return f"Tests: some fail{command}, but {verification.detail}."
     return f"Tests: not verified{command} - {verification.detail}."

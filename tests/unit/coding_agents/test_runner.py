@@ -28,6 +28,7 @@ from coding_agents import (
     VerificationState,
     WorkTree,
 )
+from coding_agents.runner import _other_model
 
 from .conftest import MemoryRecorder, MemoryWorkspaces
 
@@ -568,11 +569,12 @@ class TestCrossReview:
         assert all(not spec.resume for spec in reviewer.specs)
         assert reviewer.specs[0].session_id != "old-session"
 
-    async def test_with_only_one_agent_installed_there_is_no_review_and_nothing_breaks(
+    async def test_with_only_one_agent_installed_it_reviews_its_change_on_another_model(
         self, tmp_path, recorder
     ) -> None:
         workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
         solo = ScriptedBackend("claude")
+        solo.extra_events = [RunEvent(EventKind.INIT, {"session_id": "s", "model": "claude-opus-5-5[1m]"})]
         runner = CodingRunner(
             {"claude": solo},
             recorder,
@@ -585,15 +587,56 @@ class TestCrossReview:
 
         report = await self._edit(runner)
 
-        assert report.review is None and report.landing is not None
+        edit, review = solo.specs
+        assert (edit.mode, edit.model) == (Mode.EDIT, None), "the author keeps the agent's own default"
+        assert (review.mode, review.model, review.resume) == (Mode.PLAN, "claude-sonnet-5-5", False)
+        assert report.review.reviewer == "claude (claude-sonnet-5-5, a separate session from the author's)"
+        assert report.landing is not None
 
-    async def test_an_unavailable_second_agent_is_skipped(self, tmp_path, recorder) -> None:
-        runner, _, reviewer, *_ = self._setup(tmp_path, recorder)
+    async def test_when_the_other_agent_cannot_the_authors_own_agent_reviews(self, tmp_path, recorder) -> None:
+        """Codex out of credits left Claude's changes unreviewed while Claude itself could still read them."""
+        runner, author, reviewer, *_ = self._setup(tmp_path, recorder)
         reviewer._available = False
 
         report = await self._edit(runner)
 
-        assert report.review is None and not reviewer.specs
+        assert not reviewer.specs
+        assert author.specs[1].model == "claude-opus-5-5", "the author's model is not known: the first listed"
+        assert report.review.reviewer.startswith("claude (claude-opus-5-5, a separate session")
+
+    async def test_an_edit_run_gets_more_turns_than_a_plan_run(self, tmp_path, recorder) -> None:
+        """At 40 turns an edit stopped twice midway through a large change, and a stopped run is not applied."""
+        runner, author, *_ = self._setup(tmp_path, recorder)
+
+        await self._edit(runner)
+        await runner.run(task_id="t2", task="look", workspace="/repo", mode=Mode.PLAN, backend="claude")
+
+        edit, plan = author.specs
+        assert (edit.mode, plan.mode) == (Mode.EDIT, Mode.PLAN)
+        assert edit.max_turns > plan.max_turns == 40
+
+    async def test_a_finished_change_no_agent_can_review_says_why(self, tmp_path, recorder) -> None:
+        runner, author, reviewer, *_ = self._setup(tmp_path, recorder)
+        reviewer._available = author._available = False
+
+        review = await runner.review_landed(task_id="t1", task="add subtract", workspace="/repo", author="claude")
+
+        assert review.verdict is ReviewVerdict.UNCLEAR and not reviewer.specs and not author.specs
+        assert review.summary == (
+            "no coding agent could take the review (codex: codex is missing; claude: claude is missing)"
+        )
+
+    async def test_a_finished_change_with_no_agent_installed_has_no_review(self, recorder) -> None:
+        runner = CodingRunner({}, recorder)
+
+        assert await runner.review_landed(task_id="t1", task="x", workspace="/r", author="x") is None
+
+    async def test_a_finished_change_is_reviewed_by_the_other_agent_on_its_own_model(self, tmp_path, recorder) -> None:
+        runner, author, reviewer, *_ = self._setup(tmp_path, recorder)
+
+        review = await runner.review_landed(task_id="t1", task="add subtract", workspace="/repo", author="claude")
+
+        assert review.reviewer == "codex" and reviewer.specs[0].model is None and not author.specs
 
     async def test_a_change_whose_tests_failed_is_not_reviewed(self, tmp_path, recorder) -> None:
         runner, _, reviewer, *_ = self._setup(tmp_path, recorder, verifier=ScriptedVerifier(VerificationState.FAILED))
@@ -807,3 +850,16 @@ async def test_the_runner_says_why_no_agent_can_take_a_run(recorder: MemoryRecor
     assert await runner.unavailable() == ""
     assert await runner.unavailable("codex") == "codex: codex is missing"
     assert "not a coding agent north can run" in await runner.unavailable("gemini")
+
+
+@pytest.mark.parametrize(
+    ("agent", "authored", "reviews_with"),
+    [
+        ("claude", "claude-opus-5-5[1m]", "claude-sonnet-5-5"),
+        ("claude", "claude-sonnet-5-5", "claude-opus-5-5"),
+        ("claude", None, "claude-opus-5-5"),
+        ("codex", "gpt-5", None),  # none listed: its own default, in a new session
+    ],
+)
+def test_a_same_agent_review_takes_the_first_listed_model_the_author_did_not_use(agent, authored, reviews_with) -> None:
+    assert _other_model(agent, authored) == reviews_with

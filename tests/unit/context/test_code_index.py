@@ -6,6 +6,7 @@ reproducible without any network / real embedding model.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -119,6 +120,54 @@ async def test_embed_failure_returns_empty(tmp_path: Path) -> None:
     idx = CodeIndex(tmp_path / "idx.db", boom)
     res = await idx.search(str(tmp_path), "add", max_results=5)
     assert res == []
+
+
+def _two_files(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    _write(repo, "a.py", "def add(a, b):\n    return a + b\n")
+    _write(repo, "pkg/b.py", "def validate_config(settings):\n    return bool(settings)\n")  # deeper: indexed second
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_a_slow_first_build_does_not_hold_the_search(tmp_path: Path, monkeypatch) -> None:
+    """Seaborn's first search waited 6 minutes for the whole index; on-device it is 0.26 s a chunk."""
+    monkeypatch.setattr("context.code_index._SEARCH_WAIT_SECONDS", 0.05)
+    repo = _two_files(tmp_path)
+    second_file = asyncio.Event()
+
+    async def slow(texts: list[str]) -> list[list[float]]:
+        if any(text.startswith("pkg/b.py\n") for text in texts):
+            await second_file.wait()
+        return await _fake_embed(texts)
+
+    idx = CodeIndex(tmp_path / "idx.db", slow)
+
+    first = await idx.search(str(repo), "add numbers", max_results=5)
+
+    assert [path for path, *_ in first] == ["a.py"], "what is done is searched"
+    assert idx.building(str(repo)) == (1, 2)
+    second_file.set()
+    await idx._builds[str(repo.resolve())]
+    assert idx.building(str(repo)) is None
+    assert {path for path, *_ in await idx.search(str(repo), "config", max_results=5)} == {"a.py", "pkg/b.py"}
+
+
+@pytest.mark.asyncio
+async def test_a_build_that_fails_midway_keeps_the_files_it_did(tmp_path: Path) -> None:
+    repo = _two_files(tmp_path)
+    down = True
+
+    async def flaky(texts: list[str]) -> list[list[float]]:
+        if down and any(text.startswith("pkg/b.py\n") for text in texts):
+            raise RuntimeError("embeddings down")
+        return await _fake_embed(texts)
+
+    idx = CodeIndex(tmp_path / "idx.db", flaky)
+
+    assert [path for path, *_ in await idx.search(str(repo), "add", max_results=5)] == ["a.py"]
+    down = False
+    assert {path for path, *_ in await idx.search(str(repo), "add", max_results=5)} == {"a.py", "pkg/b.py"}
 
 
 @pytest.mark.asyncio

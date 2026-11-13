@@ -66,7 +66,13 @@ SETUP: dict[int, list[str]] = {
     4: ["go mod download"],
     5: ["go mod download"],
     6: ["npx --yes yarn@1 install --frozen-lockfile --ignore-scripts"],
-    7: [_PY.format(version="3.12"), f"{_PIP} -r requirements_test.txt"],
+    # An old pymarc's setup.py is rejected by current setuptools, and psycopg2 needs Postgres headers.
+    7: [
+        _PY.format(version="3.11"),
+        "printf 'setuptools<66\\n' > /tmp/north-bench-build.txt",
+        "sed '/psycopg2/d' requirements.txt > /tmp/north-bench-req.txt",
+        f"{_PIP} --build-constraints /tmp/north-bench-build.txt -r /tmp/north-bench-req.txt pytest pytest-asyncio",
+    ],
     8: [_PY.format(version="3.12"), f"{_PIP} pytest"],
     10: ["npm ci --no-audit --no-fund"],
     11: ["npm ci --no-audit --no-fund"],
@@ -75,7 +81,12 @@ SETUP: dict[int, list[str]] = {
     14: [_PY.format(version="3.11"), f"{_PIP} -e . pytest dirty-equals pytest-mock"],
     15: [_PY.format(version="3.11"), f"{_PIP} -e '.[dev]'"],
     16: [_PY.format(version="3.11"), f"{_PIP} -e . pytest dirty-equals pytest-mock"],
-    17: [_PY.format(version="3.11"), f"{_PIP} -e '.[complete,test]'"],
+    # A copy has no git tags, so dask cannot name its own version and `distributed` will not accept it.
+    17: [
+        _PY.format(version="3.11"),
+        f"{_PIP} -e . 'numpy<2' 'pandas<2.1' pyarrow toolz pytest pytest-rerunfailures pytest-xdist pytest-timeout",
+        f"{_PIP} --no-deps distributed==2023.6.0",
+    ],
     19: [_PY.format(version="3.12"), f"{_PIP} pytest"],
     20: [_PY.format(version="3.12"), f"{_PIP} pytest"],
 }

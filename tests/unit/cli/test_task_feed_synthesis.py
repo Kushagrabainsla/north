@@ -20,6 +20,23 @@ def test_the_combined_answer_replaces_what_the_agents_streamed() -> None:
     assert feed.answer == "Three sources, summarised."
 
 
+def test_an_answer_streamed_again_replaces_the_first() -> None:
+    """The live order of one task: an answer, a reset, the same answer again."""
+    feed = TaskStepFeed(stream=MagicMock(), live=MagicMock())
+    for event, data in [
+        ("agent_started", {"agent": "north"}),
+        ("token", {"text": "ready"}),
+        ("inference_call", {"model": "claude-sonnet-5-5"}),
+        ("stream_reset", {}),
+        ("token", {"text": "ready"}),
+        ("agent_completed", {"agent": "north", "summary": "ready"}),
+    ]:
+        feed.apply(event, data)
+
+    assert feed.answer == "ready"
+    assert feed.steps[-1][1].startswith("north: ready"), "a reset adds no step"
+
+
 def test_a_ledger_with_a_combined_answer_reads_as_that_answer() -> None:
     entries = [
         {"action": "agent_completed", "output": "found three sources"},

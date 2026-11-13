@@ -33,7 +33,7 @@ from coding_agents.constants import (
     SECRET_PATHS,
     STREAM_LINE_LIMIT_BYTES,
 )
-from coding_agents.environment import agent_environment
+from coding_agents.environment import agent_environment, in_project
 from coding_agents.exceptions import CodingAgentError
 from coding_agents.gate import Decision
 from coding_agents.gate_client import ask_gate
@@ -131,7 +131,7 @@ class CodexBackend(CodingBackend):
             self._command,
             "app-server",
             cwd=spec.workspace,
-            env=self._environment,
+            env=in_project(self._environment, spec.workspace),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from coding_agents.base import CodingBackend, Lander, LiveRun, RunRecorder, RunStart, Verifier, Workspaces
+from coding_agents.constants import DEFAULT_MAX_TURNS, EDIT_MAX_TURNS, SAME_AGENT_REVIEW_MODELS
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
 from coding_agents.gate import GateSessions
 from coding_agents.models import (
@@ -52,6 +53,30 @@ class RunReport:
     earlier_branches: tuple[str, ...] = ()  # branches earlier edit rounds of this task left, still there
 
 
+@dataclass(frozen=True)
+class _Reviewer:
+    """The agent that reads a change, and the model it reads with (None: its own default)."""
+
+    name: str
+    model: str | None = None
+    same_agent: bool = False  # the author's own agent, in a new session
+
+    @property
+    def label(self) -> str:
+        """How the review names its source, so a same-agent review is never taken for another agent's."""
+        if not self.same_agent:
+            return self.name
+        return f"{self.name} ({self.model or 'its default model'}, a separate session from the author's)"
+
+
+def _other_model(agent: str, authored: str | None) -> str | None:
+    """The first model listed for *agent* that is not the one it wrote with; None when none is listed."""
+    listed = SAME_AGENT_REVIEW_MODELS.get(agent, ())
+    used = (authored or "").split("[")[0].strip().lower()  # Claude reports "claude-opus-5-5[1m]"
+    others = [model for model in listed if not used.startswith(model)]
+    return others[0] if others else None
+
+
 class CodingRunner:
     """Runs a task on an installed coding agent, and leaves the run on the record.
 
@@ -80,6 +105,9 @@ class CodingRunner:
         self._ask_url = ask_url
         self._verifier = verifier
         self._lander = lander
+        # The model each agent last wrote a task's change with, as the agent reported it: a review by the
+        # same agent uses another model. Kept in memory: after a restart the review takes the first listed.
+        self._authored: dict[tuple[str, str], str] = {}
         # The branches each task's edit rounds left behind, oldest first: a task that edits three times
         # left three branches in the user's repository and said so only one round at a time.
 
@@ -103,12 +131,14 @@ class CodingRunner:
         review: bool = False,
         fresh: bool = False,
         asking: bool = True,
+        model: str | None = None,
     ) -> RunReport:
         """Run *task* in *workspace*; a re-planned task that finds its own live run continues that session.
 
-        *review* has the other coding agent, when there is one, read an edit's diff before it is offered.
+        *review* has another coding agent read an edit's diff before it is offered (see `_reviewer`).
         *fresh* never resumes: a review must not continue some earlier plan run of the same agent.
         *asking* lets the agent ask north a question (`ask_north`), when north is set up to answer.
+        *model* overrides the agent's own default model.
         """
         if mode is Mode.EDIT and not self.can_edit:
             raise CodingAgentError("edit runs are not set up here")
@@ -124,6 +154,8 @@ class CodingRunner:
             mode=mode,
             resume=live is not None,
             guidance=guidance,
+            max_turns=EDIT_MAX_TURNS if mode is Mode.EDIT else DEFAULT_MAX_TURNS,
+            model=model,
         )
         # Written before the process starts, so a crash can still find the session and the copy.
         await self._recorder.start(RunStart(run_id, task_id, agent, task, workspace))
@@ -210,6 +242,8 @@ class CodingRunner:
                     await self._recorder.remember(
                         run_id, {"provider": backend.provider, "session_id": event.data["session_id"]}
                     )
+                if event.kind is EventKind.INIT and spec.mode is Mode.EDIT and event.data.get("model"):
+                    self._authored[task_id, backend.name] = str(event.data["model"])
                 await self._recorder.record(run_id, task_id, event.kind.value, event.data)
             except Exception:
                 logger.warning("could not record %s for coding run %s", event.kind, run_id, exc_info=True)
@@ -274,47 +308,68 @@ class CodingRunner:
         return verification, reviewed, landing
 
     async def _review(self, change: WorkChange, task: str, task_id: str, *, author: str) -> Review | None:
-        """The other agent's read of *change*, or None when there is no other agent or the diff cannot be had."""
-        other = await self._other_available(author)
-        if other is None or self._workspaces is None:
+        """Another read of *change* (see `_reviewer`), or None when nobody can review it or the diff cannot be had."""
+        reviewer = await self._reviewer(author, task_id)
+        if reviewer is None or self._workspaces is None:
             return None
         try:
             diff = await self._workspaces.diff(change.tree)
         except CodingAgentError:
             return None
-        return await self._ask_reviewer(other, review_task(task, diff), change.tree.path, task_id)
+        return await self._ask_reviewer(reviewer, review_task(task, diff), change.tree.path, task_id)
 
     async def review_landed(self, *, task_id: str, task: str, workspace: str, author: str) -> Review | None:
-        """The other agent's read of a task's finished change in *workspace*, or None when there is no other agent."""
-        other = await self._other_available(author)
-        if other is None:
-            return None
-        return await self._ask_reviewer(other, landed_review_task(task), workspace, task_id)
+        """Another read of a task's finished change in *workspace* (see `_reviewer`).
 
-    async def _ask_reviewer(self, reviewer: str, task: str, workspace: str, task_id: str) -> Review | None:
+        A review that cannot happen says why: skipped in silence, the report read as if the change had been
+        reviewed (benchmark, 2026-11-11, Codex out of credits).
+        """
+        reviewer = await self._reviewer(author, task_id)
+        if reviewer is None:
+            return await self._why_no_reviewer(author)
+        return await self._ask_reviewer(reviewer, landed_review_task(task), workspace, task_id)
+
+    async def _reviewer(self, author: str, task_id: str) -> _Reviewer | None:
+        """Who reads *author*'s change: another agent first, else the author's own agent in a new session.
+
+        With Codex out of credits, Claude's changes went unreviewed while Claude itself could still read
+        them. The same agent reviews on another model where one is listed, so it brings a second view.
+        """
+        for name, backend in self._backends.items():
+            if name != author and (await backend.probe()).available:
+                return _Reviewer(name)
+        own = self._backends.get(author)
+        if own is None or not (await own.probe()).available:
+            return None
+        return _Reviewer(author, _other_model(author, self._authored.get((task_id, author))), same_agent=True)
+
+    async def _why_no_reviewer(self, author: str) -> Review | None:
+        """Why no agent, the author's own included, could take the review; None when none is installed."""
+        names = sorted(self._backends, key=lambda name: name == author)  # the other agents first
+        if not names:
+            return None
+        reasons = [f"{name}: {(await self._backends[name].probe()).reason or 'it is not available'}" for name in names]
+        return Review(names[0], ReviewVerdict.UNCLEAR, f"no coding agent could take the review ({'; '.join(reasons)})")
+
+    async def _ask_reviewer(self, reviewer: _Reviewer, task: str, workspace: str, task_id: str) -> Review | None:
         try:
             report = await self.run(
                 task_id=task_id,
                 task=task,
                 workspace=workspace,
                 guidance=review_guidance(),
-                backend=reviewer,
+                backend=reviewer.name,
                 mode=Mode.PLAN,
                 fresh=True,
                 asking=False,  # a reviewer reads and reports; it is not the user's to ask
+                model=reviewer.model,
             )
         except CodingAgentError:
             return None
         if not report.outcome.ok:
-            return Review(reviewer, ReviewVerdict.UNCLEAR, f"the review could not be completed: {report.outcome.error}")
-        return parse_review(reviewer, report.outcome.text)
-
-    async def _other_available(self, author: str) -> str | None:
-        """The first coding agent that is not *author* and can take a run now."""
-        for name, backend in self._backends.items():
-            if name != author and (await backend.probe()).available:
-                return name
-        return None
+            error = f"the review could not be completed: {report.outcome.error}"
+            return Review(reviewer.label, ReviewVerdict.UNCLEAR, error)
+        return parse_review(reviewer.label, report.outcome.text)
 
     async def _finish_tree(
         self, run_id: str, task_id: str, tree: WorkTree | None, *, keep_empty: bool = False

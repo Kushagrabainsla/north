@@ -197,6 +197,15 @@ class TestHowItIsStarted:
         names = set(_calls(workspace)["env"])
 
         assert "NORTH_SECRET" not in names and "ANTHROPIC_API_KEY" not in names and "HOME" in names
+        assert "VIRTUAL_ENV" not in names
+
+    async def test_it_starts_in_the_projects_virtualenv(self, make_fake_codex, workspace) -> None:
+        (workspace / ".venv").mkdir()
+        (workspace / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+
+        await _run(CodexBackend(str(make_fake_codex())), _spec(workspace))
+
+        assert "VIRTUAL_ENV" in _calls(workspace)["env"]
 
     async def test_an_edit_run_without_the_gate_is_refused_before_anything_starts(
         self, make_fake_codex, workspace

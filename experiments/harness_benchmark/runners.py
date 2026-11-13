@@ -160,6 +160,10 @@ def run_north(task: Task, checkout: Checkout, log: Path) -> ArmResult:
     except (RuntimeError, TimeoutError, httpx.HTTPError) as exc:
         result.error = f"{type(exc).__name__}: {exc}"
     finally:
+        # A server that died before this point left no reason in its output: its exit code
+        # (negative: the signal) and its own log are all there is, so keep both.
+        if process.poll() is not None:
+            result.extra["server_exit_code"] = process.returncode
         process.terminate()
         try:
             process.wait(timeout=30)
@@ -167,6 +171,8 @@ def run_north(task: Task, checkout: Checkout, log: Path) -> ArmResult:
             process.kill()
         result.extra["login_returned"] = return_login(home)
         shutil.copy2(home.parent / f"{home.name}.log", log.with_suffix(".server.log"))
+        if (home / "north.log").exists():
+            shutil.copy2(home / "north.log", log.with_suffix(".north.log"))
         shutil.rmtree(home, ignore_errors=True)
         (home.parent / f"{home.name}.log").unlink(missing_ok=True)
     result.seconds = round(time.monotonic() - started, 1)

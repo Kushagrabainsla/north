@@ -58,12 +58,41 @@ def _have(mirror: Path, commit: str) -> None:
 
 
 def _export(spec: dict[str, Any], dest: Path) -> None:
-    """The tree at a commit, with no history: a run must not be able to read the fix out of the log."""
+    """The tree at a commit, with no history: a run must not be able to read the fix out of the log.
+
+    Submodules too, each at the commit the project pins: `git archive` leaves them out, and
+    openlibrary's copy had no `vendor/infogami`, so no setup could import the code it was to change.
+    """
     mirror = _mirror(spec["repo"])
     _have(mirror, spec["commit"])
     archive = subprocess.run(["git", "archive", spec["commit"]], cwd=mirror, check=True, capture_output=True).stdout
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
         tar.extractall(dest, filter="data")
+    for path, repo in _submodules(mirror, spec["commit"]):
+        pinned = _git(mirror, "ls-tree", spec["commit"], path).split()
+        if len(pinned) >= 3 and pinned[1] == "commit":
+            (dest / path).mkdir(parents=True, exist_ok=True)
+            _export({"repo": repo, "commit": pinned[2]}, dest / path)
+
+
+_GITHUB = re.compile(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?$")
+
+
+def _submodules(mirror: Path, commit: str) -> list[tuple[str, str]]:
+    """(path, GitHub owner/name) of each submodule the commit's `.gitmodules` lists."""
+    listed = subprocess.run(["git", "show", f"{commit}:.gitmodules"], cwd=mirror, capture_output=True, text=True)
+    sections: list[dict[str, str]] = []
+    for line in listed.stdout.splitlines():
+        if line.strip().startswith("["):
+            sections.append({})
+        elif sections and "=" in line:
+            key, _, value = line.partition("=")
+            sections[-1][key.strip()] = value.strip()
+    return [
+        (section["path"], repo.group(1))
+        for section in sections
+        if "path" in section and (repo := _GITHUB.search(section.get("url", "")))
+    ]
 
 
 def _clone_with_history(spec: dict[str, Any], dest: Path) -> None:
@@ -127,11 +156,15 @@ def materialize(task: Task, dest: Path) -> Checkout:
     _fill(task, dest)
     _git(dest, "init", "-q")
     _apply(dest, spec.get("patches", []))
+    # Every file the project tracks, even one its own .gitignore names: flipt's `flipt` line matched
+    # `cmd/flipt`, the seed went without it, and the agent wrote the server from scratch.
+    _git(dest, "add", "-A", "--force")
     (dest / ".git" / "info" / "exclude").write_text("\n".join(_EXCLUDED) + "\n")
+    failed = _set_up(task, dest)  # before the seed: what an install leaves (`*.egg-info`) is not the agent's change
     _git(dest, "add", "-A")
     _git(dest, "commit", "-qm", "seed", "--allow-empty")
     seed = _git(dest, "rev-parse", "HEAD").strip()
-    return Checkout(dest, seed, localize(task.prompt, spec.get("root"), dest), _set_up(task, dest))
+    return Checkout(dest, seed, localize(task.prompt, spec.get("root"), dest), failed)
 
 
 def capture_patch(path: Path, seed: str) -> str:

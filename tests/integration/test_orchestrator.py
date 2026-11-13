@@ -696,11 +696,11 @@ async def test_explicit_idempotency_key_dedupes_across_different_prompts(tmp_pat
 
 @pytest.mark.asyncio
 async def test_completed_task_is_not_deduped_on_resubmission(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
+    orch, ledger, _ = _make_orchestrator(tmp_path)
 
     first = await orch.submit_task(TaskRequest(prompt="repeat question", source=LedgerSource.PROMPT))
-    # Wait for the first task to finish completely
-    await asyncio.sleep(0.1)
+    # Until the first task has finished: a fixed 0.1 s lost the race whenever the machine was busy.
+    await _wait_for_ledger_action(ledger, first.task_id, "task_completed")
 
     second = await orch.submit_task(TaskRequest(prompt="repeat question", source=LedgerSource.PROMPT))
     assert second.task_id != first.task_id

@@ -296,10 +296,12 @@ class TestWhatHappenedToTheChange:
         assert "NOT applied" not in text
 
     async def test_a_conflict_says_why_and_where_the_branch_is_and_how_to_look(self) -> None:
-        text = await self._text(verification=PASSED, landing=Landing(LandingState.CONFLICT, "same lines"))
+        reason = "files it adds are already in your folder, untracked: `cmd/flipt/main.go`"
+        text = await self._text(verification=PASSED, landing=Landing(LandingState.CONFLICT, reason))
 
-        assert "NOT applied: the same lines changed in your working tree meanwhile" in text
+        assert f"NOT applied: {reason}." in text
         assert "`north/wt-coding-abc`" in text and "git -C /repo diff abc123..north/wt-coding-abc" in text
+        assert "Do not merge or check out that branch yourself" in text
 
     async def test_branches_earlier_rounds_left_are_named(self) -> None:
         runner = StubRunner(can_edit=True, change=CHANGE, verification=PASSED, landing=Landing(LandingState.APPLIED))
@@ -326,11 +328,21 @@ class TestWhatHappenedToTheChange:
         text = await self._text(verification=failed, landing=Landing(LandingState.KEPT, "the tests failed"))
 
         assert "do not run another edit round" not in text
+        # North fast-forwarded the user's branch onto such a change once, past the check.
+        assert "Do not merge, cherry-pick or check out that branch yourself" in text
 
     async def test_a_declined_change_says_you_kept_it(self) -> None:
         text = await self._text(verification=PASSED, landing=Landing(LandingState.DECLINED, "you kept it"))
 
         assert "NOT applied: you chose to keep them on the branch" in text
+        assert "Do not merge" not in text, "the user chose it: theirs to merge"
+
+    async def test_tests_that_never_finished_are_said_to_have_given_no_result(self) -> None:
+        never = Verification(VerificationState.SKIPPED, "pytest -q", "they did not finish in 600 s")
+
+        text = await self._text(verification=never, landing=Landing(LandingState.APPLIED, ""))
+
+        assert "north ran the tests (`pytest -q`) but got no result: they did not finish in 600 s." in text
 
     async def test_failing_tests_are_shown_to_the_model_with_their_output(self) -> None:
         failed = Verification(VerificationState.FAILED, "pytest -q", "FAILED test_calc.py::test_sub - assert 3 == 2")
@@ -339,6 +351,16 @@ class TestWhatHappenedToTheChange:
 
         assert "NOT applied: the tests failed" in text
         assert "tests (`pytest -q`) on them: FAILED." in text and "assert 3 == 2" in text
+
+    async def test_tests_that_already_failed_are_said_to_say_nothing_about_it(self) -> None:
+        already = Verification(
+            VerificationState.ALREADY_FAILING, "pytest -q", "the same tests fail without this change"
+        )
+
+        text = await self._text(verification=already, landing=Landing(LandingState.APPLIED))
+
+        assert "applied to your working tree" in text
+        assert "some fail, but the same tests fail without this change." in text
 
     async def test_work_that_could_not_be_tested_says_so(self) -> None:
         skipped = Verification(VerificationState.SKIPPED, detail="no test command was found for this project")
@@ -460,8 +482,38 @@ class TestBeforeATaskEnds:
         workspace = self._repository(tmp_path)
         tool = await self._edited(runner, workspace)
 
+        await tool.before_task_ends("t1", workspace)
+
         assert await tool.before_task_ends("t1", workspace) == ""
         assert runner.review_calls == []
+
+    async def test_a_change_the_tests_held_back_keeps_the_task_going_once(self, tmp_path) -> None:
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(self._runner(Landing(LandingState.KEPT, "tests failed")), workspace)
+
+        note = await tool.before_task_ends("t1", workspace)
+
+        assert "NOT applied" in note and "Call coding_agent in edit mode now" in note
+        assert await tool.before_task_ends("t1", workspace) == ""
+
+    async def test_a_change_the_policy_or_the_user_kept_does_not_keep_the_task_going(self, tmp_path) -> None:
+        workspace = self._repository(tmp_path)
+        by_policy = Landing(LandingState.KEPT, "north's policy", by_policy=True)
+        for landing in (by_policy, Landing(LandingState.DECLINED, "you kept it")):
+            tool = await self._edited(self._runner(landing), workspace)
+
+            assert await tool.before_task_ends("t1", workspace) == ""
+
+    async def test_an_edit_that_lands_after_one_was_held_back_is_reviewed_not_held(self, tmp_path) -> None:
+        runner = self._runner(Landing(LandingState.KEPT, "tests failed"))
+        runner.landed_review = Review("codex", ReviewVerdict.OK, "fine")
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(runner, workspace)
+        runner.landing = self.APPLIED
+
+        await tool.execute(_input(workspace, mode="edit"))
+
+        assert "codex reviewed" in await tool.before_task_ends("t1", workspace)
 
     async def test_the_user_can_turn_the_review_off(self, tmp_path) -> None:
         runner = self._runner()
@@ -470,6 +522,29 @@ class TestBeforeATaskEnds:
 
         assert await tool.before_task_ends("t1", workspace) == ""
         assert runner.review_calls == []
+
+    async def test_a_follow_up_sent_with_review_off_does_not_cancel_the_review_of_the_change(self, tmp_path) -> None:
+        """Benchmark task 16: a small fix with review off skipped the review of a 17-file change."""
+        runner = self._runner()
+        runner.landed_review = Review("codex", ReviewVerdict.OK, "fine")
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(runner, workspace)
+
+        await tool.execute(_input(workspace, mode="edit", review=False))
+
+        assert "codex reviewed" in await tool.before_task_ends("t1", workspace)
+
+    async def test_a_review_that_did_not_happen_is_reported_not_passed_over(self, tmp_path) -> None:
+        """Codex out of credits: the report must not read as if the change was reviewed."""
+        runner = self._runner()
+        runner.landed_review = Review("codex", ReviewVerdict.UNCLEAR, "codex could not take the review: out of credits")
+        workspace = self._repository(tmp_path)
+        tool = await self._edited(runner, workspace)
+
+        note = await tool.before_task_ends("t1", workspace)
+
+        assert note.startswith("The finished change has no review. codex could not take the review: out of credits")
+        assert "codex reviewed" not in note and "not reviewed" in note
 
     async def test_with_no_other_agent_nothing_is_said(self, tmp_path) -> None:
         workspace = self._repository(tmp_path)

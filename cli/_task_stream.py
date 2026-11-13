@@ -227,6 +227,12 @@ class TaskStepFeed:
         icon = "✓" if data.get("success", True) else "✗"
         self.steps.append((icon, f"  {tool}{_result_preview(data)}", True))
 
+    def _on_stream_reset(self, data: dict[str, Any]) -> None:
+        # What streamed is being replaced: north answers again (asked to check its answer, or with a
+        # message sent while it worked), or a model failed mid-answer. The web page and the TUI drop
+        # it; here it was kept, and "Reply with just the word ready." printed "readyready".
+        self._tokens = ""
+
     def _on_self_repair_started(self, data: dict[str, Any]) -> None:
         # The answer streamed so far is about to be replaced.
         self._tokens = ""
@@ -299,6 +305,7 @@ _EVENT_HANDLERS: dict[str, Callable[[TaskStepFeed, dict[str, Any]], None]] = {
     "tool_called": TaskStepFeed._on_tool_called,
     "tool_result": TaskStepFeed._on_tool_result,
     "approval_required": TaskStepFeed._on_approval_required,
+    "stream_reset": TaskStepFeed._on_stream_reset,
     "self_repair_started": TaskStepFeed._on_self_repair_started,
     "self_repair_done": TaskStepFeed._on_self_repair_done,
 }

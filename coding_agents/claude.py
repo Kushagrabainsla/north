@@ -31,7 +31,7 @@ from coding_agents.constants import (
     SECRET_PATHS,
     STREAM_LINE_LIMIT_BYTES,
 )
-from coding_agents.environment import agent_environment
+from coding_agents.environment import agent_environment, in_project
 from coding_agents.exceptions import CodingAgentError
 from coding_agents.gate import HOOKED_TOOLS
 from coding_agents.models import (
@@ -219,7 +219,7 @@ class ClaudeBackend(CodingBackend):
 
     def _process_environment(self, spec: RunSpec) -> dict[str, str]:
         """What the agent starts with, plus where its hook asks north when it has one."""
-        environment = dict(self._environment)
+        environment = in_project(self._environment, spec.workspace)
         if spec.gate is not None:
             environment |= {"NORTH_GATE_URL": spec.gate.url, "NORTH_GATE_TOKEN": spec.gate.token}
         if spec.ask is not None:
@@ -239,7 +239,10 @@ class ClaudeBackend(CodingBackend):
                 "failIfUnavailable": True,
                 "autoAllowBashIfSandboxed": False,
                 "filesystem": {"denyRead": list(self._protected_paths)},
-                "network": {"strictAllowlist": True, "allowedDomains": []},
+                # No host on the internet, but this machine's ports: without them an agent could not start
+                # the dev server or test server a check needs (benchmark, 2026-11-11), and the user chose to
+                # allow it knowing it can reach any local service.
+                "network": {"strictAllowlist": True, "allowedDomains": [], "allowLocalBinding": True},
             }
         }
         if spec.gate is not None:

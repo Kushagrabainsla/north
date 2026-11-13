@@ -55,6 +55,37 @@ def test_a_copy_has_one_commit_and_points_at_itself(tmp_path: Path) -> None:
     assert str(copy.path) in (copy.path / "README.md").read_text()
 
 
+def test_a_tracked_file_its_own_gitignore_names_is_in_the_seed(tmp_path: Path) -> None:
+    """flipt's `.gitignore` says `flipt`, which also matches the `cmd/flipt` sources the project tracks."""
+    task = _files_task({".gitignore": "flipt\n", "cmd/flipt/main.go": "package main\n"})
+    copy = checkouts.materialize(task, tmp_path / "w")
+    tracked = subprocess.run(["git", "ls-files"], cwd=copy.path, capture_output=True, text=True).stdout.split()
+    assert "cmd/flipt/main.go" in tracked
+    (copy.path / "cmd" / "flipt" / "main.go").write_text("package main // changed\n")
+    assert "changed" in checkouts.capture_patch(copy.path, copy.seed)
+
+
+def test_each_submodule_on_github_is_found_with_its_path(tmp_path: Path) -> None:
+    """openlibrary keeps infogami in a submodule, which `git archive` leaves out of the copy."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / ".gitmodules").write_text(
+        '[submodule "vendor/infogami"]\n\turl = https://github.com/internetarchive/infogami.git\n'
+        "\tpath = vendor/infogami\n"
+        '[submodule "wmd"]\n\tpath = vendor/js/wmd\n\turl = git@github.com:internetarchive/wmd.git\n'
+        '[submodule "elsewhere"]\n\tpath = x\n\turl = https://gitlab.com/a/b.git\n'
+    )
+    git = ["git", "-c", "user.name=a", "-c", "user.email=a@a"]
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run([*git, "add", "-A"], cwd=repo, check=True)
+    subprocess.run([*git, "commit", "-qm", "m"], cwd=repo, check=True)
+
+    assert checkouts._submodules(repo, "HEAD") == [
+        ("vendor/infogami", "internetarchive/infogami"),
+        ("vendor/js/wmd", "internetarchive/wmd"),
+    ]
+
+
 def test_the_patch_has_edits_and_new_files_but_not_dependencies(tmp_path: Path) -> None:
     copy = checkouts.materialize(_files_task({"a.py": "x = 1\n"}), tmp_path / "w")
     (copy.path / "a.py").write_text("x = 2\n")
@@ -83,6 +114,13 @@ def test_a_change_left_on_a_branch_is_found(tmp_path: Path) -> None:
     subprocess.run([*git, "commit", "-qam", "kept"], cwd=copy.path, check=True)
     subprocess.run([*git, "checkout", "-q", "-"], cwd=copy.path, check=True)
     assert "x = 2" in checkouts.kept_branches(copy.path, copy.seed)["kept"]
+
+
+def test_what_setup_creates_is_not_part_of_the_patch(tmp_path: Path) -> None:
+    task = _files_task({"a.py": ""})
+    task.setup = ["mkdir pkg.egg-info && touch pkg.egg-info/PKG-INFO"]
+    copy = checkouts.materialize(task, tmp_path / "w")
+    assert checkouts.capture_patch(copy.path, copy.seed) == ""
 
 
 def test_a_failing_setup_step_is_recorded_and_does_not_stop_the_copy(tmp_path: Path) -> None:
@@ -208,6 +246,19 @@ def test_a_shared_pinned_base_image_is_left_alone() -> None:
 def test_an_arm_machine_asks_for_x86_images() -> None:
     assert score.docker_platform("arm64") == {"DOCKER_DEFAULT_PLATFORM": "linux/amd64"}
     assert score.docker_platform("x86_64") == {}
+
+
+def test_a_run_that_did_no_work_is_run_again(tmp_path: Path) -> None:
+    import run
+
+    record = tmp_path / "r.json"
+    assert not run.finished(record)
+    record.write_text(json.dumps({"error": "usage limit", "patch_bytes": 0}))
+    assert not run.finished(record)
+    record.write_text(json.dumps({"error": "timed out", "patch_bytes": 40}))
+    assert run.finished(record)
+    record.write_text(json.dumps({"error": "", "patch_bytes": 0}))
+    assert run.finished(record)
 
 
 def test_a_read_tool_summary_counts_as_a_tool_input() -> None:

@@ -26,6 +26,7 @@ from checkouts import capture_patch, kept_branches, materialize  # noqa: E402
 from runners import RUNNERS, ArmResult  # noqa: E402
 
 _MIN_FREE_GB = 5
+_STOP_AFTER_FAILURES = 3
 
 
 def load_task(number: int) -> Task:
@@ -45,6 +46,7 @@ def run_one(arm: str, task: Task, sample: int, out: Path, work: Path) -> dict:
     if free_gb(work) < _MIN_FREE_GB:
         raise SystemExit(f"stopping: under {_MIN_FREE_GB} GB free")
     path = work / name
+    shutil.rmtree(path, ignore_errors=True)
     checkout = materialize(task, path)
     began = time.monotonic()
     try:
@@ -78,26 +80,68 @@ def run_one(arm: str, task: Task, sample: int, out: Path, work: Path) -> dict:
     return record
 
 
+def finished(record_file: Path) -> bool:
+    """Whether a run is done. One that failed before doing any work (a usage limit, an outage) runs again."""
+    if not record_file.exists():
+        return False
+    record = json.loads(record_file.read_text())
+    return not (record.get("error") and not record.get("patch_bytes"))
+
+
+def no_work(record: dict) -> bool:
+    return bool(record.get("error")) and not record.get("patch_bytes")
+
+
+def check_setup(numbers: list[int], work: Path) -> int:
+    """Build each task's copy and install its dependencies, spending no model quota."""
+    broken = 0
+    for number in numbers:
+        task = load_task(number)
+        path = work / f"check-{number:02}"
+        began = time.monotonic()
+        try:
+            copy = materialize(task, path)
+            status = "ok" if not copy.setup_failed else f"setup failed: {copy.setup_failed}"
+        except Exception as exc:
+            status, broken = f"BROKEN {type(exc).__name__}: {str(exc)[:300]}", broken + 1
+        print(f"{number:2} {time.monotonic() - began:6.0f}s {free_gb(work):5.1f} GB free  {status[:500]}", flush=True)
+        shutil.rmtree(path, ignore_errors=True)
+    return 1 if broken else 0
+
+
+def run_all(args: argparse.Namespace, numbers: list[int], out: Path, work: Path) -> None:
+    in_a_row = 0
+    for sample in range(1, args.samples + 1):
+        for number in numbers:
+            task = load_task(number)
+            for arm in args.arms.split(","):
+                if finished(out / f"{run_id(arm, number, sample)}.json"):
+                    continue
+                in_a_row = in_a_row + 1 if no_work(run_one(arm, task, sample, out, work)) else 0
+                if in_a_row >= _STOP_AFTER_FAILURES:
+                    # Most likely a usage limit: carrying on would only record failures. Rerun to continue.
+                    raise SystemExit(f"stopping: {in_a_row} runs in a row did no work")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--arms", default="claude,codex,north")
     parser.add_argument("--tasks", default=",".join(str(n) for n in range(1, 21)))
     parser.add_argument("--samples", type=int, default=1)
-    parser.add_argument("--name", required=True)
+    parser.add_argument("--name", default="")
+    parser.add_argument("--check-setup", action="store_true")
     args = parser.parse_args()
 
     os.environ["PATH"] = f"{TOOLS_DIR / 'go' / 'bin'}:{os.environ['PATH']}"
-    out = RESULTS_DIR / args.name
-    out.mkdir(parents=True, exist_ok=True)
+    numbers = [int(n) for n in args.tasks.split(",")]
     work = Path(tempfile.mkdtemp(prefix="north-bench-work-", dir=Path.home() / ".cache" / "north"))
-    print(f"results -> {out}", flush=True)
     try:
-        for sample in range(1, args.samples + 1):
-            for number in (int(n) for n in args.tasks.split(",")):
-                task = load_task(number)
-                for arm in args.arms.split(","):
-                    if not (out / f"{run_id(arm, number, sample)}.json").exists():
-                        run_one(arm, task, sample, out, work)
+        if args.check_setup:
+            return check_setup(numbers, work)
+        out = RESULTS_DIR / args.name
+        out.mkdir(parents=True, exist_ok=True)
+        print(f"results -> {out}", flush=True)
+        run_all(args, numbers, out, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return 0

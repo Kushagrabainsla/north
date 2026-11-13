@@ -14,6 +14,7 @@ from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentRes
 from context.repo_instructions import load_repo_instructions
 from context.repo_map import build_repo_map
 from context.repo_revision import repository_identity
+from inference.exceptions import is_model_unavailable_error
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
@@ -137,7 +138,10 @@ class Agent(ABC):
                 raise
             except Exception as exc:
                 if store is not None:
-                    await store.finish_with_error(payload.run_id, "failed", str(exc))
+                    # No model could take the next step: the run's work stands, and the task, queued until a
+                    # model is back, continues it. Recorded as failed, it started over and forgot what it did.
+                    status = "paused" if is_model_unavailable_error(exc) else "failed"
+                    await store.finish_with_error(payload.run_id, status, str(exc))
                 raise
 
     @abstractmethod

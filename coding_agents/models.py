@@ -128,6 +128,7 @@ class WorkChange:
 class VerificationState(StrEnum):
     PASSED = "passed"
     FAILED = "failed"
+    ALREADY_FAILING = "already_failing"  # some fail, the same ones as without the change
     SKIPPED = "skipped"  # nothing to run, or it could not be run
     DECLINED = "declined"  # the user would not let the tests run
 

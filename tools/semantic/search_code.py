@@ -47,13 +47,20 @@ class SearchCodeTool(Tool):
 
     def format_output(self, data: dict[str, Any]) -> str:
         matches = data.get("matches", [])
+        partial = data.get("partial")
+        note = (
+            f"\nThe index of this repository is still being built ({partial['indexed']} of {partial['total']} "
+            "changed files done), so these results can miss code. For an exact name, use search_files."
+            if partial
+            else ""
+        )
         if not matches:
-            return "No semantically similar code found (try grep/search_symbols for exact names)."
+            return f"No semantically similar code found (try grep/search_symbols for exact names).{note}"
         lines = [f"Found {len(matches)} relevant code location(s):"]
         for m in matches:
             sym = f" `{m['symbol']}`" if m.get("symbol") else ""
             lines.append(f"- {m['path']}:{m['start_line']}-{m['end_line']}{sym}")
-        return "\n".join(lines)
+        return "\n".join(lines) + note
 
     async def run(self, input: ToolInput) -> ToolOutput:
         query = (input.params.get("query") or "").strip()
@@ -79,4 +86,8 @@ class SearchCodeTool(Tool):
             }
             for path, start, end, symbol, code in results
         ]
-        return ToolOutput(success=True, data={"matches": matches, "count": len(matches)})
+        data: dict[str, Any] = {"matches": matches, "count": len(matches)}
+        # The first search of a repository waits for its index only so long: say when the rest is not done.
+        if (building := self._index.building(workspace)) is not None:
+            data["partial"] = {"indexed": building[0], "total": building[1]}
+        return ToolOutput(success=True, data=data)

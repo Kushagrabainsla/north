@@ -22,12 +22,13 @@ from inference.decisions import EXHAUSTED, FAILED, SUCCESS, DecisionLog, Routing
 from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
+    ModelDegenerateError,
     PinnedModelUnavailableError,
 )
 from inference.facts.catalog import FactsCatalog
 from inference.facts.identity import canonical
 from inference.facts.models import Entitlement
-from inference.failure import OutageCorroboration, Scope, classify, invalid_response
+from inference.failure import Failure, OutageCorroboration, Scope, classify, invalid_response
 from inference.model_policy import model_matches
 from inference.routing.availability import AvailabilityView
 from inference.routing.chain import Candidate, ChainWalk, Requirements, context_of, narrow
@@ -49,6 +50,8 @@ _MAX_INLINE_WAIT_SECONDS = 40.0
 # Cooldowns expire on a clock this process does not own, so the retry sleeps a
 # little past the deadline rather than racing it.
 _WAIT_GRACE_SECONDS = 0.5
+# How long before asking again after an empty reply.
+_EMPTY_REPLY_PAUSE_SECONDS = 1.0
 
 # Distinguishes "the walk produced no answer" from a call that legitimately
 # returned None.
@@ -266,14 +269,17 @@ class ChainRouter:
                 continue
             started = time.monotonic()
             try:
-                result = await call_fn(provider, attempt.model_id)
+                result = await _asking_again_if_empty(call_fn, provider, attempt.model_id)
             except Exception as exc:
-                failure = classify(
-                    exc,
-                    model_id=attempt.model_id,
-                    provider=attempt.provider,
-                    capability=capability,
-                    is_free=attempt.endpoint.is_free,
+                failure = self._weighed(
+                    classify(
+                        exc,
+                        model_id=attempt.model_id,
+                        provider=attempt.provider,
+                        capability=capability,
+                        is_free=attempt.endpoint.is_free,
+                    ),
+                    attempt,
                 )
                 attempt.failed(failure)
                 if failure.scope is Scope.REQUEST:
@@ -286,13 +292,13 @@ class ChainRouter:
                 continue
 
             if is_valid is not None and not is_valid(result):
-                failure = invalid_response(attempt.model_id, attempt.provider, capability)
+                failure = self._weighed(invalid_response(attempt.model_id, attempt.provider, capability), attempt)
                 self._apply(failure, attempt)
                 attempt.failed(failure)
                 continue
 
             self._record_speed(attempt, time.monotonic() - started, result)
-            self._succeed(attempt)
+            self._succeed(attempt, capability)
             decision.chose(attempt.model_id, attempt.provider)
             self._decisions.record(_finish(decision, walk))
             return result, walk, profile
@@ -316,13 +322,29 @@ class ChainRouter:
         tokens_out = getattr(result, "tokens_out", 0) or 0
         self._on_latency(attempt.model_id, attempt.provider, seconds, int(tokens_out))
 
-    def _succeed(self, attempt) -> None:
+    def _weighed(self, failure: Failure, attempt) -> Failure:
+        """A capability failure from a model that has already served that capability is a hiccup.
+
+        An empty reply reads as "cannot call tools" and suspended tool calling on the model for an
+        hour. One that had made some 30 tool calls in the same task sent two, right after rate
+        limits, and as the only model it stalled the task until it timed out (benchmark,
+        2026-11-11). Such a model gets the short cooldown any passing failure gets.
+        """
+        if (
+            failure.scope is Scope.MODEL_CAPABILITY
+            and failure.capability
+            and self._availability.has_served(attempt.endpoint, failure.capability)
+        ):
+            return replace(failure, scope=Scope.MODEL, capability=None)
+        return failure
+
+    def _succeed(self, attempt, capability: str | None = None) -> None:
         # Only persist entitlement when it actually changed. A paid call going
         # through is news exactly once - after that, rewriting every endpoint row
         # for the provider on every successful call would put a table update on
         # the inference path for no new information.
         was_restricted = self._availability.entitlements.entitlement_of(attempt.endpoint) is not Entitlement.UNKNOWN
-        self._availability.record_success(attempt.endpoint)
+        self._availability.record_success(attempt.endpoint, capability)
         self._corroboration.clear(attempt.provider)
         if was_restricted:
             # Only the tier that just answered is cleared. A free model working
@@ -371,6 +393,20 @@ class ChainRouter:
             self._catalog.entitlement_updates(attempt.provider, Entitlement.FORBIDDEN, tier="any")
         if self._on_outcome is not None and failure.scope is not Scope.REQUEST:
             self._on_outcome(attempt.model_id, attempt.provider, False)
+
+
+async def _asking_again_if_empty(call_fn: Callable[[Any, str], Awaitable[Any]], provider: Any, model_id: str) -> Any:
+    """One call, asked once more if the model sends nothing back.
+
+    One empty reply says nothing about the model, yet it suspended tool calling for an hour;
+    with one model pinned, that stalled the task for the hour. Two in a row count against it.
+    """
+    try:
+        return await call_fn(provider, model_id)
+    except ModelDegenerateError as exc:
+        logger.info("%s sent an empty reply (%s) - asking again", model_id, exc.reason)
+    await asyncio.sleep(_EMPTY_REPLY_PAUSE_SECONDS)
+    return await call_fn(provider, model_id)
 
 
 def requirements_from(

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 # A plan run reads and thinks; this caps how long it may do either.
 DEFAULT_MAX_TURNS = 40
+# An edit run also writes, builds and tests. At 40 turns one stopped twice midway through a large
+# change, and a stopped run is not applied (benchmark, 2026-11-12). The budget still caps its cost.
+EDIT_MAX_TURNS = 150
 DEFAULT_MAX_BUDGET_USD = 2.0
 # A hard stop for a run that neither finishes nor errors. Approvals are not counted here: they
 # never expire (CODING_STYLE 13.5) and a plan run asks for none.
@@ -12,8 +15,15 @@ PROBE_TIMEOUT_SECONDS = 15.0
 # How long Claude Code waits for the gate to answer. An approval waits for a person and never expires
 # (CODING_STYLE 13.5), so this is a day, not a limit anyone meets.
 HOOK_TIMEOUT_SECONDS = 86_400
-# The longest north lets a project's own tests run after an edit.
-VERIFY_TIMEOUT_SECONDS = 300
+# The longest north lets a project's own tests run after an edit. Seaborn's suite takes 3.5 min on an
+# idle Mac; at 300 s a busy one cut it off, and the change was held back on no evidence.
+VERIFY_TIMEOUT_SECONDS = 600
+# Models an agent may review its own agent's change with, when no other agent can: the first one that
+# is not the author's model. With none listed, or none other, the review uses the agent's default model
+# in a new session. Codex's are left out: north does not know which model names a given Codex account takes.
+SAME_AGENT_REVIEW_MODELS: dict[str, tuple[str, ...]] = {"claude": ("claude-opus-5-5", "claude-sonnet-5-5")}
+# The exit code `timeout(1)` uses: a run of the tests that north stopped at the limit.
+TIMED_OUT_EXIT_CODE = 124
 # How much of a failing run's output is kept to show.
 MAX_VERIFY_OUTPUT_CHARS = 2_000
 # Dependency directories linked into a copy only while its tests run: the copy has none of its own.

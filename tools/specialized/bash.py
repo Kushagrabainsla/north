@@ -17,6 +17,7 @@ from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
+from coding_agents.constants import VERIFY_TIMEOUT_SECONDS
 from tools._path import deletes_a_root, edited_paths, git_repository, is_sensitive_path, named_paths, simple_commands
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
@@ -32,6 +33,7 @@ from utils.edit_scope import narrow_workspace
 from utils.processes import stop_process_group
 
 _TIMEOUT = 30
+_MAX_TIMEOUT = 300
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the
 # model's context window.  The tail is truncated with a visible marker.
 _MAX_OUTPUT_CHARS = 30_000
@@ -353,8 +355,10 @@ class BashTool(Tool):
         boundary = _boundary(input)
         cwd = _cwd(input, boundary)
         raw_timeout = input.params.get("timeout")
+        # North's own test run in a copy may take as long as a project's suite needs; a model's command may not.
+        longest = VERIFY_TIMEOUT_SECONDS if input.isolated_copy else _MAX_TIMEOUT
         try:
-            timeout = min(max(int(raw_timeout), 1), 300) if raw_timeout is not None else _TIMEOUT
+            timeout = min(max(int(raw_timeout), 1), longest) if raw_timeout is not None else _TIMEOUT
         except (ValueError, TypeError):
             timeout = _TIMEOUT
 
@@ -364,7 +368,8 @@ class BashTool(Tool):
         exec_argv, exec_cwd, sandbox_error = await self._resolve_execution(command, cwd, boundary, outside, limit)
         if sandbox_error is not None:
             return ToolOutput(success=False, error=sandbox_error)
-        output = await self._spawn(exec_argv, exec_cwd, timeout, command=command)
+        # A run in an agent's copy is north testing it: it compares all of the output, and no model reads it whole.
+        output = await self._spawn(exec_argv, exec_cwd, timeout, command=command, capped=not input.isolated_copy)
         if limit is not None and self._os_sandbox and self._os_sandbox.denied(_all_output(output)):
             note = _REPOSITORY_READ_ONLY.format(root=limit.root)
             if output.success:
@@ -383,7 +388,9 @@ class BashTool(Tool):
             )
         return output
 
-    async def _spawn(self, argv: list[str] | None, cwd: str | None, timeout: int, *, command: str) -> ToolOutput:
+    async def _spawn(
+        self, argv: list[str] | None, cwd: str | None, timeout: int, *, command: str, capped: bool = True
+    ) -> ToolOutput:
         """Run *argv* - or *command* through the host shell when there is none - and collect its output."""
         try:
             if argv is not None:
@@ -414,8 +421,9 @@ class BashTool(Tool):
             # A timeout or a cancelled task stops the command and whatever it started.
             await stop_process_group(proc, grace_seconds=1.0)
 
-        stdout = _cap(stdout_b.decode("utf-8", errors="replace"))
-        stderr = _cap(stderr_b.decode("utf-8", errors="replace"))
+        stdout, stderr = stdout_b.decode("utf-8", errors="replace"), stderr_b.decode("utf-8", errors="replace")
+        if capped:
+            stdout, stderr = _cap(stdout), _cap(stderr)
         success = proc.returncode == 0
         return ToolOutput(
             success=success,

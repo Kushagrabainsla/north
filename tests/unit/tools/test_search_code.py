@@ -56,6 +56,24 @@ async def test_search_code_caps_max_results(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_results_from_an_index_still_being_built_say_so() -> None:
+    class Building:
+        async def search(self, workspace: str, query: str, max_results: int):
+            return [("a.py", 1, 2, "def add", "def add(a, b): ...")]
+
+        def building(self, workspace: str):
+            return (40, 300)
+
+    tool = SearchCodeTool(code_index=Building())
+
+    out = await tool.run(ToolInput(params={"query": "add", "workspace": "/repo"}))
+
+    assert out.data["partial"] == {"indexed": 40, "total": 300}
+    assert "still being built (40 of 300 changed files done)" in tool.format_output(out.data)
+    assert "use search_files" in tool.format_output(out.data)
+
+
+@pytest.mark.asyncio
 async def test_format_output_lists_locations(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
     tool = SearchCodeTool(code_index=CodeIndex(tmp_path / "idx.db", _fake_embed))

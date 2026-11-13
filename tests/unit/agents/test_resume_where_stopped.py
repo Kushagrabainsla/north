@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
+from inference.exceptions import AllModelsRateLimitedError
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
 from orchestrator.agent_runs import AgentRunStore
@@ -106,6 +109,51 @@ async def test_a_new_task_or_another_step_starts_afresh(tmp_path: Path) -> None:
     )
 
     assert notes.read == ["1", "1", "2", "1", "2"]
+
+
+class _RateLimitedOnce(_Model):
+    """After the first read no model can serve, once; the task is queued and run again."""
+
+    async def complete_with_tools(self, request, token_callback=None):
+        results = [m for m in request.messages if m.get("role") == "tool"]
+        if len(results) == 1 and self.stalled:
+            self.stalled = False
+            raise AllModelsRateLimitedError("No model could serve north - 1 model is rate limited", retry_after=None)
+        return await super().complete_with_tools(request, token_callback)
+
+
+async def test_a_run_no_model_could_serve_is_continued_not_started_over(tmp_path: Path) -> None:
+    """Real run: a rate limit after the coding agent's edit started north over, and its report was wrong."""
+    model, runs, notes = _RateLimitedOnce(), AgentRunStore(tmp_path / "tasks.db"), _ReadsNotes()
+    model.stalled = True
+    with pytest.raises(AllModelsRateLimitedError):
+        await _agent(tmp_path, model, runs, notes).run(AgentPayload(task_id="t1", prompt=PROMPT))
+
+    result = await asyncio.wait_for(
+        _agent(tmp_path, model, runs, notes).run(AgentPayload(task_id="t1", prompt=PROMPT)), 5
+    )
+
+    assert notes.read == ["1", "2"]
+    assert "read_note" in (result.successful_tools or []), "what the first try did still counts as evidence"
+    [run] = await runs.list_for_task("t1")
+    assert run.status == "completed"
+
+
+async def test_a_run_that_broke_is_still_not_continued(tmp_path: Path) -> None:
+    class _Broken(_Model):
+        async def complete_with_tools(self, request, token_callback=None):
+            if self.stalled and any(m.get("role") == "tool" for m in request.messages):
+                self.stalled = False
+                raise RuntimeError("a bug")
+            return await super().complete_with_tools(request, token_callback)
+
+    model, runs, notes = _Broken(), AgentRunStore(tmp_path / "tasks.db"), _ReadsNotes()
+    with pytest.raises(RuntimeError):
+        await _agent(tmp_path, model, runs, notes).run(AgentPayload(task_id="t1", prompt=PROMPT))
+
+    await asyncio.wait_for(_agent(tmp_path, model, runs, notes).run(AgentPayload(task_id="t1", prompt=PROMPT)), 5)
+
+    assert notes.read == ["1", "1", "2"]
 
 
 async def test_only_a_run_stopped_from_outside_is_continued(tmp_path: Path) -> None:

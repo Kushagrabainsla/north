@@ -98,6 +98,7 @@ _EVIDENCE_LOCATOR_KEYS: tuple[str, ...] = (
 
 # How much of a final answer is kept as its one-line summary.
 _SUMMARY_CHARS = 120
+_NORTH_NOTE = "[north's own check, not a message from the user. Never attribute it to the user.]\n"
 # A step whose every model is rate limited is tried again this many times, waiting out each limit that says it
 # lifts within the bound; past either, the run fails as before (and the task is queued for the model).
 _RATE_LIMIT_WAITS = 3
@@ -633,8 +634,13 @@ class AgenticLLMAgent(LLMAgent):
         if payload.execution_profile == "quick_readonly":
             return ""
         workspace = payload.granted_workspace or payload.workspace or ""
-        notes = [await tool.before_task_ends(payload.task_id, workspace) for tool in tool_map.values()]
-        return "\n\n".join(note for note in notes if note)
+        asked = [await tool.before_task_ends(payload.task_id, workspace) for tool in tool_map.values()]
+        notes = [note for note in asked if note]
+        if not notes:
+            return ""
+        # Sent in the user's turn, a note read as the user's own words: a report said "As you asked, I have
+        # not started another edit" of a rule north set (benchmark, 2026-11-11).
+        return _NORTH_NOTE + "\n\n".join(notes)
 
     async def _save_progress(
         self, payload: AgentPayload, messages: list[dict], messages_read: int, step: int, tally: _RunTally

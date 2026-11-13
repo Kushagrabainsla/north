@@ -7,11 +7,9 @@ north runs for an agent; this only turns the tool's output into what the coding 
 from __future__ import annotations
 
 from coding_agents import ShellResult
+from coding_agents.constants import TIMED_OUT_EXIT_CODE
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
-
-# The exit code `timeout(1)` uses, so a hung test suite reads as a failing one, not a skipped one.
-_TIMED_OUT = 124
 
 
 class BashShell:
@@ -34,4 +32,6 @@ class BashShell:
         if "returncode" in data:
             return ShellResult(int(data["returncode"]), f"{data.get('stdout', '')}{data.get('stderr', '')}")
         error = output.error or ""
-        return ShellResult(_TIMED_OUT if error.startswith("Command timed out") else None, error, error=error)
+        # A hung suite reads as a failing one, not a skipped one: a change can make it hang.
+        timed_out = error.startswith("Command timed out")
+        return ShellResult(TIMED_OUT_EXIT_CODE if timed_out else None, error, error=error)

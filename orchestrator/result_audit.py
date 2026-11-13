@@ -40,7 +40,9 @@ _CRITIC_ANSWER_CHARS = 3000
 _SELF_REPAIR_INSTRUCTION = (
     "Do only what is still missing to close those gaps, with your tools, or rewrite your answer to "
     "remove any claim you did not verify with a tool. Never state something was done unless a tool did it. "
-    "If a gap is not one, because the check misread the task, say why in the answer."
+    "If a gap is not one, because the check misread the task, say why in one sentence at the end. "
+    # A correction that answered only the check dropped the root cause and the fix it had explained.
+    "Your reply replaces the previous answer, so give the whole answer again, with every part that is still true."
 )
 
 

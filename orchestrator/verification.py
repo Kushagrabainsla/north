@@ -99,6 +99,12 @@ _EXPLICIT_PATH_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# What a commit, push or merge acts on in version control.
+_VCS_OBJECT = (
+    r"(?:changes?|fix(?:es)?|work|edits?|commits?|branch(?:es)?|main|master|origin|remote|upstream|"
+    r"repo(?:sitory)?|github|pr|pull\s+request)"
+)
+
 # (label, claim pattern, tools whose successful use substantiates the claim).
 _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
     (
@@ -134,9 +140,15 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
         frozenset({"bash", "coding_agent"}),
     ),
     (
+        # The verb alone is no claim: "two sessions that had both fired were merged"
+        # and "the committed version" were flagged. A version-control object must
+        # share the verb's clause, after it ("pushed to main") or before it ("the
+        # changes were committed").
         "committing or pushing changes",
         re.compile(
-            r"\b(?:committed|pushed|merged)\b|\bopened?\s+a\s+(?:pr|pull\s+request)\b",
+            rf"\b(?:committed|pushed|merged)\b[^.,;:\n]{{0,40}}?\b{_VCS_OBJECT}\b"
+            rf"|\b{_VCS_OBJECT}\b[^.,;:\n]{{0,30}}?\b(?:was|were|been|is|are)\s+(?:committed|pushed|merged)\b"
+            r"|\bopened?\s+a\s+(?:pr|pull\s+request)\b",
             re.IGNORECASE,
         ),
         frozenset({"git", "gh"}),
@@ -301,7 +313,8 @@ def evidence_sufficiency_violations(
         if relevant_calls < 2:
             violations.append("repository overview was based on fewer than two concrete repository inspections")
 
-    if _EXTERNAL_RESEARCH_RE.search(task) and not (succeeded & _WEB_EVIDENCE_TOOLS):
+    # A coding agent did the work: a bug report's "compare the current value" is not a request for web research.
+    if _EXTERNAL_RESEARCH_RE.search(task) and _CODING_AGENT not in succeeded and not (succeeded & _WEB_EVIDENCE_TOOLS):
         violations.append("external/current research used no successful `web_search` or `fetch_url` evidence")
 
     return violations

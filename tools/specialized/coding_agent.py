@@ -16,7 +16,16 @@ from pathlib import Path
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from coding_agents import Briefing, CodingAgentError, CodingRunner, FailureKind, LandingState, Mode, RunReport
+from coding_agents import (
+    Briefing,
+    CodingAgentError,
+    CodingRunner,
+    FailureKind,
+    LandingState,
+    Mode,
+    ReviewVerdict,
+    RunReport,
+)
 from context.repo_instructions import load_repo_instructions
 from tools._path import git_repository
 from tools.base import Tool, prepared
@@ -37,9 +46,19 @@ _NOT_DELEGATED = (
     "a code change, a bug fixed, or this code investigated, and that is not done, call coding_agent now. "
     "If it needs none of that, give your final answer again."
 )
+_NO_REVIEW = (
+    "Say in your report that the change was not reviewed, and why. Do not run another edit for it. "
+    "A reply with no tool call ends the task."
+)
 _AFTER_REVIEW = (
     "That review is an opinion, not a check. If it names a real bug, fix it with one coding_agent edit, then finish. "
-    "Findings that are only style, naming or extra tests go in your report. Tell the user what the reviewer said."
+    "Findings that are only style, naming or extra tests go in your report. Tell the user what the reviewer said. "
+    "Otherwise write your final report now: north already ran the tests, and a reply with no tool call ends the task."
+)
+_NOT_APPLIED = (
+    "Your last coding_agent edit was NOT applied: tests failed with it that pass without it, and its copy is gone. "
+    "Call coding_agent in edit mode now, with the whole task and those failures, so the next edit gets it right. "
+    "If that cannot be done, tell the user it is on its branch and why. A reply with no tool call ends the task."
 )
 
 
@@ -61,9 +80,11 @@ class _Progress:
     called: bool = False
     reminded: bool = False
     reviewed: bool = False
-    review_wanted: bool = True
+    review_wanted: bool = False  # whether any applied edit wanted the end-of-task review
     author: str = ""
     landed: list[str] = field(default_factory=list)
+    tests_held_it_back: bool = False  # the last edit broke tests, so it was not applied
+    told_not_applied: bool = False
 
 
 class CodingAgentTool(Tool):
@@ -100,8 +121,9 @@ class CodingAgentTool(Tool):
                 },
                 "review": {
                     "type": "boolean",
-                    "description": "edit only: when the task's edits are done, the other coding agent reads the "
-                    "whole result once. Set false only if the user said not to review (default true)",
+                    "description": "edit only: when the task's edits are done, another coding agent (or, when none "
+                    "can, the same agent in a new session) reads the whole result once. Set false only if the "
+                    "user said not to review (default true)",
                 },
                 "backend": {
                     "type": "string",
@@ -174,10 +196,15 @@ class CodingAgentTool(Tool):
             )
         except CodingAgentError as exc:  # no usable agent, edit not set up, not a git repository
             return ToolOutput(success=False, error=str(exc))
+        if report.landing is not None:
+            progress.tests_held_it_back = report.landing.state is LandingState.KEPT and not report.landing.by_policy
         if report.landing is not None and report.landing.state is LandingState.APPLIED:
             progress.landed.append(call.task)
             progress.author = report.backend
-            progress.review_wanted = progress.review_wanted and call.review
+            # Any applied edit that wanted a review keeps it: a small follow-up sent with review off once
+            # cancelled the review of the whole change (benchmark, 2026-11-12). A user who said no to a
+            # review is asked for it on every call, so none wants one.
+            progress.review_wanted = progress.review_wanted or call.review
         return _output(report)
 
     def task_note(self, workspace: str) -> str:
@@ -193,6 +220,9 @@ class CodingAgentTool(Tool):
                 return ""
             progress.reminded = True
             return _NOT_DELEGATED
+        if progress.tests_held_it_back and not progress.told_not_applied:
+            progress.told_not_applied = True
+            return _NOT_APPLIED
         if not progress.landed or progress.reviewed or not progress.review_wanted:
             return ""
         progress.reviewed = True
@@ -204,6 +234,8 @@ class CodingAgentTool(Tool):
         )
         if review is None:
             return ""
+        if review.verdict is ReviewVerdict.UNCLEAR:
+            return f"The finished change has no review. {review.summary}\n\n{_NO_REVIEW}"
         verdict = f"{review.reviewer} reviewed the finished change. Verdict: {review.verdict.value}."
         return f"{verdict}\n{review.summary}\n\n{_AFTER_REVIEW}"
 
@@ -369,15 +401,24 @@ def _edit_summary(data: dict) -> str:
         return (
             f"The agent's changes were applied to your working tree as uncommitted changes ({size}). {tests}\n{files}"
         )
-    why = {
-        "conflict": "the same lines changed in your working tree meanwhile",
-        "declined": "you chose to keep them on the branch",
-    }.get(landing["state"], landing["reason"])
+    why = "you chose to keep them on the branch" if landing["state"] == "declined" else landing["reason"]
     text = (
         f"The agent's changes were NOT applied: {why}. {tests} They are on branch `{change['branch']}` "
         f"in your repository ({size}). To review: "
         f"`git -C {change['base']} diff {change['base_sha']}..{change['branch']}`.\n{files}"
     )
+    if landing["state"] == "conflict":
+        # North merged such a branch by hand once, and git overwrote the ignored files in the way.
+        text += (
+            "\n\nDo not merge or check out that branch yourself: it would overwrite what is in the way. "
+            "Tell the user what is in the way and that the change waits on the branch."
+        )
+    elif landing["state"] != "declined":
+        # After its tests failed, north fast-forwarded the user's branch onto the change by hand.
+        text += (
+            "\n\nDo not merge, cherry-pick or check out that branch yourself: that would skip the check that "
+            "held it back. Fix the cause with another coding_agent edit, or tell the user why it waits."
+        )
     if landing.get("by_policy"):
         text += (
             "\n\nIf meeting that rule would contradict what the user asked, ask the user which they want; "
@@ -415,4 +456,8 @@ def _tests_summary(verification: dict | None) -> str:
         return f"north ran the tests{command} on them: passed."
     if state == "failed":
         return f"north ran the tests{command} on them: FAILED.\n{verification['detail']}"
-    return f"The tests were not run{command}: {verification['detail']}."
+    if state == "already_failing":
+        return f"north ran the tests{command} on them: some fail, but {verification['detail']}."
+    if command:  # they were started: the runner was missing, or they never finished
+        return f"north ran the tests{command} but got no result: {verification['detail']}."
+    return f"The tests were not run: {verification['detail']}."

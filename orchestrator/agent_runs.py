@@ -60,8 +60,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 # Where an agent's conversation had got to, saved after each step, so a run stopped from outside
 # (a pause, a restart) continues from there instead of starting over (CODING_STYLE §15.5).
 _MIGRATION_ADD_CHECKPOINT = "ALTER TABLE agent_runs ADD COLUMN checkpoint TEXT"
-# A run stopped from outside, which a task that resumes continues: paused (cancelled) or cut off by a restart.
-_CONTINUABLE = ("cancelled", "interrupted")
+# A run stopped from outside, which a task that resumes continues: paused by you (cancelled), cut off by a
+# restart, or paused because no model could take its next step.
+_CONTINUABLE = ("cancelled", "interrupted", "paused")
 
 _EVENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_run_events (

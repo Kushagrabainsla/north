@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -103,6 +104,29 @@ async def _run_git(
         await stop_process_group(proc)
     stdout = out if binary else out.decode(errors="replace")
     return proc.returncode, stdout, err.decode(errors="replace")
+
+
+_ALREADY_THERE = re.compile(r"^error: (.+): already exists in working directory$", re.MULTILINE)
+_CHANGED_THERE = re.compile(r"^error: patch failed: (.+):\d+$", re.MULTILINE)
+_SHOWN_PATHS = 5
+
+
+def _refusal_words(stderr: str) -> str:
+    """`git apply --check`'s refusal, said plainly: which files, and what is in the way of each."""
+    reasons = []
+    if there := list(dict.fromkeys(_ALREADY_THERE.findall(stderr))):
+        reasons.append(f"files it adds are already in your folder, untracked: {_named(there)}")
+    if changed := list(dict.fromkeys(_CHANGED_THERE.findall(stderr))):
+        reasons.append(f"the same lines changed in your working tree: {_named(changed)}")
+    if reasons:
+        return "; ".join(reasons)
+    first = next((line for line in stderr.splitlines() if line.strip()), "git refused it")
+    return first.removeprefix("error: ").strip()
+
+
+def _named(paths: list[str]) -> str:
+    shown = ", ".join(f"`{path}`" for path in paths[:_SHOWN_PATHS])
+    return f"{shown} and {len(paths) - _SHOWN_PATHS} more" if len(paths) > _SHOWN_PATHS else shown
 
 
 def _slug(label: str) -> str:
@@ -279,6 +303,19 @@ class GitWorktreeManager:
         if code != 0:
             raise WorktreeError(f"git diff failed: {err.strip()}")
         return await self._apply_back(wt, patch, lock=lock)
+
+    async def refusal(self, wt: Worktree) -> str:
+        """Why *wt*'s change does not apply to the base working tree, in plain words; "" when it applies.
+
+        Every refusal was reported as "the same lines changed", which was false for a tree that was clean
+        but held untracked files the change adds (benchmark, 2026-11-11). North then merged the branch by
+        hand on that false word, and git overwrote the files.
+        """
+        code, patch, err = await _run_git(["diff", "--binary", wt.base_sha, "HEAD"], wt.path, binary=True)
+        if code != 0:
+            return f"git could not read the change: {err.strip()}"
+        code, _, err = await _run_git(["apply", "--check", "--whitespace=nowarn"], wt.base, input_data=patch)
+        return "" if code == 0 else _refusal_words(err)
 
     async def diff_text(self, wt: Worktree) -> str:
         """What *wt*'s branch tip changed against the commit it branched from, as a unified diff."""
