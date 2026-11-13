@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from catalog import RESULTS_DIR, Task, task_file  # noqa: E402
+from catalog import CACHE, RESULTS_DIR, Task, task_file  # noqa: E402
 
 _HERE = Path(__file__).parent
 _LEAK_COMMAND = re.compile(
@@ -108,7 +108,12 @@ def remove_image(folder: Path) -> None:
 
 
 def load(number: int) -> Task:
-    return Task(**json.loads(task_file(number).read_text()))
+    """A task, with a relative score path read from this machine's benchmark folder (the scoring kit's form)."""
+    task = Task(**json.loads(task_file(number).read_text()))
+    for key in ("folder", "gold"):
+        if key in task.score and not Path(task.score[key]).is_absolute():
+            task.score[key] = str(CACHE / task.score[key])
+    return task
 
 
 def check(number: int) -> int:

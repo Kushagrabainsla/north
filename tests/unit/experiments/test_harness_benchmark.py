@@ -16,6 +16,7 @@ sys.path.insert(0, str(_DIR.parent / "coding_paths_comparison"))
 import catalog  # noqa: E402
 import checkouts  # noqa: E402
 import fetch  # noqa: E402
+import kit  # noqa: E402
 import report  # noqa: E402
 import runners  # noqa: E402
 import score  # noqa: E402
@@ -331,3 +332,54 @@ def test_an_unchanged_login_is_left_alone(tmp_path: Path) -> None:
         (folder / "credentials").mkdir(parents=True)
         (folder / runners._LOGIN).write_text("same")
     assert not runners.return_login(home, real)
+
+
+def test_a_kit_task_names_its_folders_relative_to_the_benchmark_folder() -> None:
+    folder = kit.CACHE / "sources" / "x" / "task"
+    task = {"number": 1, "score": {"kind": "harbor", "folder": str(folder), "gold": str(folder / "gold.diff")}}
+
+    assert kit._relative(task)["score"] == {
+        "kind": "harbor",
+        "folder": "sources/x/task",
+        "gold": "sources/x/task/gold.diff",
+    }
+
+
+def test_the_scorer_reads_a_relative_task_folder_from_its_own_benchmark_folder(tmp_path: Path, monkeypatch) -> None:
+    file = tmp_path / "01.json"
+    score_paths = {"kind": "harbor", "folder": "sources/a", "gold": "/abs/g"}
+    task = catalog.Task(1, "small", catalog.SWE_PRO, "t", "p", {"kind": "dir"}, score=score_paths)
+    file.write_text(json.dumps(catalog.asdict(task)))
+    monkeypatch.setattr(score, "task_file", lambda number: file)
+    monkeypatch.setattr(score, "CACHE", tmp_path / "bench")
+
+    loaded = score.load(1)
+
+    assert loaded.score["folder"] == str(tmp_path / "bench" / "sources" / "a")
+    assert loaded.score["gold"] == "/abs/g", "an absolute path is left as it is"
+
+
+@pytest.mark.parametrize(
+    ("record", "scored"),
+    [
+        ({"error": "", "patch_bytes": 10}, True),
+        ({"error": "", "patch_bytes": 0}, True),  # did the work and changed nothing: a real result
+        ({"error": "out of credits", "patch_bytes": 0}, False),  # never started: not a failure to score
+        ({"error": "timed out", "patch_bytes": 50}, True),
+    ],
+)
+def test_a_run_that_never_started_is_left_out_of_the_kit(record: dict, scored: bool) -> None:
+    assert kit._did_work(record) is scored
+
+
+def test_the_report_compares_setups_on_the_tasks_they_all_ran(tmp_path: Path) -> None:
+    rows = [("north", 1, True), ("north", 2, False), ("north", 3, True), ("claude", 1, True), ("claude", 2, True)]
+    for arm, number, passed in rows:
+        record = {"arm": arm, "number": number, "score": {"passed": passed, "reward": float(passed)}}
+        (tmp_path / f"{arm}__{number:02d}__s1.json").write_text(json.dumps(record))
+
+    text = kit.report(tmp_path)
+
+    assert "tasks every setup ran: [1, 2]" in text
+    assert "claude: 2/2 passed on the shared tasks; all its tasks: 2/2" in text
+    assert "north: 1/2 passed on the shared tasks; all its tasks: 2/3" in text

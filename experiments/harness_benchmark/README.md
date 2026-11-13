@@ -54,6 +54,54 @@ To prove the scorer on a task first (the reference fix must pass and an empty ch
 uvx --from harbor python experiments/harness_benchmark/score.py --check 2
 ```
 
+### Score on a cloud machine
+
+A Mac cannot score: the images are x86 only and total over 40 GB. `kit.py` packs everything the scorer needs into one
+archive of about 1 MB. It holds north's latest run of each task and each plain run that did work.
+
+1. Build the kit on the Mac:
+
+   ```bash
+   .venv/bin/python experiments/harness_benchmark/kit.py build
+   ```
+
+2. Create an x86 Linux machine with Docker and about 100 GB of disk, for example a DigitalOcean CPU-optimized droplet
+   (8 vCPU, 16 GB) from the Docker image.
+3. Copy the kit to it, open it and start the script. Use `tmux`, so the run continues when SSH disconnects:
+
+   ```bash
+   scp ~/.cache/north/harness-benchmark/results/scoring-kit.tar.gz root@HOST:
+   ```
+
+   ```bash
+   ssh root@HOST
+   ```
+
+   ```bash
+   tar xzf scoring-kit.tar.gz && tmux new -s score ./scoring-kit/score_on_droplet.sh
+   ```
+
+   The script first proves the scorer on tasks 2 and 16, then scores every patch. It stops if a proof fails.
+4. Copy the scores back, open them, and read the report:
+
+   ```bash
+   scp root@HOST:scoring-kit/scores.tar.gz ~/.cache/north/harness-benchmark/results/
+   ```
+
+   ```bash
+   mkdir -p ~/.cache/north/harness-benchmark/results/final
+   ```
+
+   ```bash
+   tar xzf ~/.cache/north/harness-benchmark/results/scores.tar.gz -C ~/.cache/north/harness-benchmark/results/final
+   ```
+
+   ```bash
+   .venv/bin/python experiments/harness_benchmark/kit.py report
+   ```
+
+5. Destroy the machine. It bills until you destroy it.
+
 ## Checked so far
 
 - Scorer, on task 2: SWE-bench Pro's reference fix passes and an empty change fails. The other verifiers are unproven.
