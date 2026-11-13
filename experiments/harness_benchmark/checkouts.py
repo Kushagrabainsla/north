@@ -14,6 +14,8 @@ from typing import Any
 
 from catalog import SOURCES_DIR, Task
 
+from utils.filesystem import PRUNED_DIRS
+
 _GIT = ("git", "-c", "user.name=bench", "-c", "user.email=bench@bench", "-c", "commit.gpgsign=false")
 # Installed dependencies and caches: on disk for the agents, never part of a patch, and not added to the project.
 _EXCLUDED = (".venv/", "node_modules/", "__pycache__/", ".pytest_cache/", ".next/", ".mypy_cache/", "*.pyc")
@@ -168,9 +170,35 @@ def materialize(task: Task, dest: Path) -> Checkout:
 
 
 def capture_patch(path: Path, seed: str) -> str:
-    """Everything the run changed since the seed, committed or not."""
+    """Everything the run changed since the seed, committed or not, without the build output it left.
+
+    Plain Claude built task 9 in place, and its patch carried `build/regression_test` and its debug files:
+    macOS programs that `make` in the Linux scoring image could take for up to date. A new file is left
+    out when it is binary or sits in a build or dependency folder; a file the seed had always stays.
+    """
     _git(path, "add", "-A")
+    generated = _build_output(path, seed)
+    if generated:
+        _git(path, "reset", "-q", "--", *(f":(literal){name}" for name in generated))
     return _git(path, "diff", "--cached", "--binary", seed)
+
+
+def _descends_from(path: Path, seed: str, branch: str) -> bool:
+    found = subprocess.run([*_GIT, "merge-base", "--is-ancestor", seed, branch], cwd=path, capture_output=True)
+    return found.returncode == 0
+
+
+def _build_output(path: Path, seed: str) -> list[str]:
+    """The staged files new since *seed* that a build made, not an author."""
+    added = set(_git(path, "diff", "--cached", "--name-only", "--diff-filter=A", "-z", seed).split("\0")) - {""}
+    binary = {
+        line.split("\t", 2)[2]
+        for line in _git(path, "diff", "--cached", "--numstat", seed).splitlines()
+        if line.startswith("-\t-\t")
+    }
+    return sorted(
+        name for name in added if name in binary or any(part in PRUNED_DIRS for part in Path(name).parts[:-1])
+    )
 
 
 def kept_branches(path: Path, seed: str) -> dict[str, str]:
@@ -179,7 +207,9 @@ def kept_branches(path: Path, seed: str) -> dict[str, str]:
     current = _git(path, "branch", "--show-current").strip()
     kept = {}
     for name in names:
-        if name != current:
+        # A run's branch starts at the seed. A review task's checkout has the project's own branches too,
+        # and task 18's "kept" patch was a 160 MB diff to one of them, for a run that changed nothing.
+        if name != current and _descends_from(path, seed, name):
             diff = _git(path, "diff", "--binary", seed, name)
             if diff:
                 kept[name] = diff

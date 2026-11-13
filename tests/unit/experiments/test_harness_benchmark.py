@@ -98,6 +98,24 @@ def test_the_patch_has_edits_and_new_files_but_not_dependencies(tmp_path: Path) 
     assert "node_modules" not in patch
 
 
+def test_build_output_a_run_left_is_not_part_of_the_patch(tmp_path: Path) -> None:
+    """Plain Claude built task 9 in place: its patch carried macOS programs from build/."""
+    copy = checkouts.materialize(_files_task({"src/a.cc": "int a;\n", "build/keep.txt": "tracked\n"}), tmp_path / "w")
+    (copy.path / "src" / "a.cc").write_text("int a = 1;\n")
+    (copy.path / "tests").mkdir()
+    (copy.path / "tests" / "t.cc").write_text("int t;\n")
+    (copy.path / "build" / "regression_test").write_bytes(b"\xcf\xfa\xed\xfe\x00\x01binary")
+    (copy.path / "build" / "Info.plist").write_text("<plist/>\n")
+    (copy.path / "bin_tool").write_bytes(b"\x00\x01\x02 compiled")
+    (copy.path / "build" / "keep.txt").write_text("tracked, changed\n")
+
+    patch = checkouts.capture_patch(copy.path, copy.seed)
+
+    assert "src/a.cc" in patch and "tests/t.cc" in patch
+    assert "build/keep.txt" in patch, "a file the seed had stays, even in a build folder"
+    assert "regression_test" not in patch and "Info.plist" not in patch and "bin_tool" not in patch
+
+
 def test_a_change_the_agent_committed_is_still_captured(tmp_path: Path) -> None:
     copy = checkouts.materialize(_files_task({"a.py": "x = 1\n"}), tmp_path / "w")
     (copy.path / "a.py").write_text("x = 2\n")
@@ -114,6 +132,21 @@ def test_a_change_left_on_a_branch_is_found(tmp_path: Path) -> None:
     subprocess.run([*git, "commit", "-qam", "kept"], cwd=copy.path, check=True)
     subprocess.run([*git, "checkout", "-q", "-"], cwd=copy.path, check=True)
     assert "x = 2" in checkouts.kept_branches(copy.path, copy.seed)["kept"]
+
+
+def test_a_branch_the_project_already_had_is_not_a_kept_change(tmp_path: Path) -> None:
+    """Task 18's checkout keeps the project's branches; one was taken for the run's work, a 160 MB diff."""
+    copy = checkouts.materialize(_files_task({"a.py": "x = 1\n"}), tmp_path / "w")
+    git = ["git", "-c", "user.name=a", "-c", "user.email=a@a"]
+    run_branch = subprocess.run(
+        ["git", "branch", "--show-current"], cwd=copy.path, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run([*git, "checkout", "-q", "--orphan", "upstream-main"], cwd=copy.path, check=True)
+    (copy.path / "a.py").write_text("x = 99\n")
+    subprocess.run([*git, "commit", "-qam", "project history"], cwd=copy.path, check=True)
+    subprocess.run([*git, "checkout", "-q", "-f", run_branch], cwd=copy.path, check=True)
+
+    assert checkouts.kept_branches(copy.path, copy.seed) == {}
 
 
 def test_what_setup_creates_is_not_part_of_the_patch(tmp_path: Path) -> None:
