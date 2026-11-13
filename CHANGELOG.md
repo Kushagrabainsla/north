@@ -4,6 +4,9 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **The benchmark scorer grades every task it was given** (`experiments/harness_benchmark/replay_agent.py`, `fetch.py`, `kit.py`). The first cloud run scored tasks 8 to 15 and 17 as failures for every setup, for three reasons. Terminal-Bench's slim images have neither git nor patch, so a patch never reached the code; the replay agent now applies it outside the image to the files it touches and copies them back. FeatureBench's images keep pytest in a conda env that only an interactive shell activates; the verifier now activates it. dask's test patch also changes a workflow file, and pytest, handed that path, ran no test; only Python files are passed now. A FeatureBench verifier removed every file its test patch touched before reversing it, so xarray's changed test file was lost; only deleted files are removed now. The verifier also prints the end of the test log, and the kit checks for `docker compose` first. Still open: task 14's image prints results through an output plugin that the log check cannot read, and task 17's reference fix fails 110 of its 3,520 tests in its own image.
+
 ### Added
 - **A scoring kit for the harness benchmark** (`experiments/harness_benchmark/kit.py`). A Mac cannot score: the images are x86 only and total over 40 GB. `kit.py build` packs the scorer, the task files with paths relative to the benchmark folder, the task folders and one results folder (north's latest run of each task, and each plain run that did work) into an archive of about 1 MB. Its `score_on_droplet.sh` proves the scorer on tasks 2 and 16 and then scores every patch on any x86 machine with Docker. `kit.py report` gives the pass rate of each setup on the tasks they all ran. `score.py` now reads a relative task path from its own benchmark folder.
 

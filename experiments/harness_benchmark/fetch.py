@@ -141,11 +141,19 @@ def harbor_task(folder: Path, image: str, workdir: str, test_script: str, instru
     return folder
 
 
+# These images keep the project and pytest in a conda env that only an interactive shell's .bashrc activates; the
+# verifier's shell is not one, so FeatureBench's runs found no pytest and every test read as missing.
+_ACTIVATE = "[ -f /opt/miniconda3/bin/activate ] && source /opt/miniconda3/bin/activate testbed 2>/dev/null"
+# The end of the test run, in the verifier's own output: "missing 6 of 6" alone hid both of the faults above.
+_SHOW_LOG = "echo '--- end of the test log ---'; tail -40 /tmp/test.log"
+
+
 def pytest_verifier(workdir: str, setup_lines: list[str], must_pass: list[str], command: str) -> str:
     """A verifier that passes only when every listed test passed, in Harbor's reward-file form."""
     listed = json.dumps(must_pass)
     return f"""#!/bin/bash
 cd {workdir}
+{_ACTIVATE}
 {chr(10).join(setup_lines)}
 {command} > /tmp/test.log 2>&1
 python3 - <<'CHECK'
@@ -163,6 +171,7 @@ missing = [name for name in must if not ok(name)]
 print('missing', len(missing), 'of', len(must), missing[:20])
 open('/logs/verifier/reward.txt', 'w').write('0' if missing else '1')
 CHECK
+{_SHOW_LOG}
 """
 
 
@@ -197,6 +206,20 @@ def terminal_task(entry: Entry, root: Path) -> Task:
     )
 
 
+def deleted_files(test_patch: str) -> list[str]:
+    """The files a test patch deletes: an agent may have written them again, so they go before the reverse apply.
+
+    Only those: xarray's level-2 test patch changes `test_treenode.py`, and removing it first made the reverse
+    apply fail, so the tests that grade the task were not there at all.
+    """
+    blocks = re.split(r"(?m)^(?=diff --git )", test_patch)
+    return sorted(
+        found.group(1)
+        for block in blocks
+        if re.search(r"(?m)^\+\+\+ /dev/null", block) and (found := re.search(r"(?m)^--- a/(\S+)", block))
+    )
+
+
 def feature_task(entry: Entry, rows: list[dict[str, Any]]) -> Task:
     row = _one(rows, "instance_id", entry.task_id)
     workdir = "/testbed"
@@ -207,11 +230,9 @@ def feature_task(entry: Entry, rows: list[dict[str, Any]]) -> Task:
     (folder / "tests" / "test_patch.patch").write_text(row["test_patch"])
     # FeatureBench's images hold the full code; its harness removes the feature first, so grading must too.
     (folder / "prepare.patch").write_text("".join(p for p in (row["patch"], row["test_patch"]) if p))
-    deleted = sorted(set(re.findall(r"^--- a/(\S+)", row["test_patch"], re.M)))
-    clear = f"rm -f {' '.join(deleted)}"
-    script = pytest_verifier(
-        workdir, [clear, "git apply -R /tests/test_patch.patch"], must, f"python -m pytest -rA -q {' '.join(must)}"
-    )
+    deleted = deleted_files(row["test_patch"])
+    setup = ([f"rm -f {' '.join(deleted)}"] if deleted else []) + ["git apply -R /tests/test_patch.patch"]
+    script = pytest_verifier(workdir, setup, must, f"python -m pytest -rA -q {' '.join(must)}")
     (folder / "tests" / "test.sh").write_text(script)
     return Task(
         entry.number,
@@ -230,6 +251,12 @@ def feature_task(entry: Entry, rows: list[dict[str, Any]]) -> Task:
     )
 
 
+def test_files(test_patch: str) -> list[str]:
+    """The Python files a test patch writes: dask's also changes .github/workflows/tests.yml, and pytest, handed
+    that path, stops with "not found" and runs no test at all."""
+    return sorted(path for path in set(re.findall(r"^\+\+\+ b/(\S+)", test_patch, re.M)) if path.endswith(".py"))
+
+
 def evo_task(entry: Entry, rows: list[dict[str, Any]]) -> Task:
     row = _one(rows, "instance_id", entry.task_id)
     workdir = "/testbed"
@@ -239,10 +266,9 @@ def evo_task(entry: Entry, rows: list[dict[str, Any]]) -> Task:
     (folder / "tests" / "test_patch.patch").write_text(row["test_patch"])
     (folder / "solution").mkdir(exist_ok=True)
     (folder / "solution" / "gold_patch.diff").write_text(row["patch"])
-    files = sorted(set(re.findall(r"^\+\+\+ b/(\S+)", row["test_patch"], re.M)))
-    activate = "source /opt/miniconda3/bin/activate testbed 2>/dev/null"
+    files = test_files(row["test_patch"])
     script = pytest_verifier(
-        workdir, [activate, "git apply /tests/test_patch.patch"], must, f"{row['test_cmds']} {' '.join(files)}"
+        workdir, ["git apply /tests/test_patch.patch"], must, f"{row['test_cmds']} {' '.join(files)}"
     )
     (folder / "tests" / "test.sh").write_text(script)
     return Task(

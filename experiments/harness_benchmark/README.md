@@ -65,8 +65,9 @@ archive of about 1 MB. It holds north's latest run of each task and each plain r
    .venv/bin/python experiments/harness_benchmark/kit.py build
    ```
 
-2. Create an x86 Linux machine with Docker and about 100 GB of disk, for example a DigitalOcean CPU-optimized droplet
-   (8 vCPU, 16 GB) from the Docker image.
+2. Create an x86 Linux machine with Docker, the `docker compose` plugin and about 100 GB of disk. A DigitalOcean
+   `s-4vcpu-8gb` droplet (160 GB disk) on Ubuntu 24.04 works, with `apt-get install docker.io docker-compose-v2 tmux`.
+   The Docker marketplace image did not start its SSH server in one attempt.
 3. Copy the kit to it, open it and start the script. Use `tmux`, so the run continues when SSH disconnects:
 
    ```bash

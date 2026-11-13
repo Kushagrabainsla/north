@@ -233,6 +233,31 @@ def test_a_whole_file_fails_if_any_test_in_it_failed(tmp_path: Path) -> None:
     assert _run_verifier(tmp_path, "PASSED t.py::a\nFAILED t.py::b - boom\n", ["t.py"]) == "0"
 
 
+def test_the_verifier_uses_the_images_test_env_and_shows_the_log_end() -> None:
+    """FeatureBench's runs used the base Python with no pytest, and "missing 6 of 6" was all that came out."""
+    script = fetch.pytest_verifier("/testbed", [], ["t.py"], "pytest t.py")
+
+    assert "source /opt/miniconda3/bin/activate testbed" in script.split("pytest t.py")[0]
+    assert script.rstrip().endswith("tail -40 /tmp/test.log")
+
+
+def test_only_python_files_from_a_test_patch_are_handed_to_pytest() -> None:
+    """dask's test patch also changes a workflow file; given that path, pytest ran no test at all."""
+    patch = "+++ b/dask/tests/test_a.py\n+++ b/.github/workflows/tests.yml\n+++ b/dask/conftest.py\n"
+
+    assert fetch.test_files(patch) == ["dask/conftest.py", "dask/tests/test_a.py"]
+
+
+def test_only_files_a_test_patch_deletes_are_removed_before_it_is_reversed() -> None:
+    """xarray's level-2 patch changes test_treenode.py; removing it broke the reverse apply."""
+    patch = (
+        "diff --git a/t/test_gone.py b/t/test_gone.py\ndeleted file mode 100644\n--- a/t/test_gone.py\n+++ /dev/null\n"
+        "diff --git a/t/test_kept.py b/t/test_kept.py\n--- a/t/test_kept.py\n+++ b/t/test_kept.py\n"
+    )
+
+    assert fetch.deleted_files(patch) == ["t/test_gone.py"]
+
+
 def test_a_list_stored_as_text_is_read() -> None:
     assert fetch._as_list("['a', 'b']") == ["a", "b"]
     assert fetch._as_list('["a"]') == ["a"]

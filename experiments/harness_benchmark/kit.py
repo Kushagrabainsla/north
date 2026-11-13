@@ -46,6 +46,7 @@ cp -R "$KIT/cache/." "$BENCH/"
 if ! command -v uv >/dev/null; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi
 export PATH="$HOME/.local/bin:$PATH"
 docker info >/dev/null
+docker compose version >/dev/null  # Harbor runs each task with compose; Ubuntu's docker.io leaves it out
 cd "$KIT/harness"
 HARBOR=(uvx --from "harbor=={harbor}" --with httpx python)
 echo "== proving the scorer: each reference fix must pass, an empty change must fail"
