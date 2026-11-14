@@ -24,6 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from catalog import CACHE, RESULTS_DIR, Task, task_file  # noqa: E402
 
+# The file a calibration writes beside a task's tests; fetch.py's verifier reads it from /tests in the image.
+KNOWN_FAILING = "known_failing.json"
+
 _HERE = Path(__file__).parent
 _LEAK_COMMAND = re.compile(
     r"(\bcat\b|\bless\b|\bhead\b|\btail\b|\bsource\b|\bopen\(|file_path)[^\n]{0,200}\.env\b|os\.environ"
@@ -116,6 +119,27 @@ def load(number: int) -> Task:
     return task
 
 
+def calibrate(number: int) -> int:
+    """Run the reference fix and record the listed tests that fail even with it: the image's own faults.
+
+    SWE-bench counts a test only if it passes with the reference fix in that environment. Without this, task 17
+    could not be passed by any patch: its reference fix fails 110 of 3,520 tests in the published image.
+    """
+    task = load(number)
+    known = Path(task.score["folder"]) / "tests" / KNOWN_FAILING
+    known.unlink(missing_ok=True)  # an earlier calibration would hide its tests from this one
+    jobs = Path(tempfile.mkdtemp(prefix="bench-calibrate-"))
+    harbor_grade(task, Path(task.score["gold"]), jobs, "calibrate")
+    found = next((jobs / "calibrate").rglob("missing.json"), None)
+    if found is None:
+        print(f"task {number}: the reference fix produced no test results, logs in {jobs}")
+        return 1
+    failing = sorted(json.loads(found.read_text()))
+    known.write_text(json.dumps(failing, indent=1))
+    print(f"task {number}: {len(failing)} listed tests fail with the reference fix; they are left out")
+    return 0
+
+
 def check(number: int) -> int:
     """Prove the scorer before trusting it: the benchmark's reference fix passes, an empty change fails."""
     task = load(number)
@@ -153,7 +177,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--name")
     parser.add_argument("--check", type=int)
+    parser.add_argument("--calibrate", type=int)
     args = parser.parse_args()
+    if args.calibrate:
+        return calibrate(args.calibrate)
     return check(args.check) if args.check else score_run(args.name)
 
 

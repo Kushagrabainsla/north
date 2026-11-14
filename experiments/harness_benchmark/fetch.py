@@ -148,6 +148,14 @@ _ACTIVATE = "[ -f /opt/miniconda3/bin/activate ] && source /opt/miniconda3/bin/a
 _SHOW_LOG = "echo '--- end of the test log ---'; tail -40 /tmp/test.log"
 
 
+# pytest's own structured report. An output plugin cannot change it: pydantic's image prints its results through
+# one and the log held no "PASSED" line, so 62 passing tests read as missing.
+_JUNIT = "/tmp/junit.xml"
+# The listed tests that fail in this image even with the reference fix, written by `score.py --calibrate`: faults of
+# the environment, which no patch can mend. dask's reference fix failed 110 of 3,520 that way.
+KNOWN_FAILING = "known_failing.json"
+
+
 def pytest_verifier(workdir: str, setup_lines: list[str], must_pass: list[str], command: str) -> str:
     """A verifier that passes only when every listed test passed, in Harbor's reward-file form."""
     listed = json.dumps(must_pass)
@@ -155,20 +163,38 @@ def pytest_verifier(workdir: str, setup_lines: list[str], must_pass: list[str], 
 cd {workdir}
 {_ACTIVATE}
 {chr(10).join(setup_lines)}
-{command} > /tmp/test.log 2>&1
+rm -f {_JUNIT}
+{command} --junitxml={_JUNIT} -o junit_family=xunit1 > /tmp/test.log 2>&1
 python3 - <<'CHECK'
-import json, re
+import json, os, re
+import xml.etree.ElementTree as ET
 must = {listed}
+if os.path.exists('/tests/{KNOWN_FAILING}'):
+    known = set(json.load(open('/tests/{KNOWN_FAILING}')))
+    must = [name for name in must if name not in known]
 log = open('/tmp/test.log', errors='replace').read()
 passed = set(re.findall(r'^PASSED (\\S.*?)(?: - .*)?$', log, re.M))
 passed |= {{m for m in re.findall(r'^(\\S+::\\S.*?) PASSED', log, re.M)}}
 failed = set(re.findall(r'^(?:FAILED|ERROR) (\\S.*?)(?: - .*)?$', log, re.M))
+if os.path.exists('{_JUNIT}'):
+    for case in ET.parse('{_JUNIT}').iter('testcase'):
+        path = case.get('file') or ''
+        module = path[:-3].replace('/', '.') if path.endswith('.py') else ''
+        owner = case.get('classname') or ''
+        inner = owner[len(module):].lstrip('.') if module and owner.startswith(module) else ''
+        node = '::'.join(part for part in [path, *inner.split('.'), case.get('name') or ''] if part)
+        outcomes = {{child.tag for child in case}}
+        if outcomes & {{'failure', 'error'}}:
+            failed.add(node)
+        elif 'skipped' not in outcomes:
+            passed.add(node)
 def ok(name):
     if '::' in name:
         return name in passed
     return any(p.startswith(name) for p in passed) and not any(f.startswith(name) for f in failed)
 missing = [name for name in must if not ok(name)]
 print('missing', len(missing), 'of', len(must), missing[:20])
+json.dump(missing, open('/logs/verifier/missing.json', 'w'))
 open('/logs/verifier/reward.txt', 'w').write('0' if missing else '1')
 CHECK
 {_SHOW_LOG}

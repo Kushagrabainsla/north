@@ -82,7 +82,9 @@ archive of about 1 MB. It holds north's latest run of each task and each plain r
    tar xzf scoring-kit.tar.gz && tmux new -s score ./scoring-kit/score_on_droplet.sh
    ```
 
-   The script first proves the scorer on tasks 2 and 16, then scores every patch. It stops if a proof fails.
+   The script first calibrates and proves the scorer on the reference fixes of the kit's tasks (tasks 2 and 16 for a
+   full kit), then scores every patch. It stops if a proof fails. To score only some tasks, build the kit with
+   `--tasks 14,15,17`.
 4. Copy the scores back, open them, and read the report:
 
    ```bash
@@ -105,7 +107,11 @@ archive of about 1 MB. It holds north's latest run of each task and each plain r
 
 ## Checked so far
 
-- Scorer, on task 2: SWE-bench Pro's reference fix passes and an empty change fails. The other verifiers are unproven.
+- Scorer: the reference fix passes and an empty change fails on tasks 2, 16 and 17 (17 after calibration). Every
+  scored run on 2026-11-13 had its patch applied and its tests run; the job logs show it.
+- Scores, one sample each (task 18 is not scored): north 11 of 18, plain Claude 12 of the same 18 (13 of 19 with task
+  15, which north cannot take), plain Codex 7 of 7 (it ran out of credits after task 7). North took 131 minutes and
+  $31.67 on the shared tasks, plain Claude 53 minutes and $15.34.
 - All three setups ran end to end on tasks 19 and 20. One sample each, so this says nothing about which is better.
 
 ## Limits

@@ -35,6 +35,8 @@ NORTH_RUNS = {
     13: "loop-rev6", 14: "loop-b6", 16: "loop-b7", 17: "loop-b6", 18: "loop-b7", 19: "loop-b7", 20: "loop-b8",
 }  # fmt: skip
 PLAIN_RUNS = "plain-v2"
+# A reference fix of each kind of scorer: SWE-bench Pro's own tasks, and the ones fetch.py writes.
+_DEFAULT_PROOFS = (2, 16)
 
 _DROPLET_SCRIPT = """#!/usr/bin/env bash
 # Score every patch in this kit. Run on an x86 Linux machine with Docker, as a user who may run docker.
@@ -50,11 +52,14 @@ docker compose version >/dev/null  # Harbor runs each task with compose; Ubuntu'
 cd "$KIT/harness"
 HARBOR=(uvx --from "harbor=={harbor}" --with httpx python)
 echo "== proving the scorer: each reference fix must pass, an empty change must fail"
-"${{HARBOR[@]}}" score.py --check 2
-"${{HARBOR[@]}}" score.py --check 16
+for task in {proofs}; do
+  "${{HARBOR[@]}}" score.py --calibrate "$task"
+  "${{HARBOR[@]}}" score.py --check "$task"
+done
 echo "== scoring every patch (hours; progress in $KIT/score.log)"
 "${{HARBOR[@]}}" score.py --name {final} 2>&1 | tee "$KIT/score.log"
-tar czf "$KIT/scores.tar.gz" -C "$BENCH/results/{final}" --exclude=jobs .
+# With the job logs (a few MB): they show whether each patch applied and the tests ran, so a score can be trusted.
+tar czf "$KIT/scores.tar.gz" -C "$BENCH/results/{final}" .
 echo "== done: copy $KIT/scores.tar.gz back to the Mac"
 """
 
@@ -73,34 +78,43 @@ def _did_work(record: dict) -> bool:
     return not (record.get("error") and not record.get("patch_bytes"))
 
 
-def _runs_to_score() -> list[Path]:
-    """The record of each run to score: north's latest per task, and each plain run that did work."""
+def _runs_to_score(tasks: set[int]) -> list[Path]:
+    """The record of each run to score on *tasks*: north's latest per task, and each plain run that did work."""
     chosen = [RESULTS_DIR / folder / f"north__{task:02d}__s1.json" for task, folder in NORTH_RUNS.items()]
     chosen += sorted((RESULTS_DIR / PLAIN_RUNS).glob("*__*__s1.json"))
-    return [path for path in chosen if _did_work(json.loads(path.read_text()))]
+    records = [(path, json.loads(path.read_text())) for path in chosen]
+    return [path for path, record in records if record["number"] in tasks and _did_work(record)]
 
 
-def build(dest: Path) -> Path:
-    """Write the kit to *dest* and return the archive's path."""
+def proof_tasks(tasks: set[int]) -> list[int]:
+    """The tasks whose reference fix proves the scorer: the chosen ones that have one, else one of each kind."""
+    with_gold = sorted(t for t in tasks if "gold" in (json.loads((TASKS_DIR / f"{t:02d}.json").read_text())["score"]))
+    return with_gold or list(_DEFAULT_PROOFS)
+
+
+def build(dest: Path, tasks: set[int] | None = None) -> Path:
+    """Write the kit to *dest*, for *tasks* (all of them when None), and return the archive's path."""
+    tasks = tasks or set(range(1, 21))
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch) / _KIT_NAME
         (root / "harness").mkdir(parents=True)
         for name in _HARNESS_FILES:
             shutil.copy2(_HERE / name, root / "harness" / name)
-        tasks = root / "cache" / "tasks"
-        tasks.mkdir(parents=True)
+        task_dir = root / "cache" / "tasks"
+        task_dir.mkdir(parents=True)
         for file in sorted(TASKS_DIR.glob("*.json")):
             task = _relative(json.loads(file.read_text()))
-            (tasks / file.name).write_text(json.dumps(task, indent=1))
+            (task_dir / file.name).write_text(json.dumps(task, indent=1))
             if "folder" in task["score"]:
                 shutil.copytree(CACHE / task["score"]["folder"], root / "cache" / task["score"]["folder"])
         final = root / "cache" / "results" / _FINAL
         final.mkdir(parents=True)
-        for record in _runs_to_score():
+        for record in _runs_to_score(tasks):
             shutil.copy2(record, final / record.name)
             shutil.copy2(record.with_suffix(".patch"), final / record.with_suffix(".patch").name)
         script = root / "score_on_droplet.sh"
-        script.write_text(_DROPLET_SCRIPT.format(harbor=HARBOR_VERSION, final=_FINAL))
+        proofs = " ".join(str(t) for t in proof_tasks(tasks))
+        script.write_text(_DROPLET_SCRIPT.format(harbor=HARBOR_VERSION, final=_FINAL, proofs=proofs))
         script.chmod(0o755)
         archive = dest / f"{_KIT_NAME}.tar.gz"
         with tarfile.open(archive, "w:gz") as packed:
@@ -146,9 +160,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("build", "check", "report"))
     parser.add_argument("path", nargs="?")
+    parser.add_argument("--tasks", help="build: only these tasks, as 14,15,17")
     args = parser.parse_args()
     if args.command == "build":
-        archive = build(RESULTS_DIR)
+        archive = build(RESULTS_DIR, {int(n) for n in args.tasks.split(",")} if args.tasks else None)
         problems = check(archive)
         print(f"wrote {archive}" if not problems else "\n".join(problems))
         return 1 if problems else 0

@@ -211,14 +211,55 @@ def test_no_reward_is_none_not_a_failure(tmp_path: Path) -> None:
     assert score.read_reward(tmp_path) is None
 
 
-def _run_verifier(tmp_path: Path, log: str, must: list[str]) -> str:
-    script = fetch.pytest_verifier(str(tmp_path), [], must, f"cat {tmp_path / 'log'}")
+def _run_verifier(
+    tmp_path: Path, log: str, must: list[str], junit: str | None = None, known: list[str] | None = None
+) -> str:
+    # Through `sh -c`, the JUnit options the verifier appends are spare arguments, not options of `cat`.
+    script = fetch.pytest_verifier(str(tmp_path), [], must, f"sh -c 'cat {tmp_path / 'log'}' _")
     (tmp_path / "log").write_text(log)
-    logs = tmp_path / "verifier"
+    logs, tests = tmp_path / "verifier", tmp_path / "tests"
     logs.mkdir()
-    script = script.replace("/logs/verifier", str(logs)).replace("/tmp/test.log", str(tmp_path / "out"))
+    tests.mkdir()
+    if known is not None:
+        (tests / fetch.KNOWN_FAILING).write_text(json.dumps(known))
+    script = (
+        script.replace("/logs/verifier", str(logs))
+        .replace("/tmp/test.log", str(tmp_path / "out"))
+        .replace("/tests/", f"{tests}/")
+        .replace("rm -f /tmp/junit.xml", ":")
+        .replace("/tmp/junit.xml", str(tmp_path / "junit.xml"))
+    )
+    if junit is not None:
+        (tmp_path / "junit.xml").write_text(junit)
     subprocess.run(["bash", "-c", script], check=True, capture_output=True)
     return (logs / "reward.txt").read_text()
+
+
+_JUNIT = """<testsuites><testsuite>
+<testcase classname="tests.test_strict.TestStrict" name="test_a[1]" file="tests/test_strict.py"/>
+<testcase classname="tests.test_strict" name="test_b" file="tests/test_strict.py"/>
+<testcase classname="tests.test_strict" name="test_c" file="tests/test_strict.py"><skipped/></testcase>
+{extra}</testsuite></testsuites>"""
+
+
+def test_the_junit_report_counts_when_an_output_plugin_hides_the_log_lines(tmp_path: Path) -> None:
+    """pydantic's image printed "62 passed" through a plugin, and no PASSED line at all."""
+    must = ["tests/test_strict.py::TestStrict::test_a[1]", "tests/test_strict.py::test_b"]
+
+    assert _run_verifier(tmp_path, "Results: 2 passed\n", must, junit=_JUNIT.format(extra="")) == "1"
+
+
+def test_a_failure_in_the_junit_report_fails_a_whole_file(tmp_path: Path) -> None:
+    failing = '<testcase classname="tests.test_strict" name="test_d" file="tests/test_strict.py"><failure/></testcase>'
+
+    assert _run_verifier(tmp_path, "", ["tests/test_strict.py"], junit=_JUNIT.format(extra=failing)) == "0"
+
+
+def test_tests_that_fail_even_with_the_reference_fix_are_left_out(tmp_path: Path) -> None:
+    """dask's reference fix failed 110 of its 3,520 listed tests in the published image."""
+    log = "PASSED t.py::a\nFAILED t.py::env_fault - DeprecationWarning\n"
+
+    assert _run_verifier(tmp_path, log, ["t.py::a", "t.py::env_fault"], known=["t.py::env_fault"]) == "1"
 
 
 def test_the_verifier_passes_when_every_listed_test_passed(tmp_path: Path) -> None:
@@ -408,3 +449,8 @@ def test_the_report_compares_setups_on_the_tasks_they_all_ran(tmp_path: Path) ->
     assert "tasks every setup ran: [1, 2]" in text
     assert "claude: 2/2 passed on the shared tasks; all its tasks: 2/2" in text
     assert "north: 1/2 passed on the shared tasks; all its tasks: 2/3" in text
+
+
+def test_a_kit_for_some_tasks_is_proven_on_their_own_reference_fixes() -> None:
+    assert kit.proof_tasks({14, 15, 17}) == [17], "only task 17 of these has a reference fix"
+    assert kit.proof_tasks({13, 14}) == [2, 16], "with none, one task of each kind"
