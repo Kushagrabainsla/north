@@ -451,6 +451,12 @@ def test_the_report_compares_setups_on_the_tasks_they_all_ran(tmp_path: Path) ->
     assert "north: 1/2 passed on the shared tasks; all its tasks: 2/3" in text
 
 
-def test_a_kit_for_some_tasks_is_proven_on_their_own_reference_fixes() -> None:
+def test_a_kit_for_some_tasks_is_proven_on_their_own_reference_fixes(tmp_path: Path, monkeypatch) -> None:
+    # Task files of its own: the benchmark's live in a home folder that CI does not have.
+    for number in (13, 14, 15, 17):
+        score = {"kind": "harbor", "folder": "f"} | ({"gold": "g"} if number == 17 else {})
+        (tmp_path / f"{number:02d}.json").write_text(json.dumps({"score": score}))
+    monkeypatch.setattr(kit, "TASKS_DIR", tmp_path)
+
     assert kit.proof_tasks({14, 15, 17}) == [17], "only task 17 of these has a reference fix"
     assert kit.proof_tasks({13, 14}) == [2, 16], "with none, one task of each kind"
