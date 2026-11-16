@@ -109,6 +109,53 @@ def _listens_on(proc, port: int) -> bool:
         return False
 
 
+# What a north server's command line holds: `north start`, `uvicorn orchestrator.app:app`, the installed launcher.
+_NORTH_COMMANDS = ("north start", "orchestrator.app:app", "bin/north")
+
+
+def _started_as_north(proc) -> bool:
+    """Whether *proc* was started as a north server, by its program and its command line.
+
+    The words only count for a program that could be a north server: matched against any command line, they
+    also matched a shell, an editor or a grep that merely mentioned one.
+    """
+    import psutil
+
+    try:
+        name = (proc.name() or "").lower()
+        cmdline = " ".join(proc.cmdline()).lower()
+    except (psutil.Error, OSError):
+        return False
+    return (name.startswith("python") or name in {"north", "uvicorn"}) and any(k in cmdline for k in _NORTH_COMMANDS)
+
+
+def _home_of(proc) -> Path | None:
+    """The north home *proc* was started with, read from its environment; None when that cannot be read."""
+    import psutil
+
+    from config.settings import north_home_in
+
+    try:
+        environment = proc.environ()
+    except (psutil.Error, OSError):
+        return None
+    return north_home_in(environment).resolve()
+
+
+def _is_this_homes_north(proc, home: Path, port: int | None = None) -> bool:
+    """Whether *proc* is a north server of *home*: started as north with *home* as its home, or listening on
+    *port*, this home's port.
+
+    Every north on the machine matched before, whatever its home: stopping or updating the user's north also
+    stopped a benchmark's server on another port and home (2026-11-11), and a stale pid file can name any
+    process once its number is reused. A server's spawned worker inherits the home of the process that started
+    it, and holds the port, so it is still found.
+    """
+    if port is not None and _listens_on(proc, port):
+        return True
+    return _started_as_north(proc) and _home_of(proc) == home.expanduser().resolve()
+
+
 def _kill_port(host: str, port: int) -> bool:
     """Kill this user's processes listening on *port*; True when any were found.
 

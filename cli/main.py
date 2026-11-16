@@ -62,8 +62,8 @@ from cli._server import (
     _find_project_root,
     _is_north_server,
     _is_other_north,
+    _is_this_homes_north,
     _kill_port,
-    _listens_on,
     _port_in_use,
     _resolve_workspace,
     _start_server_process,
@@ -2319,7 +2319,10 @@ def update(
 
 
 def _north_processes(port: int = 8000) -> list:
-    """Every process that is part of a running north, however it was spawned.
+    """Every process that is part of this home's running north, however it was spawned.
+
+    Only this home's: another north on the machine, a second install or a benchmark's server with a home of its
+    own, is not touched (see `_is_this_homes_north`).
 
     Three ways in, because one is not enough. The command line finds a server
     started as `north start` or `uvicorn orchestrator.app:app`. The pid file
@@ -2352,23 +2355,11 @@ def _north_processes(port: int = 8000) -> list:
             pass
 
     me = psutil.Process().username()
-    for proc in psutil.process_iter(["pid", "name", "cmdline", "username"]):
+    for proc in psutil.process_iter(["pid", "username"]):
         try:
-            if proc.pid == current_pid:
-                continue
-            cmdline = " ".join(proc.info.get("cmdline") or []).lower()
-            # The keywords only count for a process that could actually *be* a
-            # north server. Matched against any command line, they also match a
-            # shell, an editor or a grep that merely mentions one - and this
-            # function's whole purpose is to send SIGKILL to what it matches.
-            name = (proc.info.get("name") or "").lower()
-            looks_like_north = name.startswith("python") or name in {"north", "uvicorn"}
-            if (
-                looks_like_north
-                and any(k in cmdline for k in ("north start", "orchestrator.app:app", "bin/north"))
-                or proc.info.get("username") == me
-                and _listens_on(proc, port)
-            ):
+            # Only this user's processes answer without root, and north never runs as anyone else.
+            mine = proc.pid != current_pid and proc.info.get("username") == me
+            if mine and _is_this_homes_north(proc, settings.north_home, port):
                 remember(proc)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -2376,7 +2367,9 @@ def _north_processes(port: int = 8000) -> list:
     pid_path = settings.north_home / "north.pid"
     if pid_path.exists():
         with contextlib.suppress(ValueError, OSError, psutil.Error):
-            remember(psutil.Process(int(pid_path.read_text(encoding="utf-8").strip())))
+            recorded = psutil.Process(int(pid_path.read_text(encoding="utf-8").strip()))
+            if _is_this_homes_north(recorded, settings.north_home, port):  # a stale file can name any process
+                remember(recorded)
 
     for proc in list(found.values()):
         with contextlib.suppress(psutil.Error):
@@ -2430,6 +2423,10 @@ def _stop_server(port: int) -> None:
 
     The process doing the stopping is left out: an update the dashboard starts is
     one of the server's children, and it stopped itself before it could install.
+
+    The recorded process is stopped only if it is this home's north: a stale pid
+    file can name a process that took over its number, such as another home's
+    server, and everything it started went with it.
     """
     import psutil
 
@@ -2439,7 +2436,8 @@ def _stop_server(port: int) -> None:
     group: list = []
     with contextlib.suppress(ValueError, OSError, psutil.Error):
         server = psutil.Process(int(pid_path.read_text(encoding="utf-8").strip()))
-        group = [proc for proc in (server, *server.children(recursive=True)) if proc.pid != os.getpid()]
+        if _is_this_homes_north(server, settings.north_home, port):
+            group = [proc for proc in (server, *server.children(recursive=True)) if proc.pid != os.getpid()]
     for proc in group:
         with contextlib.suppress(psutil.Error):
             proc.terminate()

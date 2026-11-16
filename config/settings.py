@@ -9,6 +9,7 @@ import contextlib
 import logging
 import os
 import stat as _stat
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,7 +26,16 @@ def _north_home_from_environment() -> Path:
     config), nowhere else: everything else asks `settings.north_home`, so a moved
     home (Docker's /data, a second install, a test) is moved everywhere at once.
     """
-    return Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
+    return north_home_in(os.environ)
+
+
+def north_home_in(environment: Mapping[str, str]) -> Path:
+    """The home a north started with *environment* uses: its NORTH_HOME, else ~/.north.
+
+    The same rule for another process: `north stop` reads a server's environment to tell this home's north
+    from another home's.
+    """
+    return Path(environment.get("NORTH_HOME", "~/.north")).expanduser()
 
 
 def read_secret_file(secret_file: Path) -> str:
