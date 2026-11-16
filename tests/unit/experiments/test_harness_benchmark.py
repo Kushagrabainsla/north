@@ -460,3 +460,41 @@ def test_a_kit_for_some_tasks_is_proven_on_their_own_reference_fixes(tmp_path: P
 
     assert kit.proof_tasks({14, 15, 17}) == [17], "only task 17 of these has a reference fix"
     assert kit.proof_tasks({13, 14}) == [2, 16], "with none, one task of each kind"
+
+
+def test_a_kit_can_score_the_runs_of_one_results_folder(tmp_path: Path, monkeypatch) -> None:
+    """A rerun after a fix is scored on its own, not the older runs on the kit's fixed list."""
+    folder = tmp_path / "verbatim-gate"
+    folder.mkdir()
+    for number, error in ((10, ""), (13, ""), (12, "out of credits")):
+        record = {"arm": "north", "number": number, "error": error, "patch_bytes": 0 if error else 10}
+        (folder / f"north__{number:02d}__s1.json").write_text(json.dumps(record))
+    monkeypatch.setattr(kit, "RESULTS_DIR", tmp_path)
+
+    chosen = kit._runs_to_score({10, 12, 13}, "verbatim-gate")
+
+    assert [path.name for path in chosen] == ["north__10__s1.json", "north__13__s1.json"]
+
+
+def test_a_task_with_the_benchmarks_own_verifier_is_not_calibrated(tmp_path: Path, monkeypatch, capsys) -> None:
+    """SWE-bench Pro's verifier lists no missing tests: calibrating task 2 stopped a scoring run."""
+    folder = tmp_path / "bench" / "sources" / "pro"
+    (folder / "tests").mkdir(parents=True)
+    (folder / "tests" / "test.sh").write_text("#!/bin/bash\nrun_official_tests\n")
+    task = catalog.Task(
+        2,
+        "small",
+        catalog.SWE_PRO,
+        "t",
+        "p",
+        {"kind": "git"},
+        score={"kind": "harbor", "folder": "sources/pro", "gold": "g"},
+    )
+    file = tmp_path / "02.json"
+    file.write_text(json.dumps(catalog.asdict(task)))
+    monkeypatch.setattr(score, "task_file", lambda number: file)
+    monkeypatch.setattr(score, "CACHE", tmp_path / "bench")
+    monkeypatch.setattr(score, "harbor_grade", lambda *args: pytest.fail("no reference run is needed"))
+
+    assert score.calibrate(2) == 0
+    assert "nothing to calibrate" in capsys.readouterr().out

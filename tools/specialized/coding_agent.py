@@ -51,9 +51,12 @@ _NO_REVIEW = (
     "A reply with no tool call ends the task."
 )
 _AFTER_REVIEW = (
-    "That review is an opinion, not a check. If it names a real bug, fix it with one coding_agent edit, then finish. "
-    "Findings that are only style, naming or extra tests go in your report. Tell the user what the reviewer said. "
-    "Otherwise write your final report now: north already ran the tests, and a reply with no tool call ends the task."
+    "That review is an opinion, not a check. Only its proven concerns (each quotes what it breaks and shows a case) "
+    "may go back to the author: send them in one coding_agent edit, each with its quoted words and its case "
+    "exactly as written, then finish. Do not add your own reading, and never ask for stricter behaviour than the "
+    "quoted words state; where they are unclear, the author's choice stands. Notes go in your report, not to the "
+    "author. Tell the user what the reviewer said. With no proven concern, write your final report now: north "
+    "already ran the tests, and a reply with no tool call ends the task."
 )
 _NOT_APPLIED = (
     "Your last coding_agent edit was NOT applied: tests failed with it that pass without it, and its copy is gone. "
@@ -71,6 +74,12 @@ class _Call:
     backend: str | None
     mode: Mode
     review: bool
+    request: str = ""  # the user's request word for word; "" when north was given none
+
+    @property
+    def brief(self) -> str:
+        """What the agent is asked: the user's request unchanged, then north's instructions for this step."""
+        return with_request(self.request, self.task)
 
 
 @dataclass
@@ -82,6 +91,7 @@ class _Progress:
     reviewed: bool = False
     review_wanted: bool = False  # whether any applied edit wanted the end-of-task review
     author: str = ""
+    request: str = ""  # the user's request, for the end-of-task review
     landed: list[str] = field(default_factory=list)
     tests_held_it_back: bool = False  # the last edit broke tests, so it was not applied
     told_not_applied: bool = False
@@ -94,8 +104,9 @@ class CodingAgentTool(Tool):
     locks_workspace_itself = True  # its landing step takes the workspace lock; see `Tool.locks_workspace_itself`
     is_mutating = True  # it starts a process and spends the user's agent quota, so the user's mode decides
     description = (
-        "Hand a coding task to an installed coding agent (Claude Code or Codex). Give it the whole "
-        "task with the context it needs. mode 'plan' (the default) only reads the repository and answers: use "
+        "Hand a coding task to an installed coding agent (Claude Code or Codex). north gives the agent the user's "
+        "request word for word; in `task`, say what this step must do and add the context you found. mode 'plan' "
+        "(the default) only reads the repository and answers: use "
         "it to investigate unfamiliar code, plan a change or review an approach. mode 'edit' makes the change "
         "in an isolated copy; north then runs the project's tests and offers it to the user."
     )
@@ -113,7 +124,11 @@ class CodingAgentTool(Tool):
         self.parameters_schema = {
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "What to investigate or plan, with the context it needs"},
+                "task": {
+                    "type": "string",
+                    "description": "What this step must do, and the context you found. The user's request goes to "
+                    "the agent word for word beside it, so do not restate or shorten it",
+                },
                 "mode": {
                     "type": "string",
                     "enum": [Mode.PLAN.value, *([Mode.EDIT.value] if runner.can_edit else [])],
@@ -185,10 +200,11 @@ class CodingAgentTool(Tool):
         task_id = str(input.params.get("task_id") or "")
         progress = self._progress.setdefault(task_id, _Progress())
         progress.called = True
+        progress.request = call.request or progress.request
         try:
             report = await self._runner.run(
                 task_id=task_id,
-                task=call.task,
+                task=call.brief,
                 workspace=call.workspace,
                 guidance=guidance,
                 backend=call.backend,
@@ -228,7 +244,7 @@ class CodingAgentTool(Tool):
         progress.reviewed = True
         review = await self._runner.review_landed(
             task_id=task_id,
-            task="\n\n".join(dict.fromkeys(progress.landed)),
+            task=with_request(progress.request, "\n\n".join(dict.fromkeys(progress.landed))),
             workspace=str(Path(workspace).resolve()),
             author=progress.author,
         )
@@ -286,8 +302,29 @@ class CodingAgentTool(Tool):
             return ToolOutput(success=False, error="mode must be 'plan' or 'edit'.")
         review = input.params.get("review", True) is not False
         return _Call(
-            task=task, workspace=str(Path(input.granted_workspace).resolve()), backend=backend, mode=mode, review=review
+            task=task,
+            workspace=str(Path(input.granted_workspace).resolve()),
+            backend=backend,
+            mode=mode,
+            review=review,
+            request=(input.user_request or "").strip(),
         )
+
+
+def with_request(request: str, steps: str) -> str:
+    """The user's request word for word, then north's instructions; only the instructions when there is none.
+
+    north once wrote its own 3,533-character summary of an 11,498-character task. The summary left out that
+    pytest would grade the work, and the agent called a missing method "not part of this task" (benchmark task
+    13). The request is never summarised: north's words go beneath it and cannot replace it.
+    """
+    if not request or request in steps:
+        return steps
+    return (
+        "The user's request, word for word. The work is judged against it:\n"
+        f"<<<USER REQUEST\n{request}\nUSER REQUEST>>>\n\n"
+        f"north's instructions for this step:\n{steps}"
+    )
 
 
 # These stop a run without failing the task: the session and the copy are kept for a later call.

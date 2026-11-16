@@ -670,3 +670,57 @@ async def test_no_card_is_raised_for_a_run_no_coding_agent_can_take() -> None:
 
     assert not result.success and "`codex` is not installed" in result.error
     assert store.all() == [] and runner.calls == []
+
+
+class TestTheUsersRequest:
+    """The agent is judged against the user's request, so it gets the request word for word, never north's summary.
+
+    Benchmark task 13: north turned an 11,498-character task into 3,533 characters that left out that pytest
+    would grade the work, and the agent called a missing method "not part of this task".
+    """
+
+    REQUEST = (
+        "Implement define_support and define_bin_params.\nAfter completing the task, pytest will be used to test it."
+    )
+
+    def _with_request(self, granted: str = "/repo", **params) -> ToolInput:
+        task_input = _input(granted, **params)
+        task_input.user_request = self.REQUEST
+        return task_input
+
+    async def test_the_agent_gets_the_request_unchanged_above_norths_step(self) -> None:
+        runner = StubRunner()
+
+        await _tool(runner).execute(self._with_request(task="Implement the two missing methods."))
+
+        sent = runner.calls[0]["task"]
+        assert self.REQUEST in sent, "word for word"
+        assert sent.index(self.REQUEST) < sent.index("north's instructions for this step:\nImplement the two missing")
+
+    async def test_with_no_request_the_agent_gets_norths_step_alone(self) -> None:
+        runner = StubRunner()
+
+        await _tool(runner).execute(_input())
+
+        assert runner.calls[0]["task"] == "Plan a subtract function."
+
+    async def test_a_step_that_already_holds_the_request_does_not_repeat_it(self) -> None:
+        runner = StubRunner()
+
+        await _tool(runner).execute(self._with_request(task=f"{self.REQUEST}\n\nStart with the KDE."))
+
+        assert runner.calls[0]["task"].count(self.REQUEST) == 1
+
+    async def test_the_end_of_task_reviewer_judges_against_the_request(self, tmp_path) -> None:
+        (tmp_path / ".git").mkdir()
+        runner = StubRunner(
+            can_edit=True, change=CHANGE, verification=PASSED, landing=Landing(LandingState.APPLIED, "")
+        )
+        runner.landed_review = Review("codex", ReviewVerdict.OK, "fine")
+        tool = _tool(runner)
+        await tool.execute(self._with_request(str(tmp_path), mode="edit", task="Fix the KDE."))
+
+        await tool.before_task_ends("t1", str(tmp_path))
+
+        reviewed = runner.review_calls[0]["task"]
+        assert self.REQUEST in reviewed and "Fix the KDE." in reviewed

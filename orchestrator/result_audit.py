@@ -151,6 +151,8 @@ class ResultAuditor:
                 "parent_run_id": result.run_id or payload.run_id,
                 "attempt": payload.attempt + 1,
                 "prompt": f"{payload.prompt}\n\n[correction required]\n{feedback}",
+                # The correction notes above are north's, not the user's: a coding agent still gets only the request.
+                "request": payload.request or payload.prompt,
                 "allow_questions": False,
             }
         )

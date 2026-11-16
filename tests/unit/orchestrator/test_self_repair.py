@@ -76,6 +76,8 @@ async def test_the_correction_pass_is_told_what_was_done_and_cannot_ask_again() 
     )
     # The reply replaces the answer: one that only answered the check lost the work it had reported.
     assert "give the whole answer again" in repair.prompt
+    # north's correction notes are not the user's words: a coding agent in this pass still gets only the request.
+    assert repair.request == _TASK
 
 
 def test_a_run_that_may_not_ask_is_not_offered_the_question_tools() -> None:

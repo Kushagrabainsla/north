@@ -44,6 +44,9 @@ class AgentPayload(BaseModel):
     parent_run_id: str | None = None
     attempt: int = 0
     prompt: str
+    # Server-owned: the request as the user wrote it, when `prompt` is no longer only that (a correction pass
+    # appends north's own notes). Empty means `prompt` is the request. A coding agent gets it word for word.
+    request: str = Field(default="", exclude=True)
     # Exact procedures required by a flow step. Unlike semantic suggestions,
     # these skills are loaded in full and form part of the execution contract.
     skills: list[str] = Field(default_factory=list)

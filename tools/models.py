@@ -44,6 +44,9 @@ class ToolInput(BaseModel):
     before_change: Any = Field(default=None, exclude=True)
     # Set only by north's own test run, in a coding agent's throwaway copy, where a test may rewrite a tracked file.
     isolated_copy: bool = Field(default=False, exclude=True)
+    # The user's request for this task, word for word, set by the agent from its payload. Server-owned like
+    # `granted_workspace`: a coding agent is judged against it, so the model's own summary cannot stand in for it.
+    user_request: str | None = Field(default=None, exclude=True)
 
 
 class ToolOutput(BaseModel):

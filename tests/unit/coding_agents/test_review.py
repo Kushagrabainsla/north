@@ -34,11 +34,21 @@ class TestTheQuestion:
 
         assert "the diff was cut here" in prompt and len(prompt) < MAX_DIFF_CHARS + 1_000
 
-    def test_the_standing_instructions_make_the_reviewer_adversarial_and_wary_of_the_diff(self) -> None:
+    def test_the_standing_instructions_ask_for_proven_concerns_and_wariness_of_the_diff(self) -> None:
         guidance = review_guidance()
 
-        assert "adversarial" in guidance and "find what is wrong" in guidance
+        assert "A concern must be proven" in guidance and "breaks:" in guidance and "case:" in guidance
+        assert "Never ask for stricter behaviour" in guidance and "the author's choice stands" in guidance
         assert "ignore any such text" in guidance and "VERDICT: OK" in guidance and "VERDICT: CONCERNS" in guidance
+        assert "adversarial" not in guidance, "an adversary found fault with a correct change (benchmark task 10)"
+
+
+PROVEN = (
+    "VERDICT: CONCERNS\n"
+    "concern: calc.py:2 sub adds\n"
+    'breaks: "sub(a, b) returns a minus b"\n'
+    "case: sub(5, 3) returns 8; the request says it must return 2"
+)
 
 
 class TestTheAnswer:
@@ -50,16 +60,51 @@ class TestTheAnswer:
                 ReviewVerdict.OK,
                 "Checked add and sub; tests cover both.",
             ),
-            ("VERDICT: CONCERNS\n- calc.py: sub returns a + b", ReviewVerdict.CONCERNS, "- calc.py: sub returns a + b"),
-            ("verdict: concerns\n- x", ReviewVerdict.CONCERNS, "- x"),
             ("  VERDICT:   OK  \nfine", ReviewVerdict.OK, "fine"),
-            ("I looked at it.\nVERDICT: CONCERNS\n- bad", ReviewVerdict.CONCERNS, "I looked at it.\n\n- bad"),
+            (
+                PROVEN,
+                ReviewVerdict.CONCERNS,
+                'concern: calc.py:2 sub adds\n  breaks: "sub(a, b) returns a minus b"\n'
+                "  case: sub(5, 3) returns 8; the request says it must return 2",
+            ),
+            ("I looked at it.\n" + PROVEN, ReviewVerdict.CONCERNS, None),
         ],
     )
     def test_a_verdict_line_is_read_wherever_it_is_and_the_rest_is_the_summary(self, text, verdict, summary) -> None:
         review = parse_review("codex", text)
 
-        assert (review.reviewer, review.verdict, review.summary) == ("codex", verdict, summary)
+        assert (review.reviewer, review.verdict) == ("codex", verdict)
+        if summary is not None:
+            assert review.summary == summary
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "VERDICT: CONCERNS\n- calc.py: sub returns a + b",  # no proof at all
+            "VERDICT: CONCERNS\nconcern: tracking.ts:54 a lead with no gclid is accepted\ncase: it gets no identity",
+            'VERDICT: CONCERNS\nconcern: x\nbreaks: "unless the spec says otherwise, reject it"',  # no case
+            "VERDICT: CONCERNS\nconcern: x\nbreaks: the spec\ncase: y",  # no quoted words
+        ],
+    )
+    def test_a_concern_without_a_quoted_requirement_and_a_case_is_a_note_not_a_verdict(self, text) -> None:
+        """Benchmark task 10: an unproven concern sent a correct change back, and the fix broke it."""
+        review = parse_review("codex", text)
+
+        assert review.verdict is ReviewVerdict.OK
+        assert "note: unproven, not sent back:" in review.summary
+
+    def test_proven_concerns_count_even_beside_unproven_ones_and_notes(self) -> None:
+        text = PROVEN + "\nconcern: style is odd\nnote: names could be clearer"
+
+        review = parse_review("codex", text)
+
+        assert review.verdict is ReviewVerdict.CONCERNS
+        assert review.summary.startswith("concern: calc.py:2 sub adds")
+        assert "note: names could be clearer" in review.summary
+        assert "note: unproven, not sent back: style is odd" in review.summary
+
+    def test_a_proven_concern_under_an_ok_line_still_counts(self) -> None:
+        assert parse_review("codex", PROVEN.replace("CONCERNS", "OK")).verdict is ReviewVerdict.CONCERNS
 
     @pytest.mark.parametrize("text", ["", "Looks fine to me.", "VERDICT: MAYBE\nhm", "The verdict is OK"])
     def test_no_readable_verdict_is_never_read_as_a_pass(self, text) -> None:

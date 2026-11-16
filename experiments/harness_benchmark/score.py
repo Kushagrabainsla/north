@@ -126,6 +126,11 @@ def calibrate(number: int) -> int:
     could not be passed by any patch: its reference fix fails 110 of 3,520 tests in the published image.
     """
     task = load(number)
+    test_script = Path(task.score["folder"]) / "tests" / "test.sh"
+    if not test_script.exists() or "missing.json" not in test_script.read_text():
+        # The benchmark's own verifier (SWE-bench Pro's, Terminal-Bench's): it lists no missing tests to leave out.
+        print(f"task {number}: graded by the benchmark's own verifier; nothing to calibrate")
+        return 0
     known = Path(task.score["folder"]) / "tests" / KNOWN_FAILING
     known.unlink(missing_ok=True)  # an earlier calibration would hide its tests from this one
     jobs = Path(tempfile.mkdtemp(prefix="bench-calibrate-"))

@@ -78,10 +78,14 @@ def _did_work(record: dict) -> bool:
     return not (record.get("error") and not record.get("patch_bytes"))
 
 
-def _runs_to_score(tasks: set[int]) -> list[Path]:
-    """The record of each run to score on *tasks*: north's latest per task, and each plain run that did work."""
-    chosen = [RESULTS_DIR / folder / f"north__{task:02d}__s1.json" for task, folder in NORTH_RUNS.items()]
-    chosen += sorted((RESULTS_DIR / PLAIN_RUNS).glob("*__*__s1.json"))
+def _runs_to_score(tasks: set[int], source: str | None = None) -> list[Path]:
+    """The record of each run to score on *tasks*: every run in the results folder *source* when one is named,
+    else north's latest per task and each plain run. A run that never started is left out either way."""
+    if source:
+        chosen = sorted((RESULTS_DIR / source).glob("*__*__s1.json"))
+    else:
+        chosen = [RESULTS_DIR / folder / f"north__{task:02d}__s1.json" for task, folder in NORTH_RUNS.items()]
+        chosen += sorted((RESULTS_DIR / PLAIN_RUNS).glob("*__*__s1.json"))
     records = [(path, json.loads(path.read_text())) for path in chosen]
     return [path for path, record in records if record["number"] in tasks and _did_work(record)]
 
@@ -92,8 +96,9 @@ def proof_tasks(tasks: set[int]) -> list[int]:
     return with_gold or list(_DEFAULT_PROOFS)
 
 
-def build(dest: Path, tasks: set[int] | None = None) -> Path:
-    """Write the kit to *dest*, for *tasks* (all of them when None), and return the archive's path."""
+def build(dest: Path, tasks: set[int] | None = None, source: str | None = None) -> Path:
+    """Write the kit to *dest*, for *tasks* (all of them when None) and the runs in *source* (see
+    `_runs_to_score`), and return the archive's path."""
     tasks = tasks or set(range(1, 21))
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch) / _KIT_NAME
@@ -109,7 +114,7 @@ def build(dest: Path, tasks: set[int] | None = None) -> Path:
                 shutil.copytree(CACHE / task["score"]["folder"], root / "cache" / task["score"]["folder"])
         final = root / "cache" / "results" / _FINAL
         final.mkdir(parents=True)
-        for record in _runs_to_score(tasks):
+        for record in _runs_to_score(tasks, source):
             shutil.copy2(record, final / record.name)
             shutil.copy2(record.with_suffix(".patch"), final / record.with_suffix(".patch").name)
         script = root / "score_on_droplet.sh"
@@ -161,9 +166,11 @@ def main() -> int:
     parser.add_argument("command", choices=("build", "check", "report"))
     parser.add_argument("path", nargs="?")
     parser.add_argument("--tasks", help="build: only these tasks, as 14,15,17")
+    parser.add_argument("--from", dest="source", help="build: the runs in this results folder, as verbatim-gate")
     args = parser.parse_args()
     if args.command == "build":
-        archive = build(RESULTS_DIR, {int(n) for n in args.tasks.split(",")} if args.tasks else None)
+        tasks = {int(n) for n in args.tasks.split(",")} if args.tasks else None
+        archive = build(RESULTS_DIR, tasks, args.source)
         problems = check(archive)
         print(f"wrote {archive}" if not problems else "\n".join(problems))
         return 1 if problems else 0

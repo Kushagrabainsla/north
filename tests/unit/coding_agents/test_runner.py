@@ -204,6 +204,10 @@ async def test_cancelling_a_run_records_it_cancelled_and_lets_the_cancel_through
 
 
 _ONE_FILE = (FileDelta("calc.py", 4, 1),)
+# A reviewer's concern in the proven form: the words it breaks, quoted, and a case.
+_PROVEN_CONCERN = (
+    'VERDICT: CONCERNS\nconcern: calc.py: sub returns a + b\nbreaks: "add subtract"\ncase: sub(5, 3) returns 8, not 2'
+)
 
 
 class TestEditRuns:
@@ -512,7 +516,7 @@ class TestVerifyAndLand:
 class TestCrossReview:
     """After an edit, the other agent reads the diff, read-only; the verdict is advice for whoever decides."""
 
-    def _setup(self, tmp_path, recorder, *, reviewer_text="VERDICT: CONCERNS\n- calc.py: sub returns a + b", **kw):
+    def _setup(self, tmp_path, recorder, *, reviewer_text=_PROVEN_CONCERN, **kw):
         workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
         author, reviewer = ScriptedBackend("claude"), ScriptedBackend("codex")
         reviewer._outcome = RunOutcome(True, reviewer_text, "reviewer-thread")
@@ -546,7 +550,7 @@ class TestCrossReview:
         (spec,) = reviewer.specs
         assert spec.mode is Mode.PLAN and spec.workspace == workspaces.created[0].path
         assert "add subtract" in spec.task and "return a - b" in spec.task and "UNTRUSTED DIFF" in spec.task
-        assert "adversarial" in spec.guidance
+        assert "A concern must be proven" in spec.guidance
         assert report.review.reviewer == "codex" and report.review.verdict is ReviewVerdict.CONCERNS
         assert "sub returns a + b" in report.review.summary
         assert lander.review == report.review, "whoever decides sees it"

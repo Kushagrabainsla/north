@@ -1377,7 +1377,12 @@ def _tool_input(payload: AgentPayload, params: dict[str, Any]) -> ToolInput:
         params["workspace"] = payload.workspace
     if payload.task_id and "task_id" not in params:
         params["task_id"] = payload.task_id
-    return ToolInput(params=params, edit_scope=payload.edit_scope, granted_workspace=payload.granted_workspace or None)
+    return ToolInput(
+        params=params,
+        edit_scope=payload.edit_scope,
+        granted_workspace=payload.granted_workspace or None,
+        user_request=payload.request or payload.prompt,
+    )
 
 
 def _answered_by(card: Card) -> str:

@@ -134,3 +134,12 @@ async def test_a_tool_with_a_note_is_offered_whatever_retrieval_picked(tmp_path:
     names = {tool.name for tool, _ in await agent._load_tools(_payload())}
 
     assert "holding" in names and "filler7" not in names
+
+
+def test_a_tool_gets_the_users_request_beside_the_models_params() -> None:
+    """Server-owned, like the granted folder: the model's own summary cannot stand in for the request."""
+    from agents.agentic_llm_agent import _tool_input
+
+    assert _tool_input(_payload(), {"task": "my summary"}).user_request == "do it"
+    corrected = AgentPayload(task_id="t1", prompt="do it\n\n[correction required]\nnorth's notes", request="do it")
+    assert _tool_input(corrected, {}).user_request == "do it", "a correction pass keeps the user's words"
