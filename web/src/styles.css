@@ -248,7 +248,9 @@ button, input, textarea, select { letter-spacing: inherit; }
 .panel, .table-list, .verbose-events, .memory-layout,
 .execution-details, .system-hero, .approval-card, .agent-grid article, .metric-cards > div,
 .dialog-body, .workspace-menu { border-color: var(--line); border-radius: 5px; background: var(--surface); box-shadow: none; }
-.sun-mark, .online-orb { border-radius: 4px; box-shadow: none; }
+.sun-mark { border-radius: 4px; box-shadow: none; }
+/* The health sign stays a circle (its 50% radius above); only its glow goes. */
+.online-orb { box-shadow: none; }
 .timezone-picker select, .model-picker select, .card-field input, .card-field textarea, .card-field select,
 .schedule-form input, .schedule-form textarea, .schedule-form select, .fact-editor select {
   border-radius: 3px; background: #0a0d0f;
@@ -456,7 +458,8 @@ button:not(:disabled):active { transform: translateY(1px); }
 .cockpit-grid > .panel { background: var(--surface); box-shadow: 0 0 0 1px var(--line-strong); }
 .system-panel, .briefing-panel, .system-hero, .approval-card { background: var(--surface); }
 .attention-panel { border-color: rgba(233,199,111,.48) !important; }
-.system-panel .online-orb, .sun-mark { border-radius: 8px; box-shadow: none; }
+.system-panel .online-orb { box-shadow: none; }
+.sun-mark { border-radius: 8px; box-shadow: none; }
 .list-row, .memory-row, .fact-row, .schedule-row, .provider-row, .event-row, .bootstrap-row { border-color: var(--line); }
 .list-row { min-height: 42px; padding: 8px 2px; font-size: 11px; }
 .list-row small, .memory-main small, .schedule-main small { color: var(--muted); font-size: 10px; }
