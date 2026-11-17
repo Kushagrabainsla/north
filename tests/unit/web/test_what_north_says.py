@@ -96,3 +96,4 @@ def test_status_names_the_default_model_and_each_kind_with_its_own_row(monkeypat
 
     assert "default anthropic:claude-haiku-5-5 · background auto (eco)" in output
     assert "· tasks" not in output  # Same as default: nothing to add
+    assert output.count("models ") == 1  # the catalog line has its own name

@@ -1279,7 +1279,8 @@ def status() -> None:
             count = len(pool_data.get("models", []))
             style = "white" if count else "bright_black"
             parts.append(f"[{style}]{pool_name}={count}[/{style}]")
-        _console.print("  [dim]models    [/dim] " + "  ".join(parts))
+        # "catalog", not "models": that name is the Models panel's rows, printed above.
+        _console.print("  [dim]catalog   [/dim] " + "  ".join(parts))
 
     # ── Providers: the server's view. The CLI's own settings read only its environment
     # and ~/.north/.env, so keys saved in the dashboard showed as missing, and the fixed
