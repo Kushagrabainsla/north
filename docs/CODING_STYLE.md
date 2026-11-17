@@ -464,6 +464,7 @@ Two consequences worth keeping:
 - **Safe** (was `auto`): read-only, safe mutating actions and exact replays of the user's past answers run; everything else asks.
 - **Autonomous**: never asks; a model given the user's memory as context always gives the answer that best fits the user. It follows the Approvals row of the Models panel. The deterministic tiers (read-only, north's notes, the safe list, exact replays) decide first; the model decides the rest. Only if the model fails (no model, an error, an unreadable reply) does a card wait for the user.
   Autonomous decides from memory only: an action that leaves the sandbox or the workspace (a push, a new host) is allowed only when a fact the user stated covers it. With no covering fact the model abstains and a card waits - it never guesses yes. Facts written by a worker, a repo or a tool never authorize anything.
+  The model also reads the user's messages in the chat session, as trusted; a message covers an action as a fact does. North's answers are never read. In a chat run, a no is a card with its reason, which the user can overrule. In any other run, a no is final, until 3 in one task: then the task asks.
 - **YOLO**: never asks; every approval is yes and every question gets the affirmative answer.
 
 **Why:** each mode must mean one thing the user can predict.

@@ -21,6 +21,7 @@ indistinguishable from one that never happened.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -28,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from approval.models import ApprovalDecision, DecidedBy, MemoryRef
+from approval.session import NO_SESSION, Session, SessionReader
 from approval.unattended import forbidden_reason
 from config.approval_mode import YES_ANSWER, ApprovalMode, affirmative_option
 
@@ -37,6 +39,10 @@ if TYPE_CHECKING:
     from approval.unattended import UnattendedPolicy
 
 logger = logging.getLogger(__name__)
+
+# How many actions the memory decider may refuse in one run that is not a chat before
+# the next one is put to the user. Claude Code's auto mode asks again after 3 blocks in a row.
+DECIDER_REFUSAL_LIMIT = 3
 
 
 class ActionKind(StrEnum):
@@ -181,6 +187,8 @@ class Ruling:
     rule: str
     decided_by: str = ""
     memory_used: tuple[MemoryRef, ...] = ()
+    # For a ruling that asks: what the card tells the user about why north asks, "" for nothing.
+    note: str = ""
 
     @property
     def allowed(self) -> bool:
@@ -207,11 +215,12 @@ class Decider(Protocol):
 
     Returns None when it cannot decide - no model, an error, an unreadable
     reply - and the card then waits for the user. See `approval/decider.py`.
+    *session* is the run the request belongs to: whether it is a chat, and the user's messages.
     """
 
-    async def rule(self, action: Action) -> Answer | None: ...
+    async def rule(self, action: Action, session: Session = NO_SESSION) -> Answer | None: ...
 
-    async def answer(self, card: Card) -> Answer | None: ...
+    async def answer(self, card: Card, session: Session = NO_SESSION) -> Answer | None: ...
 
 
 @dataclass
@@ -222,8 +231,13 @@ class ApprovalPolicy:
     unattended: UnattendedPolicy | None = None
     approval_memory: ApprovalMemory | None = None
     decider: Decider | None = None
+    # Finds the chat session of a task id. None: no run is a chat (tests, tools wired alone).
+    sessions: SessionReader | None = None
+    # The memory decider's refusals in each task, for DECIDER_REFUSAL_LIMIT. Kept in
+    # memory: after a restart the count starts again, which only asks sooner.
+    _refusals: Counter[str] = field(default_factory=Counter, repr=False)
 
-    async def rule(self, action: Action) -> Ruling:
+    async def rule(self, action: Action, task_id: str | None = None) -> Ruling:
         """Decide whether *action* runs, asks, or is refused.
 
         The tiers are ordered from the least to the most judgement involved -
@@ -268,7 +282,7 @@ class ApprovalPolicy:
             return Ruling(Verdict.ASK, "a change to north's own settings")
 
         if mode is ApprovalMode.AUTONOMOUS:
-            return await self._autonomous(action)
+            return await self._autonomous(action, task_id)
 
         # 3. A handful of catastrophic shapes are refused rather than asked
         #    about, below autonomous. Not a floor - autonomous passed above.
@@ -314,16 +328,19 @@ class ApprovalPolicy:
             chosen = affirmative_option(card.options) or YES_ANSWER
             return Answer(ApprovalDecision.ANSWERED, chosen, "yes to everything", DecidedBy.YOLO)
         if mode is ApprovalMode.AUTONOMOUS and self.decider is not None:
-            return await (self._answer_each(card, self.decider) if card.asks_several else self.decider.answer(card))
+            session = await self._session(card.task_id)
+            if card.asks_several:
+                return await self._answer_each(card, self.decider, session)
+            return await self.decider.answer(card, session)
         return None
 
     @staticmethod
-    async def _answer_each(card: Card, decider: Decider) -> Answer | None:
+    async def _answer_each(card: Card, decider: Decider, session: Session) -> Answer | None:
         """The memory decider's answer to each of *card*'s questions, or None to ask if it cannot answer one."""
         answers: list[tuple[str, Answer]] = []
         for question in card.fields:
             asked = {"message": question.display_label(), "options": question.options, "fields": []}
-            answer = await decider.answer(card.model_copy(update=asked))
+            answer = await decider.answer(card.model_copy(update=asked), session)
             if answer is None:
                 return None
             answers.append((question.name, answer))
@@ -336,22 +353,58 @@ class ApprovalPolicy:
             values={name: answer.chosen_option for name, answer in answers},
         )
 
-    async def _autonomous(self, action: Action) -> Ruling:
-        """Autonomous never asks: the deterministic tiers first, then the memory decider.
+    async def _autonomous(self, action: Action, task_id: str | None) -> Ruling:
+        """Autonomous decides for you: the deterministic tiers first, then the memory decider.
 
         Prepared work skips the safe list and replays: its fields are what is
-        being judged, and neither tier reads them. Only a decider that cannot
-        decide leaves a card for the user.
+        being judged, and neither tier reads them. A decider that cannot decide
+        leaves a card for the user, and so can a refusal (see `_refused`).
         """
         if not action.carries_work:
             if (safe := self._safe_subset(action)) is not None:
                 return safe
             if (recalled := self._recall(action)) is not None:
                 return recalled
-        if self.decider is not None and (answer := await self.decider.rule(action)) is not None:
-            verdict = Verdict.ALLOW if answer.decision == ApprovalDecision.APPROVED else Verdict.REFUSE
-            return Ruling(verdict, answer.reason, DecidedBy.MEMORY_DECIDER, answer.memory_used)
-        return Ruling(Verdict.ASK, "the memory decider could not decide")
+        if self.decider is None:
+            return Ruling(Verdict.ASK, "the memory decider could not decide")
+        session = await self._session(task_id)
+        answer = await self.decider.rule(action, session)
+        if answer is None:
+            return Ruling(Verdict.ASK, "the memory decider could not decide")
+        if answer.decision == ApprovalDecision.APPROVED:
+            return Ruling(Verdict.ALLOW, answer.reason, DecidedBy.MEMORY_DECIDER, answer.memory_used)
+        return self._refused(answer, session, task_id)
+
+    def _refused(self, answer: Answer, session: Session, task_id: str | None) -> Ruling:
+        """The memory decider said no: final in a run nobody watches, a card the user can overrule otherwise.
+
+        In a chat the user is there, so the no is shown as a card with its reason and
+        the user can still say yes: north refused a recording asked for in chat, and
+        the user never saw the refusal (issue #82, item 1). In any other run, the
+        refusals in one task after DECIDER_REFUSAL_LIMIT become cards too.
+        """
+        if task_id:
+            self._refusals[task_id] += 1
+        if session.from_chat:
+            note = f"North would say no: {answer.reason}"
+            return Ruling(Verdict.ASK, "you are in the chat, so north asks", note=note)
+        if task_id and self._refusals[task_id] > DECIDER_REFUSAL_LIMIT:
+            note = (
+                f"North said no to {DECIDER_REFUSAL_LIMIT} actions in this task, so it asks about this one. "
+                f"It would say no: {answer.reason}"
+            )
+            return Ruling(Verdict.ASK, "too many refusals in this task", note=note)
+        return Ruling(Verdict.REFUSE, answer.reason, DecidedBy.MEMORY_DECIDER, answer.memory_used)
+
+    async def _session(self, task_id: str | None) -> Session:
+        """The chat session of *task_id*, or `NO_SESSION`; a lookup that fails is never a reason to stop."""
+        if self.sessions is None or not task_id:
+            return NO_SESSION
+        try:
+            return await self.sessions(task_id)
+        except Exception:
+            logger.warning("Could not read the session of task %s - deciding as for a run nobody watches", task_id)
+            return NO_SESSION
 
     def _safe_subset(self, action: Action) -> Ruling | None:
         """The deterministic allowlist, or None when it does not apply.

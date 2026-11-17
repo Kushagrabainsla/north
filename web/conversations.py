@@ -7,10 +7,14 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from approval.session import NO_SESSION, Session
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.secrets import redact, until_secret
 from utils.time import format_timestamp, utcnow
+
+# How many of the user's latest messages in a session an approval reads.
+SESSION_MESSAGE_LIMIT = 10
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS web_conversations (
@@ -311,6 +315,33 @@ class ConversationStore:
                 task_ids,
             ).fetchall()
         return {row[0]: (row[1], row[2]) for row in rows}
+
+    async def session_of(self, task_id: str) -> Session:
+        """The chat session that started or joined *task_id*: the user's messages up to its latest turn.
+
+        A task no turn names did not come from chat, and gets `NO_SESSION`.
+        """
+        if not task_id:
+            return NO_SESSION
+        prompts = await asyncio.to_thread(self._session_prompts_sync, task_id)
+        if prompts is None:
+            return NO_SESSION
+        return Session(from_chat=True, messages=tuple(redact(prompt) for prompt in prompts))
+
+    def _session_prompts_sync(self, task_id: str) -> list[str] | None:
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT conversation_id, MAX(position) FROM web_turns WHERE task_id=? GROUP BY conversation_id "
+                "ORDER BY MAX(position) DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            rows = conn.execute(
+                "SELECT prompt FROM web_turns WHERE conversation_id=? AND position<=? ORDER BY position DESC LIMIT ?",
+                (row[0], row[1], SESSION_MESSAGE_LIMIT),
+            ).fetchall()
+        return [prompt for (prompt,) in reversed(rows)]
 
     async def turns(self, conversation_id: str) -> list[Turn]:
         rows = await asyncio.to_thread(self._turns_sync, conversation_id)

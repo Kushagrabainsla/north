@@ -8,6 +8,7 @@ items that led there, so every decision can be shown and checked afterwards.
 
 What it reads, for every request kind (tool actions, questions, prepared work):
 
+- whether the run came from chat, and your own messages in that chat session;
 - facts about you that match the request, and your profile;
 - your judgement rules;
 - your past approve/reject decisions for the same agent;
@@ -22,8 +23,13 @@ abstention - it returns None and the card waits for you. That is the one case
 Autonomous pauses.
 
 An action that leaves the sandbox (a push, a host it was not given) is the same:
-it is approved only when the reply cites something you stated - a fact, a past
-decision, your rules or your profile. Citing nothing is a guess, so the card waits.
+it is approved only when the reply cites something you stated - a message in this
+session, a fact, a past decision, your rules or your profile. Citing nothing is a
+guess, so the card waits.
+
+Your messages are trusted; north's answers in the session are not read at all. It
+refused a camera recording you had asked for in chat because it never saw the
+request (issue #82, item 1).
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 from approval.models import ApprovalDecision, Card, DecidedBy, MemoryKind, MemoryRef
 from approval.policy import Action, Answer
+from approval.session import NO_SESSION, Session
 from inference.models import CompletionRequest
 from memory import ContextDocument
 from utils.prompts import load_prompt
@@ -60,7 +67,19 @@ _ACTION_DECISIONS = {"approve": ApprovalDecision.APPROVED, "reject": ApprovalDec
 _UNTRUSTED_TAG = re.compile(r"</?\s*untrusted\s*>", re.IGNORECASE)
 # What may cover an action that leaves the sandbox. An episode is north's own summary of a
 # past task, which an agent's output can shape, so it never authorizes one.
-_COVERING_KINDS = frozenset({MemoryKind.FACT, MemoryKind.PAST_DECISION, MemoryKind.JUDGEMENT_RULES, MemoryKind.PROFILE})
+_COVERING_KINDS = frozenset(
+    {
+        MemoryKind.USER_MESSAGE,
+        MemoryKind.FACT,
+        MemoryKind.PAST_DECISION,
+        MemoryKind.JUDGEMENT_RULES,
+        MemoryKind.PROFILE,
+    }
+)
+_FROM_CHAT = (
+    "The user started this run from chat. Their messages in this session are below, and they can see what north does."
+)
+_NOT_FROM_CHAT = "This run did not start from chat: a schedule, a flow or a program started it. Nobody is watching."
 
 
 @dataclass(frozen=True)
@@ -83,6 +102,7 @@ class _Subject:
     options: tuple[str, ...]
     task_id: str = ""
     leaves_sandbox: bool = False
+    session: Session = NO_SESSION
 
 
 class MemoryDecider:
@@ -98,7 +118,7 @@ class MemoryDecider:
         self._inference_router = inference_router
         self._approval_memory = approval_memory
 
-    async def rule(self, action: Action) -> Answer | None:
+    async def rule(self, action: Action, session: Session = NO_SESSION) -> Answer | None:
         """Approve or reject an action (or prepared work), or None when undecided."""
         subject = _Subject(
             kind="prepared work" if action.carries_work else "action",
@@ -107,10 +127,11 @@ class MemoryDecider:
             content=_action_content(action),
             options=("approve", "reject"),
             leaves_sandbox=action.leaves_sandbox,
+            session=session,
         )
         return await self._decide(subject)
 
-    async def answer(self, card: Card) -> Answer | None:
+    async def answer(self, card: Card, session: Session = NO_SESSION) -> Answer | None:
         """Answer a question card, or None when undecided."""
         subject = _Subject(
             kind="question",
@@ -119,12 +140,16 @@ class MemoryDecider:
             content=f"{card.title}\n{card.message}",
             options=tuple(card.options),
             task_id=card.task_id,
+            session=session,
         )
         return await self._decide(subject)
 
     async def _decide(self, subject: _Subject) -> Answer | None:
+        said = _said_items(subject.session)
         items = await self._known_items(subject)
         prompt = load_prompt("prompts/approval_decider.md").format(
+            origin=_FROM_CHAT if subject.session.from_chat else _NOT_FROM_CHAT,
+            messages="\n".join(f"[{item.id}] {item.text}" for item in said) or "(none: this run is not a chat)",
             memory="\n".join(f"[{item.id}] {item.text}" for item in items) or "(nothing known yet)",
             kind=subject.kind,
             agent=subject.agent,
@@ -154,7 +179,7 @@ class MemoryDecider:
                 str(reply.get("reason") or "no reason given").strip(),
             )
             return None
-        answer = _read_reply(reply, subject, items)
+        answer = _read_reply(reply, subject, said + items)
         if answer is not None and _is_a_guess(answer, subject):
             logger.info(
                 "Memory decider: nothing you stated covers this action from %s that leaves the sandbox - "
@@ -206,6 +231,16 @@ class MemoryDecider:
             )
             for row in rows[:_PAST_DECISION_LIMIT]
         ]
+
+
+def _said_items(session: Session) -> list[_Item]:
+    """The user's messages in the session, oldest first, each with an id to cite.
+
+    Trusted: the user wrote them. A message may still hold the fence's tag, which is
+    removed so it cannot open or close the untrusted block.
+    """
+    texts = [text for message in session.messages if (text := _UNTRUSTED_TAG.sub("", message).strip())]
+    return [_Item(f"U{n}", text, MemoryRef(kind=MemoryKind.USER_MESSAGE, text=text)) for n, text in enumerate(texts, 1)]
 
 
 def _action_facts(action: Action) -> str:

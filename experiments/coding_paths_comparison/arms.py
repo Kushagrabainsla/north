@@ -183,7 +183,7 @@ class AutoDecider:
     eval's card bot then says no, the way a person who stated nothing covering it would.
     """
 
-    async def rule(self, action):
+    async def rule(self, action, session=None):
         from approval.models import ApprovalDecision
 
         if action.leaves_sandbox or action.reaches_third_party or action.spends_money:
@@ -192,7 +192,7 @@ class AutoDecider:
 
         return Answer(ApprovalDecision.APPROVED, "Approve", "stand-in memory: inside the workspace", "eval")
 
-    async def answer(self, card):
+    async def answer(self, card, session=None):
         return None
 
 

@@ -278,11 +278,11 @@ class UserInteraction:
 
         if card.type is CardType.APPROVAL and not card.action_key:
             card = card.model_copy(update={"action_key": _action_for(card).describe()})
-        auto = await self._auto_resolve(card)
-        if auto is not None:
-            return auto
-        await self._surface(card, event)
-        return card
+        decided = await self._auto_resolve(card)
+        if decided.status != _PENDING:
+            return decided
+        await self._surface(decided, event)
+        return decided
 
     async def _surface(self, card: Card, event: CardEvent | None) -> None:
         """Register *card* as waiting and show it on every channel that is wired, all from one scrubbed copy."""
@@ -293,8 +293,8 @@ class UserInteraction:
         if self._notifier is not None:
             await self._notifier.notify(card)
 
-    async def _auto_resolve(self, card: Card) -> Card | None:
-        """Resolve *card* without the user, or return None to surface it.
+    async def _auto_resolve(self, card: Card) -> Card:
+        """*card* resolved without the user, or the card to surface, still pending.
 
         The policy decides both kinds: a directly-raised APPROVAL card is ruled
         on like any tool action, and a QUESTION is answered only in the modes
@@ -302,19 +302,19 @@ class UserInteraction:
         from being asked: any error logs and falls through to surfacing the card.
         """
         if self._policy is None:
-            return None
+            return card
         try:
             if card.type is CardType.APPROVAL:
-                answer = await self._rule_on(card)
+                answer, card = await self._rule_on(card)
             elif card.type is CardType.QUESTION:
                 answer = await self._policy.answer(card)
             else:
                 answer = None
         except Exception:
             logger.debug("ApprovalPolicy failed for card %s - surfacing it", card.id)
-            return None
+            return card
         if answer is None:
-            return None
+            return card
         self.record_resolved(card, answer)
         resolved = self._store.get(card.id) or card
         await self._audit(resolved, answer)
@@ -337,15 +337,17 @@ class UserInteraction:
             )
         )
 
-    async def _rule_on(self, card: Card) -> Answer | None:
-        """The policy's ruling on a directly-raised approval card, or None to ask."""
-        ruling = await self._policy.rule(_action_for(card))
+    async def _rule_on(self, card: Card) -> tuple[Answer | None, Card]:
+        """The policy's ruling on a directly-raised approval card (None to ask), and the card, with why it asks."""
+        ruling = await self._policy.rule(_action_for(card), card.task_id or None)
         if ruling.verdict is Verdict.ASK:
-            return None
+            if ruling.note:
+                card = card.model_copy(update={"message": f"{card.message}\n\n{ruling.note}"})
+            return None, card
         if ruling.allowed:
             chosen = approve_option(card.options)
-            return Answer(ApprovalDecision.APPROVED, chosen, ruling.rule, ruling.decided_by, ruling.memory_used)
-        return Answer(ApprovalDecision.REJECTED, "", ruling.rule, ruling.decided_by, ruling.memory_used)
+            return Answer(ApprovalDecision.APPROVED, chosen, ruling.rule, ruling.decided_by, ruling.memory_used), card
+        return Answer(ApprovalDecision.REJECTED, "", ruling.rule, ruling.decided_by, ruling.memory_used), card
 
     async def _emit(self, card: Card, event: CardEvent) -> None:
         if self._stream is None or not card.task_id:

@@ -60,12 +60,12 @@ class _Decider:
     def __init__(self, approves: bool) -> None:
         self._approves = approves
 
-    async def rule(self, action: Action) -> Answer | None:
+    async def rule(self, action: Action, session=None) -> Answer | None:  # noqa: ANN001
         if not self._approves:
             return None
         return Answer(ApprovalDecision.APPROVED, "Approve", "stub decider", "memory_decider")
 
-    async def answer(self, card):  # noqa: ANN001
+    async def answer(self, card, session=None):  # noqa: ANN001
         return None
 
 

@@ -208,11 +208,11 @@ class StubDecider:
         self._answer = answer
         self.asked: list = []
 
-    async def rule(self, action):
+    async def rule(self, action, session=None):
         self.asked.append(action)
         return self._answer
 
-    async def answer(self, card):
+    async def answer(self, card, session=None):
         self.asked.append(card)
         return self._answer
 

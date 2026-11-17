@@ -183,7 +183,7 @@ export interface Approval {
 }
 
 export interface MemoryRef {
-  kind: "fact" | "episode" | "past_decision" | "judgement_rules" | "profile";
+  kind: "fact" | "episode" | "past_decision" | "judgement_rules" | "profile" | "user_message";
   // The kind in words, from the API.
   label: string;
   text: string;

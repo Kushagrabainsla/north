@@ -122,11 +122,11 @@ class Approvals:
             ruling = Ruling(Verdict.ALLOW, f"you approved {covered} earlier in this task", DecidedBy.REPLAY)
             self._record(request, ruling, task_id)
             return Decision(ruling.verdict, ruling.rule)
-        ruling = await self._policy.rule(request.action)
+        ruling = await self._policy.rule(request.action, task_id)
         if request.requires_confirmation and ruling.verdict is not Verdict.REFUSE:
-            return await self._ask(request, task_id)
+            return await self._ask(request, task_id, ruling.note)
         if ruling.verdict is Verdict.ASK:
-            return await self._ask(request, task_id)
+            return await self._ask(request, task_id, ruling.note)
         if _worth_recording(request.action):
             self._record(request, ruling, task_id)
         return Decision(ruling.verdict, ruling.rule)
@@ -148,7 +148,7 @@ class Approvals:
                 return Decision(Verdict.REFUSE, _ALREADY_DONE)
             if (said_no := self.refused_paths(request.action.named_paths(), task_id)) is not None:
                 return Decision(Verdict.REFUSE, said_no)
-        rulings = [await self._policy.rule(request.action) for request in requests]
+        rulings = [await self._policy.rule(request.action, task_id) for request in requests]
         if refused := next((ruling for ruling in rulings if ruling.verdict is Verdict.REFUSE), None):
             return Decision(Verdict.REFUSE, refused.rule)
         asking = [
@@ -157,7 +157,8 @@ class Approvals:
             if r.requires_confirmation or ruling.verdict is Verdict.ASK
         ]
         if asking:
-            decision = await self._ask_together(asking, task_id, title, message)
+            notes = "\n".join(dict.fromkeys(ruling.note for ruling in rulings if ruling.note))
+            decision = await self._ask_together(asking, task_id, title, _with_note(message, notes))
             if not decision.allowed:
                 return decision
         for request, ruling in zip(requests, rulings, strict=True):
@@ -241,10 +242,13 @@ class Approvals:
             return False
         return self._effects.done(task_id, action.describe())
 
-    async def _ask(self, request: Request, task_id: str | None) -> Decision:
+    async def _ask(self, request: Request, task_id: str | None, note: str = "") -> Decision:
         if self._interaction is None:
             return Decision(Verdict.REFUSE, _NOBODY_TO_ASK)
-        card = await self._interaction.ask_person(self._card(request, task_id), event=CardEvent.APPROVAL)
+        card = self._card(request, task_id)
+        if note:
+            card = card.model_copy(update={"message": _with_note(card.message, note)})
+        card = await self._interaction.ask_person(card, event=CardEvent.APPROVAL)
         verdict = Verdict.ALLOW if card.status == ApprovalDecision.APPROVED else Verdict.REFUSE
         if verdict is Verdict.ALLOW and task_id:
             covers = (request.action.describe(), request.action.scope)
@@ -281,6 +285,11 @@ class Approvals:
             rejecting=request.rejecting,
             action_key=request.action.describe(),
         )
+
+
+def _with_note(message: str, note: str) -> str:
+    """*message* with why north asks after it, when the policy said why."""
+    return f"{message}\n\n{note}" if note else message
 
 
 def _worth_recording(action: Action) -> bool:

@@ -178,8 +178,10 @@ export function memoryLabel(ref: MemoryRef): string {
 
 // Where a piece of memory lives, so a decision can be traced back to what it
 // read - and that memory corrected or forgotten there. Past decisions live with
-// approvals; everything else on the Memory page.
+// approvals; everything else on the Memory page. A message you wrote in the
+// chat is not stored memory, so it has no link ("").
 export function memoryLink(ref: MemoryRef): string {
+  if (ref.kind === "user_message") return "";
   const params = new URLSearchParams();
   if (ref.kind === "past_decision") {
     params.set("tab", "decisions");
@@ -226,11 +228,14 @@ export function DecisionDetail({
       </small>
       {memory.length > 0 && (
         <ul className="decision-memory">
-          {memory.map((ref, index) => (
-            <li key={index}>
-              <Link to={memoryLink(ref)}>{memoryLabel(ref)}</Link>
-            </li>
-          ))}
+          {memory.map((ref, index) => {
+            const link = memoryLink(ref);
+            return (
+              <li key={index}>
+                {link ? <Link to={link}>{memoryLabel(ref)}</Link> : memoryLabel(ref)}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

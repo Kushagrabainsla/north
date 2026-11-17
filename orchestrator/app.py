@@ -127,6 +127,7 @@ from utils.version import NORTH_VERSION
 from web.api import configure as configure_web
 from web.api import router as web_api_router
 from web.api import session_router as web_session_router
+from web.conversations import ConversationStore
 
 logger = logging.getLogger(__name__)
 
@@ -1039,6 +1040,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         unattended=UnattendedPolicy.from_settings(settings, store=unattended_rules),
         approval_memory=approval_memory,
         decider=MemoryDecider(deps.memory, deps.cost_tracker, approval_memory),
+        # Which runs are chats, and what you said in them: the decider reads your messages,
+        # and a no in a chat is a card you can overrule (issue #82, item 1).
+        sessions=ConversationStore(settings.north_home / "web.db").session_of,
     )
     # The approval layer: the one object every tool, flow, agent and the
     # orchestrator asks through.

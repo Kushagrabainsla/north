@@ -77,6 +77,8 @@ class MemoryKind(StrEnum):
     PAST_DECISION = "past_decision"
     JUDGEMENT_RULES = "judgement_rules"
     PROFILE = "profile"
+    # A message the user wrote in the chat session the run belongs to (approval/session.py).
+    USER_MESSAGE = "user_message"
 
     @property
     def label(self) -> str:
@@ -89,6 +91,7 @@ _MEMORY_KIND_LABELS: dict[MemoryKind, str] = {
     MemoryKind.PAST_DECISION: "Your past decision",
     MemoryKind.JUDGEMENT_RULES: "Your judgement rules",
     MemoryKind.PROFILE: "Your profile",
+    MemoryKind.USER_MESSAGE: "Your message",
 }
 
 

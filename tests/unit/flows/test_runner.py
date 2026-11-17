@@ -1083,7 +1083,7 @@ async def test_a_step_that_answers_with_the_json_naming_its_file_delivers_the_fi
 class AllowEverything:
     """A policy that would approve any card it was asked about: an autonomous mode at its most permissive."""
 
-    async def rule(self, action):
+    async def rule(self, action, task_id=None):
         from approval.policy import Ruling, Verdict
 
         return Ruling(Verdict.ALLOW, "allow everything")

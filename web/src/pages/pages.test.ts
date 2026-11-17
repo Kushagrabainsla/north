@@ -29,6 +29,10 @@ describe("links from a decision to the memory it used", () => {
     expect(profile.get("doc")).toBeNull();
   });
 
+  it("shows a message you wrote in the chat as text, with no link", () => {
+    expect(memoryLink({ kind: "user_message", label: "Your message", text: "record the screen", ref: "" })).toBe("");
+  });
+
   it("names what kind of memory it was, as the API words it", () => {
     expect(memoryLabel({ kind: "fact", label: "Fact", text: "likes tea", ref: "" })).toBe("Fact: likes tea");
     expect(memoryLabel({ kind: "judgement_rules", label: "Your judgement rules", text: "", ref: "" })).toBe("Your judgement rules");
