@@ -520,6 +520,26 @@ class TestBashOsSandbox:
 
         assert r'(regex #"/\.git/hooks(/|$)")' in profile(str(tmp_path), writable=True)
 
+    def test_the_keychain_is_closed_in_both_profiles(self, tmp_path) -> None:
+        """Open, a command that needed no card read gh's GitHub token with `security` (2026-11-16)."""
+        from tools.specialized._seatbelt import profile
+
+        for writable in (False, True):
+            text = profile(str(tmp_path), writable=writable)
+            assert '(global-name "com.apple.SecurityServer")' in text and "Library/Keychains" in text
+
+    @pytest.mark.asyncio
+    async def test_no_command_reaches_the_keychain_even_when_approved(self, tmp_path) -> None:
+        login = Path.home() / "Library" / "Keychains" / "login.keychain-db"
+        if not login.exists():
+            pytest.skip("this machine has no login keychain")
+
+        out = await self._approved().execute(
+            ToolInput(params={"command": f"security show-keychain-info {login}"}, granted_workspace=str(tmp_path))
+        )
+
+        assert not out.success, "an approved command read the keychain"
+
     @pytest.mark.asyncio
     async def test_a_long_output_is_kept_whole(self, tmp_path) -> None:
         """Cut at 30,000 characters, the rest was lost before the agent's overflow store could keep it."""

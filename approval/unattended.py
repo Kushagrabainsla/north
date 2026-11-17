@@ -41,7 +41,6 @@ from approval.unattended_rules import (
     KIND_BROWSER,
     KIND_COMMAND,
     KIND_DEVICE,
-    KIND_GIT,
     KIND_SELF_MESSAGE,
     UnattendedRuleStore,
 )
@@ -57,9 +56,6 @@ _DANGEROUS = re.compile(r"[;&|`$<>(){}\n]")
 _TRAILING_STDERR_REDIRECT = re.compile(r"\s+2>&1\s*$")
 # `| tail -15` only trims what a command already printed.
 _TRAILING_TRIM = re.compile(r"\s*\|\s*(?:tail|head)(?:\s+-n?\s*\d+)?\s*$")
-
-# Even for a safe git action, these argument flags are destructive.
-_GIT_DANGEROUS_ARGS: frozenset[str] = frozenset({"-f", "--force", "-D", "--delete", "--hard"})
 
 # Backstop for the two hard rules, for tools that have not yet declared
 # themselves via `Action.reaches_third_party` / `Action.spends_money`. The flags
@@ -187,16 +183,6 @@ class UnattendedPolicy:
                 self._fired(KIND_COMMAND, pattern)
                 return True
         return False
-
-    def approves_git(self, action: str, args: str = "") -> bool:
-        """True for an enabled, local git action (never push/pull/merge/force)."""
-        name = action.strip()
-        if name not in self._patterns(KIND_GIT):
-            return False
-        if any(tok in _GIT_DANGEROUS_ARGS for tok in args.split()):
-            return False
-        self._fired(KIND_GIT, name)
-        return True
 
     def approves_device(self, operation: str) -> bool:
         """True for a trivially reversible device verb - the undo is another toggle.

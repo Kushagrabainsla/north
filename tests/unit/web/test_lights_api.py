@@ -18,8 +18,8 @@ from tests.conftest import approvals
 from tests.unit.tools.kasa_fakes import FakeBulb, FakeNetwork
 from tools.home import Home
 from tools.registry import ToolRegistry
+from tools.specialized.kasa import KasaTool
 from tools.specialized.kasa_devices import KasaDevices
-from tools.specialized.kasa_tool import KasaTool
 from web import lights
 from web.api import WebRuntime
 

@@ -1,9 +1,9 @@
 """Shared synchronous subprocess runner for CLI-wrapping tools.
 
-GitTool and GhTool both shell out to an external binary, capture stdout/stderr,
-enforce a timeout, and cap output to a structured ``ToolOutput``. This is the
-single definition of that flow (CODING_STYLE §5 DRY). BashTool uses async
-execution instead and deliberately does not share this path.
+GhTool shells out to an external binary, captures stdout/stderr, enforces a
+timeout, and caps output to a structured ``ToolOutput``. This is the single
+definition of that flow (CODING_STYLE §5 DRY), for any tool that wraps a CLI.
+BashTool uses async execution instead and deliberately does not share this path.
 """
 
 from __future__ import annotations

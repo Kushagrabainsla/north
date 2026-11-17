@@ -11,6 +11,7 @@ import {
   capabilityColumns,
   ContentTextarea,
   failure,
+  mcpServer,
   sourceLabel,
   type PageMessage,
   type ToolDetail,
@@ -18,6 +19,19 @@ import {
 } from "./capabilities";
 
 const TOOL_COLUMNS = capabilityColumns("Tool", "Operation");
+
+/** An MCP tool: what it does and which server runs it. Its code is the server's, so it is not shown or edited. */
+export function McpToolDetail({ tool, server }: { tool: ToolSummary; server: string }) {
+  return (
+    <section className="mcp-tool-detail">
+      <p>{tool.description}</p>
+      <p className="muted">
+        {tool.mutating ? "Makes changes" : "Read-only"} · provided by the MCP server <b>{server}</b>. Its code runs
+        in that server, so north cannot show or edit it here.
+      </p>
+    </section>
+  );
+}
 
 export function Tools() {
   const dialog = useDialog();
@@ -30,6 +44,7 @@ export function Tools() {
   const [description, setDescription] = useState("");
   const [message, setMessage] = useState<PageMessage | null>(null);
   const selectedTool = tools.data?.find((tool) => tool.name === selected);
+  const server = selectedTool ? mcpServer(selectedTool.source) : "";
   const closeEditor = () => {
     setSelected(null);
     setDetailLoading(false);
@@ -44,9 +59,12 @@ export function Tools() {
   const open = async (toolName: string) => {
     setSelected(toolName);
     setCreating(false);
-    setDetailLoading(true);
     setContent("");
     setMessage(null);
+    // An MCP tool's code runs in its server: there is no file to fetch, and asking for one was a 404.
+    const tool = tools.data?.find((row) => row.name === toolName);
+    if (tool && mcpServer(tool.source)) return;
+    setDetailLoading(true);
     try {
       const detail = await api<ToolDetail>(
         `/web/api/tools/${encodeURIComponent(toolName)}`,
@@ -181,7 +199,7 @@ export function Tools() {
         title={selected || "Tool"}
         eyebrow={selectedTool ? sourceLabel(selectedTool.source) : "Capability"}
         actions={
-          selected ? (
+          selected && !server ? (
             <>
               {selectedTool?.source === "learned" && (
                 <Button variant="danger" onClick={() => void remove()}>
@@ -200,7 +218,9 @@ export function Tools() {
         }
       >
         {selected && <ViewsAbout kind="tool" name={selected}/>}
-        {detailLoading ? (
+        {server && selectedTool ? (
+          <McpToolDetail tool={selectedTool} server={server}/>
+        ) : detailLoading ? (
           <Loading />
         ) : (
           <section className="tool-preview-layout">

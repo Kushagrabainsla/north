@@ -23,6 +23,9 @@ RETIRED_TOOLS: dict[str, str] = dict.fromkeys(
         "goto_definition",
         # Removed before issue #78; text still told the model to use it.
         "check_types",
+        # The shell runs git; north's own code calls git itself. gh stays a tool: its login is
+        # closed to the shell.
+        "git",
     ),
     "bash",
 )

@@ -17,7 +17,7 @@ from approval.store import ApprovalStore
 from config.approval_mode import ApprovalMode
 from tests.conftest import approvals
 from tools.models import ToolInput
-from tools.specialized.kasa_tool import KasaTool
+from tools.specialized.kasa import KasaTool
 
 
 def _lights_off(**facts) -> Request:

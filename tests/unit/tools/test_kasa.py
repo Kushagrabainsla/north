@@ -10,7 +10,7 @@ import pytest
 
 from tests.unit.tools.kasa_fakes import FakeBulb, FakeNetwork
 from tools.models import ToolInput
-from tools.specialized import kasa_tool
+from tools.specialized import kasa as kasa_tool
 from tools.specialized.kasa_devices import KasaDevices
 
 

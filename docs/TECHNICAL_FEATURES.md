@@ -346,7 +346,7 @@ timeout - see ARCHITECTURE §9.8.
 
 **Setting:** `sandbox.os` (`os_sandbox_enabled`, default on).
 
-The same approval flow is shared by every gated tool (`BashTool`, `PatchFileTool`, `GitTool`, `GhTool`, `KasaTool`) through the one `UserInteraction` mediator (see Section 16), so the tools never drift.
+The same approval flow is shared by every gated tool (`BashTool`, `WriteFileTool`, `GhTool`, `KasaTool`) through the one `UserInteraction` mediator (see Section 16), so the tools never drift.
 
 ## 14. Persistent PTY Shell Sessions (removed)
 

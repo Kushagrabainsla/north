@@ -170,14 +170,6 @@ async def test_a_chained_command_is_not_in_the_safe_subset() -> None:
     assert (await policy(ApprovalMode.SAFE).rule(shell("pytest && rm -rf /"))).verdict is Verdict.ASK
 
 
-async def test_auto_allows_a_local_git_action_but_not_a_push() -> None:
-    def git(operation: str, args: str = "") -> Action:
-        return Action(agent="git", kind=ActionKind.GIT, summary=f"git {operation}", operation=operation, args=args)
-
-    assert (await policy(ApprovalMode.SAFE).rule(git("commit"))).verdict is Verdict.ALLOW
-    assert (await policy(ApprovalMode.SAFE).rule(git("push"))).verdict is Verdict.ASK
-
-
 async def test_auto_allows_an_edit_inside_the_workspace_only(tmp_path: Path) -> None:
     inside = tmp_path / "src" / "app.py"
     inside.parent.mkdir(parents=True)
@@ -276,12 +268,12 @@ async def test_the_safe_subset_wins_over_a_learned_rejection(tmp_path: Path) -> 
 
 
 def test_identity_is_built_from_facts_not_the_rendered_message() -> None:
-    a = shell("git push --force")
-    b = Action(agent="git", kind=ActionKind.GIT, summary="git push --force", operation="push", args="--force")
+    a = shell("gh pr merge 12")
+    b = Action(agent="gh", kind=ActionKind.GITHUB, summary="gh pr merge 12", operation="pr_merge", args="12")
 
     assert a.describe() != b.describe()
-    assert "cmd=git push --force" in a.describe()
-    assert "op=push" in b.describe() and "args=--force" in b.describe()
+    assert "cmd=gh pr merge 12" in a.describe()
+    assert "op=pr_merge" in b.describe() and "args=12" in b.describe()
 
 
 def test_two_different_commands_have_different_identities() -> None:
@@ -366,11 +358,10 @@ def _remembering(tmp_path: Path, action: Action, decision: str = ApprovalDecisio
 
 def _reset(repo: str) -> Action:
     return Action(
-        agent="git",
-        kind=ActionKind.GIT,
+        agent="bash",
+        kind=ActionKind.SHELL_COMMAND,
         summary="git reset HEAD~1",
-        operation="reset",
-        args="HEAD~1",
+        command="git reset HEAD~1",
         workspace=repo,
         place=repo,
     )

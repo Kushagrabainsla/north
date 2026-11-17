@@ -21,8 +21,8 @@ from tools import home as home_module
 from tools.home import SCENES, Device, DeviceTool, Home, LightChange
 from tools.models import ToolInput
 from tools.registry import LearnedTool, ToolRegistry
+from tools.specialized.kasa import KasaTool
 from tools.specialized.kasa_devices import KasaDevices
-from tools.specialized.kasa_tool import KasaTool
 
 
 class _Hue(DeviceTool):

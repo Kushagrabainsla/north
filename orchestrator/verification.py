@@ -61,10 +61,10 @@ _EXTERNAL_RESEARCH_RE = re.compile(
     r"\b(?:research|investigate|look\s*up|search|compare)\b",
     re.IGNORECASE,
 )
-# How north inspects a repository: the shell (`ls`, `find`, `cat`, `rg`) and git. Since issue #78
+# How north inspects a repository: the shell (`ls`, `find`, `cat`, `rg`, `git log`). Since issue #78
 # there are no separate list and read tools, so a listing and a read are no longer told apart by
 # the tool's name; what counts is how many inspections succeeded.
-_REPO_INSPECTION_TOOLS = frozenset({"bash", "git"})
+_REPO_INSPECTION_TOOLS = frozenset({"bash"})
 # The installed coding agent read the repository itself: that is the inspection, whatever north's own tools saw.
 _CODING_AGENT = "coding_agent"
 _WEB_EVIDENCE_TOOLS = frozenset({"web_search", "fetch_url"})
@@ -153,7 +153,7 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
             r"|\bopened?\s+a\s+(?:pr|pull\s+request)\b",
             re.IGNORECASE,
         ),
-        frozenset({"git", "gh"}),
+        frozenset({"bash", "gh"}),
     ),
     (
         "citing external information",
@@ -308,7 +308,7 @@ def evidence_sufficiency_violations(
         if relevant_calls < 2:
             violations.append(
                 "repository overview was based on fewer than two concrete repository inspections "
-                "(successful `bash` or `git` calls)"
+                "(successful `bash` calls)"
             )
 
     # A coding agent did the work: a bug report's "compare the current value" is not a request for web research.

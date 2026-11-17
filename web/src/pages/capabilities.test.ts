@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CapabilityName, capabilityColumns, skillRunsAs, sourceLabel } from "./capabilities";
+import { CapabilityName, capabilityColumns, mcpServer, skillRunsAs, sourceLabel } from "./capabilities";
 import type { SkillExecution } from "./capabilities";
 
 const contract = (tools: string[]): SkillExecution => ({
@@ -42,5 +42,25 @@ describe("the sibling Skills, Tools and Flows tables", () => {
     expect(renderToStaticMarkup(createElement(CapabilityName, { name: "daily-brief", source: "builtin" }))).toBe("<b>daily-brief</b>");
     expect(renderToStaticMarkup(createElement(CapabilityName, { name: "mine", source: "learned" }))).toBe('<b>mine</b><span class="kit-badge">learned</span>');
     expect(sourceLabel("learned")).toBe("learned");
+  });
+});
+
+describe("an MCP tool on the Tools page", () => {
+  // Opening one asked the server for its code, which lives in the MCP server: a 404, and nothing opened.
+  it("is told apart by its source, which names the server", () => {
+    expect(mcpServer("MCP: gmail")).toBe("gmail");
+    expect(mcpServer("built-in")).toBe("");
+    expect(mcpServer("learned")).toBe("");
+  });
+
+  it("shows what it does and which server runs it, with no code to edit", async () => {
+    const { McpToolDetail } = await import("./Tools");
+    const html = renderToStaticMarkup(createElement(McpToolDetail, {
+      tool: { name: "mcp__gmail__search", description: "Search Gmail messages.", source: "MCP: gmail", status: "active", mutating: false },
+      server: "gmail",
+    }));
+    expect(html).toContain("Search Gmail messages.");
+    expect(html).toContain("<b>gmail</b>");
+    expect(html).not.toContain("textarea");
   });
 });

@@ -1,6 +1,11 @@
-"""GhTool - GitHub CLI operations for engineering agents.
+"""GhTool - GitHub CLI operations: issues, pull requests, checks.
 
-Mirrors GitTool's safety model: read-only actions (pr view/diff/list/checks,
+Kept although the shell runs git (issue #78 follow-up): gh keeps its login in
+`~/.config/gh` and the macOS keychain, which the shell sandbox closes, and the
+coding agents run with no internet and no GitHub login. This tool runs outside
+the sandbox, so the model never reaches the token.
+
+Read-only actions (pr view/diff/list/checks,
 issue view/list, repo view, run list/view) execute immediately; mutating
 actions (pr create/comment/merge/review, issue create/comment) are gated in
 code behind a user approval card - the gate does not rely on the agent's

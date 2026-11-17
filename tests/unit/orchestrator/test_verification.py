@@ -35,7 +35,7 @@ def test_test_pass_claim_with_bash_ok() -> None:
     assert verify_claims("All tests pass now.", ["bash"]) == []
 
 
-@pytest.mark.parametrize("tools", [["bash"], ["git"]])
+@pytest.mark.parametrize("tools", [["bash"]])
 def test_source_backed_retrospective_does_not_require_rerunning_old_tests(tools) -> None:
     assert (
         verify_claims(
@@ -76,8 +76,10 @@ def test_commit_claim_without_git_flagged() -> None:
     assert any("committing or pushing changes" in v for v in violations)
 
 
-def test_commit_claim_with_git_ok() -> None:
-    assert verify_claims("I committed the changes.", ["git"]) == []
+def test_commit_claim_with_a_shell_or_github_call_ok() -> None:
+    """The shell runs git since the git tool was removed; gh opens and merges pull requests."""
+    assert verify_claims("I committed the changes.", ["bash"]) == []
+    assert verify_claims("I opened a pull request.", ["gh"]) == []
 
 
 @pytest.mark.parametrize(
@@ -172,7 +174,7 @@ def test_repository_overview_requires_two_inspections() -> None:
     assert evidence_sufficiency_violations(task, ["bash"], {"bash": 1})
     assert evidence_sufficiency_violations(task, ["web_search"], {"web_search": 3}), "the web is not the repository"
     assert evidence_sufficiency_violations(task, ["bash"], {"bash": 2}) == []
-    assert evidence_sufficiency_violations(task, ["bash", "git"], {"bash": 1, "git": 1}) == []
+    assert evidence_sufficiency_violations(task, ["bash", "web_search"], {"bash": 1, "web_search": 1}), "one each"
 
 
 def test_a_successful_coding_agent_run_is_the_repository_inspection() -> None:
@@ -199,7 +201,8 @@ def test_terse_overview_is_treated_as_repository_work_in_engineering_context() -
     assert (
         evidence_sufficiency_violations(
             "Give me an overview of what it is.",
-            ["bash", "git"],
+            ["bash"],
+            {"bash": 2},
             repository_context=True,
         )
         == []

@@ -28,6 +28,11 @@ TEXTS = sorted(
 )
 
 
+# Retired names that are also a shell command the text rightly names ("a git repository", `git log`):
+# found in a skill's tool list instead (below), not in prose.
+_ALSO_A_COMMAND = frozenset({"git"})
+
+
 def _mentions(text: str, name: str) -> bool:
     # "glob" is also an ordinary word ("a glob pattern"); as a tool it was always written `glob`.
     pattern = rf"`{name}`" if name == "glob" else rf"(?<![\w.-]){re.escape(name)}(?![\w-])"
@@ -37,9 +42,24 @@ def _mentions(text: str, name: str) -> bool:
 @pytest.mark.parametrize("path", TEXTS, ids=lambda path: str(path.relative_to(ROOT)))
 def test_names_no_retired_tool(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    named = sorted(name for name in RETIRED_TOOLS if _mentions(text, name))
+    named = sorted(name for name in set(RETIRED_TOOLS) - _ALSO_A_COMMAND if _mentions(text, name))
     instead = sorted({current_tool(name) for name in named})
     assert not named, f"{path.relative_to(ROOT)} names retired tools {named}; use {instead}"
+
+
+def test_no_built_in_skill_lists_a_retired_tool() -> None:
+    from skills.registry import SkillRegistry
+    from utils.runtime_resources import builtin_skills_dir
+
+    registry = SkillRegistry(builtin_dir=builtin_skills_dir())
+    listed = {
+        (name, tool)
+        for name in registry.names()
+        if (execution := registry.get(name).execution) is not None
+        for tool in execution.tools
+        if tool in RETIRED_TOOLS
+    }
+    assert not listed, f"built-in skills list retired tools: {sorted(listed)}"
 
 
 def test_a_saved_skill_that_names_a_retired_tool_still_resolves() -> None:

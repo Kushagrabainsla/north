@@ -125,7 +125,24 @@ def test_no_store_falls_back_to_the_shipped_defaults() -> None:
     """A caller with no database gets north's behaviour, not an empty list."""
     policy = UnattendedPolicy()
     assert policy.approves_command("pytest") is True
-    assert policy.approves_git("status") is True
+    assert policy.approves_device("on") is True
+
+
+def test_a_rule_about_a_kind_north_no_longer_takes_is_removed(tmp_path) -> None:
+    """The git rules stayed on the page as switches that did nothing once the git tool was gone."""
+    from utils.db import open_db_connection
+
+    path = tmp_path / "rules.db"
+    UnattendedRuleStore(path)
+    with open_db_connection(path) as conn:
+        conn.execute(
+            "INSERT INTO unattended_rules (id, kind, pattern, enabled, source, note, created_at, updated_at) "
+            "VALUES ('git:commit', 'git', 'commit', 1, 'builtin', '', '', '')"
+        )
+
+    kinds = {rule.kind for rule in UnattendedRuleStore(path).all()}
+
+    assert "git" not in kinds and "command" in kinds
 
 
 # ── The new categories ───────────────────────────────────────────────────────

@@ -31,7 +31,7 @@ async def test_the_list_is_visible(store) -> None:
     payload = await web_api.unattended_rules()
 
     assert payload["rules"], "the shipped rules must be listed, not hidden in Python"
-    assert {r["pattern"] for r in payload["rules"]} >= {"pytest", "status"}
+    assert {r["pattern"] for r in payload["rules"]} >= {"pytest", "on"}
     assert payload["active"] is True
 
 

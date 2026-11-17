@@ -63,23 +63,11 @@ def test_extra_commands_extend_allowlist():
     assert p.approves_command("pytest") is True, "the shipped defaults must still apply"
 
 
-def test_safe_git_actions_approved():
+def test_a_git_write_is_not_in_the_safe_list():
+    """The git tool and its safe-list rules are gone; the shell runs git, and a git write asks."""
     p = UnattendedPolicy()
-    for action in ("add", "commit", "branch", "checkout", "stash", "status", "diff"):
-        assert p.approves_git(action, "") is True, action
-
-
-def test_network_and_merge_git_actions_rejected():
-    p = UnattendedPolicy()
-    for action in ("push", "pull", "merge"):
-        assert p.approves_git(action, "origin main") is False, action
-
-
-def test_dangerous_git_args_rejected():
-    p = UnattendedPolicy()
-    assert p.approves_git("branch", "-D main") is False
-    assert p.approves_git("checkout", "-f .") is False
-    assert p.approves_git("commit", "--force") is False
+    for command in ("git commit -m x", "git push origin main", "git checkout -f ."):
+        assert p.approves_command(command) is False, command
 
 
 def test_from_settings():

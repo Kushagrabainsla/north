@@ -55,3 +55,34 @@ def test_every_tool_named_in_agent_prompts_resolves(prompt_path: Path) -> None:
     referenced = set(_TOOL_CALL_RE.findall(content)) - _AGENT_BUILTINS
     unknown = referenced - _registry_names()
     assert not unknown, f"{prompt_path} references unregistered tools: {sorted(unknown)}"
+
+
+def _declared_tool_names(path: Path) -> list[str]:
+    """The `name = "..."` each Tool class in *path* declares, read without importing it."""
+    import ast
+
+    names = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if (
+                    isinstance(item, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "name" for target in item.targets)
+                    and isinstance(item.value, ast.Constant)
+                    and isinstance(item.value.value, str)
+                ):
+                    names.append(item.value.value)
+    return names
+
+
+@pytest.mark.parametrize("folder", ["universal", "specialized"])
+def test_a_built_in_tools_file_is_named_after_the_tool(folder: str) -> None:
+    """The dashboard and create_tool find a tool's code as `<name>.py`: git, gh and kasa lived in
+    `<name>_tool.py`, so their pages answered 404 and create_tool could not read or update them."""
+    tools_dir = Path(__file__).resolve().parents[3] / "tools" / folder
+    misnamed = {
+        path.name: names
+        for path in sorted(tools_dir.glob("*.py"))
+        if not path.name.startswith("_") and (names := _declared_tool_names(path)) and path.stem not in names
+    }
+    assert not misnamed, f"rename these files to their tool's name: {misnamed}"

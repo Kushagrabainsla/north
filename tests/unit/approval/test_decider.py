@@ -197,7 +197,11 @@ async def test_an_unusable_reply_leaves_the_question_to_you(reply: object) -> No
 
 def _push() -> Action:
     return Action(
-        agent="coding:claude", kind=ActionKind.GIT, summary="push origin main", operation="push", leaves_sandbox=True
+        agent="coding:claude",
+        kind=ActionKind.SHELL_COMMAND,
+        summary="git push origin main",
+        command="git push origin main",
+        leaves_sandbox=True,
     )
 
 

@@ -29,7 +29,7 @@ from tools.models import ToolInput, ToolOutput
 from tools.registry import LearnedTool, ToolRegistry
 from tools.specialized import _os_sandbox
 from tools.specialized.bash import BashTool
-from tools.specialized.kasa_tool import KasaTool
+from tools.specialized.kasa import KasaTool
 from tools.universal._draft_checks import draft_problems
 from tools.universal.create_tool import CreateToolTool
 from web import secrets_panel as secrets_routes

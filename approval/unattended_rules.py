@@ -64,11 +64,10 @@ CREATE TABLE IF NOT EXISTS unattended_rules_seeded (
 # changes nothing is already allowed in every mode by the policy's first tier,
 # so a list of read rules would be a second answer to a settled question.
 KIND_COMMAND = "command"
-KIND_GIT = "git"
 KIND_DEVICE = "device"
 KIND_SELF_MESSAGE = "self_message"
 KIND_BROWSER = "browser"
-KINDS: tuple[str, ...] = (KIND_COMMAND, KIND_GIT, KIND_DEVICE, KIND_SELF_MESSAGE, KIND_BROWSER)
+KINDS: tuple[str, ...] = (KIND_COMMAND, KIND_DEVICE, KIND_SELF_MESSAGE, KIND_BROWSER)
 
 # The only browser actions a rule may name: opening a page and editing a field. A click or a key press can
 # submit, send or buy, so no row - shipped or yours - may allow one (`add` refuses it, the matcher ignores it).
@@ -96,19 +95,6 @@ _BUILTIN_COMMANDS: tuple[str, ...] = (
     "make test",
 )
 
-# Local, reversible, workspace-bound. Network (push/pull) and merge never.
-_BUILTIN_GIT: tuple[str, ...] = (
-    "status",
-    "diff",
-    "log",
-    "show",
-    "branch",
-    "checkout",
-    "add",
-    "commit",
-    "stash",
-)
-
 # Trivially reversible physical actions, where the undo is another toggle. An
 # explicit verb list, never a general "smart home" category: "unlock" is a
 # toggle by shape, and must not be reachable by describing it as one.
@@ -125,7 +111,6 @@ _BUILTIN_BROWSER: tuple[str, ...] = ("goto", "fill", "type", "select")
 
 _BUILTINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (KIND_COMMAND, _BUILTIN_COMMANDS),
-    (KIND_GIT, _BUILTIN_GIT),
     (KIND_DEVICE, _BUILTIN_DEVICE),
     (KIND_SELF_MESSAGE, _BUILTIN_SELF_MESSAGE),
     (KIND_BROWSER, _BUILTIN_BROWSER),
@@ -206,6 +191,10 @@ class UnattendedRuleStore:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_SCHEMA)
             conn.execute(_SEEDED_SCHEMA)
+            # A rule about a kind of action north no longer takes fires for nothing and showed as a switch that
+            # did nothing: the git rules, once the git tool was gone (the shell runs git).
+            placeholders = ", ".join("?" for _ in KINDS)
+            conn.execute(f"DELETE FROM unattended_rules WHERE kind NOT IN ({placeholders})", KINDS)
             self._seed(conn)
         self._cache: dict[str, tuple[str, ...]] | None = None
 

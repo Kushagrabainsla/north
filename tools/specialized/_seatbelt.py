@@ -4,7 +4,7 @@ The kernel, not a reading of the command string, decides what a command may
 touch. Two profiles:
 
 - **read-only** - no writes outside `/dev`, no network, no reads of credential
-  directories. A command that finishes under it is *proved* to have changed
+  directories or the keychain. A command that finishes under it is *proved* to have changed
   nothing, so it needs no card.
 - **workspace** - writes limited to the workspace, any folder you approved
   for that one command, and the temp and cache directories tools need;
@@ -50,6 +50,9 @@ _PROTECTED = (
     r"/\.git/config$",
     r"/\.(bashrc|bash_profile|zshrc|zprofile|profile|gitconfig)$",
 )
+
+# The services through which a program reads the macOS keychain.
+_KEYCHAIN_SERVICES = ("com.apple.SecurityServer", "com.apple.securityd", "com.apple.securityd.xpc")
 
 # Home-relative caches that package managers and compilers write to.
 _CACHE_DIRS = (".cache", ".npm", ".cargo", ".rustup", ".gradle", ".m2", "Library/Caches", ".local/share/uv")
@@ -209,6 +212,13 @@ def profile(
     # Unwritable as well as unreadable: a workspace of the home folder used to
     # let an approved command write into ~/.ssh.
     rules.append(f"(deny file-read* file-write* {secrets})")
+    # The keychain too. Open, a command that needed no card read gh's GitHub token with
+    # `security find-generic-password` (measured 2026-11-16). Certificate checks use another
+    # service, so HTTPS still works; a credential stored in the keychain does not.
+    keychain_dirs = (Path.home() / "Library" / "Keychains", "/Library/Keychains")
+    keychains = " ".join(f"(subpath {_quote(p)})" for p in keychain_dirs)
+    rules.append(f"(deny file-read* file-write* {keychains})")
+    rules.append("(deny mach-lookup " + " ".join(f'(global-name "{name}")' for name in _KEYCHAIN_SERVICES) + ")")
     # North's notes, news and task folders are readable, as they are to north's own
     # file policy: with no read tool left, the shell is how earlier notes are read back.
     readable = " ".join(f"(subpath {_quote(p)})" for p in north_readable_dirs())

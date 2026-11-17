@@ -25,9 +25,9 @@ COMPACTION_THRESHOLD = 0.75
 
 # Agents with these tools produce larger, denser outputs (file contents, diffs,
 # bash stdout). Their summaries need more room to preserve file paths and errors.
-HEAVY_OUTPUT_TOOLS: frozenset[str] = frozenset({"bash", "git"})
+HEAVY_OUTPUT_TOOLS: frozenset[str] = frozenset({"bash"})
 COMPACT_TOKENS_DEFAULT = 512  # ~350 words - general agents
-COMPACT_TOKENS_HEAVY = 1000  # ~700 words - agents with bash/git
+COMPACT_TOKENS_HEAVY = 1000  # ~700 words - agents with bash
 # keep_recent used when context overflows every available model's window.
 COMPACT_KEEP_RECENT_OVERFLOW: int = 1
 # Max chars per field/line kept when rendering history for summarisation.

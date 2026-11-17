@@ -48,7 +48,6 @@ REQUESTS: dict[str, Action] = {
         summary="git push origin main",
         command="git push origin main",
     ),
-    "git_push_as_git": Action(agent="coding:claude", kind=ActionKind.GIT, summary="push origin main", operation="push"),
     "fetch_new_host": Action(
         agent="coding:claude", kind=ActionKind.OTHER, summary="WebFetch https://example.com", mutating=True
     ),
@@ -114,11 +113,11 @@ async def test_what_each_mode_does_with_each_request_a_coding_agent_makes() -> N
         assert table[label]["read_in_worktree"].startswith("allow")
         assert table[label]["shell_read_only"].startswith("allow")
     # Anything that changes something asks in ask mode.
-    for name in ("edit_in_worktree", "shell_write", "git_push_as_shell", "git_push_as_git", "fetch_new_host"):
+    for name in ("edit_in_worktree", "shell_write", "git_push_as_shell", "fetch_new_host"):
         assert table["ask"][name].startswith("ask")
     # Autonomous with an abstaining decider waits for you on everything that leaves the worktree - the
     # abstain rule rides on this. An edit inside the task workspace is already allowed by a fixed rule.
-    for name in ("shell_write", "git_push_as_shell", "git_push_as_git", "fetch_new_host"):
+    for name in ("shell_write", "git_push_as_shell", "fetch_new_host"):
         assert table["autonomous, decider abstains"][name].startswith("ask"), name
     assert table["autonomous, decider abstains"]["edit_in_worktree"] == "allow (edit inside the task workspace)"
 
@@ -126,5 +125,5 @@ async def test_what_each_mode_does_with_each_request_a_coding_agent_makes() -> N
 async def test_autonomous_has_no_hard_floor_today_so_the_memory_rule_must_live_in_the_decider() -> None:
     """Pins current behaviour: an approving decider lets a push through. The abstain-without-a-fact
     rule is therefore a decider change (prompt + a 'leaves the sandbox' fact on the Action), not a policy floor."""
-    verdict, _ = await _verdict(ApprovalMode.AUTONOMOUS, REQUESTS["git_push_as_git"], _Decider(approves=True))
+    verdict, _ = await _verdict(ApprovalMode.AUTONOMOUS, REQUESTS["git_push_as_shell"], _Decider(approves=True))
     assert verdict == "allow"

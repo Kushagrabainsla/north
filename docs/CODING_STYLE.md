@@ -306,7 +306,7 @@ memory/base.py         MemoryGateway     <- LocalMemoryGateway (single gated rea
 ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
 inference/base.py      InferenceRouter   <- ModelDispatcher (multi-provider)
 approval/base.py       Notifier          <- TerminalNotifier (default), MacOSNotifier (optional)
-tools/base.py          Tool              <- WebSearchTool, ReadFileTool, BashTool, GitTool, etc.
+tools/base.py          Tool              <- WebSearchTool, WriteFileTool, BashTool, GhTool, etc.
 agents/base.py         Agent             <- LLMAgent / AgenticLLMAgent (subclassed per domain:
                                             ArchitectAgent, CoderAgent, TesterAgent, ResearcherAgent,
                                             HealthAgent, JobAgent, FinanceAgent, UniversityAgent, …)

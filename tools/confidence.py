@@ -27,7 +27,6 @@ RELIABLE_TOOLS = frozenset(
         "web_search",
         "schedule_task",
         "fetch_url",
-        "git",
     }
 )
 

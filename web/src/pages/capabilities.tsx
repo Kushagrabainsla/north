@@ -101,6 +101,9 @@ export function CapabilityStatus({ value }: { value: string }) {
   return value === "active" ? null : <Status value={value}/>;
 }
 
+/** The MCP server a tool comes from, or "" for a tool whose code is north's own. */
+export const mcpServer = (source: string): string => (source.startsWith("MCP: ") ? source.slice(5) : "");
+
 /** Where a skill, tool or flow came from, in plain words. */
 export const sourceLabel = (source: string): string =>
   source === "builtin" ? "built-in" : source;

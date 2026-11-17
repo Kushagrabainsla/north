@@ -8,7 +8,7 @@
   {"id": "find-filenames", "prompt": "Find every TypeScript test file matching **/*.test.ts", "expected": ["bash"], "kind": "single"},
   {"id": "search-content", "prompt": "Search the repository for every reference to approval_timeout", "expected": ["bash"], "kind": "single"},
   {"id": "one-command", "prompt": "Run the project's pytest command and return its output", "expected": ["bash"], "kind": "single"},
-  {"id": "git-history", "prompt": "Show the repository's recent commits and current diff", "expected": ["git"], "kind": "single"},
+  {"id": "git-history", "prompt": "Show the repository's recent commits and current diff", "expected": ["bash"], "kind": "single"},
   {"id": "github-ci", "prompt": "Check the pull request's CI results and show the failed job logs", "expected": ["gh"], "kind": "single"},
   {"id": "symbols", "prompt": "List the classes and functions defined in this Python module", "expected": ["bash"], "kind": "single"},
   {"id": "references", "prompt": "Find all callers and usages of the parse_schedule function", "expected": ["bash"], "kind": "single"},

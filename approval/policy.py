@@ -1,7 +1,7 @@
 """The single place that decides whether north acts without asking.
 
 Before this module the decision lived in seven places: `is_instantly_safe` and
-an allowlist check inside BashTool, an allowlist check inside GitTool, another
+an allowlist check inside BashTool, an allowlist check inside the git tool, another
 inside PatchFileTool, and three more in JudgementFilter (autonomous approves
 everything, auto replays a learned decision, an LLM answers at high confidence).
 Nothing could answer "what will north do without asking me?", and the LLM tier
@@ -49,7 +49,6 @@ class ActionKind(StrEnum):
 
     SHELL_COMMAND = "shell_command"
     FILE_EDIT = "file_edit"
-    GIT = "git"
     GITHUB = "github"
     DEVICE = "device"
     BROWSER = "browser"
@@ -373,13 +372,6 @@ class ApprovalPolicy:
             and self.unattended.approves_command(action.command)
         ):
             return Ruling(Verdict.ALLOW, "test, lint or build command", DecidedBy.SAFE_LIST)
-        if (
-            action.kind is ActionKind.GIT
-            # A repository outside the task's folder is yours to allow, whatever the operation.
-            and not action.leaves_sandbox
-            and self.unattended.approves_git(action.operation, action.args)
-        ):
-            return Ruling(Verdict.ALLOW, "local-only git", DecidedBy.SAFE_LIST)
         if action.kind is ActionKind.DEVICE and self.unattended.approves_device(action.operation):
             return Ruling(Verdict.ALLOW, "reversible device toggle", DecidedBy.SAFE_LIST)
         if action.kind is ActionKind.BROWSER and self.unattended.approves_browser(action.operation):
