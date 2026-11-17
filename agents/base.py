@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -21,6 +20,7 @@ from tools.base import Tool
 from tools.retrieval import tool_index_documents
 from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 from utils.execution_context import ExecutionIdentity, bind_execution
+from utils.tools import named_tools
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +68,7 @@ def _mentioned_tool_names(skills: list[Any], tool_names: set[str]) -> set[str]:
     """
     if not skills or not tool_names:
         return set()
-    corpus = " ".join(f"{skill.body} {skill.description}" for skill in skills)
-    words = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", corpus))
-    return tool_names & words
+    return named_tools(" ".join(f"{skill.body} {skill.description}" for skill in skills), tool_names)
 
 
 class Agent(ABC):
@@ -507,5 +505,4 @@ def _tool_names_in_text(text: str, tool_names: set[str]) -> set[str]:
     """Return exact tool identifiers named in task text."""
     if not text or not tool_names:
         return set()
-    words = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", text))
-    return tool_names & words
+    return named_tools(text, tool_names)

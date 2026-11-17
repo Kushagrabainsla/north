@@ -224,7 +224,8 @@ steps:
     assert [item["skill"] for item in run.outputs] == ["review-item", "review-item"]
     assert '"value": "hello"' in agent.payloads[1].prompt
     assert agent.payloads[0].skills == ["review-item"]
-    assert agent.payloads[0].allowed_tools == []
+    # The skill lists no tools; every step still has read_tool_output (issue #82, item 4).
+    assert agent.payloads[0].allowed_tools == ["read_tool_output"]
     assert agent.payloads[0].mutation_policy == "deny"
 
 

@@ -369,8 +369,11 @@ small relevant subset using the task, role, selected skills, and current plan; e
 mentions, the loop controls and the four most-used tools (`bash`, `write_file`, `fetch_url`,
 `web_search`) are always loaded. A call to a registered tool that was not loaded loads it and
 runs it, with the same gates. A flow step's tool list is a contract: neither rule widens it.
-`find_tools` lets the running agent search the catalog by what a tool does. Confidence affects ranking, not eligibility. No agent configuration
-or registry code changes when tools come or go.
+The list is the skill's tools plus `read_tool_output` (`flows.validation.STEP_TOOLS`). A flow
+is rejected if its step text (skill description, body or step instructions) names a tool the
+step cannot use; a retired name counts as its replacement.
+`find_tools` lets the running agent search the catalog by what a tool does. Confidence affects
+ranking, not eligibility. No agent configuration or registry code changes when tools come or go.
 
 ---
 

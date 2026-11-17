@@ -21,8 +21,8 @@ from flows.models import FlowSource, flow_fingerprint
 from flows.registry import FlowRegistry
 from flows.store import FlowRun, FlowRunStore
 from flows.validation import (
-    resolve_execution_tools,
     schema_errors,
+    step_tools,
     validate_flow_capabilities,
 )
 from inference.exceptions import missing_resource
@@ -460,7 +460,7 @@ class FlowRunner:
             # North runs every step. A skill's `execution.agent` is kept as written (it is part of
             # the fingerprint an active flow was tested under) but no longer chooses anything.
             selected_agent_name = NORTH_AGENT
-            allowed_tools = resolve_execution_tools(execution, step.inputs) if execution else ()
+            allowed_tools = step_tools(execution, step.inputs) if execution else ()
             # The step's own approval, never the skill's declared baseline
             # (execution.approval): a flow step must be able to require
             # different approval than the skill's default for this one use,

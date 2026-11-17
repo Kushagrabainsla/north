@@ -6,9 +6,22 @@ from dataclasses import dataclass
 from typing import Any
 
 from flows.models import flow_fingerprint
-from utils.retired_tools import current_tool
+from utils.retired_tools import RETIRED_TOOLS, current_tool
+from utils.tools import named_tools
 
 _APPROVAL_RANK = {"never": 0, "on_mutation": 1, "before_step": 2}
+
+# Tools every flow step has, whatever its skill lists. North cuts a long tool result
+# and tells the agent to call read_tool_output for the rest; a step without it could
+# not, and the research briefing failed that call in all 4 runs (issue #82, item 4).
+# It only reads what the step's own tools returned.
+STEP_TOOLS: tuple[str, ...] = ("read_tool_output",)
+
+
+def step_tools(execution, inputs: dict[str, Any]) -> tuple[str, ...]:
+    """The tools one flow step may use: its skill's list, then the tools every step has."""
+    listed = resolve_execution_tools(execution, inputs)
+    return listed + tuple(name for name in STEP_TOOLS if name not in listed)
 
 
 @dataclass(frozen=True)
@@ -194,8 +207,36 @@ def validate_flow_capabilities(
                     tool_registry.get(tool_name)
                 except Exception:
                     errors.append(f"{prefix}: unknown tool {tool_name!r} in skill contract")
+            errors.extend(f"{prefix}: {message}" for message in _unlisted_tools(step, skill, tool_names, tool_registry))
 
     return FlowValidationReport(tuple(errors), tuple(warnings))
+
+
+def _unlisted_tools(step, skill, tool_names: tuple[str, ...], tool_registry) -> list[str]:
+    """A tool the step's text tells the agent to call, which the step cannot use.
+
+    A step can use only the tools its skill lists. The news briefing called fetch_url
+    in every run and each call failed; the outreach step was told to call
+    search_files, which it did not have (issue #82, item 4). A retired name counts as
+    the tool that replaced it, as it does when the step runs.
+    """
+    try:
+        known = set(tool_registry.all_tool_names())
+    except Exception:
+        return []
+    text = f"{skill.description}\n{skill.body}\n{step.instructions}"
+    usable = set(tool_names) | set(STEP_TOOLS)
+    messages = []
+    for name in sorted(named_tools(text, known | set(RETIRED_TOOLS))):
+        tool = current_tool(name)
+        if tool in usable:
+            continue
+        shown = name if tool == name else f"{name} (now {tool})"
+        messages.append(
+            f"its text names tool {shown!r}, which skill {step.skill!r} does not list; "
+            f"add {tool!r} to the skill's tools or take it out of the text"
+        )
+    return messages
 
 
 def schedulable_flow_error(

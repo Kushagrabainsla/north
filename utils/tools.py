@@ -32,9 +32,23 @@ See docs/CODING_STYLE.md Section 15 and architecture/modules.yaml (platform laye
 from __future__ import annotations
 
 import inspect
+import re
+from collections.abc import Iterable
 from typing import Any, Protocol, runtime_checkable
 
 from utils.edit_scope import EditAuthorizer
+
+_WORD = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+
+
+def named_tools(text: str, tool_names: Iterable[str]) -> set[str]:
+    """The tool names that *text* names as whole words.
+
+    One rule for "this text names that tool", used when north loads the tools a
+    skill names and when it checks that a flow step can use the tools its text
+    names. Substring matching over-fires ("global" contains "glob").
+    """
+    return set(tool_names) & set(_WORD.findall(text))
 
 
 def tool_mutates(tool: Any, params: dict[str, Any] | None = None) -> bool:
