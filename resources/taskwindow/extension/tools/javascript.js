@@ -1,5 +1,6 @@
 import { resolveTab } from "./tabs.js";
 import { withDebugger, send } from "./cdp.js";
+import { evaluateScript } from "./evaluate.js";
 
 // Evaluated over CDP (Runtime.evaluate), the same path the DevTools console
 // uses: it runs in the page's main world and is exempt from the page's Content
@@ -9,17 +10,13 @@ import { withDebugger, send } from "./cdp.js";
 export async function javascriptExecute({ code, awaitPromise = true, tabId, sessionToken }) {
   const tab = await resolveTab(tabId, sessionToken);
   return withDebugger(tab.id, async (tid) => {
-    const { result, exceptionDetails } = await send(tid, "Runtime.evaluate", {
-      expression: code,
-      awaitPromise: awaitPromise !== false,
-      returnByValue: true,
-      userGesture: true,
-      // REPL mode, as the DevTools console runs: a top-level `const ta = …`
-      // from one call otherwise stays declared in the page for good, so the
-      // next call reusing the name throws "Identifier 'ta' has already been
-      // declared". It also allows top-level `await`.
-      replMode: true,
-    });
+    // In REPL mode, as the DevTools console runs; a script written as a function body
+    // (`return x;`) runs as one (evaluate.js).
+    const { result, exceptionDetails } = await evaluateScript(
+      (method, params) => send(tid, method, params),
+      code,
+      { awaitPromise },
+    );
     if (exceptionDetails) {
       const detail = exceptionDetails.exception?.description || exceptionDetails.text || "Uncaught exception";
       throw new Error(`page script threw: ${detail}`);
