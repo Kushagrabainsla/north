@@ -643,7 +643,7 @@ async def test_history_answer_does_not_trigger_a_spurious_repair(tmp_path):
     auditor, ledger, _ = _make_auditor(tmp_path)
     agent = _StubbornClaimAgent()
     result = AgentResult(
-        output="Last month we ran tests and built the pilot.", summary="history", successful_tools=["read_file", "git"]
+        output="Last month we ran tests and built the pilot.", summary="history", successful_tools=["bash", "git"]
     )
 
     await auditor.verify_claims(

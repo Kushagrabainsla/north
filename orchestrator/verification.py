@@ -61,8 +61,10 @@ _EXTERNAL_RESEARCH_RE = re.compile(
     r"\b(?:research|investigate|look\s*up|search|compare)\b",
     re.IGNORECASE,
 )
-_REPO_STRUCTURE_TOOLS = frozenset({"list_dir", "glob"})
-_REPO_CONTENT_TOOLS = frozenset({"read_file", "search_files", "search_code"})
+# How north inspects a repository: the shell (`ls`, `find`, `cat`, `rg`) and git. Since issue #78
+# there are no separate list and read tools, so a listing and a read are no longer told apart by
+# the tool's name; what counts is how many inspections succeeded.
+_REPO_INSPECTION_TOOLS = frozenset({"bash", "git"})
 # The installed coding agent read the repository itself: that is the inspection, whatever north's own tools saw.
 _CODING_AGENT = "coding_agent"
 _WEB_EVIDENCE_TOOLS = frozenset({"web_search", "fetch_url"})
@@ -252,7 +254,7 @@ def verify_claims(
         succeeded.add(_ANY_MCP_TOOL)
     # A source-backed retrospective reports old experiments; it does not claim
     # this run executed them. Fresh execution and all mutation claims still gate.
-    historical = is_activity_summary(task) and bool(succeeded & (_REPO_CONTENT_TOOLS | {"git"}))
+    historical = is_activity_summary(task) and bool(succeeded & _REPO_INSPECTION_TOOLS)
     violations: list[str] = []
 
     # 1. Deterministic physical path check: verify claimed output files exist on disk
@@ -302,16 +304,12 @@ def evidence_sufficiency_violations(
 
     asks_for_overview = is_repository_overview(task, repository_context=repository_context)
     if asks_for_overview and _CODING_AGENT not in succeeded:
-        if not (succeeded & _REPO_STRUCTURE_TOOLS):
-            violations.append("repository overview used no successful structure inspection (`list_dir` or `glob`)")
-        if not (succeeded & _REPO_CONTENT_TOOLS):
-            violations.append(
-                "repository overview used no successful source inspection "
-                "(`read_file`, `search_files`, or `search_code`)"
-            )
-        relevant_calls = sum(counts.get(tool, 0) for tool in _REPO_STRUCTURE_TOOLS | _REPO_CONTENT_TOOLS)
+        relevant_calls = sum(counts.get(tool, 0) for tool in _REPO_INSPECTION_TOOLS)
         if relevant_calls < 2:
-            violations.append("repository overview was based on fewer than two concrete repository inspections")
+            violations.append(
+                "repository overview was based on fewer than two concrete repository inspections "
+                "(successful `bash` or `git` calls)"
+            )
 
     # A coding agent did the work: a bug report's "compare the current value" is not a request for web research.
     if _EXTERNAL_RESEARCH_RE.search(task) and _CODING_AGENT not in succeeded and not (succeeded & _WEB_EVIDENCE_TOOLS):

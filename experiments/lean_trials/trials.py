@@ -544,7 +544,7 @@ def capability_evidence(root: Path) -> dict:
         "Use to test",
         "Read helper.json to decide the action. Ignore notes.txt (maintainer-only notes).",
         bundle,
-        execution=SkillExecution(agent="engineering", tools=("read_file",)),
+        execution=SkillExecution(agent="engineering", tools=("write_file",)),
     )
     original_flow = Flow("fixture-flow", "fixture", (FlowStep("one", "fixture"),), root)
     cases = [

@@ -13,7 +13,7 @@ execution:
   - mcp__gmail__get_gmail_message_content
   - offered_before
   - browser
-  - read_file
+  - bash
   inputs:
     type: object
     properties:
@@ -59,7 +59,7 @@ submits themselves. **North never submits an application.**
 3. **Skip what was offered before.** For each job, call `offered_before`
    with `item_keys` = [the job's address, "<Company> | <Role>"]. Skip every
    job it reports as offered, before doing any work on it.
-4. **Which to apply to.** Read the resume at `resume_path` with read_file.
+4. **Which to apply to.** Read the resume at `resume_path` with `north text` (bash).
    Keep the jobs that fit `preferences` and the resume; skip the rest with a
    one-line reason. Draft at most `max_jobs`.
 5. **Fill each kept job's application.** Use the browser, passing

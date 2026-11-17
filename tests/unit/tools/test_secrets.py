@@ -22,15 +22,23 @@ from config import secret_store
 from config.secret_store import SecretUnavailable, secret
 from config.settings import settings
 from orchestrator.api_context import ApiServices, bind_services
+from tests.conftest import approving_store, bind_approvals
 from tests.unit.tools.test_tool_drafts import _GOOD, _block, _create, _guide
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.registry import LearnedTool, ToolRegistry
+from tools.specialized import _os_sandbox
+from tools.specialized.bash import BashTool
 from tools.specialized.kasa_tool import KasaTool
 from tools.universal._draft_checks import draft_problems
 from tools.universal.create_tool import CreateToolTool
-from tools.universal.read_file import ReadFileTool
 from web import secrets_panel as secrets_routes
+
+
+def _shell():
+    """How files are read since issue #78: the shell, here with every command approved."""
+    return bind_approvals(BashTool(os_sandbox=True), store=approving_store())
+
 
 KEY = "owm-1234-abcd-5678"
 
@@ -147,7 +155,7 @@ async def test_any_tool_that_returns_a_stored_value_returns_its_name_instead(sav
     project_env.parent.mkdir()
     project_env.write_text(f"OPENWEATHER_KEY={KEY}\n", encoding="utf-8")
 
-    out = await ReadFileTool().execute(ToolInput(params={"path": str(project_env)}))
+    out = await _shell().execute(ToolInput(params={"command": f"cat {project_env}"}))
 
     assert out.success, out.error
     assert KEY not in str(out.data) and "[secret openweather]" in str(out.data)
@@ -164,8 +172,11 @@ async def test_the_store_is_private_lists_no_value_and_file_tools_cannot_read_it
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     [listed] = saved.saved()
     assert (listed.name, listed.note) == ("openweather", "weather for get_forecast") and KEY not in repr(listed)
-    out = await ReadFileTool().execute(ToolInput(params={"path": str(path)}))
-    assert not out.success and KEY not in str(out.model_dump())
+    out = await _shell().execute(ToolInput(params={"command": f"cat {path}"}))
+    # The value never reaches the model; where the OS sandbox runs, the file is not read at all.
+    assert KEY not in str(out.model_dump())
+    if _os_sandbox.current() is not None:
+        assert not out.success
 
 
 def test_a_name_or_value_north_cannot_keep_is_refused_with_why() -> None:

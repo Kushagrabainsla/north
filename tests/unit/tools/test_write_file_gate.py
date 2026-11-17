@@ -111,16 +111,17 @@ async def test_a_credential_path_is_refused_before_any_card(tmp_path: Path, monk
 
 @pytest.mark.asyncio
 async def test_a_file_outside_the_task_folder_can_be_read(tmp_path: Path) -> None:
-    from tools.universal.read_file import ReadFileTool
+    """The task folder bounds writes, not reads; files are read with the shell since issue #78."""
+    from tests.conftest import approving_store, bind_approvals
+    from tools.specialized.bash import BashTool
 
     notes = tmp_path / "Desktop" / "notes.txt"
     notes.parent.mkdir()
     notes.write_text("remember the milk")
+    (tmp_path / "task").mkdir()
 
-    out = await ReadFileTool().execute(
-        ToolInput(
-            params={"path": str(notes), "workspace": str(tmp_path / "task")}, granted_workspace=str(tmp_path / "task")
-        )
+    out = await bind_approvals(BashTool(os_sandbox=True), store=approving_store()).execute(
+        ToolInput(params={"command": f"cat {notes}"}, granted_workspace=str(tmp_path / "task"))
     )
 
     assert out.success, out.error

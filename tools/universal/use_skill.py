@@ -4,7 +4,7 @@ The primary path is semantic pre-selection (skills are injected into context
 before the agent acts). This tool is the fallback for the long tail: when a
 listed skill fits but its body was not pre-injected, the agent can pull it in.
 It only ever reads - bundled files are returned as read-only references the agent
-opens itself with read_file; the skill system never executes anything.
+reads itself with a shell command; the skill system never executes anything.
 """
 
 from __future__ import annotations
@@ -18,15 +18,15 @@ from tools.models import ToolInput, ToolOutput
 
 
 class UseSkillTool(Tool):
-    """Return a named skill's step-by-step instructions and reference-file names."""
+    """Return a named skill's step-by-step instructions and its reference files."""
 
     name = "use_skill"
     description = (
         "Load the full step-by-step instructions for a named skill (a reusable "
         "procedure for a recurring kind of task). Use it when a skill listed as "
         "available fits the current task and its full body was not already provided. "
-        "Returns the instructions plus the names of any read-only reference files in "
-        "the skill's folder (open those with read_file)."
+        "Returns the instructions plus the folder and names of any read-only reference "
+        "files in the skill's folder (read those with bash, e.g. `cat <folder>/<file>`)."
     )
     parameters_schema = {
         "type": "object",
@@ -51,6 +51,7 @@ class UseSkillTool(Tool):
             data={
                 "name": skill.name,
                 "instructions": skill.body,
+                "folder": str(skill.directory),
                 "reference_files": skill.bundled_file_names(),
             },
         )
@@ -59,5 +60,7 @@ class UseSkillTool(Tool):
         references = data.get("reference_files") or []
         body = f"# Skill: {data.get('name', '')}\n\n{data.get('instructions', '')}"
         if references:
-            body += f"\n\nReference files (read with read_file): {', '.join(references)}"
+            # Names alone could not be found: the folder is where they are.
+            folder = data.get("folder", "")
+            body += f"\n\nReference files in {folder} (read with bash, e.g. `cat`): {', '.join(references)}"
         return body

@@ -179,7 +179,7 @@ async def _case(client, home, work, listing, case):
                 result = stored.outputs[-1]["data"]["result"]
                 print("Case:", case, result)
                 tools = stored.outputs[-1]["data"]["tools_used"]
-                assert set(tools) <= {"read_file", "write_file", "find_tools", "request_approval"}, tools
+                assert set(tools) <= {"bash", "write_file", "find_tools", "request_approval"}, tools
                 return result
             await asyncio.sleep(1)
 
@@ -191,7 +191,7 @@ async def test_prompt_authors_and_tests_a_user_defined_local_flow(custom_north):
         "Make it reusable: take listing_path, resume_path, output_dir, and preferences as runtime inputs. "
         "Read one saved job listing and my resume, assess fit, and create local review drafts only. "
         "Reuse North's authoring tools and flow runner. Create a learned executable skill if needed; "
-        "the exact execution tool allowlist must be read_file and write_file, executor general, "
+        "the exact execution tool allowlist must be bash and write_file, executor general, "
         "minimum approval on_mutation. Bind all four required string inputs via ${inputs.<name>}. "
         "For suitable jobs write fit.md, application.md, and questions.json inside output_dir. "
         "For obvious mismatches write only fit.md and questions.json; do not invent an application. "
@@ -216,7 +216,7 @@ async def test_prompt_authors_and_tests_a_user_defined_local_flow(custom_north):
     doc = (home / "skills" / name / "SKILL.md").read_text()
     meta = yaml.safe_load(doc.split("---", 2)[1])
     assert meta["status"] == "active"
-    assert set(meta["execution"]["tools"]) == {"read_file", "write_file"}
+    assert set(meta["execution"]["tools"]) == {"bash", "write_file"}
     assert set(meta["execution"]["inputs"]["required"]) == {"listing_path", "resume_path", "output_dir", "preferences"}
     assert set(meta["execution"]["outputs"]["required"]) == {"status", "artifacts", "questions"}
     if not SEED:

@@ -35,7 +35,7 @@ def test_test_pass_claim_with_bash_ok() -> None:
     assert verify_claims("All tests pass now.", ["bash"]) == []
 
 
-@pytest.mark.parametrize("tools", [["read_file"], ["search_code"], ["git"]])
+@pytest.mark.parametrize("tools", [["bash"], ["git"]])
 def test_source_backed_retrospective_does_not_require_rerunning_old_tests(tools) -> None:
     assert (
         verify_claims(
@@ -165,12 +165,14 @@ def test_no_actionable_claims_no_violations() -> None:
     assert verify_claims("Here is a summary of the options you could consider.", []) == []
 
 
-def test_repository_overview_requires_structure_and_source_evidence() -> None:
+def test_repository_overview_requires_two_inspections() -> None:
+    """The shell lists and reads (issue #78), so inspections are counted, not told apart by tool name."""
     task = "Give me an overview of this repository and explain how it works."
 
-    assert evidence_sufficiency_violations(task, ["list_dir"], {"list_dir": 1})
-    assert evidence_sufficiency_violations(task, ["read_file"], {"read_file": 2})
-    assert evidence_sufficiency_violations(task, ["list_dir", "read_file"], {"list_dir": 1, "read_file": 1}) == []
+    assert evidence_sufficiency_violations(task, ["bash"], {"bash": 1})
+    assert evidence_sufficiency_violations(task, ["web_search"], {"web_search": 3}), "the web is not the repository"
+    assert evidence_sufficiency_violations(task, ["bash"], {"bash": 2}) == []
+    assert evidence_sufficiency_violations(task, ["bash", "git"], {"bash": 1, "git": 1}) == []
 
 
 def test_a_successful_coding_agent_run_is_the_repository_inspection() -> None:
@@ -191,13 +193,13 @@ def test_a_bug_report_that_says_current_and_compare_needs_no_web_research_from_a
 def test_terse_overview_is_treated_as_repository_work_in_engineering_context() -> None:
     assert evidence_sufficiency_violations(
         "Give me an overview of what it is.",
-        ["list_dir"],
+        ["bash"],
         repository_context=True,
     )
     assert (
         evidence_sufficiency_violations(
             "Give me an overview of what it is.",
-            ["list_dir", "read_file"],
+            ["bash", "git"],
             repository_context=True,
         )
         == []
@@ -211,8 +213,8 @@ def test_repository_overview_prompt_variants_share_the_same_evidence_gate() -> N
         "Walk me through the repository architecture.",
         "How does this repository work?",
     ):
-        assert evidence_sufficiency_violations(task, ["list_dir"]), task
-        assert evidence_sufficiency_violations(task, ["list_dir", "read_file"]) == [], task
+        assert evidence_sufficiency_violations(task, ["bash"]), task
+        assert evidence_sufficiency_violations(task, ["bash"], {"bash": 2}) == [], task
 
 
 def test_current_external_research_requires_web_evidence() -> None:

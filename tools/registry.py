@@ -39,7 +39,6 @@ _TOOLS_ROOT = Path(__file__).parent
 # constrain which agents can use a tool.
 _TOOL_DIRS: tuple[tuple[str, str], ...] = (
     ("universal", "tools.universal"),
-    ("semantic", "tools.semantic"),
     ("specialized", "tools.specialized"),
 )
 # Hot-reload TTL: re-scan tool directories at most once per this many seconds.

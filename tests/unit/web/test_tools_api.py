@@ -34,12 +34,12 @@ async def test_dashboard_tool_edits_stay_candidates_until_runtime_activation(tmp
 async def test_dashboard_edit_of_builtin_tool_creates_candidate_override(tmp_path) -> None:
     learned = tmp_path / "learned" / "tools"
     registry = ToolRegistry(auto_register=True, learned_dir=learned)
-    original = registry.get("read_file")
-    content = _read_tool("read_file", learned).data["content"]
+    original = registry.get("fetch_url")
+    content = _read_tool("fetch_url", learned).data["content"]
 
     with bind_services(ApiServices(tool_registry=registry, north_home=tmp_path)):
-        result = await web_api.update_tool("read_file", web_api.ToolUpdate(content=content))
+        result = await web_api.update_tool("fetch_url", web_api.ToolUpdate(content=content))
 
     assert result["status"] == "candidate"
-    assert learned.joinpath("candidates", "universal", "read_file.py").exists()
-    assert registry.get("read_file") is original
+    assert learned.joinpath("candidates", "universal", "fetch_url.py").exists()
+    assert registry.get("fetch_url") is original

@@ -8,7 +8,8 @@ touch. Two profiles:
   nothing, so it needs no card.
 - **workspace** - writes limited to the workspace, any folder you approved
   for that one command, and the temp and cache directories tools need;
-  credential directories stay unreadable and unwritable. Used for commands you
+  credential directories stay unreadable and unwritable, and git hooks, git's
+  config and shell start-up files unwritable. Used for commands you
   approved. Given an egress proxy port, the network is closed too, except
   loopback (a project's own tests start local servers) - and the proxy on
   loopback is the only way out (see `_egress.py`).
@@ -32,12 +33,23 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools._path import is_north_scratch
+from tools._path import DB_SUFFIXES, SECRET_FILENAMES, SENSITIVE_DIR_NAMES, is_north_scratch, north_readable_dirs
 
 _SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
-# Home-relative directories that hold credentials. Unreadable under both profiles.
-_SECRET_DIRS = (".ssh", ".aws", ".gnupg", ".config", ".north")
+# Home-relative directories that hold credentials, unreadable under both profiles. The same
+# list north's file policy uses (`tools/_path.py`), so the two cannot disagree.
+_SECRET_DIRS = tuple(sorted(SENSITIVE_DIR_NAMES))
+
+# Files whose change runs code later, outside any sandbox: git hooks, git's config (which can
+# name a hook folder or a program git runs) and shell start-up files. No command writes them,
+# wherever they are; write_file can, with the change on its card. The list Anthropic's
+# sandbox-runtime protects.
+_PROTECTED = (
+    r"/\.git/hooks(/|$)",
+    r"/\.git/config$",
+    r"/\.(bashrc|bash_profile|zshrc|zprofile|profile|gitconfig)$",
+)
 
 # Home-relative caches that package managers and compilers write to.
 _CACHE_DIRS = (".cache", ".npm", ".cargo", ".rustup", ".gradle", ".m2", "Library/Caches", ".local/share/uv")
@@ -151,6 +163,16 @@ def _secret_dirs() -> list[str]:
     return paths
 
 
+def _closed_files() -> str:
+    """North's databases inside its home, and secret files anywhere, as Seatbelt filters."""
+    from config.settings import settings
+
+    home = _regex_literal(os.path.realpath(settings.north_home))
+    suffixes = "|".join(_regex_literal(suffix) for suffix in DB_SUFFIXES)
+    names = "|".join(_regex_literal(name) for name in sorted(SECRET_FILENAMES))
+    return f'(regex #"^{home}/.*({suffixes})$") (regex #"/({names})$")'
+
+
 def profile(
     workspace: str | None,
     *,
@@ -187,9 +209,17 @@ def profile(
     # Unwritable as well as unreadable: a workspace of the home folder used to
     # let an approved command write into ~/.ssh.
     rules.append(f"(deny file-read* file-write* {secrets})")
+    # North's notes, news and task folders are readable, as they are to north's own
+    # file policy: with no read tool left, the shell is how earlier notes are read back.
+    readable = " ".join(f"(subpath {_quote(p)})" for p in north_readable_dirs())
+    rules.append(f"(allow file-read* {readable})")
     if workspace and is_north_scratch(Path(workspace)):
         operations = "file-read* file-write*" if writable else "file-read*"
         rules.append(f"(allow {operations} (subpath {_quote(workspace)}))")
+    # Whatever was opened above, north's databases and secret files stay closed.
+    rules.append(f"(deny file-read* file-write* {_closed_files()})")
+    if writable:
+        rules.append("(deny file-write* " + " ".join(f'(regex #"{pattern}")' for pattern in _PROTECTED) + ")")
     if not writable:
         rules.append("(deny network*)")
     elif proxy_port is not None:

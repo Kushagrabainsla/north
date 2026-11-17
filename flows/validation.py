@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from flows.models import flow_fingerprint
+from utils.retired_tools import current_tool
 
 _APPROVAL_RANK = {"never": 0, "on_mutation": 1, "before_step": 2}
 
@@ -28,7 +29,9 @@ def resolve_execution_tools(execution, inputs: dict[str, Any]) -> tuple[str, ...
 
     ``$input.<name>`` is supported only for the legacy compatibility skill. It
     must resolve to a static tool name in the flow definition, never a runtime
-    value, so validation can still prove the allowlist before execution.
+    value, so validation can still prove the allowlist before execution. A
+    retired tool's name resolves to the tool that replaced it
+    (`utils/retired_tools.py`), so a skill saved before the change still runs.
     """
     resolved: list[str] = []
     for declared in execution.tools:
@@ -42,6 +45,7 @@ def resolve_execution_tools(execution, inputs: dict[str, Any]) -> tuple[str, ...
             if not isinstance(value, str) or not value.strip() or value.startswith("${"):
                 raise ValueError(f"tool reference {declared!r} must resolve to a static tool name")
             name = value.strip()
+        name = current_tool(name)
         if name not in resolved:
             resolved.append(name)
     return tuple(resolved)

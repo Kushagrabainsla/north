@@ -93,8 +93,8 @@ class Skill:
     def bundled_file_names(self) -> list[str]:
         """Names of supporting files in the skill folder (everything but SKILL.md).
 
-        These are read-only references the agent may open with ``read_file``;
-        the skill system never executes them.
+        These are read-only references the agent may read with a shell command
+        (``cat``); the skill system never executes them.
         """
         if not self.directory.is_dir():
             return []

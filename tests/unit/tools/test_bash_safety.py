@@ -437,12 +437,16 @@ class TestBashOsSandbox:
         assert not out.success and not (home / ".ssh" / "authorized_keys").exists()
 
     @pytest.mark.asyncio
-    async def test_a_task_folder_inside_north_home_is_open_to_its_command_and_no_other(self) -> None:
-        """~/.north is closed to commands; a task's own folder inside it is the exception."""
+    async def test_a_task_folder_inside_north_home_is_writable_by_its_own_command_only(self) -> None:
+        """~/.north is closed to commands; its task folders are readable, as to north's file policy.
+
+        Since issue #78 the shell is north's only file reader, so it reads what `read_file`
+        could. Writing stays limited to the task's own folder.
+        """
         from utils.handoff import ensure_handoff_dir
 
         mine, other = ensure_handoff_dir("task_mine"), ensure_handoff_dir("task_other")
-        (Path(other) / "notes.txt").write_text("private")
+        (Path(other) / "notes.txt").write_text("from another task")
         tool = self._approved()
 
         own = await tool.execute(
@@ -450,12 +454,99 @@ class TestBashOsSandbox:
                 params={"command": "echo hi > note.txt && cat note.txt", "workspace": mine}, granted_workspace=mine
             )
         )
-        foreign = await tool.execute(
+        read_other = await tool.execute(
             ToolInput(params={"command": f"cat {other}/notes.txt", "workspace": mine}, granted_workspace=mine)
+        )
+        write_other = await tool.execute(
+            ToolInput(params={"command": f"echo x > {other}/notes.txt", "workspace": mine}, granted_workspace=mine)
         )
 
         assert own.success and own.data["stdout"].strip() == "hi"
-        assert not foreign.success
+        assert read_other.success and read_other.data["stdout"].strip() == "from another task"
+        assert not write_other.success and (Path(other) / "notes.txt").read_text() == "from another task"
+
+    @pytest.mark.asyncio
+    async def test_norths_notes_are_readable_and_its_databases_and_secrets_are_not(self) -> None:
+        """Notes are read back with the shell; north's state and keys never are."""
+        from config.settings import settings
+        from tools._path import personal_dir
+
+        notes = Path(personal_dir("notes"))
+        notes.mkdir(parents=True, exist_ok=True)
+        (notes / "plan.md").write_text("week plan")
+        (notes / "state.db").write_text("rows")
+        settings.north_home.mkdir(parents=True, exist_ok=True)
+        (settings.north_home / "secret.key").write_text("key")
+        tool = self._tool()
+
+        plan = await tool.execute(ToolInput(params={"command": f"cat {notes}/plan.md"}))
+        database = await tool.execute(ToolInput(params={"command": f"cat {notes}/state.db"}))
+        secret = await tool.execute(ToolInput(params={"command": f"cat {settings.north_home}/secret.key"}))
+
+        assert plan.success and plan.data["stdout"] == "week plan"
+        assert not database.success and not secret.success
+
+    @pytest.mark.asyncio
+    async def test_shell_start_up_files_and_gits_config_are_never_writable(self, tmp_path) -> None:
+        """A change there runs code later, outside any sandbox; write_file can still make it, on a card."""
+        import subprocess
+
+        tool = self._approved()
+        for target in (".zshrc", ".bashrc", ".gitconfig"):
+            out = await tool.execute(
+                ToolInput(params={"command": f"echo x > {target}"}, granted_workspace=str(tmp_path))
+            )
+            assert not out.success and "write_file" in (out.error or ""), target
+            assert not (tmp_path / target).exists(), target
+        ordinary = await tool.execute(
+            ToolInput(params={"command": "echo x > notes.txt"}, granted_workspace=str(tmp_path))
+        )
+        assert ordinary.success
+
+        # git itself may run in a repository, but not change its config, which can name a program git runs.
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        before = (repo / ".git" / "config").read_text()
+        out = await tool.execute(
+            ToolInput(
+                params={"command": "git config core.pager evil", "workspace": str(repo)}, granted_workspace=str(repo)
+            )
+        )
+        assert not out.success and (repo / ".git" / "config").read_text() == before
+
+    def test_git_hooks_are_closed_to_writes_in_the_profile(self, tmp_path) -> None:
+        """A repository's own policy refuses most edits there first; the kernel rule holds for whatever is left."""
+        from tools.specialized._seatbelt import profile
+
+        assert r'(regex #"/\.git/hooks(/|$)")' in profile(str(tmp_path), writable=True)
+
+    @pytest.mark.asyncio
+    async def test_a_long_output_is_kept_whole(self, tmp_path) -> None:
+        """Cut at 30,000 characters, the rest was lost before the agent's overflow store could keep it."""
+        tool = self._tool()
+
+        out = await tool.execute(ToolInput(params={"command": "seq 1 20000"}, granted_workspace=str(tmp_path)))
+
+        assert out.success and out.data["stdout"].splitlines()[-1] == "20000"
+        assert len(out.data["stdout"]) > 30_000
+
+    @pytest.mark.asyncio
+    async def test_the_read_only_run_gets_the_commands_own_time(self, tmp_path, monkeypatch) -> None:
+        """With 10 seconds, a slow read such as a large `find` went to a card although it changed nothing."""
+        seen: list[int] = []
+        original = BashTool._spawn
+
+        async def spawn(self, argv, cwd, timeout, **kwargs):
+            seen.append(timeout)
+            return await original(self, argv, cwd, timeout, **kwargs)
+
+        monkeypatch.setattr(BashTool, "_spawn", spawn)
+
+        out = await self._tool().execute(
+            ToolInput(params={"command": "true", "timeout": 120}, granted_workspace=str(tmp_path))
+        )
+
+        assert out.success and seen == [120], "one run, read-only, with the time the call asked for"
 
     def test_docker_replaces_the_os_sandbox(self) -> None:
         from tools.specialized._sandbox import SandboxConfig

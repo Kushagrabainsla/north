@@ -28,7 +28,7 @@ Implement -> Test -> Verify -> Commit -> Next slice
 For each slice:
 1. **Implement** the smallest complete piece of functionality
 2. **Test** - run the relevant tests (or write one if none exists)
-3. **Verify** - `check_types` on changed files, `lint(path, fix=true)`
+3. **Verify** - the project's type checker and linter on changed files, with `bash`
 4. **Commit** - `git(action="add", args="path/to/file")` per file, then `git(action="commit", args="...")`
 5. **Move to the next slice** - carry forward, don't restart
 
@@ -137,7 +137,7 @@ Each increment should be independently revertable:
 After each increment, verify with the project's own commands:
 
 - [ ] The change does one thing and does it completely
-- [ ] `check_types` on changed files passes (a "skipped" result is fine)
+- [ ] The project's type checker passes on changed files (run with `bash`)
 - [ ] `lint(path=..., fix=true)` passes
 - [ ] Relevant tests pass via `bash` with adequate timeout
 - [ ] The new functionality works as expected
@@ -150,7 +150,7 @@ When implementing through the coder agent, the agent follows this discipline by 
 When you are the coder:
 - Use `update_plan` with your intended steps (understand, design, change file A, verify, ...)
 - Keep exactly one step `in_progress`
-- Run `check_types` after every file change
+- Run the project's type checker with `bash` after every file change
 - Run tests after every logical slice, not just at the end
 
 ## Common Rationalizations

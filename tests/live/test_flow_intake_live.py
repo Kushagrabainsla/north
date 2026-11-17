@@ -56,7 +56,7 @@ async def _intake(provider, timing):
         "\n\n<north_runtime_context>\ntimezone: America/Los_Angeles\n</north_runtime_context>\n"
         "## Context\nNo user timing preference is stored.\n"
         "## Verified capability catalog\nNo flows or schedules exist. Active skill review-saved-note: "
-        "general executor, read_file only, approval never, required string input note_path, "
+        "general executor, bash only, approval never, required string input note_path, "
         "output summary string. It returns a concise summary of one saved note without writing or sending."
     )
     messages = [

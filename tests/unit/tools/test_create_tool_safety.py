@@ -65,7 +65,7 @@ class TestFailClosedGate:
     async def test_update_refused_without_an_approval_layer(self) -> None:
         tool = CreateToolTool(tool_registry=None)
         result = await tool.execute(
-            ToolInput(params={"action": "update", "name": "read_file", "content": _BENIGN_TOOL})
+            ToolInput(params={"action": "update", "name": "fetch_url", "content": _BENIGN_TOOL})
         )
         assert result.success is False
         assert "fail closed" in result.error
@@ -156,12 +156,12 @@ async def test_a_test_call_that_changes_something_asks_like_any_call(tmp_path: P
 
 async def test_a_draft_already_there_is_tested_and_switched_on_by_activate(tmp_path: Path) -> None:
     tool, registry, _learned = _demo(tmp_path)
-    assert tool._update({"name": "read_file", "content": _BENIGN_TOOL.replace("my_tool", "read_file")}).success
+    assert tool._update({"name": "fetch_url", "content": _BENIGN_TOOL.replace("my_tool", "fetch_url")}).success
 
-    out = await tool.run(ToolInput(params={"action": "activate", "name": "read_file", "test_params": {}}))
+    out = await tool.run(ToolInput(params={"action": "activate", "name": "fetch_url", "test_params": {}}))
 
     assert out.success, out.error
-    assert "read_file" in registry.tools
+    assert "fetch_url" in registry.tools
 
 
 async def test_an_approved_tool_change_is_not_replayed_for_different_code(tmp_path: Path) -> None:
@@ -192,9 +192,9 @@ def test_updating_builtin_tool_stages_learned_candidate(tmp_path: Path) -> None:
 
     core_update = tool._update(
         {
-            "name": "read_file",
-            "content": _BENIGN_TOOL.replace("my_tool", "read_file"),
+            "name": "fetch_url",
+            "content": _BENIGN_TOOL.replace("my_tool", "fetch_url"),
         }
     )
     assert core_update.success
-    assert (learned / "candidates" / "universal" / "read_file.py").exists()
+    assert (learned / "candidates" / "universal" / "fetch_url.py").exists()

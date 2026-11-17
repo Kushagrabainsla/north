@@ -94,7 +94,6 @@ from tools.confidence import RELIABLE_TOOLS
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from tools.retrieval import tool_index_documents
-from tools.semantic.search_code import SearchCodeTool
 from tools.specialized._sandbox import SandboxConfig
 from tools.specialized.bash import BashTool
 from tools.specialized.coding_agent import CodingAgentTool
@@ -287,9 +286,6 @@ def _build_tool_registry(
     tool_registry.register(GetActiveSessionsTool(running_task_store=deps.running_task_store))
     tool_registry.register(UpdatePlanTool(plan_store=deps.plan_store, stream_manager=deps.stream_manager))
     _register_coding_agent(tool_registry, deps, approvals, skill_selector)
-    # Semantic code search (#2) - only when embeddings are available.
-    if deps.code_index is not None:
-        tool_registry.register(SearchCodeTool(code_index=deps.code_index))
     # Registered by hand for its sandbox setting; approval comes from the
     # registry like every other tool's.
     tool_registry.register(

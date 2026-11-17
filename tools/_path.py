@@ -1,12 +1,12 @@
 """Shared path resolution and sensitive-path policy for workspace-scoped tools.
 
 This module is the single fail-closed gate for filesystem access: every tool
-that touches a path (read_file, write_file, search_files, glob, list_dir,
-check_types, search_symbols, find_references) resolves it through
-``resolve_path()``, and every tool that walks a tree prunes via
-``PRUNED_DIRS``/``SENSITIVE_DIR_NAMES``. The sensitive-path blocklist applies
-in *all* branches - with or without a workspace - so setting a broad workspace
-(e.g. $HOME) can never re-open access to ~/.ssh, north's home, /etc, etc.
+that takes a path (write_file, the browser, photos and screenshots) resolves it through
+``resolve_path()``, and the shell sandbox (``tools/specialized/_seatbelt.py``)
+takes its secret folders, secret files and readable parts of north's home from
+here. The sensitive-path blocklist applies in *all* branches - with or without
+a workspace - so setting a broad workspace (e.g. $HOME) can never re-open
+access to ~/.ssh, north's home, /etc, etc.
 
 North's home is ``settings.north_home`` (NORTH_HOME), blocked wherever it is;
 ``~/.north`` stays blocked too, since a default install's secrets may sit there.
@@ -29,8 +29,7 @@ from utils.edit_scope import EditAuthorizer
 
 # The pure filesystem-traversal exclusion set now lives in the platform layer
 # (``utils.filesystem``). It is re-exported here so existing ``tools._path``
-# importers (search_files, glob, context.repo_map) keep working unchanged and so
-# the file-walking tools share one source of truth for what to prune.
+# importers (context.repo_map) keep working unchanged.
 from utils.filesystem import (
     PRUNED_DIRS,  # noqa: F401  (re-exported for tools._path compatibility)
 )
@@ -73,7 +72,8 @@ _BLOCKED_PREFIXES: tuple[str, ...] = (
 )
 
 # Filenames whose contents are secrets wherever they live.
-_BLOCKED_FILENAMES: frozenset[str] = frozenset({"secret.key"})
+SECRET_FILENAMES: frozenset[str] = frozenset({"secret.key"})
+_BLOCKED_FILENAMES = SECRET_FILENAMES
 
 # SQLite state suffixes. north's own DBs (ledger, jobs, task-context, ...) live
 # in north's home - including the task-context DBs that share <home>/tasks/ with
@@ -166,6 +166,16 @@ def is_north_scratch(path: Path) -> bool:
     if _in_handoff_root(resolved):
         return not resolved.endswith(DB_SUFFIXES)
     return _in_personal_subdir(resolved)
+
+
+def north_readable_dirs() -> tuple[str, ...]:
+    """The folders in north's home a shell command may read; the rest of north's home is closed.
+
+    The task folders and the personal data (news, notes), as north's file policy allows,
+    and the learned skills, whose reference files `use_skill` tells the model to read.
+    North's databases and secret files stay closed inside all of them.
+    """
+    return (_handoff_root(), *(personal_dir(sub) for sub in _PERSONAL_SUBDIRS), _personal_root() + "/skills")
 
 
 def personal_dir(subdir: str) -> str:
@@ -359,6 +369,15 @@ def git_repository(path: Path) -> Path | None:
     return None
 
 
+def _looks_like_a_path(token: str) -> bool:
+    return not token.startswith("-") and (token.startswith(("/", "~")) or "/" in token)
+
+
+def path_words(command: str) -> list[str]:
+    """The words of a shell command that look like paths, as written: `src/a.py`, `~/notes`, `/etc/hosts`."""
+    return list(dict.fromkeys(token for token in _shell_tokens(command) if token and _looks_like_a_path(token)))
+
+
 def named_paths(command: str, cwd: str | None) -> tuple[Path, ...]:
     """The paths a shell command names, resolved from *cwd*: what a "no" to it covers.
 
@@ -370,8 +389,7 @@ def named_paths(command: str, cwd: str | None) -> tuple[Path, ...]:
     for token in _shell_tokens(command):
         if not token or token.startswith("-") or set(token) <= set("&|;<>()"):
             continue
-        looks_like_a_path = token.startswith(("/", "~")) or "/" in token
-        if not (looks_like_a_path or (cwd and (Path(cwd) / token).exists())):
+        if not (_looks_like_a_path(token) or (cwd and (Path(cwd) / token).exists())):
             continue
         path = target_path(token, cwd)
         if str(path).startswith("/dev/") or path in found:

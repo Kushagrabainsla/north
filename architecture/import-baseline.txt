@@ -18,7 +18,6 @@ intelligence.memory -> intelligence.inference
 intelligence.skills -> intelligence.inference
 intelligence.skills -> intelligence.memory
 intelligence.workspace_context -> integrations.tools
-intelligence.workspace_context -> intelligence.inference
 interfaces.cli -> integrations.tools
 interfaces.web -> integrations.tools
 platform.ledger -> platform.common

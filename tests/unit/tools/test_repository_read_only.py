@@ -117,15 +117,18 @@ async def test_a_coding_agents_own_copy_may_be_written_by_its_tests(repo: Path) 
     assert (repo / "src" / "calc.py").read_text() == "x = 2"
 
 
-async def test_a_test_run_in_a_copy_keeps_all_its_output(repo: Path) -> None:
-    """Real run: Jest printed more than the limit, so two runs were compared on different slices of it."""
+async def test_every_run_keeps_all_its_output(repo: Path) -> None:
+    """Real run: Jest printed more than the limit, so two runs were compared on different slices of it.
+
+    Since issue #78 no run is cut by the tool: the agent decides how much of a result a model sees.
+    """
     print_a_lot = "python3 -c \"print('x' * 40000 + 'END'); raise SystemExit(1)\""  # only a failing run is compared
 
-    whole = await _run(print_a_lot, repo, isolated_copy=True)
-    limited = await _run(print_a_lot, repo)
+    in_a_copy = await _run(print_a_lot, repo, isolated_copy=True)
+    in_the_repository = await _run(print_a_lot, repo)
 
-    assert "END" in whole.data["stdout"]
-    assert "END" not in limited.data["stdout"]
+    assert "END" in in_a_copy.data["stdout"]
+    assert "END" in in_the_repository.data["stdout"]
 
 
 async def test_a_folder_outside_any_repository_is_not_limited(tmp_path: Path) -> None:

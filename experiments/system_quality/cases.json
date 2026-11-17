@@ -85,12 +85,10 @@
       "repository_type": "small_python_service",
       "prompt": "Give me an overview of this repository.",
       "successful_tools": [
-        "list_dir",
-        "read_file"
+        "bash"
       ],
       "evidence_counts": {
-        "list_dir": 1,
-        "read_file": 2
+        "bash": 3
       },
       "expected_pass": true
     },
@@ -99,10 +97,10 @@
       "repository_type": "small_python_service",
       "prompt": "Give me an overview of this repository.",
       "successful_tools": [
-        "list_dir"
+        "bash"
       ],
       "evidence_counts": {
-        "list_dir": 1
+        "bash": 1
       },
       "expected_pass": false
     },
@@ -111,24 +109,22 @@
       "repository_type": "typescript_monorepo",
       "prompt": "What does this codebase do?",
       "successful_tools": [
-        "glob",
-        "search_code"
+        "bash"
       ],
       "evidence_counts": {
-        "glob": 2,
-        "search_code": 2
+        "bash": 4
       },
       "expected_pass": true
     },
     {
-      "id": "monorepo-content-only",
+      "id": "monorepo-single-inspection",
       "repository_type": "typescript_monorepo",
       "prompt": "What does this codebase do?",
       "successful_tools": [
-        "search_code"
+        "bash"
       ],
       "evidence_counts": {
-        "search_code": 3
+        "bash": 1
       },
       "expected_pass": false
     },
@@ -137,12 +133,10 @@
       "repository_type": "mixed_infrastructure",
       "prompt": "Summarize the project structure.",
       "successful_tools": [
-        "glob",
-        "search_files"
+        "bash"
       ],
       "evidence_counts": {
-        "glob": 1,
-        "search_files": 2
+        "bash": 3
       },
       "expected_pass": true
     },
@@ -151,12 +145,10 @@
       "repository_type": "mixed_infrastructure",
       "prompt": "Summarize the project structure.",
       "successful_tools": [
-        "glob",
-        "read_file"
+        "bash"
       ],
       "evidence_counts": {
-        "glob": 1,
-        "read_file": 0
+        "bash": 1
       },
       "expected_pass": false
     },
@@ -165,12 +157,10 @@
       "repository_type": "documentation_only",
       "prompt": "What is this project for?",
       "successful_tools": [
-        "list_dir",
-        "read_file"
+        "bash"
       ],
       "evidence_counts": {
-        "list_dir": 1,
-        "read_file": 1
+        "bash": 2
       },
       "expected_pass": true
     },
@@ -179,10 +169,10 @@
       "repository_type": "small_python_service",
       "prompt": "Research the latest official docs and compare the current options.",
       "successful_tools": [
-        "read_file"
+        "bash"
       ],
       "evidence_counts": {
-        "read_file": 2
+        "bash": 2
       },
       "expected_pass": false
     },
@@ -213,12 +203,10 @@
       "repository_type": "typescript_monorepo",
       "prompt": "Walk me through the repository architecture.",
       "successful_tools": [
-        "glob",
-        "search_code"
+        "bash"
       ],
       "evidence_counts": {
-        "glob": 1,
-        "search_code": 1
+        "bash": 2
       },
       "expected_pass": true
     },
@@ -228,12 +216,10 @@
       "prompt": "Give me context on what this is.",
       "repository_context": true,
       "successful_tools": [
-        "list_dir",
-        "read_file"
+        "bash"
       ],
       "evidence_counts": {
-        "list_dir": 1,
-        "read_file": 1
+        "bash": 2
       },
       "expected_pass": true
     }

@@ -1392,6 +1392,15 @@ class _PushToTalk:
         return text
 
 
+@app.command("text")
+def text_command(path: Path = typer.Argument(..., help="A PDF, a Word document (.docx) or a text file.")) -> None:
+    """Print the text in a file, so a shell command can read a PDF or a Word document."""
+    from cli.text import print_text
+
+    if status := print_text(path):
+        raise typer.Exit(status)
+
+
 @app.command("dictate")
 def dictate(
     hotkey: str = typer.Option(

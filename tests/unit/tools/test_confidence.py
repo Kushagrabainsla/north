@@ -35,7 +35,7 @@ async def test_score_for_unknown_pair_returns_default(
 async def test_score_for_unknown_reliable_tool_returns_high_prior(
     tracker: ConfidenceTracker,
 ) -> None:
-    assert await tracker.get_score("health", "read_file") == RELIABLE_CONFIDENCE
+    assert await tracker.get_score("health", "bash") == RELIABLE_CONFIDENCE
 
 
 async def test_helpful_use_increases_score(tracker: ConfidenceTracker) -> None:

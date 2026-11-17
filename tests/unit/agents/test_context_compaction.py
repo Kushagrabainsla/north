@@ -206,12 +206,14 @@ async def test_quick_task_uses_deterministic_reduction_without_model_call() -> N
     assert "read_tool_output" in messages[3]["content"]
 
 
-def test_file_context_for_summary_tracks_read_and_modified_paths() -> None:
+def test_file_context_for_summary_tracks_named_and_modified_paths() -> None:
+    """Files are read with the shell since issue #78, so the paths its commands name are the record."""
     messages = [
         {
             "role": "assistant",
             "tool_calls": [
-                {"function": {"name": "read_file", "arguments": '{"path":"src/a.py"}'}},
+                {"function": {"name": "bash", "arguments": '{"command":"sed -n \'1,40p\' src/a.py | head -5"}'}},
+                {"function": {"name": "bash", "arguments": '{"command":"rg -n timezone ~/notes"}'}},
                 {"function": {"name": "write_file", "arguments": '{"path":"docs/notes.md"}'}},
             ],
         }
@@ -219,7 +221,7 @@ def test_file_context_for_summary_tracks_read_and_modified_paths() -> None:
 
     context = file_context_for_summary(messages)
 
-    assert "Files read: src/a.py" in context
+    assert "Paths named in shell commands: src/a.py, ~/notes" in context
     assert "Files modified: docs/notes.md" in context
 
 
@@ -231,7 +233,9 @@ async def test_compaction_prompt_includes_file_context() -> None:
         {"role": "user", "content": "Task description"},
     ]
     for i in range(4):
-        name = "write_file" if i == 0 else "read_file"
+        name, arguments = (
+            ("write_file", f'{{"path":"file_{i}.py"}}') if i == 0 else ("bash", f'{{"command":"cat src/file_{i}.py"}}')
+        )
         messages.extend(
             [
                 {
@@ -240,7 +244,7 @@ async def test_compaction_prompt_includes_file_context() -> None:
                     "tool_calls": [
                         {
                             "id": f"call_{i}",
-                            "function": {"name": name, "arguments": f'{{"path":"file_{i}.py"}}'},
+                            "function": {"name": name, "arguments": arguments},
                         }
                     ],
                 },
@@ -259,7 +263,7 @@ async def test_compaction_prompt_includes_file_context() -> None:
     prompt = router.complete_calls[0].prompt
     assert "<file_context>" in prompt
     assert "Files modified: file_0.py" in prompt
-    assert "Files read: file_1.py" in prompt
+    assert "Paths named in shell commands: src/file_1.py" in prompt
 
 
 def test_render_exchange_preserves_multi_round_compacted_summary() -> None:

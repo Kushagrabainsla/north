@@ -24,7 +24,7 @@ description: "Use when restructuring code whose behaviour must stay identical - 
 
 1. **Understand before touching (Chesterton's Fence).** Before changing or removing anything, understand why it exists. Answer: What is this code's responsibility? What calls it? What does it call? What are the edge cases?
 2. **Ensure characterization tests capture CURRENT behaviour.** Add them if missing. These are your safety net.
-3. **Refactor in small steps.** Run `check_types` on changed files after each step. Run relevant tests via `bash` with adequate timeout. Every step must leave the system in a passing state.
+3. **Refactor in small steps.** Run the project's type checker on changed files with `bash` after each step. Run relevant tests via `bash` with adequate timeout. Every step must leave the system in a passing state.
 4. **Verify public signatures / return types are unchanged** (or update every caller in the same change).
 5. **Run `lint(path=..., fix=true)` on all changed files** to match project style.
 6. **Commit after each logical slice.** Don't batch unrelated refactors into one commit.
@@ -65,7 +65,7 @@ description: "Use when restructuring code whose behaviour must stay identical - 
 
 ## Verification
 - [ ] All existing tests pass without modification
-- [ ] `check_types` on changed files passes
+- [ ] The project's type checker passes on changed files (run with `bash`)
 - [ ] `ruff check .` passes
 - [ ] Each refactor is a reviewable, incremental change
 - [ ] No error handling was removed or weakened

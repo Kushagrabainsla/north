@@ -27,6 +27,7 @@ from skills.registry import parse_execution_contract, rejection_reason, skill_fr
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal._procedure_edit import begin_edit, describe_user_edit
+from utils.retired_tools import current_tool
 
 if TYPE_CHECKING:
     from skills.registry import SkillRegistry
@@ -429,6 +430,9 @@ class CreateSkillTool(Tool):
             for name in execution.tools:
                 if name.startswith("$input."):
                     continue
+                # A new skill names the tool that exists now; only saved skills keep a retired name.
+                if (replacement := current_tool(name)) != name:
+                    return f"Tool '{name}' was retired; name '{replacement}' instead, which does its work now."
                 try:
                     self._tool_registry.get(name)
                 except Exception:

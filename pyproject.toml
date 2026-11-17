@@ -33,9 +33,9 @@ dependencies = [
     "python-kasa>=0.12.0",
     # Checks the views north makes (A2UI JSON) against the UI kit's catalog, a JSON Schema.
     "jsonschema>=4.26.0",
-    # Bundled ripgrep binary for fast .gitignore-aware search_files. Wheels only
-    # exist for these two platforms; everywhere else search_files falls back to
-    # its pure-Python engine (or finds a system rg on PATH / via NORTH_RIPGREP).
+    # Bundled ripgrep binary: shell commands search files with `rg`, which bash
+    # puts on every command's PATH. Wheels only exist for these two platforms;
+    # elsewhere a command uses a system `rg` or `grep -rn`.
     "ripgrep>=15.0.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "ripgrep>=15.0.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "sqlite-vec>=0.1.9",

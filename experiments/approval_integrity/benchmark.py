@@ -129,7 +129,6 @@ def _registry(tmp: Path, mode: ApprovalMode, store: ApprovalStore):
     deps.approval_store = store
     deps.stream_manager = None
     deps.notifier = None
-    deps.code_index = None
     policy = ApprovalPolicy(mode_provider=lambda: mode, unattended=UnattendedPolicy())
     approvals = Approvals(policy, UserInteraction(store))
     with patch.object(settings, "north_home", tmp / "north_home"):

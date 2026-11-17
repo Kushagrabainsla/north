@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# ripgrep powers the fast path of the search_files tool on every container
+# ripgrep (`rg`) is how shell commands search files, on every container
 # arch (the PyPI ripgrep wheel only covers linux x86_64).
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ripgrep tzdata \

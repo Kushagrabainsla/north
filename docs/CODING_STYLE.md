@@ -360,13 +360,11 @@ is adding a file:
 
 ```
 tools/
-  universal/    <- general-purpose tools (read_file, web_search, scheduling, etc.)
+  universal/    <- general-purpose tools (write_file, web_search, scheduling, etc.)
   specialized/  <- integration and execution tools (bash, git, gh, kasa, etc.)
-  semantic/     <- code intelligence (search_symbols, find_references)
-  analysis/     <- static analysis (check_types)
 ```
 
-All four directories feed one global catalog. At task start, semantic retrieval selects a
+Both directories feed one global catalog. At task start, semantic retrieval selects a
 small relevant subset using the task, role, selected skills, and current plan; exact tool
 mentions and essential controls are retained. `find_tools` lets the running agent search and
 load a missed capability. Confidence affects ranking, not eligibility. No agent configuration
@@ -594,8 +592,6 @@ tools/
   _path.py           <- shared path-safety helpers
   universal/         <- general-purpose tool implementations
   specialized/       <- integration and execution tool implementations
-  semantic/          <- code intelligence (search_symbols, find_references)
-  analysis/          <- static analysis (check_types)
 
 orchestrator/
   __init__.py
@@ -1449,39 +1445,28 @@ class ConfidenceTracker:
         ...
 ```
 
-### 16.3 Semantic Code Tools
+### 16.3 Files: the Shell Reads, write_file Writes
 
-Agents explore code via semantic tools instead of spawning shell commands. These are faster and more reliable.
+North reads, lists and searches files with `bash`; it has no separate tools for that (issue #78). A tool earns its place only when the shell cannot do its work: north's own capabilities (`create_tool`, `create_skill`, `create_flow`, `use_skill`, schedules, memory), and `write_file`, whose card shows the change before it is made.
 
-| Tool | Purpose | Example |
-|------|---------|---------|
-| `read_file(path, start_line?, end_line?)` | Read file ranges with line numbers | `read_file("agents/base.py", 1, 50)` |
-| `glob(pattern, path?, head_limit?)` | Find files by name, newest first | `glob("**/*Test*.ts")` |
-| `list_dir(path)` | Explore directory structure | `list_dir("tools/")` |
-| `search_files(pattern, output_mode?, context?, file_type?)` | Grep contents: lines, file list, or counts | `search_files("def run", output_mode="count")` |
-| `search_symbols(path, type?)` | Find function/class definitions via Python AST | `search_symbols("tools/base.py", "class")` |
-| `find_references(symbol, path)` | Locate all uses of a symbol | `find_references("execute_call", "agents/")` |
-| `check_types(path)` | Run language-specific type checkers | `check_types("agents/base.py")` |
+- Read: `cat -n file`, `sed -n '120,180p' file`. A PDF or a Word document: `north text file.pdf`.
+- List and find: `ls -la dir`, `find dir -name '*.md'`.
+- Search: `rg -n 'pattern' dir` (north puts `rg` on every command's PATH) or `grep -rn`.
+- Create or replace a file: `write_file`. Change a git repository: `coding_agent`.
 
-**When to use instead of bash:**
-- `read_file` instead of `cat` / `head` / `tail`
-- `glob` instead of `find -name`
-- `list_dir` instead of `ls` / `find`
-- `search_files` instead of `grep -rn` (use `output_mode` to match `-l` / `-c`)
-- `search_symbols` instead of `grep "^def \|^class "` (Python)
-- `find_references` instead of `grep -r` (when looking for symbol usage)
-- `check_types` instead of `python -m py_compile` / `tsc --noEmit` / `go vet`
+**Why:** each read tool repeated a command the shell already has, and was one more tool in every prompt. Over 30 days (118 north runs, to 2026-11-16) the four read tools ran in 4 runs, and the four code-search tools in none.
 
-**When to still use bash:**
-- `bash` is appropriate for one-shot commands that run and exit (`pytest`, `npm test`, etc.)
-- For processes that must stay alive across calls (dev servers, `--watch`, REPLs, debuggers), use the `shell` tool (`start`/`read`/`write`/`stop`/`list`) instead of `bash`
-- `bash` is appropriate for git operations (use the `git` tool instead; safer)
-- For GitHub operations (PRs, issues, checks), prefer the `gh` tool over raw bash or an MCP server
+**How to apply:**
+- A command that only reads runs at once: the kernel proves it read-only (§16.1.1). Its time limit is the command's own.
+- Output is not cut by the tool. The agent keeps a long result whole and pages it with `read_tool_output`.
+- The sandbox reads north's notes, news, task folders and learned skills, never its databases or secret files; the secret folders come from `tools/_path.py`, one list for every tool.
+- Git hooks, git's config and shell start-up files are never writable from a command; `write_file` can change them, on a card.
+- Do not add a tool that wraps a shell command. If the model misuses a command, fix the bash tool's description.
+- A removed tool's name stays in `utils/retired_tools.py`, so a saved skill that names it still runs.
 
 **Repository conventions:** when a task carries a `workspace`, agents auto-load that
 repo's `AGENTS.md` / `CLAUDE.md` / `.github/copilot-instructions.md` / `.cursorrules`
 into context (`context/repo_instructions.py`). Honour them - they are the repo's house rules.
-- `bash` is appropriate for environment inspection or one-off commands
 
 ---
 

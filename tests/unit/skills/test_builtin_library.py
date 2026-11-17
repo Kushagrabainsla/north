@@ -141,7 +141,7 @@ def test_job_application_skills_split_drafting_from_submission() -> None:
 
     assert prepare.execution is not None
     assert prepare.execution.approval == "before_step"
-    assert {"browser", "read_file", "write_file"} == set(prepare.execution.tools)
+    assert {"browser", "bash", "write_file"} == set(prepare.execution.tools)
     assert "never submits" in prepare.body.lower()
 
     assert submit.execution is not None

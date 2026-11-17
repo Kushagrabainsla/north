@@ -26,20 +26,7 @@ from memory.facts import FactStore
 from orchestrator.api.cron import list_cron_entries
 from orchestrator.api_context import ApiServices, bind_services
 from tools.models import ToolInput
-from tools.universal.read_file import ReadFileTool
 from tools.universal.write_file import WriteFileTool
-
-
-async def test_a_slice_says_where_it_sits_in_the_file(tmp_path: Path) -> None:
-    log = tmp_path / "medium.txt"
-    log.write_text("".join(f"entry {n}\n" for n in range(1, 3001)))
-    tool = ReadFileTool()
-
-    out = await tool.run(ToolInput(params={"path": str(log), "start_line": 2500, "end_line": 2500}))
-
-    text = tool.format_output(out.data)
-    assert "truncated at" not in text
-    assert text.endswith("… (lines 2500-2500 of 3000)")
 
 
 async def test_a_write_that_replaced_a_file_says_so(tmp_path: Path) -> None:

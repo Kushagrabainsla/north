@@ -35,7 +35,6 @@ from utils.prompts import load_prompt
 from utils.time import configure_timezone, system_timezone_name
 
 if TYPE_CHECKING:
-    from context.code_index import CodeIndex
     from inference.cost_tracker import CostTracker
     from jobs.cron_store import UserCronStore
     from memory import MemoryGateway
@@ -85,9 +84,6 @@ class Dependencies:
     # cannot meaningfully be compared (see utils/vector_space.py).
     embedding_model: str = ""
     fact_store: FactStore | None = field(default=None)
-    # Semantic code index (#2 code RAG). Present only when embeddings are available;
-    # backs the search_code tool. None when no embed_fn is wired.
-    code_index: CodeIndex | None = field(default=None)
     # The editable safe-action list behind the `auto` tier. Attached in the
     # lifespan (it needs no async init, but the approval policy is built there),
     # and read by the web API so the rules can be edited on the page.
@@ -290,7 +286,6 @@ def _default_north_settings() -> NorthSettings:
 
 def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
     """Build and wire all synchronously-constructable production dependencies."""
-    from context.code_index import CodeIndex
     from inference.cost_tracker import CostTracker
     from jobs.cron_store import UserCronStore
     from memory import LocalMemoryGateway
@@ -331,9 +326,6 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         supersede_fn=_build_supersede_fn(cost_tracker),
         glossary_fn=_build_glossary_fn(cost_tracker),
         dates_fn=_build_dates_fn(cost_tracker),
-    )
-    code_index = CodeIndex(
-        db_path=settings.north_home / "code_index.db", embed_fn=embed_fn, embedding_model=embedding_model
     )
     memory = LocalMemoryGateway(
         context_store=context_store,
@@ -399,5 +391,4 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         memory=memory,
         embed_fn=embed_fn,
         fact_store=fact_store,
-        code_index=code_index,
     )

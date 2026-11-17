@@ -2,7 +2,7 @@
 
 The cap shortened only the fields inside a result's `data`. The agent loop also
 adds `formatted`, the tool's readable copy (the whole file, line-numbered, for
-read_file), beside it, and that copy was never shortened. In the issue #76 test
+the read tool of the time), beside it, and that copy was never shortened. In the issue #76 test
 one read of a 256 KB file took the agent's input from 29,135 to 153,511 tokens a
 call, resent on every later step, and a 30 MB file ended its task with "the
 conversation is too long" on a short conversation. A sub-agent's answer to
@@ -20,13 +20,13 @@ from agents.constants import MAX_TOOL_RESULT_CHARS
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from inference.models import ToolCall
 from memory import FileContextStore
-from tests.conftest import MockInferenceRouter
+from tests.conftest import MockInferenceRouter, approving_store, bind_approvals
 from tools.base import Tool
 from tools.confidence import ConfidenceTracker
 from tools.models import ToolInput, ToolOutput
 from tools.output_spill import spill_store
 from tools.registry import ToolRegistry
-from tools.universal.read_file import ReadFileTool
+from tools.specialized.bash import BashTool
 
 AGENTS_DIR = Path(__file__).parents[3] / "agents"
 NEEDLE = "record 1500: the one the user asked about"
@@ -55,6 +55,7 @@ async def _enter(agent, tmp_path: Path, call: ToolCall, tools: dict[str, Tool]) 
 
 
 async def test_reading_a_large_file_enters_the_conversation_within_the_cap(tmp_path: Path) -> None:
+    """Files are read with the shell (issue #78), which no longer cuts its own output: this is the only cap."""
     lines = [f"record {i}: status=ok region=eu-west amount={i * 7} note=routine entry" for i in range(3_000)]
     lines[1500] = NEEDLE
     (tmp_path / "medium.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -63,8 +64,8 @@ async def test_reading_a_large_file_enters_the_conversation_within_the_cap(tmp_p
     result = await _enter(
         _agent(tmp_path),
         tmp_path,
-        ToolCall(name="read_file", call_id="c1", params={"path": str(tmp_path / "medium.txt")}),
-        {"read_file": ReadFileTool()},
+        ToolCall(name="bash", call_id="c1", params={"command": "cat medium.txt", "workspace": str(tmp_path)}),
+        {"bash": bind_approvals(BashTool(), store=approving_store())},
     )
 
     assert result["success"] is True
@@ -100,7 +101,7 @@ def test_status_fields_survive_when_everything_else_is_reduced() -> None:
         "data": {"rows": [{"i": i, "pad": "z" * 100} for i in range(5_000)]},
     }
 
-    raw = _cap_tool_result(data, "search_files")
+    raw = _cap_tool_result(data, "bash")
 
     assert len(raw) <= MAX_TOOL_RESULT_CHARS
     result = json.loads(raw)

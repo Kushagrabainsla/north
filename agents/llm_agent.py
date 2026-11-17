@@ -75,7 +75,7 @@ class LLMAgent(Agent):
             system_lines += [
                 f"- workspace: {payload.workspace}",
                 "- Before creating or interacting with directories (like Desktop, Downloads, Documents, etc.),"
-                " always list the workspace contents (using `list_dir` or standard commands) to inspect"
+                " always list the workspace contents (with bash, e.g. `ls -la`) to inspect"
                 " the system, locate the actual target directories, and check if they are already"
                 " present - exactly like a human engineer would. Never guess paths or run creation"
                 " commands blindly.",

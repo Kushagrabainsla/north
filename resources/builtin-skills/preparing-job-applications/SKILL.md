@@ -6,7 +6,7 @@ execution:
   agent: general
   tools:
     - browser
-    - read_file
+    - bash
     - write_file
   approval: before_step
   inputs:

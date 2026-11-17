@@ -107,7 +107,7 @@ north extends itself through a small hierarchy. Choosing the right entity is the
 
 | Primitive | What it is | Authority | Activation | Cost | Use when |
 |---|---|---|---|---|---|
-| **Tool** | Deterministic code the model calls (`read_file`, `git`, `web_search`) | n/a (it just runs) | The model decides to call it | one function call | the work is deterministic - never make a model do what code can do reliably |
+| **Tool** | Deterministic code the model calls (`write_file`, `git`, `web_search`) | n/a (it just runs) | The model decides to call it | one function call | the work is deterministic - never make a model do what code can do reliably |
 | **Skill** | Reusable procedural knowledge (a `SKILL.md`) that can own an executor and several atomic tools | advisory in ordinary tasks; server-enforced execution contract when selected by a flow | selected semantically for a task or explicitly by a flow step | no extra call when suggested; one agent run when invoked by a flow | there is a known-good procedure for a class of work ("how to debug a flaky test") |
 | **Flow** | An ordered sequence of skill invocations with inputs and approval boundaries | coordinates skills; never calls tools directly | explicitly run or triggered by a schedule after evidence-backed activation | one agent run per skill step | several reusable procedures must complete in a controlled order |
 | **Policy** | An authoritative *rule* (a `resources/policies/*.md`) | binding - overrides task/skill/user on conflict | deterministic, by agent name (`applies_to`), injected high (system prompt), always on | no extra model call | a cross-cutting rule must *always* hold (safety guardrails, clean-code) |
@@ -1608,7 +1608,7 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
    Ledger write (async): source=system, action="routed", agents=["job","university"]
 
 5. Job agent spins up (reasoning pool, high priority):
-   Selects relevant tools from the global catalog: web_search [0.9], read_file [0.7], schedule_task [0.6]
+   Selects relevant tools from the global catalog: web_search [0.9], bash [0.7], schedule_task [0.6]
    Loads those tool definitions into context (wire order is stable by name).
    Reads user.md: LinkedIn internship, distributed systems team, June 2nd start.
    Reads judgement_rules.md: prefers mornings for deep work.

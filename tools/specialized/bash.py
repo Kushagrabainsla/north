@@ -10,7 +10,10 @@ See docs/CODING_STYLE.md Section 16.1.
 from __future__ import annotations
 
 import asyncio
+import functools
+import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -34,9 +37,9 @@ from utils.processes import stop_process_group
 
 _TIMEOUT = 30
 _MAX_TIMEOUT = 300
-# Stdout/stderr are capped so a single `cat` of a large file can't overflow the
-# model's context window.  The tail is truncated with a visible marker.
-_MAX_OUTPUT_CHARS = 30_000
+# Output is not cut here. The agent keeps a long result whole and shows the model a
+# part of it, with a handle to read the rest (`read_tool_output`). A cut here at
+# 30,000 characters lost the rest before that store ever saw it (issue #78).
 _REFUSAL_TAIL = 2_000
 _GIT_TIMEOUT = 20
 # Each ignored path is a sandbox rule, and the kernel takes about 2 ms to compile one.
@@ -154,16 +157,48 @@ def _all_output(output: ToolOutput) -> str:
     return f"{output.error or ''}\n{output.data.get('stderr', '')}\n{output.data.get('stdout', '')}"
 
 
-def _cap(text: str) -> str:
-    if len(text) <= _MAX_OUTPUT_CHARS:
-        return text
-    kept = text[:_MAX_OUTPUT_CHARS]
-    omitted = len(text) - _MAX_OUTPUT_CHARS
-    return kept + f"\n[…{omitted} chars truncated]"
+@functools.cache
+def _north_commands() -> str:
+    """A folder with north's own commands, put first on every command's PATH.
+
+    It holds `north` (so `north text file.pdf` works however north was started: a
+    source checkout has no `north` launcher) and `rg`, which north installs with
+    itself. Only these two: north's whole Python folder would also shadow the
+    user's own `python3`. This `north` offers `text` alone (`cli/text.py`): the
+    full CLI loads settings from north's home, which no command may read.
+    """
+    folder = Path(tempfile.mkdtemp(prefix="north-commands-"))
+    package_root = Path(__file__).resolve().parents[2]
+    launcher = folder / "north"
+    launcher.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(package_root)!r})\n"
+        "from cli.text import main\nsys.exit(main(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    launcher.chmod(0o755)
+    ripgrep = Path(sys.executable).parent / "rg"
+    if ripgrep.exists():
+        (folder / "rg").symlink_to(ripgrep)
+    return str(folder)
 
 
-# A command that has to finish within this under the read-only profile to skip the card.
-_PROBE_TIMEOUT = 10
+def _environment() -> dict[str, str]:
+    return {**os.environ, "PATH": os.pathsep.join([_north_commands(), os.environ.get("PATH", "")])}
+
+
+def _timeout(input: ToolInput) -> int:
+    """How long the command may run: what the call asked for, within the limit, else the default.
+
+    The read-only run that may skip the card gets the same time. With 10 seconds, a slow
+    read such as a `find` over a large folder went to a card although it changed nothing.
+    """
+    raw = input.params.get("timeout")
+    # North's own test run in a copy may take as long as a project's suite needs; a model's command may not.
+    longest = VERIFY_TIMEOUT_SECONDS if input.isolated_copy else _MAX_TIMEOUT
+    try:
+        return min(max(int(raw), 1), longest) if raw is not None else _TIMEOUT
+    except (ValueError, TypeError):
+        return _TIMEOUT
 
 
 class BashTool(Tool):
@@ -181,9 +216,14 @@ class BashTool(Tool):
     name = "bash"
     is_mutating = True
     description = (
-        "Run a shell command and return stdout/stderr/returncode."
-        " Default timeout 30 s, pass timeout= (max 300) for longer commands."
+        "Run a shell command and return stdout/stderr/returncode. This is how you read and search files:"
+        " `cat -n file` (with line numbers), `sed -n '120,180p' file` (a range of lines),"
+        " `ls -la dir`, `find dir -name '*.md'`, `rg -n 'pattern' dir` or `grep -rn 'pattern' dir`,"
+        " and `north text file.pdf` for the text of a PDF."
         " Commands that only read run at once; anything that writes or uses the network needs approval."
+        " To create or replace a file, use write_file: its card shows the change."
+        " Default timeout 30 s, pass timeout= (max 300) for longer commands."
+        " A long output is kept whole: you see part of it and can read the rest with read_tool_output."
         " Approved commands reach only allowed hosts (package registries, code hosts);"
         " a 403 on CONNECT means the host is not allowed."
     )
@@ -267,7 +307,7 @@ class BashTool(Tool):
             return None
         boundary = _boundary(input)
         cwd = _cwd(input, boundary)
-        proved = await self._prove_read_only(command, boundary, cwd)
+        proved = await self._prove_read_only(command, boundary, cwd, _timeout(input))
         also = "\n\nAlso writes to:\n" + "\n".join(f"- `{folder}`" for folder in outside) if outside else ""
         return Request(
             action=self._action(command, read_only=proved is not None, boundary=boundary, outside=outside, cwd=cwd),
@@ -277,7 +317,9 @@ class BashTool(Tool):
             prepared=proved,
         )
 
-    async def _prove_read_only(self, command: str, boundary: str | None, cwd: str | None) -> ToolOutput | None:
+    async def _prove_read_only(
+        self, command: str, boundary: str | None, cwd: str | None, timeout: int
+    ) -> ToolOutput | None:
         """Run *command* where the kernel refuses every write and the network.
 
         Returns its output when it finished successfully without being refused
@@ -296,7 +338,7 @@ class BashTool(Tool):
         # A throwaway temp folder: programs need one to start, and what lands in it is deleted here.
         with tempfile.TemporaryDirectory(prefix="north-probe-") as scratch:
             argv = self._os_sandbox.wrap(command, boundary, writable=False, scratch=scratch)
-            output = await self._spawn(argv, cwd, _PROBE_TIMEOUT, command=command)
+            output = await self._spawn(argv, cwd, timeout, command=command)
         if output.data is None or output.data.get("returncode") != 0:
             return None
         if self._os_sandbox.denied(f"{output.data.get('stderr', '')}\n{output.data.get('stdout', '')}"):
@@ -354,13 +396,7 @@ class BashTool(Tool):
             return outside
         boundary = _boundary(input)
         cwd = _cwd(input, boundary)
-        raw_timeout = input.params.get("timeout")
-        # North's own test run in a copy may take as long as a project's suite needs; a model's command may not.
-        longest = VERIFY_TIMEOUT_SECONDS if input.isolated_copy else _MAX_TIMEOUT
-        try:
-            timeout = min(max(int(raw_timeout), 1), longest) if raw_timeout is not None else _TIMEOUT
-        except (ValueError, TypeError):
-            timeout = _TIMEOUT
+        timeout = _timeout(input)
 
         limit = None
         if self._os_sandbox and not input.isolated_copy:
@@ -368,8 +404,7 @@ class BashTool(Tool):
         exec_argv, exec_cwd, sandbox_error = await self._resolve_execution(command, cwd, boundary, outside, limit)
         if sandbox_error is not None:
             return ToolOutput(success=False, error=sandbox_error)
-        # A run in an agent's copy is north testing it: it compares all of the output, and no model reads it whole.
-        output = await self._spawn(exec_argv, exec_cwd, timeout, command=command, capped=not input.isolated_copy)
+        output = await self._spawn(exec_argv, exec_cwd, timeout, command=command)
         if limit is not None and self._os_sandbox and self._os_sandbox.denied(_all_output(output)):
             note = _REPOSITORY_READ_ONLY.format(root=limit.root)
             if output.success:
@@ -384,13 +419,13 @@ class BashTool(Tool):
             where = f"in `{boundary}`" if boundary else "only in temp folders"
             output.error = (
                 f"{output.error}\nThe sandbox lets this command write {where}. If it must write somewhere else, "
-                "call bash again with write_outside=[that folder]; the user is asked first."
+                "call bash again with write_outside=[that folder]; the user is asked first. "
+                "Git hooks, git's config and shell start-up files (.zshrc, .bashrc, .gitconfig) "
+                "are never writable from a command: change one with write_file."
             )
         return output
 
-    async def _spawn(
-        self, argv: list[str] | None, cwd: str | None, timeout: int, *, command: str, capped: bool = True
-    ) -> ToolOutput:
+    async def _spawn(self, argv: list[str] | None, cwd: str | None, timeout: int, *, command: str) -> ToolOutput:
         """Run *argv* - or *command* through the host shell when there is none - and collect its output."""
         try:
             if argv is not None:
@@ -399,6 +434,7 @@ class BashTool(Tool):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
+                    env=_environment(),
                     start_new_session=True,
                 )
             else:
@@ -407,6 +443,7 @@ class BashTool(Tool):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
+                    env=_environment(),
                     start_new_session=True,
                 )
         except Exception as exc:
@@ -422,8 +459,6 @@ class BashTool(Tool):
             await stop_process_group(proc, grace_seconds=1.0)
 
         stdout, stderr = stdout_b.decode("utf-8", errors="replace"), stderr_b.decode("utf-8", errors="replace")
-        if capped:
-            stdout, stderr = _cap(stdout), _cap(stderr)
         success = proc.returncode == 0
         return ToolOutput(
             success=success,

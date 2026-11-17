@@ -22,17 +22,12 @@ _WARN_THRESHOLD: float = 0.25
 
 RELIABLE_TOOLS = frozenset(
     {
-        "read_file",
         "write_file",
-        "list_dir",
-        "search_files",
         "bash",
         "web_search",
         "schedule_task",
         "fetch_url",
         "git",
-        "search_symbols",
-        "find_references",
     }
 )
 

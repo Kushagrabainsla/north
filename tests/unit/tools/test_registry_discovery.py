@@ -33,17 +33,14 @@ def _registry_names() -> set[str]:
     return {tool.name for tool in registry.all_tools()} | _MANUALLY_REGISTERED
 
 
-def test_semantic_tools_are_discovered() -> None:
-    registry = ToolRegistry(auto_register=True)
-    names = {tool.name for tool in registry.all_tools()}
-    assert {"search_symbols", "find_references"} <= names
+def test_the_retired_file_tools_are_gone_and_write_file_stays() -> None:
+    """The shell reads, lists and searches files (issue #78); only the write tool, with its diff card, is left."""
+    from utils.retired_tools import RETIRED_TOOLS
 
-
-def test_coding_tools_are_universal() -> None:
-    """Code navigation tools resolve for every agent."""
     registry = ToolRegistry(auto_register=True)
     available = {t.name for t in registry.available_tools(auto_reload=False)}
-    assert {"search_symbols", "find_references", "read_file", "list_dir"} <= available
+    assert not available & set(RETIRED_TOOLS)
+    assert "write_file" in available
 
 
 @pytest.mark.parametrize(

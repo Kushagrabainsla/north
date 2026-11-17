@@ -33,7 +33,7 @@ Locate the module's public surface:
 - **Docs:** `README.md`, `docs/`, `CONTRIBUTING.md` — conventions and architecture
 
 ### Step 2: Search for What You'll Touch
-Use `search_files` to find the specific symbol/feature you will modify:
+Use `bash` (`rg -n 'name' .`, `find . -name '*.py'`) to find the specific symbol/feature you will modify:
 - Search by content: function names, class names, error messages
 - Search by files: `*.py`, `*.toml`, `test_*.py`
 - Read the file you'll modify AND its tests
@@ -93,5 +93,5 @@ Only after steps 1-5 should you plan your change. The plan should:
 - [ ] Traced at least one path end to end
 - [ ] Noted project conventions (error handling, naming, style)
 - [ ] Plan follows existing patterns exactly
-- [ ] `check_types` on changed files passes
+- [ ] The project's type checker passes on changed files (run with `bash`)
 - [ ] `ruff check .` passes

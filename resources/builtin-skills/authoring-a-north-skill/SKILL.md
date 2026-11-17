@@ -36,13 +36,13 @@ description: >-
   or to know what they saved recently.
 domains: [general]
 instructions: |
-  1. List the folder (`list_dir`) and keep the .md, .txt and .html files changed in the last 7 days.
-  2. Read each one (`read_file`). Skip a file you cannot read and name it at the end.
+  1. List the .md, .txt and .html files in the folder changed in the last 7 days (`bash`: `find <folder> -mtime -7`).
+  2. Read each one (`bash`: `cat`). Skip a file you cannot read and name it at the end.
   3. For each article write its title, two sentences on what it argues, and one line on why it might matter to the user.
   4. Write the digest to the output path (`write_file`), newest article first, with the date at the top.
   5. Answer with the digest path and how many articles it covers.
 execution:
-  tools: [list_dir, read_file, write_file]
+  tools: [bash, write_file]
   approval: on_mutation
   inputs:
     type: object

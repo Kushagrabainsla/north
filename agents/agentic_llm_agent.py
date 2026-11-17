@@ -416,8 +416,8 @@ class AgenticLLMAgent(LLMAgent):
     ) -> list[tuple[ToolCall, str, bool, list[tuple[str, str]]]]:
         """Run read-only calls concurrently and mutating calls sequentially.
 
-        To preserve causal ordering (e.g. write_file before read_file in the same
-        turn), calls are partitioned into contiguous chunks. Contiguous read-only
+        To preserve causal ordering (e.g. write_file before a `cat` of that file in
+        the same turn), calls are partitioned into contiguous chunks. Contiguous read-only
         calls run concurrently via asyncio.gather(), while mutating calls run
         sequentially under the per-WORKSPACE lock. Every call is wrapped so a
         raised exception becomes a failed tool result rather than cancelling its

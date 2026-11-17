@@ -14,6 +14,7 @@ from typing import Any
 
 from agents.tool_output_reduction import salient_excerpt
 from inference.models import CompletionRequest
+from tools._path import path_words
 from tools.output_spill import carries_handle, overflow_note, store_overflow, summary_note
 from utils.prompts import load_prompt
 
@@ -201,38 +202,45 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
 # Paths are exact context, not prose: losing "which file did we edit?" during
 # compaction causes needless re-search and risky edits. Derive them from the
 # agent's own tool-call history so no separate mutable tracker can drift.
-_READ_FILE_TOOLS = frozenset({"read_file"})
+# Files are read with the shell (issue #78), so what a command names is the record.
+_SHELL = "bash"
 _EDIT_FILE_TOOLS = frozenset({"write_file"})
 _MAX_COMPACTION_FILES = 40
 
 
 def file_context_for_summary(messages: list[dict]) -> str:
-    """Return compact, stable lists of files read and changed in *messages*."""
-    read: list[str] = []
+    """Return compact, stable lists of the paths shell commands named and the files changed in *messages*."""
+    named: list[str] = []
     modified: list[str] = []
+
+    def add(target: list[str], path: str) -> None:
+        if path not in target and len(target) < _MAX_COMPACTION_FILES:
+            target.append(path)
+
     for msg in messages:
         if msg.get("role") != "assistant":
             continue
         for call in msg.get("tool_calls") or []:
             function = call.get("function", {})
             name = function.get("name")
-            if name not in _READ_FILE_TOOLS | _EDIT_FILE_TOOLS:
+            if name != _SHELL and name not in _EDIT_FILE_TOOLS:
                 continue
             try:
                 args = json.loads(function.get("arguments", "{}"))
             except (TypeError, json.JSONDecodeError):
                 continue
-            path = args.get("path") if isinstance(args, dict) else None
-            if not isinstance(path, str) or not path:
+            if not isinstance(args, dict):
                 continue
-            target = read if name in _READ_FILE_TOOLS else modified
-            if path not in target and len(target) < _MAX_COMPACTION_FILES:
-                target.append(path)
+            if name == _SHELL:
+                for path in path_words(str(args.get("command") or "")):
+                    add(named, path)
+            elif isinstance(args.get("path"), str) and args["path"]:
+                add(modified, args["path"])
 
     def render(label: str, paths: list[str]) -> str:
         return f"{label}: " + (", ".join(paths) if paths else "none")
 
-    return "\n".join((render("Files read", read), render("Files modified", modified)))
+    return "\n".join((render("Paths named in shell commands", named), render("Files modified", modified)))
 
 
 def _already_shrunk(content: str) -> bool:

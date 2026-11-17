@@ -25,7 +25,7 @@ class WebSearchTool(Tool):
         "backends ignore. Results are short snippets only - to read a page in full, follow "
         "up with fetch_url on its URL, or with the browser tool if that page needs a login, "
         "a click, or renders itself in JavaScript. To find code or files in the user's own "
-        "project, use search_files, search_code, or glob instead."
+        "project, use bash instead (`rg -n`, `find`)."
     )
     parameters_schema = {
         "type": "object",
