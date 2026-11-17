@@ -107,6 +107,100 @@ def _repository_rules(limit: RepositoryLimit) -> list[str]:
     ]
 
 
+# A path a refusal names: "rm: x.dmg: Operation not permitted", "open /a/b: operation not permitted".
+_REFUSED_PATH = re.compile(r"([^\s:'\"`]+)['\"`]?:\s*(?:operation not permitted|read-only file system)", re.IGNORECASE)
+# A unix socket a command tried: "unix:///Users/me/.docker/run/docker.sock", "/var/run/x.sock".
+_UNIX_SOCKET = re.compile(r"(?:unix://)?(/[^\s:'\"`%/][^\s:'\"`%]*\.sock)\b")
+_NETWORK_MARKERS = ("could not resolve host", "nodename nor servname", "network is unreachable")
+_NOT_MACOS = (
+    "North's own sandbox refused part of this command. This is not a macOS permission: "
+    "Full Disk Access or another macOS setting will not change it."
+)
+
+
+def explain(output: str, workspace: str | None, *, also_writable: tuple[str, ...] = ()) -> str:
+    """What north's sandbox refused in *output*, and what can be done; "" when it shows no refusal.
+
+    North built the box, so it compares each refused path with what the box allows,
+    instead of letting the model guess. Told only "Operation not permitted", north
+    blamed macOS and told the user to grant Full Disk Access for deletes in
+    ~/Downloads and a call to the Docker socket (issue #82, item 8).
+    """
+    lowered = output.lower()
+    sockets = sorted(set(_UNIX_SOCKET.findall(output)))
+    if not denied(output) and not sockets:
+        return ""
+    refused = [Path(found).expanduser() for found in dict.fromkeys(_REFUSED_PATH.findall(output))]
+    # A relative path is relative to a `cd` north cannot see; the general rule below covers it.
+    reasons = [
+        reason for path in refused if path.is_absolute() and (reason := _why_refused(path, workspace, also_writable))
+    ]
+    reasons += [
+        f"`{socket}` is a unix socket. Unix sockets, such as the Docker daemon's, are closed to every "
+        "command. No answer opens them: if the user needs it, the user runs the command."
+        for socket in sockets
+    ]
+    if any(marker in lowered for marker in _NETWORK_MARKERS):
+        reasons.append(
+            "A command reaches the network only through north's proxy (HTTP_PROXY), to the hosts it allows. "
+            "A program that does not use the proxy cannot connect."
+        )
+    if reasons:
+        return "\n".join([_NOT_MACOS, *(f"- {reason}" for reason in reasons)])
+    if refused and all(path.is_absolute() for path in refused):
+        return ""  # every refused path is one the box allows: something other than north refused it
+    granted = [f"`{os.path.realpath(folder)}`" for folder in (workspace, *also_writable) if folder]
+    where = ", ".join([*granted, "the temp and cache folders"])
+    return (
+        f"If this command wrote outside {where}, north's own sandbox refused it, not macOS: "
+        "Full Disk Access will not change it. To write elsewhere, call bash again with "
+        "write_outside=[that folder]; the user is asked first. Git hooks, git's config and shell start-up "
+        "files (.zshrc, .bashrc, .gitconfig) are never writable from a command: change one with write_file."
+    )
+
+
+def _writable_roots(workspace: str | None, also_writable: tuple[str, ...]) -> list[str]:
+    """The folders the workspace profile lets a command write, as real paths."""
+    folders = [folder for folder in (workspace, *also_writable) if folder]
+    folders += [*_TEMP_DIRS, *(str(Path.home() / name) for name in _CACHE_DIRS)]
+    return [os.path.realpath(folder) for folder in folders]
+
+
+def _within(path: str, folders: list[str] | tuple[str, ...]) -> bool:
+    return any(path == folder or path.startswith(folder.rstrip("/") + "/") for folder in folders)
+
+
+def _why_refused(path: Path, workspace: str | None, also_writable: tuple[str, ...]) -> str:
+    """Why the workspace profile refuses *path*, or "" when it allows it (then north did not refuse it)."""
+    from config.settings import settings
+
+    real = os.path.realpath(path)
+    north_home = os.path.realpath(settings.north_home)
+    credentials = [os.path.realpath(p) for p in _secret_dirs() if os.path.realpath(p) != north_home]
+    keychains = [os.path.realpath(Path.home() / "Library" / "Keychains"), "/Library/Keychains"]
+    if _within(real, credentials + keychains) or Path(real).name in SECRET_FILENAMES:
+        return f"`{path}` holds credentials, which are closed to every command. No answer opens it."
+    if _within(real, [north_home]) and not (workspace and _within(real, [os.path.realpath(workspace)])):
+        if real.endswith(DB_SUFFIXES) or not _within(real, [os.path.realpath(p) for p in north_readable_dirs()]):
+            return f"`{path}` is north's own data, which is closed to every command. No answer opens it."
+        return (
+            f"`{path}` is in north's own folder: a command may read it but not write it. "
+            "Write north's notes with write_file."
+        )
+    if any(re.search(pattern, real) for pattern in _PROTECTED):
+        return (
+            f"`{path}` is a git hook, git's config or a shell start-up file: never writable from a command. "
+            "Change it with write_file."
+        )
+    if _within(real, _writable_roots(workspace, also_writable)):
+        return ""
+    folder = real if Path(real).is_dir() else os.path.dirname(real)
+    return (
+        f"`{path}` is outside the folders this command may write. To change it, call bash again with "
+        f'write_outside=["{folder}"]; the user is asked first.'
+    )
+
+
 def available() -> bool:
     """True when this host has Seatbelt."""
     return sys.platform == "darwin" and shutil.which("sandbox-exec") is not None
@@ -149,6 +243,10 @@ class Seatbelt:
     @staticmethod
     def denied(stderr: str) -> bool:
         return denied(stderr)
+
+    @staticmethod
+    def explain(output: str, workspace: str | None, *, also_writable: tuple[str, ...] = ()) -> str:
+        return explain(output, workspace, also_writable=also_writable)
 
 
 def _quote(path: str | Path) -> str:

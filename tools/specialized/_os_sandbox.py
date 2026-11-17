@@ -4,7 +4,7 @@ Callers ask `current()` and never branch on the platform (CODING_STYLE §16.4).
 macOS has Seatbelt. A platform with no implementation returns None, and the
 caller falls back to asking for every command - it fails closed, it does not
 pretend to be sandboxed. Add Linux (bubblewrap) by writing a class with these
-three methods (`available`, `wrap`, `denied`) and listing it in `_IMPLEMENTATIONS`.
+four methods (`available`, `wrap`, `denied`, `explain`) and listing it in `_IMPLEMENTATIONS`.
 """
 
 from __future__ import annotations
@@ -43,6 +43,13 @@ class OsSandbox(Protocol):
     @staticmethod
     def denied(stderr: str) -> bool:
         """True when *stderr* shows the sandbox refused something the command tried."""
+        ...
+
+    @staticmethod
+    def explain(output: str, workspace: str | None, *, also_writable: tuple[str, ...] = ()) -> str:
+        """What the sandbox refused in *output*, path by path, and what can be done; "" for no refusal.
+
+        Says it was north's sandbox, not the platform's permissions, wherever that is so."""
         ...
 
 

@@ -414,15 +414,15 @@ class BashTool(Tool):
                 return output
             tail = _all_output(output).strip()[-_REFUSAL_TAIL:]
             return ToolOutput(success=False, failure_kind="refused", data=output.data, error=f"{tail}\n{note}")
-        if not output.success and self._os_sandbox and self._os_sandbox.denied(output.error or ""):
-            # Refused, not broken: say how to ask, so the work is not dropped.
-            where = f"in `{boundary}`" if boundary else "only in temp folders"
-            output.error = (
-                f"{output.error}\nThe sandbox lets this command write {where}. If it must write somewhere else, "
-                "call bash again with write_outside=[that folder]; the user is asked first. "
-                "Git hooks, git's config and shell start-up files (.zshrc, .bashrc, .gitconfig) "
-                "are never writable from a command: change one with write_file."
-            )
+        if self._os_sandbox and (
+            note := self._os_sandbox.explain(_all_output(output), boundary, also_writable=outside)
+        ):
+            # Refused, not broken: say it was north's box and how to ask, so the work is not dropped and macOS is
+            # not blamed. On success too: `cd ~/Downloads; rm x.dmg; df -h` passes after its rm was refused.
+            if output.success:
+                output.data["stdout"] = f"{output.data.get('stdout', '')}\n[north: {note}]"
+            else:
+                output.error = f"{output.error}\n{note}"
         return output
 
     async def _spawn(self, argv: list[str] | None, cwd: str | None, timeout: int, *, command: str) -> ToolOutput:
