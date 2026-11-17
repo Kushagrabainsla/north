@@ -36,6 +36,27 @@ class ApprovalMode(StrEnum):
     def description(self) -> str:
         return _DESCRIPTIONS[self]
 
+    @property
+    def who_answers(self) -> str:
+        """Who answers a card in this mode, as an agent tells the user."""
+        return _WHO_ANSWERS[self]
+
+
+# Told only that "the approval mode decides who answers", an agent in Autonomous told the
+# user a flow "sends nothing until you approve", and then north approved the batch for
+# them (issue #82, item 2). The agent says what happens from this.
+_WHO_ANSWERS: dict[ApprovalMode, str] = {
+    ApprovalMode.ASK: "the user answers every card for a change; read-only work runs without one.",
+    ApprovalMode.SAFE: (
+        "north runs read-only work, safe changes and exact repeats of the user's past answers; "
+        "the user answers every other card."
+    ),
+    ApprovalMode.AUTONOMOUS: (
+        "north decides cards for the user from what it knows about them, without showing them. "
+        "The user sees a card only when north cannot decide, or, in a chat, when north would say no."
+    ),
+    ApprovalMode.YOLO: "north says yes to every card; the user sees none.",
+}
 
 _DESCRIPTIONS: dict[ApprovalMode, str] = {
     ApprovalMode.ASK: "Read-only work runs; every change asks you.",

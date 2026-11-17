@@ -1115,6 +1115,12 @@ class AgenticLLMAgent(LLMAgent):
             "- interaction: when a requirement or a design decision is genuinely ambiguous, use "
             "ask_user rather than guessing. The approval mode decides who answers."
         )
+        if (mode := getattr(getattr(self._deps, "north_settings", None), "autonomy", None)) is not None:
+            system_lines.append(
+                f"- approvals: the approval mode is {mode.value}: {mode.who_answers} When you tell the user "
+                "what happens before something is sent or changed, say it as this mode works. Never promise "
+                "that nothing happens until they approve when north answers for them."
+            )
         system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n" if system_lines else ""
 
         # Split context: recent conversation goes before the task so the model
