@@ -1,6 +1,5 @@
-// One row for a ledger event on Tasks, in a chat turn and on the dashboard. The dashboard's
-// activity strip was a 4-column grid that gave one event a quarter of the row, cut short (#76, P16);
-// it is these rows now, each the full width.
+// One row for a ledger event on Tasks and in a chat turn. The dashboard's activity strip,
+// which used these rows in a short form, is gone (issue #81): its rows said nothing.
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -26,12 +25,5 @@ describe("an event row", () => {
 
   it("links its task in the unscoped stream", () => {
     expect(html({ showTask: true })).toContain('href="/tasks/t1"');
-  });
-
-  it("is one short line on the dashboard", () => {
-    const row = html({ brief: true });
-    expect(row).toContain("now");
-    expect(row).not.toContain("not found");
-    expect(row).not.toContain("glm");
   });
 });

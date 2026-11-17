@@ -7,10 +7,25 @@ about which files may ever be published can be read and tested on their own.
 from __future__ import annotations
 
 import base64
+import mimetypes
 import re
 from pathlib import Path
 
 from tools._path import DB_SUFFIXES
+
+# Not text, but a format other than text/ that still reads as text.
+_TEXT_APPLICATION_TYPES = frozenset({"application/json", "application/xml", "application/x-yaml", "application/yaml"})
+
+
+def artifact_media_type(path: Path) -> str:
+    """The file's media type from its name; a name with no known type is taken as plain text."""
+    return mimetypes.guess_type(path.name)[0] or "text/plain"
+
+
+def is_text_media(media_type: str) -> bool:
+    """Whether a file of this type is read as text. A recording or a picture is not (issue #81)."""
+    return media_type.startswith("text/") or media_type in _TEXT_APPLICATION_TYPES
+
 
 # Directories the artifact library may read. ``tasks`` holds the engineering
 # pipeline's handoff output (research notes, specs, QA reports).

@@ -221,7 +221,6 @@ export interface DashboardData {
   jobs: { job_id: string; agent: string; task: string; status: string; scheduled_at: string; late_note?: string }[];
   cron: { name: string; agent: string; task: string; hour: number; minute: number; weekday?: number }[];
   metrics: Record<string, unknown>;
-  activity: LedgerEntry[];
   artifacts: Artifact[];
 }
 

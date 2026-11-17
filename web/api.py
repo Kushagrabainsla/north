@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import mimetypes
 import os
 import re
 from collections.abc import Callable, Mapping
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from approval.models import CardType, DecidedBy, MemoryKind
@@ -43,9 +43,11 @@ from tools.universal.browser import browser_availability
 from utils.time import epoch_to_local, localnow
 from web.artifacts import (
     allowed_output_roots,
+    artifact_media_type,
     artifact_task_id,
     encode_artifact_id,
     is_readable_artifact,
+    is_text_media,
     resolve_artifact,
 )
 from web.browser_keys import BROWSER_KEY_COOKIE, BROWSER_KEY_MAX_AGE_SECONDS, known_browser, remember_browser
@@ -1337,7 +1339,7 @@ def _list_artifacts_sync(limit: int) -> list[dict[str, Any]]:
                 "name": path.name,
                 "kind": folder.name,
                 "task": task,
-                "media_type": mimetypes.guess_type(path.name)[0] or "text/plain",
+                "media_type": artifact_media_type(path),
                 "size": stat.st_size,
                 "updated_at": stat.st_mtime,
             }
@@ -1391,18 +1393,30 @@ async def list_artifacts(limit: int = 100) -> list[dict[str, Any]]:
 
 @router.get("/artifacts/{artifact_id}")
 async def get_artifact(artifact_id: str) -> dict[str, Any]:
+    """An artifact with its text. A recording, a picture or any other file that is not text has none:
+    the page shows it from `/file`. Read as text, a 5-second video was shown as a screen of bytes (issue #81)."""
     path = _artifact_path(artifact_id)
-    if path.stat().st_size > 2_000_000:
-        raise HTTPException(status_code=413, detail="Artifact is too large to preview")
-    content = await asyncio.to_thread(path.read_text, "utf-8", "replace")
+    media_type = artifact_media_type(path)
+    content = ""
+    if is_text_media(media_type):
+        if path.stat().st_size > 2_000_000:
+            raise HTTPException(status_code=413, detail="Artifact is too large to preview")
+        content = await asyncio.to_thread(path.read_text, "utf-8", "replace")
     return {
         "id": artifact_id,
         "name": path.name,
         "kind": path.parent.name,
         "task": _artifact_task_id(path, current_services().require("north_home")),
-        "media_type": mimetypes.guess_type(path.name)[0] or "text/plain",
+        "media_type": media_type,
         "content": content,
     }
+
+
+@router.get("/artifacts/{artifact_id}/file")
+async def get_artifact_file(artifact_id: str) -> FileResponse:
+    """The artifact itself, with its media type, so the browser plays or shows it, and can seek in a video."""
+    path = _artifact_path(artifact_id)
+    return FileResponse(path, media_type=artifact_media_type(path))
 
 
 # The documents you write yourself; your profile is rebuilt from your facts and soul is north's own.
@@ -1431,12 +1445,11 @@ async def _memory_counts() -> dict[str, int]:
 
 @router.get("/dashboard")
 async def dashboard() -> dict[str, Any]:
-    active, jobs, cron, metrics, ledger_entries, conversations, artifacts = await asyncio.gather(
+    active, jobs, cron, metrics, conversations, artifacts = await asyncio.gather(
         current_services().require("orchestrator").list_active_tasks(),
         current_services().require("job_processor").list_jobs(limit=8),
         current_services().require("cron_store").list(),
         current_services().require("ledger").get_metrics(days=7),
-        current_services().require("ledger").query(LedgerFilters(limit=12)),
         current_services().require("conversation_store").list(limit=6),
         asyncio.to_thread(_list_artifacts_sync, 100),
     )
@@ -1480,6 +1493,6 @@ async def dashboard() -> dict[str, Any]:
         ],
         "cron": cron,
         "metrics": metrics,
-        "activity": [_entry_payload(entry) for entry in ledger_entries],
+        # No latest events: north's own background calls filled them, and they said nothing (issue #81).
         "artifacts": dashboard_artifacts,
     }

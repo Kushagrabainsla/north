@@ -626,10 +626,12 @@ button:not(:disabled):active { transform: translateY(1px); }
 .capability-modal.flow-modal { width: min(1120px, calc(100vw - 40px)); }
 .capability-modal:has(.skill-preview-layout),
 .capability-modal:has(.tool-preview-layout),
-.capability-modal:has(.markdown-pane) { height: auto; max-height: 88dvh; }
+.capability-modal:has(.markdown-pane),
+.capability-modal:has(.artifact-download) { height: auto; max-height: 88dvh; }
 .capability-modal:has(.skill-preview-layout) .capability-modal-shell,
 .capability-modal:has(.tool-preview-layout) .capability-modal-shell,
-.capability-modal:has(.markdown-pane) .capability-modal-shell { height: auto; }
+.capability-modal:has(.markdown-pane) .capability-modal-shell,
+.capability-modal:has(.artifact-download) .capability-modal-shell { height: auto; }
 .capability-modal::backdrop {
   background: rgba(3,5,4,.82);
   backdrop-filter: blur(5px);
@@ -769,6 +771,16 @@ button:not(:disabled):active { transform: translateY(1px); }
   .setup-reminder .panel-content { align-items: flex-start; flex-direction: column; gap: 12px; }
   .setup-page .page-header { align-items: flex-start; flex-wrap: wrap; }
 }
+/* A picture, a recording or a PDF in the artifact viewer, at its own size up to the viewer's. */
+/* A modal dialog is pinned to the window's top and bottom, so `auto` filled it: a 3-second clip sat in a
+   window-tall box. The media viewer fits what it shows. */
+.capability-modal:has(.artifact-download) { height: fit-content; }
+.capability-modal-content:has(> .artifact-download) { padding: 16px; }
+.artifact-media { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto; border-radius: 8px; background: #000; }
+audio.artifact-media, video.artifact-sound-only { width: 100%; height: 54px; background: transparent; }
+.artifact-pdf { width: 100%; height: 70vh; border: 0; background: #fff; }
+.artifact-download { margin: 12px 0 0; text-align: center; font-size: 11px; }
+.artifact-download a { color: var(--accent); }
 .artifact-run h3 a { color: var(--text); text-decoration: none; font-family: inherit; }.artifact-run h3 a:hover { color: var(--accent); }.artifact-owner-kind { color: var(--accent); text-transform: uppercase; letter-spacing: .12em; font-size: 9px; }
 /* A notice: on the dashboard one short row, its preview two lines at most; on Approvals the whole text,
    formatted, a long one opened on demand. Shown whole on the dashboard, a briefing stretched the

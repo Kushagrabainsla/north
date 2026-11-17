@@ -4,7 +4,6 @@ import { Button, CardGrid, Empty, EntityCard, ListRow, Loading, Notice, Stat, St
 import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
 import { SetupReminder } from "./Setup";
-import { EventList } from "../events";
 
 /** What decides the model: the pinned one under manual routing, where power is not in use, else power. */
 export function dialsLine(system: DashboardData["system"]): string {
@@ -74,9 +73,8 @@ export function Dashboard() {
       <Panel title="Usage" label="Last 7 days" to="/insights">
         <StatGrid><Stat label="Tasks" value={String(data.metrics.total_tasks || 0)}/><Stat label="Model cost" value={<>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</>}/></StatGrid>
       </Panel>
-      <Panel title="Activity" label="Latest events" to="/tasks?view=everything" className="full-panel">
-        {data.activity.length === 0 ? <Empty>Nothing has happened yet.</Empty> : <EventList entries={data.activity.slice(0, 8)} brief/>}
-      </Panel>
+      {/* No "Latest events" panel: north's own background calls filled it, eight rows of "inference call ·
+        memory · completed" that said nothing (issue #81). Every event is on the Tasks page. */}
     </div>
   </div>;
 }

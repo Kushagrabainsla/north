@@ -119,3 +119,32 @@ async def test_a_task_folder_inside_a_store_names_the_store_as_its_kind(tmp_path
         [row] = await web_api.list_artifacts()
 
     assert (row["task"], row["kind"]) == ("flow_a76e4e08e204", "research")
+
+
+async def test_a_recording_is_served_as_itself_not_read_as_text(north_home) -> None:
+    """Issue #81: a 5-second camera recording opened as a screen of bytes; the page now plays it from `/file`."""
+    recording = north_home / "tasks" / "task_abc123" / "camera-5s.mov"
+    recording.write_bytes(b"\x00\x00\x00\x14ftypqt  \xff\xfe" + b"\x00" * 3_000_000)
+    artifact_id = _id_for("tasks/task_abc123/camera-5s.mov")
+
+    preview = await web_api.get_artifact(artifact_id)
+    served = await web_api.get_artifact_file(artifact_id)
+    [listed] = [row for row in await web_api.list_artifacts() if row["name"] == "camera-5s.mov"]
+
+    assert preview["media_type"] == listed["media_type"] == served.media_type == "video/quicktime"
+    assert preview["content"] == "", "not read as text, and its 3 MB are no reason to refuse it"
+    assert str(served.path) == str(recording)
+
+
+async def test_a_text_artifact_too_large_to_preview_is_still_refused(north_home) -> None:
+    (north_home / "tasks" / "task_abc123" / "huge.md").write_text("x" * 2_000_001, encoding="utf-8")
+
+    with pytest.raises(HTTPException) as excinfo:
+        await web_api.get_artifact(_id_for("tasks/task_abc123/huge.md"))
+    assert excinfo.value.status_code == 413
+
+
+async def test_the_file_route_cannot_serve_outside_the_library(north_home) -> None:
+    with pytest.raises(HTTPException) as excinfo:
+        await web_api.get_artifact_file(_id_for("secret.key"))
+    assert excinfo.value.status_code == 404
