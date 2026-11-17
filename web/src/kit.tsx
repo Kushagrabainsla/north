@@ -424,13 +424,16 @@ const INPUTS = new Set(["input", "select", "textarea"]);
  *  gets the kit's one input style from kit.css. A single input is tied to the
  *  label, so clicking the label focuses it; anything else (several choice
  *  buttons) is a group the label names. */
-export function Field({ label, hint, error, wide = false, children }: { label: string; hint?: ReactNode; error?: string; wide?: boolean; children: ReactNode }) {
+export function Field({ label, hint, error, wide = false, hideLabel = false, children }: { label: string; hint?: ReactNode; error?: string; wide?: boolean;
+  /** The row already names it (a list in a ListRow's actions): the label is for screen readers only. */
+  hideLabel?: boolean; children: ReactNode }) {
   const id = useId();
   const input = isValidElement(children) && typeof children.type === "string" && INPUTS.has(children.type)
     ? children as ReactElement<{ id?: string }> : null;
   const inputId = input?.props.id || `${id}-input`;
+  const labelClass = cx("kit-field-label", hideLabel && "kit-visually-hidden");
   return <div className={cx("kit-field", wide && "kit-field-wide")}>
-    {input ? <label className="kit-field-label" id={id} htmlFor={inputId}>{label}</label> : <span className="kit-field-label" id={id}>{label}</span>}
+    {input ? <label className={labelClass} id={id} htmlFor={inputId}>{label}</label> : <span className={labelClass} id={id}>{label}</span>}
     {input ? <div className="kit-field-control">{cloneElement(input, { id: inputId })}</div>
       : <div className="kit-field-control" role="group" aria-labelledby={id}>{children}</div>}
     {error ? <small className="kit-field-error">{error}</small> : hint && <small>{hint}</small>}

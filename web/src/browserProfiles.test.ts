@@ -10,7 +10,7 @@ import { DialogProvider } from "./dialog";
 vi.mock("./hooks", async (importOriginal) => ({
   ...await importOriginal<typeof import("./hooks")>(),
   useResource: (path: string) => ({
-    data: path === "/web/api/browser/profiles" ? { profiles: [], tests: {} } : {
+    data: path === "/web/api/browser/profiles" ? { profiles: [], tests: {} } : path === "/orchestrator/inference/catalog" ? [] : {
       power: "cruise", autonomy: "safe",
       models: {
         default: { model: "", power: "cruise" },

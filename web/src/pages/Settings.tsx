@@ -4,7 +4,7 @@ import { BrowserProfiles } from "../browserProfiles";
 import { CodingAgents, ProviderConnections, Secrets, TelegramConnection } from "../connections";
 import { configureDisplayTimezone, PageHeader, Panel, YoloBadge } from "../components";
 import { useResource } from "../hooks";
-import { Button, Empty, Field, ListRow, Loading, Notice, SectionHeader, Tabs, Note } from "../kit";
+import { Button, Field, ListRow, Loading, Notice, SectionHeader, Tabs, Note } from "../kit";
 
 export interface ModeOption {
   value: string;
@@ -39,171 +39,97 @@ export interface SettingsData {
 export type SettingsUpdate = Partial<Omit<SettingsData, "models">> & {
   models?: Record<string, ModelRow | null>;
 };
-
-export type RowMode = "same" | "auto" | "model";
-
-export const rowMode = (choice: ModelRow | null): RowMode =>
-  !choice ? "same" : choice.model ? "model" : "auto";
-
-/** What a row runs on, in a few words: the model's own name, or Auto and its power. */
-export const describeChoice = (choice: ModelRow): string =>
-  // Split once: a model id may itself contain a colon.
-  choice.model ? choice.model.slice(choice.model.indexOf(":") + 1) : `Auto, ${choice.power}`;
 export interface ProviderModels {
   provider: string;
   models: string[];
 }
 
-export const POWER_LEVELS = ["eco", "cruise", "sport"];
+export const POWERS = ["eco", "cruise", "sport"];
 
-// Which model answers, when the user is choosing it rather than north. Provider
-// first, then that provider's models: a flat list of several hundred ids is not
-// a choice anyone can make, and the provider is the half people know.
-export function ModelPicker({
-  value,
-  onPick,
-  busy,
-}: {
-  value: string;
-  onPick: (spec: string) => void;
+/** A row's choice as one list value: "same", "auto:eco", or "model:provider:model_id". */
+export const choiceValue = (choice: ModelRow | null): string =>
+  !choice ? "same" : choice.model ? `model:${choice.model}` : `auto:${choice.power}`;
+
+/** The choice a list value stands for. A chosen model keeps the row's power for a later Auto. */
+export const valueChoice = (value: string, current: ModelRow | null): ModelRow | null => {
+  if (value === "same") return null;
+  if (value.startsWith("auto:")) return { model: "", power: value.slice(5) };
+  return { model: value.slice(6), power: current?.power || "cruise" };
+};
+
+/** What a row runs on, in a few words: the model's own name, or Auto and its power. */
+export const choiceText = (choice: ModelRow): string =>
+  // Split once: a model id may itself contain a colon.
+  choice.model ? choice.model.slice(choice.model.indexOf(":") + 1) : `Auto · ${choice.power}`;
+
+/** One list for a row (#80): Same as default, Auto with each power, then each provider's models. */
+export function ModelSelect({ label, choice, sameAs, catalog, busy, onChange }: {
+  label: string;
+  choice: ModelRow | null;
+  // The Default row's choice, offered as "Same as default"; absent on the Default row itself.
+  sameAs?: ModelRow;
+  catalog: ProviderModels[];
   busy: boolean;
+  onChange: (choice: ModelRow | null) => void;
 }) {
-  const catalog = useResource<ProviderModels[]>(
-    "/orchestrator/inference/catalog",
-  );
-  const providers = catalog.data || [];
-  // A stored pin is "provider:model_id", but only the provider half is a fixed
-  // vocabulary - a model id may itself contain a colon, so it is split once.
-  const [chosenProvider, chosenModel] = (() => {
-    const at = value.indexOf(":");
-    return at > 0 ? [value.slice(0, at), value.slice(at + 1)] : ["", value];
-  })();
-  const provider = chosenProvider || providers[0]?.provider || "";
-  const models =
-    providers.find((row) => row.provider === provider)?.models || [];
-
-  if (catalog.loading) return <Loading />;
-  if (catalog.error)
-    return <Notice tone="error">Could not read the model catalog: {catalog.error}</Notice>;
-  if (!providers.length)
-    return (
-      <Empty>
-        No models are reachable. Check your provider keys under System.
-      </Empty>
-    );
+  const value = choiceValue(choice);
+  const listed = catalog.some((row) => row.models.some((id) => value === `model:${row.provider}:${id}`));
   return (
-    <div className="model-picker">
-      <Field label="Provider">
-        <select
-          value={provider}
-          disabled={busy}
-          onChange={(event) =>
-            onPick(
-              `${event.target.value}:${(providers.find((r) => r.provider === event.target.value)?.models || [])[0] || ""}`,
-            )
-          }
-        >
-          {providers.map((row) => (
-            <option value={row.provider} key={row.provider}>
-              {row.provider}
-            </option>
+    <Field label={label} hideLabel>
+      <select value={value} disabled={busy} onChange={(event) => onChange(valueChoice(event.target.value, choice))}>
+        {sameAs && <option value="same">Same as default ({choiceText(sameAs)})</option>}
+        <optgroup label="North chooses">
+          {POWERS.map((power) => (
+            <option key={power} value={`auto:${power}`}>Auto · {power}</option>
           ))}
-        </select>
-      </Field>
-      <Field label="Model">
-        <select
-          value={chosenModel}
-          disabled={busy || !models.length}
-          onChange={(event) => onPick(`${provider}:${event.target.value}`)}
-        >
-          {/* With nothing chosen, a placeholder: else a provider with one model offers no change to pick. */}
-          {!chosenModel && <option value="" disabled>Choose a model</option>}
-          {(models.includes(chosenModel) || !chosenModel
-            ? models
-            : [chosenModel, ...models]
-          ).map((id) => (
-            <option value={id} key={id}>
-              {id}
-            </option>
-          ))}
-        </select>
-      </Field>
-    </div>
+        </optgroup>
+        {/* A saved model the catalog no longer lists stays visible, rather than the list showing another. */}
+        {choice?.model && !listed && (
+          <optgroup label="Not reachable now">
+            <option value={value}>{choice.model}</option>
+          </optgroup>
+        )}
+        {catalog.map((row) => (
+          <optgroup key={row.provider} label={row.provider}>
+            {row.models.map((id) => (
+              <option key={id} value={`model:${row.provider}:${id}`}>{id}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </Field>
   );
 }
 
-/** One row of the Models panel. "Choose a model" saves nothing until a model is picked. */
-function ModelRowEditor({
-  label,
-  description,
-  choice,
-  fallback,
-  busy,
-  onSave,
-}: {
-  label: string;
-  description: string;
-  choice: ModelRow | null;
-  // The Default row, which a kind "Same as default" uses. Absent on the Default row itself.
-  fallback?: ModelRow;
+/** The one place models and power are shown and set (#80): every row, each with one list. */
+export function ModelsPanel({ models, catalog, busy, save }: {
+  models: ModelsData;
+  catalog: ProviderModels[];
   busy: boolean;
-  onSave: (choice: ModelRow | null) => void;
+  /** Change rows by name: "default" or a kind; null makes a kind follow the default again. */
+  save: (rows: Record<string, ModelRow | null>) => void;
 }) {
-  const [choosing, setChoosing] = useState(false);
-  const mode = choosing ? "model" : rowMode(choice);
-  const power = choice?.power || "cruise";
-  const pick = (next: RowMode) => {
-    if (busy || next === mode) return;
-    setChoosing(next === "model");
-    if (next === "same") onSave(null);
-    if (next === "auto") onSave({ model: "", power });
-  };
   return (
-    <ListRow title={label} description={description}>
-      <div className="model-row">
-        <Field label="Uses">
-          <Tabs
-            label={`${label} uses`}
-            value={mode}
-            disabled={busy}
-            onChange={pick}
-            items={[
-              // Short, read after "Uses": they share one line on a phone.
-              ...(fallback ? [{ value: "same" as RowMode, label: "default" }] : []),
-              { value: "auto" as RowMode, label: "auto" },
-              { value: "model" as RowMode, label: "model" },
-            ]}
-          />
-        </Field>
-        {mode === "auto" && (
-          <Field label="Power">
-            <Tabs
-              label={`${label} power`}
-              value={power}
-              disabled={busy}
-              onChange={(value) => onSave({ model: "", power: value })}
-              items={POWER_LEVELS.map((value) => ({ value, label: value }))}
-            />
-          </Field>
-        )}
-      </div>
-      {mode === "same" && fallback && <Note>Same as the Default row: {describeChoice(fallback)}.</Note>}
-      {mode === "model" && (
-        <ModelPicker
-          value={choice?.model || ""}
-          busy={busy}
-          onPick={(spec) => {
-            setChoosing(false);
-            onSave({ model: spec, power });
-          }}
-        />
-      )}
-    </ListRow>
+    <div>
+      <Note>
+        Auto lets north pick, cheapest first (eco) to most capable (sport). A model you choose is the
+        only one called: if it fails, the work stops.
+      </Note>
+      <ListRow title="Default" description="Used by every row set to Same as default."
+        actions={<ModelSelect label="Default" choice={models.default} catalog={catalog} busy={busy}
+          onChange={(choice) => choice && save({ default: choice })} />} />
+      {models.kinds.map((row) => (
+        <ListRow key={row.kind} title={row.label} description={row.description}
+          actions={<ModelSelect label={row.label} choice={row.choice} sameAs={models.default} catalog={catalog}
+            busy={busy} onChange={(choice) => save({ [row.kind]: choice })} />} />
+      ))}
+    </div>
   );
 }
 
 export function SettingsPage() {
   const resource = useResource<SettingsData>("/orchestrator/settings");
+  const catalog = useResource<ProviderModels[]>("/orchestrator/inference/catalog");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const update = async (body: SettingsUpdate) => {
@@ -236,37 +162,12 @@ export function SettingsPage() {
       />
       {error && <Notice tone="error">{error}</Notice>}
       <div className="settings-grid">
-        {/* The one place models and power are shown and set (#80). */}
         <Panel title="Models" className="models-panel">
-          <Note>
-            Auto: north ranks the models it can reach for each part of the work. Eco tries the cheapest
-            first, cruise the best fit, sport the most capable. A model you choose is the only one
-            called: if it fails, the work stops.
-          </Note>
-          {resource.loading && !models ? (
-            <Loading />
-          ) : models ? (
-            <div>
-              <ModelRowEditor
-                label="Default"
-                description="What every kind of work below uses, unless you change its row."
-                choice={models.default}
-                busy={busy}
-                onSave={(choice) => choice && void update({ models: { default: choice } })}
-              />
-              {models.kinds.map((row) => (
-                <ModelRowEditor
-                  key={row.kind}
-                  label={row.label}
-                  description={row.description}
-                  choice={row.choice}
-                  fallback={models.default}
-                  busy={busy}
-                  onSave={(choice) => void update({ models: { [row.kind]: choice } })}
-                />
-              ))}
-            </div>
-          ) : null}
+          {catalog.error && <Notice tone="error">Could not read the model catalog: {catalog.error}</Notice>}
+          {models ? (
+            <ModelsPanel models={models} catalog={catalog.data || []} busy={busy}
+              save={(rows) => void update({ models: rows })} />
+          ) : resource.loading ? <Loading /> : null}
         </Panel>
         <Panel title="Autonomy">
           <Tabs

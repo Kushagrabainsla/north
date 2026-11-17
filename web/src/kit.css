@@ -168,6 +168,9 @@
 .kit-row-main p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .kit-row-main small { display: flex; flex-wrap: wrap; gap: 0 10px; margin-top: 4px; color: var(--faint); font-size: 10px; }
 .kit-row-side { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+/* A field at a row's side (a list for the row): up to 300px, and it shrinks, so a long option never pushes past the panel. */
+.kit-row-side:has(> .kit-field) { flex: 0 1 300px; min-width: 0; }
+.kit-row-side > .kit-field { width: 100%; }
 .kit-row-body { padding: 0 0 12px; }
 .kit-row-muted .kit-row-title b, .kit-row-muted .kit-row-main p { color: var(--faint); }
 
