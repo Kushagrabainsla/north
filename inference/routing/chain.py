@@ -319,7 +319,9 @@ class ChainWalk:
                         endpoint.provider_model_id,
                         endpoint.provider,
                         attempt.failure.reason,
-                        attempt.failure.retry_after,
+                        # The provider's own wait, or else the cooldown the caller just set,
+                        # so a failure that named no wait can still be waited out.
+                        attempt.failure.retry_after or self.availability.retry_after(endpoint),
                         tried=True,
                         status_code=attempt.failure.status_code,
                         detail=attempt.failure.detail,

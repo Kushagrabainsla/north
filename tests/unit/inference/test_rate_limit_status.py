@@ -251,7 +251,7 @@ def test_provider_attaches_status_and_headers_to_exception() -> None:
     assert exc.value.body == {"error": {"message": "rate limit"}}
 
 
-def test_dispatcher_records_status_with_precise_wait(tmp_path) -> None:
+def test_dispatcher_records_status_with_precise_wait(tmp_path, no_inline_waits) -> None:
     """A 429 in the dispatch chain is recorded with the provider's real wait."""
     from config.strategy import NorthSettings
     from inference.capability import ModelCapability, ModelInfo

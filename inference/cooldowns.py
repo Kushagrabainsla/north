@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 _CooldownKey = tuple[str, str]
 
 _RATE_LIMIT_SECS: float = 60.0
+# A failure that names no wait (a server error, a 429 with no reset) cools the model
+# for 0.5 s, then twice as long after each further failure in a row, up to
+# _RATE_LIMIT_SECS: the waits of the Anthropic SDK's retries. A fixed 60 s was longer
+# than the router's 40 s wait limit, so a chain of one model failed at once on one 500
+# (issue #82, item 5).
+_FIRST_COOLDOWN_SECS: float = 0.5
+# A model that has not failed for this long starts again from the first cooldown.
+_STRIKE_MEMORY_SECS: float = 300.0
 # Cap on a provider-supplied Retry-After so a bogus/huge value can't sideline a
 # model for a long time; payment cooldowns have their own (much longer) constant.
 _MAX_RATE_LIMIT_SECS: float = 600.0
@@ -26,7 +34,8 @@ _CAPABILITY_COOLDOWN_SECS: float = 3600.0  # 1 h (e.g. for degenerate tool_calls
 class CooldownStore:
     """Tracks per-model cooldowns in memory with optional disk persistence for payment cooldowns.
 
-    Rate-limit cooldowns (60 s) are memory-only - they reset on restart.
+    Rate-limit cooldowns are memory-only - they reset on restart. With no wait named,
+    they start at 0.5 s and double for each failure in a row, up to 60 s.
     Payment-exhausted cooldowns (24 h) are persisted to disk so they survive restarts.
     Capability cooldowns (1 h) are memory-only per (model_id, provider, capability).
     """
@@ -39,6 +48,8 @@ class CooldownStore:
         # Explicit tracking of which keys are payment cooldowns, replacing the
         # fragile "> 3600s remaining" heuristic.
         self._payment_keys: set[_CooldownKey] = set()
+        # key -> (failures in a row with no wait named, monotonic time of the last one)
+        self._strikes: dict[_CooldownKey, tuple[int, float]] = {}
         # Serialises concurrent _persist_sync calls (dispatched via run_in_executor)
         # so the read-modify-write cycle on the JSON file is atomic.
         self._persist_lock = threading.Lock()
@@ -118,10 +129,23 @@ class CooldownStore:
         """Apply a short rate-limit cooldown (memory-only).
 
         Uses *seconds* when a provider supplied a Retry-After (clamped to
-        ``_MAX_RATE_LIMIT_SECS``), otherwise the default 60 s.
+        ``_MAX_RATE_LIMIT_SECS``). Otherwise the cooldown starts at 0.5 s and
+        doubles for each failure in a row, up to 60 s.
         """
-        duration = _RATE_LIMIT_SECS if seconds is None else min(max(seconds, 0.0), _MAX_RATE_LIMIT_SECS)
-        self._expiry[key] = time.monotonic() + duration
+        now = time.monotonic()
+        if seconds is not None:
+            duration = min(max(seconds, 0.0), _MAX_RATE_LIMIT_SECS)
+        else:
+            count, last = self._strikes.get(key, (0, now))
+            if now - last > _STRIKE_MEMORY_SECS:
+                count = 0
+            duration = min(_FIRST_COOLDOWN_SECS * 2**count, _RATE_LIMIT_SECS)
+            self._strikes[key] = (count + 1, now)
+        self._expiry[key] = now + duration
+
+    def forget_failures(self, key: _CooldownKey) -> None:
+        """The model answered: its next failure with no wait named starts at the first cooldown again."""
+        self._strikes.pop(key, None)
 
     def set_payment_exhausted(self, key: _CooldownKey) -> None:
         """Apply a 24-hour payment cooldown and persist it to disk."""

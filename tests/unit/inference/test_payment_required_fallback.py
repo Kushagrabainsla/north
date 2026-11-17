@@ -72,7 +72,7 @@ async def test_payment_required_does_not_mark_provider_down(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_generic_inference_error_recorded_as_status_error(tmp_path):
+async def test_generic_inference_error_recorded_as_status_error(tmp_path, no_inline_waits):
     """A generic InferenceError (5xx, timeout, bad JSON, etc.) must surface in the
     status store as kind 'error' - not be invisible as a silent "all available".
     TranscriptionError subclasses InferenceError, so it is covered by the same branch.

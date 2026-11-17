@@ -198,6 +198,7 @@ class AvailabilityView:
     def record_success(self, endpoint: Endpoint, capability: str | None = None) -> None:
         self._entitlements.clear_tier(endpoint.provider, is_free=endpoint.is_free)
         self._health.record_success(endpoint.provider)
+        self._cooldowns.forget_failures((endpoint.provider_model_id, endpoint.provider))
         if capability is not None:
             self._served.add((endpoint.provider_model_id, endpoint.provider, capability))
 
@@ -243,7 +244,11 @@ class AvailabilityView:
         if failure.scope is Scope.PROVIDER_DOWN:
             # One provider-level failure is a vote, not a verdict: it is recorded
             # against the model that saw it, and only the corroborated breaker is
-            # reported provider-wide.
+            # reported provider-wide. The model that saw it cools briefly, as for
+            # any failure that names no wait. With no cooldown at all, a 502 gave
+            # the walk no time to wait for, so a chain of one model failed at once
+            # (issue #82, item 5).
+            self._cooldowns.set_rate_limit(key)
             if provider_down:
                 self._health.mark_degraded(provider, failure.reason)
                 self._record(lambda s: s.record_provider_down(provider, failure.reason))

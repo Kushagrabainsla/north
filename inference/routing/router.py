@@ -44,9 +44,13 @@ LatencySink = Callable[[str, str, float, int], None]
 ProviderLookup = Callable[[str], Any]
 
 # A walk that ends with every candidate merely cooling down is waited out and
-# retried once, rather than failing a call that would have worked a second later.
-# Above this, the wait is the caller's to decide on and the error carries how long.
+# walked again, as often as the waits fit in this budget, rather than failing a call
+# that would have worked a second later. Above it, the wait is the caller's to decide
+# on and the error carries how long.
 _MAX_INLINE_WAIT_SECONDS = 40.0
+# At most this many walks for one call, so a provider that names a tiny wait each
+# time cannot make one call into dozens of requests.
+_MAX_WALKS = 8
 # Cooldowns expire on a clock this process does not own, so the retry sleeps a
 # little past the deadline rather than racing it.
 _WAIT_GRACE_SECONDS = 0.5
@@ -225,21 +229,28 @@ class ChainRouter:
         """Walk the chain for *component* until one endpoint returns a usable answer.
 
         A walk where nothing was left but cooling-down endpoints is waited out and
-        walked again, once, when the soonest of those cooldowns is short: a model
-        rate-limited for a tenth of a second is not a reason to fail a call. The
-        chain is rebuilt after the wait, because what is available has changed.
+        walked again, while the waits fit in ``_MAX_INLINE_WAIT_SECONDS``: a model
+        rate-limited for a tenth of a second is not a reason to fail a call. A
+        server error cools its model for 0.5 s, then twice as long each time in a
+        row, so a chain of one model tries again after 0.5, 1, 2, 4, 8 and 16 s, as
+        the Anthropic SDK does. Once, one 502 failed a chat turn at once (issue #82,
+        item 5). The chain is rebuilt after each wait, because what is available
+        has changed.
         """
-        result, walk, profile = await self._walk(component, requirements, call_fn, is_valid, capability, task_id)
-        if result is not _NO_RESULT:
-            return result
-
-        wait = walk.soonest_retry()
-        if wait is not None and 0 < wait <= _MAX_INLINE_WAIT_SECONDS:
-            logger.info("Every candidate is cooling down - waiting %.1fs and walking again", wait)
-            await asyncio.sleep(wait + _WAIT_GRACE_SECONDS)
+        waited = 0.0
+        for walked in range(1, _MAX_WALKS + 1):
             result, walk, profile = await self._walk(component, requirements, call_fn, is_valid, capability, task_id)
             if result is not _NO_RESULT:
                 return result
+            wait = walk.soonest_retry()
+            if wait is None or wait <= 0 or walked == _MAX_WALKS:
+                break
+            pause = wait + _WAIT_GRACE_SECONDS
+            if waited + pause > _MAX_INLINE_WAIT_SECONDS:
+                break
+            logger.info("Every candidate is cooling down - waiting %.1fs and walking again", wait)
+            await asyncio.sleep(pause)
+            waited += pause
 
         raise AllModelsRateLimitedError(
             f"No model could serve {profile.part} - {walk.exhaustion_summary(requirements)}",

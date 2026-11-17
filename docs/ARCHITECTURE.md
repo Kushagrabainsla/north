@@ -1000,13 +1000,14 @@ Agents carry no model pool either. An agent's `model_pool` setting, and the pool
 
 Every `complete()` and `complete_with_tools()` call walks its part's ordered chain until one model succeeds. Three exception classes handle failures in the chain:
 
-- `ModelRateLimitedError` - raised on HTTP 429, 404 (retired model), and 503. Applies a 60-second cooldown to the `(model_id, provider)` pair and silently advances to the next candidate.
+- `ModelRateLimitedError` - raised on HTTP 429. Cools the `(model_id, provider)` pair for the wait the provider named, and advances to the next candidate.
+- `ProviderUnavailableError` - raised on HTTP 502, 503, 504 and a failed connection. Counts one vote toward the provider's breaker, cools the model that saw it, and advances to the provider's next endpoint.
 - `PaymentRequiredError` - raised on HTTP 402. Applies a 24-hour cooldown and advances.
-- `InferenceError` - raised on HTTP 400 (unsupported parameters, bad model ID) and other provider errors. Records a failure in the EMA, logs at `WARNING`, and advances to the next candidate.
+- `InferenceError` - raised on HTTP 400 (unsupported parameters, bad model ID), 500 and other provider errors. Cools the model and advances to the next candidate.
 
-Any other exception (network failures, unexpected errors) records a failure in the EMA and re-raises immediately to the caller.
+A failure that names no wait cools its model for 0.5 s, then twice as long for each failure in a row, up to 60 s. An answer from the model starts the doubling again (`inference/cooldowns.py`).
 
-The chain is exhausted only when every candidate has been tried or cooled down. Only then is `AllModelsRateLimitedError` raised to the caller.
+When every candidate failed or is cooling down, the router waits for the soonest cooldown and walks the chain again. It does this while the waits fit in 40 s, and at most 8 walks for one call. So a chain of one model tries again after 0.5, 1, 2, 4, 8 and 16 s, as the Anthropic SDK does (issue #82, item 5). Only then is `AllModelsRateLimitedError` raised, with the soonest wait, which the agent loop can wait out. A failure that needs an action, such as billing or a rejected key, names no wait, so it is not waited for.
 
 Every inference call is logged to the Ledger with `source: inference_router`:
 

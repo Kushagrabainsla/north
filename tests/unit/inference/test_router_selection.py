@@ -166,7 +166,7 @@ async def test_price_breaks_a_tie_between_equal_models(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_all_models_exhausted(tmp_path):
+async def test_all_models_exhausted(tmp_path, no_inline_waits):
     # Every candidate fails -> the router reports total exhaustion, it does not
     # silently return garbage.
     def boom(model_id, request):
