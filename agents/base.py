@@ -24,10 +24,16 @@ from utils.execution_context import ExecutionIdentity, bind_execution
 
 logger = logging.getLogger(__name__)
 
-# Registry tools that support the agent loop itself. Internal tools such as
-# ask_user, delegate_task, request_approval, and find_tools are injected by the
-# loop and therefore do not appear here.
-_ESSENTIAL_TOOL_NAMES: frozenset[str] = frozenset({"update_plan", "use_skill"})
+# Registry tools that are always loaded, whatever retrieval picks: the loop's own
+# controls, and the four tools north uses most. With only the controls, retrieval
+# missed bash, fetch_url and web_search in chat tasks: the calls failed "not found",
+# and north told the user it had no shell (issue #82, item 3). Anthropic's tool
+# search guidance keeps the 3-5 most-used tools loaded. A flow step's tool list
+# replaces this set. Internal tools such as ask_user, request_approval and
+# find_tools are injected by the loop and do not appear here.
+_ESSENTIAL_TOOL_NAMES: frozenset[str] = frozenset(
+    {"update_plan", "use_skill", "bash", "write_file", "fetch_url", "web_search"}
+)
 
 # Cap on how many non-selected skill names are listed as "available via use_skill".
 # High enough to list every skill an agent has (general has 18, ~110 tokens of

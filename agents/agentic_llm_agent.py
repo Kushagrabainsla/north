@@ -52,6 +52,7 @@ from tools.output_spill import overflow_note, store_overflow
 from tools.retrieval import tool_index_documents
 from tools.universal.offered_before import OFFERED_SCOPE
 from utils.execution_context import current_execution
+from utils.retired_tools import current_tool
 from utils.tasks import spawn
 from utils.text import normalize_dashes
 from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
@@ -489,6 +490,8 @@ class AgenticLLMAgent(LLMAgent):
         tool_map: dict[str, Tool],
     ) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
         """Execute one call, turning any unexpected exception into a failed result."""
+        # Loaded before the gates below, so they judge the tool that will run.
+        self._load_called_tool(call.name, tool_map, payload)
         is_mutating = self._is_mutating_call(call, tool_map)
         if payload.execution_profile == "quick_readonly" and is_mutating:
             return _failed_call(
@@ -507,6 +510,24 @@ class AgenticLLMAgent(LLMAgent):
                 raise
             logger.warning("Tool call '%s' raised: %s", call.name, exc, exc_info=True)
             return _failed_call(call, exc)
+
+    def _load_called_tool(self, name: str, tool_map: dict[str, Tool], payload: AgentPayload) -> None:
+        """Load a registered tool that the model called by name but retrieval did not load.
+
+        Every tool name is in the system prompt, so the model calls tools it was not given.
+        Such calls failed "not found" in chat tasks, and north then said it had no shell
+        (issue #82, item 3). The tool runs as any loaded tool does: Tool.execute puts a change to
+        the approval layer, and the gates in `_safe_execute_call` still apply. A flow step
+        keeps to its tool list: that list is a contract, not a retrieval hint.
+        """
+        if name in tool_map or name in _INTERNAL_TOOLS or payload.allowed_tools is not None:
+            return
+        registry = getattr(self._deps, "tool_registry", None)
+        if registry is None:
+            return
+        tool = next((tool for tool in registry.available_tools() if tool.name == name), None)
+        if tool is not None:
+            tool_map[name] = tool
 
     def _is_mutating_call(self, call: ToolCall, tool_map: dict[str, Tool]) -> bool:
         tool = tool_map.get(call.name)
@@ -1327,7 +1348,7 @@ class AgenticLLMAgent(LLMAgent):
         payload: AgentPayload,
     ) -> tuple[str, list[tuple[str, str]]]:
         if tool_name not in tool_map:
-            return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}"), []
+            return _failed_json(_not_loaded(tool_name, tool_map, payload)), []
         tool_input = _tool_input(payload, params).model_copy(update={"before_change": self._before_change(payload)})
         try:
             result = await tool_map[tool_name].execute(tool_input)
@@ -1527,6 +1548,24 @@ class _TokenRelay:
     async def reset(self) -> None:
         self._splitter = ReasoningStreamSplitter()
         await self._stream_manager.emit(self._task_id, "stream_reset", {})
+
+
+def _not_loaded(name: str, tool_map: dict[str, Tool], payload: AgentPayload) -> str:
+    """Why a called tool cannot run, and what to use instead.
+
+    A registered tool is loaded when called (`_load_called_tool`), so this is a name north
+    does not have, a retired one, or a tool outside a flow step's list.
+    """
+    parts = []
+    if (replacement := current_tool(name)) != name:
+        parts.append(f"Tool '{name}' was removed: use '{replacement}' instead.")
+    else:
+        parts.append(f"Tool '{name}' not found.")
+    if payload.allowed_tools is not None:
+        parts.append(f"This flow step can use only: {', '.join(sorted(tool_map))}.")
+    elif replacement == name:
+        parts.append("North has no tool by that name: call find_tools to search by what you need.")
+    return " ".join(parts)
 
 
 def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:

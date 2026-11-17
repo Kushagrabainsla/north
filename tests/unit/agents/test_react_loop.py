@@ -919,7 +919,8 @@ async def test_task_selection_uses_global_catalog_not_agent_mapping(tmp_path: Pa
     )
     loaded_names = {tool.name for tool, _ in loaded}
 
-    assert loaded_names == {"web_search", "kasa", "update_plan"}
+    # The match, the named tool, the loop control and the four most-used tools - not the whole catalog.
+    assert loaded_names == {"web_search", "kasa", "update_plan", "bash", "write_file", "fetch_url"}
     index.search_tools.assert_awaited_once()
     indexed_profiles = dict(index.update_tools.await_args.args[0])
     assert "Tool name: web search (web_search)." in indexed_profiles["web_search"]

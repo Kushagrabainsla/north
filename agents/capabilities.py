@@ -33,7 +33,10 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
                 names = ", ".join(t.name for t in sorted(tools, key=lambda x: x.name))
                 lines.append("\n### Available Tool Names")
                 lines.append(names)
-                lines.append("Use `find_tools` when the needed tool is not currently loaded.")
+                lines.append(
+                    "Call any tool named here directly: north loads it when you call it, except in a flow "
+                    "step, which has its own tool list. Use `find_tools` to search by what a tool does."
+                )
         except Exception:
             pass
 

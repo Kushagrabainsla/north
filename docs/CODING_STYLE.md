@@ -366,8 +366,10 @@ tools/
 
 Both directories feed one global catalog. At task start, semantic retrieval selects a
 small relevant subset using the task, role, selected skills, and current plan; exact tool
-mentions and essential controls are retained. `find_tools` lets the running agent search and
-load a missed capability. Confidence affects ranking, not eligibility. No agent configuration
+mentions, the loop controls and the four most-used tools (`bash`, `write_file`, `fetch_url`,
+`web_search`) are always loaded. A call to a registered tool that was not loaded loads it and
+runs it, with the same gates. A flow step's tool list is a contract: neither rule widens it.
+`find_tools` lets the running agent search the catalog by what a tool does. Confidence affects ranking, not eligibility. No agent configuration
 or registry code changes when tools come or go.
 
 ---
