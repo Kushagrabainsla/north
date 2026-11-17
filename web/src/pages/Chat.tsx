@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Folder, FolderOpen, Pin, PinOff, Trash2 } from "lucide-react";
+import { useStickToBottom } from "use-stick-to-bottom";
 import { api, del, patch, post } from "../api";
 import { ErrorNotice, InferenceCategories, Markdown, PageHeader, PromptTelemetry, timeAgo } from "../components";
 import { Button, confirmDelete, Empty, EntityTable, Loading, Notice, ResourceView, Menu, SearchField, Stack, Status, Tabs, Toolbar, type Column } from "../kit";
@@ -35,6 +36,9 @@ const DICTATION_PROBLEMS: Record<string, string> = {
 };
 
 export const dictationProblem = (error: string) => DICTATION_PROBLEMS[error] || `Dictation stopped: ${error}.`;
+
+/** The way back to the newest text, shown only when you scrolled away from it in a session that has any. */
+export const showJump = (atBottom: boolean, turns: number) => !atBottom && turns > 0;
 
 /** What a turn is in, for its badge and its working line. A card wins over a running
  *  task, since answering it is what moves things; a paused task stays paused, card or not:
@@ -406,7 +410,12 @@ export function Chat() {
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
-  const chatRoom = useRef<HTMLElement>(null);
+  // The room follows its newest text while you are at the bottom, and stays where you put it once you
+  // scroll up (issue #79). Content grows after any one scroll: turn details and answers arrive later,
+  // so a single scroll on open left the room at its top, and a streaming answer ran below the edge.
+  // Instant, not animated: a glide chased every late block of content, and opening a long session
+  // took more than three seconds to reach its end.
+  const follow = useStickToBottom({ initial: "instant", resize: "instant" });
   const openedAtBottom = useRef<string | null>(null);
   const { live, reasoning, signals, steps } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
@@ -420,10 +429,10 @@ export function Chat() {
     if (!conversationId) { openedAtBottom.current = null; return; }
     if (room.data?.id !== conversationId || openedAtBottom.current === conversationId) return;
     openedAtBottom.current = conversationId;
-    window.requestAnimationFrame(() => chatRoom.current?.scrollTo({ top: chatRoom.current.scrollHeight }));
+    // Another session opens at its bottom too, even if you had scrolled up in the one before.
+    void follow.scrollToBottom("instant");
   }, [conversationId, room.data?.id]);
   const updatePrompt = (value: string) => { setPrompt(value); if (conversationId) { if (value) localStorage.setItem(`north-chat-draft:${conversationId}`, value); else localStorage.removeItem(`north-chat-draft:${conversationId}`); } };
-  const scrollLatestTurnToTop = () => window.requestAnimationFrame(() => chatRoom.current?.querySelector(".turn-bundle:last-child")?.scrollIntoView({ block: "start", behavior: "smooth" }));
   const createSession = async () => {
     const session = await post<Conversation>("/web/api/conversations", { title: "New session" });
     await chats.reload(); navigate(`/sessions/${session.id}`);
@@ -433,7 +442,7 @@ export function Chat() {
     if (!prompt.trim() || !conversationId) return;
     if (prompt.trim().startsWith("/") && await handleSlash(prompt.trim())) return;
     setSubmitting(true);
-    try { await post(`/web/api/conversations/${conversationId}/turns`, { prompt }); updatePrompt(""); setNotice(""); await Promise.all([room.reload(), chats.reload()]); scrollLatestTurnToTop(); }
+    try { await post(`/web/api/conversations/${conversationId}/turns`, { prompt }); updatePrompt(""); setNotice(""); await Promise.all([room.reload(), chats.reload()]); void follow.scrollToBottom("instant"); }
     catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
     finally { setSubmitting(false); }
   };
@@ -548,7 +557,7 @@ export function Chat() {
   const currentWorkspace = room.data?.workspace || "";
   const taskRunning = (room.data?.turns || []).some(turn => turn.task_id && ["pending", "running", "queued", "retrying", "paused"].includes(turn.detail?.task.status || ""));
   return <div className={`chat-page session-room ${dragging ? "dragging" : ""}`} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
-    <section className="chat-room" ref={chatRoom}>
+    <section className="chat-room" ref={follow.scrollRef}>
       {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><Button variant="primary" onClick={() => void createSession()}>+ New session</Button></div> : room.loading && !room.data ? <Loading/> : !room.data ? <Notice tone="error">{room.error || "Session unavailable"}</Notice> : <>
         <PageHeader title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<Menu items={[
           { label: room.data.pinned ? "Unpin" : "Pin", onSelect: () => void togglePinned() },
@@ -559,9 +568,9 @@ export function Chat() {
         ]}/>}/>
         {room.error && <Notice tone="error">{room.error}</Notice>}
         <section className="session-goal"><div><small>Active goal</small><p>{room.data.goal || "No goal has been set for this session yet."}</p></div><div><Status value={room.data.goal_status}/>{room.data.goal && room.data.goal_status !== "achieved" && <Button size="sm" onClick={() => void markGoalAchieved()}>Mark achieved</Button>}</div></section>
-        <div className="turns">{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} reasoning={turn.task_id ? reasoning[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} steps={turn.task_id ? steps[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <Empty>A fresh room. Your prompts, North's responses and every step of the work will stay together here.</Empty>}</div>
+        <div className="turns" ref={follow.contentRef}>{room.data.turns?.length ? room.data.turns.map((turn, index) => joinedTurn(room.data!.turns!, index) ? <JoinedTurn key={turn.id} turn={turn}/> : <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} reasoning={turn.task_id ? reasoning[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} steps={turn.task_id ? steps[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <Empty>A fresh room. Your prompts, North's responses and every step of the work will stay together here.</Empty>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
-        <form className="composer" onSubmit={submit}><textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder={taskRunning ? "Add to the task North is working on…" : "Ask North anything…"} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
+        <form className="composer" onSubmit={submit}>{showJump(follow.isAtBottom, room.data.turns?.length || 0) && <button type="button" className="jump-latest" onClick={() => void follow.scrollToBottom("instant")}>Jump to latest ↓</button>}<textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder={taskRunning ? "Add to the task North is working on…" : "Ask North anything…"} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}
     </section>
   </div>;

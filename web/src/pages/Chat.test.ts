@@ -5,9 +5,9 @@
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { attachmentText, dictationProblem, ghostText, joinedTurn, replyText, Sessions, sessionsEmptyMessage, turnStatus } from "./Chat";
+import { attachmentText, Chat, dictationProblem, ghostText, joinedTurn, replyText, Sessions, sessionsEmptyMessage, showJump, turnStatus } from "./Chat";
 import { optionParts } from "../kit";
 import { DialogProvider } from "../dialog";
 import type { Turn } from "../types";
@@ -140,6 +140,31 @@ describe("an offered answer", () => {
   it("reads as a title with its explanation under it", () => {
     expect(optionParts("North-native: flows that find jobs, on a schedule")).toEqual(["North-native", "flows that find jobs, on a schedule"]);
     expect(optionParts("Prep help only")).toEqual(["Prep help only", ""]);
+  });
+});
+
+describe("a session that follows its newest text", () => {
+  // Issue #79: the room scrolled once on open and once on send, so a streaming answer ran below the edge.
+  const room = () => renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: ["/sessions/c1"] },
+    createElement(DialogProvider, null, createElement(Routes, null, createElement(Route, { path: "/sessions/:conversationId", element: createElement(Chat) })))));
+
+  it("is one scrolling room whose turns are the content it follows", () => {
+    served.data = {
+      "/web/api/conversations": [],
+      "/web/api/approvals": [],
+      "/web/api/conversations/c1": { id: "c1", title: "Trip planning", goal: "", goal_status: "idle", workspace: "", pinned: false,
+        archived: false, turns: [{ id: "t1", prompt: "Plan the trip", created_at: "", task_id: null, detail: null }] },
+    };
+    const html = room();
+    expect(html).toMatch(/<section class="chat-room">.*<div class="turns">.*Plan the trip/s);
+    // A room opens at its end, so there is nothing to jump to.
+    expect(html).not.toContain("Jump to latest");
+  });
+
+  it("offers the way back only when you scrolled away from text there is", () => {
+    expect(showJump(false, 3)).toBe(true);
+    expect(showJump(true, 3)).toBe(false);
+    expect(showJump(false, 0)).toBe(false);
   });
 });
 
