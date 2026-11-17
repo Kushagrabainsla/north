@@ -75,19 +75,24 @@ def test_a_call_answered_first_time_counts_the_endpoint_that_answered() -> None:
     assert (recorded.outcome, recorded.endpoints, recorded.attempted) == (SUCCESS, 1, 1)
 
 
-def test_status_names_the_pinned_model_not_power(monkeypatch) -> None:
+def test_status_names_the_default_model_and_each_kind_with_its_own_row(monkeypatch) -> None:
     answers = {
         "/health": {"status": "ok", "checks": {}},
         "/orchestrator/settings": {
             "power": "cruise",
             "autonomy": "ask",
-            "routing": "manual",
-            "model": "anthropic:claude-haiku-5-5",
+            "models": {
+                "default": {"model": "anthropic:claude-haiku-5-5", "power": "cruise"},
+                "kinds": [
+                    {"kind": "tasks", "choice": None},
+                    {"kind": "background", "choice": {"model": "", "power": "eco"}},
+                ],
+            },
         },
     }
     monkeypatch.setattr(main, "_api", lambda method, path, **kw: SimpleNamespace(json=lambda: answers.get(path, {})))
 
     output = CliRunner().invoke(main.app, ["status"]).output
 
-    assert "anthropic:claude-haiku-5-5 (pinned; power not in use)" in output
-    assert "power      cruise" not in output
+    assert "default anthropic:claude-haiku-5-5 · background auto (eco)" in output
+    assert "· tasks" not in output  # Same as default: nothing to add

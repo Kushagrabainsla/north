@@ -7,7 +7,7 @@ import pytest
 
 from config.browser_connection import active_cdp_endpoint
 from config.browser_profiles import BrowserProfile, discover_browser_profiles
-from config.strategy import NorthSettings
+from config.strategy import ModelChoice, NorthSettings
 
 
 def profile(**overrides):
@@ -17,7 +17,7 @@ def profile(**overrides):
 def test_profiles_and_setup_roundtrip_preserve_existing_settings(tmp_path):
     settings = NorthSettings(tmp_path / "settings.json")
     settings.set_timezone("America/Los_Angeles")
-    settings.set_routing(model="provider:model")
+    settings.set_default_model(ModelChoice(model="provider:model"))
     settings.set_browser_profiles([profile()])
     settings.set_setup_progress({"status": "in_progress", "step": 2})
     reloaded = NorthSettings(tmp_path / "settings.json")
@@ -25,7 +25,7 @@ def test_profiles_and_setup_roundtrip_preserve_existing_settings(tmp_path):
     assert reloaded.setup_progress == {"status": "in_progress", "step": 2}
     assert reloaded.timezone_configured
     assert reloaded.timezone == "America/Los_Angeles"
-    assert reloaded.routing_model == "provider:model"
+    assert reloaded.default_model.model == "provider:model"
 
 
 def test_duplicate_ids_are_rejected_atomically(tmp_path):

@@ -75,8 +75,7 @@ from inference.provider_health import ProviderHealthTracker
 from inference.providers.local_embeddings import PROVIDER_NAME as LOCAL_EMBEDDINGS
 from inference.rate_limit_status import _PAYLOAD_TOO_LARGE_SECS, RateLimitStatusStore
 from inference.routing.availability import AvailabilityView, EntitlementLedger
-from inference.routing.chain import Requirements
-from inference.routing.parts import DEFAULT_PART_PROFILES, Order, parse_profiles
+from inference.routing.parts import kind_of, parse_profiles
 from inference.routing.router import ChainRouter, requirements_from
 from utils.text import extract_json
 
@@ -279,19 +278,21 @@ class ModelDispatcher(InferenceRouter):
             pinned=self._pinned_model,
         )
 
-    def _power_mode(self) -> str | None:
-        """The user's current power setting, read live so a change needs no restart.
+    def _power_mode(self, component: str) -> str | None:
+        """The power for *component*'s kind of work, read live so a change needs no restart.
 
-        Meaningless under manual routing - a chain of one has nothing to order -
-        so it is not even offered there.
+        Meaningless under a chosen model - a chain of one has nothing to order.
         """
-        if self._north_settings is None or self._north_settings.pinned_model:
+        if self._north_settings is None:
             return None
-        return self._north_settings.power.value
+        choice = self._north_settings.model_for(kind_of(component))
+        return choice.power.value if choice.auto else None
 
-    def _pinned_model(self) -> str:
-        """The model manual routing pins every call to, or "" when north is choosing."""
-        return self._north_settings.pinned_model if self._north_settings is not None else ""
+    def _pinned_model(self, component: str) -> str:
+        """The model the user chose for *component*'s kind of work, or "" when north is choosing."""
+        if self._north_settings is None:
+            return ""
+        return self._north_settings.model_for(kind_of(component)).model
 
     # ---- chain routing support ----
 
@@ -374,63 +375,6 @@ class ModelDispatcher(InferenceRouter):
                 "Model routing is not ready - the model catalog has not loaded yet. Retry shortly."
             )
         return self._chain_router
-
-    def part_chains(self, limit: int = 6) -> list[dict]:
-        """For each part of a task, the models north would try, in order.
-
-        This is what actually decides a model, and until now nothing showed it.
-        The System page displayed "model pools" - capability buckets recomputed
-        for that panel alone, left over from the pool router that was deleted.
-        Grouping is not selection: the chain ranks *per part*, on the axis that
-        part is ranked by, and walks in order.
-
-        Read from the live catalog, so it reflects the routing mode, the power
-        dial and any pinned model at the moment it is asked - the same inputs a
-        real call would get. Requirements a call derives from itself (its tools,
-        its prompt size) are not applied here; those narrow the chain further at
-        call time.
-        """
-        try:
-            chain_router = self._chain()
-        except RoutingNotReadyError:
-            return []
-
-        parts: list[dict] = []
-        for name in sorted(DEFAULT_PART_PROFILES):
-            try:
-                candidates, profile = chain_router.chain_for(name, Requirements())
-            except Exception:
-                logger.debug("part_chains: could not build a chain for %r", name, exc_info=True)
-                continue
-            parts.append(
-                {
-                    "part": name,
-                    "requires": sorted(profile.requires),
-                    "order_by": profile.order_by if profile.ranks_by_score else Order.CHEAPEST,
-                    "min_context": profile.min_context,
-                    "eligible": len(candidates),
-                    "models": [self._candidate_view(candidate) for candidate in candidates[:limit]],
-                }
-            )
-        return parts
-
-    def _candidate_view(self, candidate: Any) -> dict:
-        """One rung of a chain: what it is, and whether north could call it now."""
-        reasons = []
-        if self._availability is not None:
-            reasons = [self._availability.skip_reason(endpoint) for endpoint in candidate.endpoints]
-        callable_now = any(reason is None for reason in reasons) if reasons else True
-        return {
-            "model": candidate.canonical_id,
-            "score": round(float(candidate.score), 4),
-            "price": candidate.price if candidate.price != float("inf") else None,
-            "providers": sorted({endpoint.provider for endpoint in candidate.endpoints}),
-            "available": callable_now,
-            # Why it cannot be called, when nothing can serve it. The first
-            # reason is enough: they are all the same shape and the point is
-            # that this rung is being skipped.
-            "skipped_because": "" if callable_now else next((r for r in reasons if r), ""),
-        }
 
     def routing_decisions(self, *, task_id: str | None = None, part: str | None = None, limit: int = 50) -> list[dict]:
         """Recent routing decisions - "why did the coder run on a free model?"."""

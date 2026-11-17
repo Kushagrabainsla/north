@@ -62,6 +62,16 @@
 .kit-field textarea { min-height: 96px; resize: vertical; line-height: 1.6; }
 .kit-field input[type=range] { width: 100%; accent-color: var(--accent); }
 .kit-search input:focus, .kit-field input:focus, .kit-field select:focus, .kit-field textarea:focus { outline: none; border-color: var(--accent); }
+/* A select draws the kit's chevron, not the browser's own arrow. On the control, not the select's
+   background, so a page that sets a select's background keeps it. */
+.kit-field select { appearance: none; -webkit-appearance: none; padding-right: 32px; cursor: pointer; text-overflow: ellipsis; }
+.kit-field select:disabled { cursor: default; opacity: .6; }
+.kit-field-control:has(> select) { position: relative; }
+.kit-field-control:has(> select)::after {
+  content: ""; position: absolute; top: 50%; right: 13px; width: 6px; height: 6px; pointer-events: none;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: translateY(-70%) rotate(45deg);
+}
+.kit-field-control:has(> select:focus)::after { border-color: var(--accent); }
 
 /* ── Section header ── */
 .kit-section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }

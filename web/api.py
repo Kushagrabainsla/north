@@ -827,14 +827,8 @@ async def system_overview() -> dict[str, Any]:
         # cannot install for you, so the page says which of the three states it
         # is in rather than leaving the gap to be found mid-task.
         "browser": dict(zip(("state", "detail"), browser_availability(), strict=True)),
-        "settings": {
-            "power": settings.power.value,
-            "autonomy": settings.autonomy.value,
-            "routing": settings.routing_mode.value,
-            # The model actually in force, so the page never reports a pin that
-            # a switch back to auto has already released.
-            "model": settings.pinned_model,
-        },
+        # Models and power are on the Settings page only (#80): a second copy here disagreed with it.
+        "settings": {"autonomy": settings.autonomy.value},
         "bootstrap": {
             "status": "complete" if bootstrapped else ("in_progress" if progress else "not_started"),
             "completed": completed,
@@ -1466,11 +1460,8 @@ async def dashboard() -> dict[str, Any]:
     return {
         "system": {
             "status": "online",
-            "power": settings.power.value,
+            # Models and power are on the Settings page only (#80).
             "autonomy": settings.autonomy.value,
-            # Under manual routing the pinned model decides and power is not in use.
-            "routing": settings.routing_mode.value,
-            "model": settings.pinned_model,
         },
         # The schedules that run, built-ins included, as the Flows page counts them: the tile counted only
         # yours and read "0 scheduled" beside two built-ins under Next up.

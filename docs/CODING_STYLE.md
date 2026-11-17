@@ -462,7 +462,7 @@ Two consequences worth keeping:
 
 - **Ask**: read-only runs; every mutating action asks.
 - **Safe** (was `auto`): read-only, safe mutating actions and exact replays of the user's past answers run; everything else asks.
-- **Autonomous**: never asks; a model given the user's memory as context always gives the answer that best fits the user. It uses the pinned model under manual routing and its own routing part under auto routing. The deterministic tiers (read-only, north's notes, the safe list, exact replays) decide first; the model decides the rest. Only if the model fails (no model, an error, an unreadable reply) does a card wait for the user.
+- **Autonomous**: never asks; a model given the user's memory as context always gives the answer that best fits the user. It follows the Approvals row of the Models panel. The deterministic tiers (read-only, north's notes, the safe list, exact replays) decide first; the model decides the rest. Only if the model fails (no model, an error, an unreadable reply) does a card wait for the user.
   Autonomous decides from memory only: an action that leaves the sandbox or the workspace (a push, a new host) is allowed only when a fact the user stated covers it. With no covering fact the model abstains and a card waits - it never guesses yes. Facts written by a worker, a repo or a tool never authorize anything.
 - **YOLO**: never asks; every approval is yes and every question gets the affirmative answer.
 
@@ -1547,13 +1547,13 @@ north_settings.set_strategy(StrategyMode.ECO)
 
 ### 17.3 Inference Strategy
 
-A request names its part through `component`; the router builds that part's chain from its profile (`inference/routing/parts.py`) and what the request needs. There is no per-call priority. `ModelDispatcher` reads the power dial at call time and applies it to the part's ordering:
+A request names its part through `component`; the router builds that part's chain from its profile (`inference/routing/parts.py`) and what the request needs. There is no per-call priority. `ModelDispatcher` reads the row for the part's kind of work (`kind_of`) at call time. A chosen model is the only one called. An Auto row's power is applied to the part's ordering:
 
 - `eco` - every part cheapest-first, keeping its quality floor
 - `cruise` - each part's own profile (default)
 - `sport` - every part ordered on quality
 
-Changing strategy takes effect on the next inference call. No restart required. Under manual routing the pinned model answers every call.
+A change takes effect on the next inference call. No restart required. A new part that is not your task's own work is added to `kind_of`.
 
 ### 17.5 Never Read os.environ Directly
 

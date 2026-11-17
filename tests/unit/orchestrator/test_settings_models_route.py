@@ -1,4 +1,4 @@
-"""The settings endpoint the web page drives for the routing dial."""
+"""The settings endpoint the web page drives for the Models panel (#80)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 import orchestrator.api.settings as api
-from config.strategy import NorthSettings, RoutingMode
+from config.strategy import ModelChoice, NorthSettings, StrategyMode, WorkKind
 from orchestrator.api_context import ApiServices, bind_services
 
 
@@ -20,53 +20,66 @@ async def update(**body):
 
 
 @pytest.mark.asyncio
-async def test_routing_is_reported_with_the_other_dials(settings) -> None:
+async def test_the_panel_lists_the_default_row_and_every_kind(settings) -> None:
     with bind_services(ApiServices(north_settings=settings)):
         out = await api.get_settings()
-    assert out.routing == "auto" and out.model == ""
+
+    assert out.models.default == api.ModelRow(model="", power="cruise")
+    assert [row.kind for row in out.models.kinds] == ["tasks", "checks", "approvals", "background"]
+    assert [row.label for row in out.models.kinds] == ["Your tasks", "Checks", "Approvals", "Background"]
+    assert all(row.choice is None for row in out.models.kinds)  # "Same as default"
 
 
 @pytest.mark.asyncio
-async def test_a_model_can_be_pinned(settings) -> None:
+async def test_rows_are_changed_by_name(settings) -> None:
     with bind_services(ApiServices(north_settings=settings)):
-        out = await update(routing="manual", model="groq:qwen3-32b")
+        out = await update(
+            models={
+                "default": {"model": "groq:qwen3-32b"},
+                "background": {"model": "", "power": "eco"},
+            }
+        )
 
-    assert out.routing == "manual" and out.model == "groq:qwen3-32b"
-    assert settings.pinned_model == "groq:qwen3-32b"
+    assert out.models.default.model == "groq:qwen3-32b"
+    background = next(row for row in out.models.kinds if row.kind == "background")
+    assert background.choice == api.ModelRow(model="", power="eco")
+    assert settings.model_for(WorkKind.TASKS).model == "groq:qwen3-32b"
+    assert settings.model_for(WorkKind.BACKGROUND) == ModelChoice(power=StrategyMode.ECO)
 
 
 @pytest.mark.asyncio
-async def test_manual_without_a_model_is_refused(settings) -> None:
-    """Otherwise the refusal arrives on the user's next task instead of here."""
+async def test_a_kind_sent_as_null_is_same_as_default_again(settings) -> None:
+    settings.set_kind_model(WorkKind.CHECKS, ModelChoice(power=StrategyMode.SPORT))
+    with bind_services(ApiServices(north_settings=settings)):
+        await update(models={"checks": None})
+    assert settings.kind_model(WorkKind.CHECKS) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "models",
+    [
+        {"default": None},
+        {"sideways": {"model": ""}},
+        {"checks": {"model": "", "power": "warp"}},
+        # Checked before anything is saved: the good row is not applied either.
+        {"tasks": {"model": "groq:qwen3-32b"}, "nonsense": None},
+    ],
+)
+async def test_a_bad_row_is_a_422_and_changes_nothing(settings, models) -> None:
     with bind_services(ApiServices(north_settings=settings)), pytest.raises(HTTPException) as exc:
-        await update(routing="manual")
+        await update(models=models)
     assert exc.value.status_code == 422
-    assert settings.routing_mode is RoutingMode.AUTO
+    assert settings.default_model == ModelChoice()
+    assert all(settings.kind_model(kind) is None for kind in WorkKind)
 
 
 @pytest.mark.asyncio
-async def test_manual_is_allowed_when_a_model_was_chosen_earlier(settings) -> None:
-    settings.set_routing(model="groq:qwen3-32b")
+async def test_power_sets_the_default_row(settings) -> None:
+    """What `/power eco` and "switch to eco mode" send."""
     with bind_services(ApiServices(north_settings=settings)):
-        out = await update(routing="manual")
-    assert out.routing == "manual" and settings.pinned_model == "groq:qwen3-32b"
-
-
-@pytest.mark.asyncio
-async def test_an_unknown_mode_is_a_422(settings) -> None:
-    with bind_services(ApiServices(north_settings=settings)), pytest.raises(HTTPException) as exc:
-        await update(routing="sideways")
-    assert exc.value.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_switching_to_auto_keeps_the_model_for_next_time(settings) -> None:
-    with bind_services(ApiServices(north_settings=settings)):
-        await update(routing="manual", model="groq:qwen3-32b")
-        out = await update(routing="auto")
-
-    assert out.routing == "auto" and out.model == "groq:qwen3-32b"
-    assert settings.pinned_model == ""
+        out = await update(power="eco")
+    assert out.power == "eco" and out.models.default.power == "eco"
 
 
 @pytest.mark.asyncio

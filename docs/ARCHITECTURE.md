@@ -974,11 +974,13 @@ Each provider exposes a `refresh()` method that fetches its live model list; `Mo
 
 **Error-triggered refresh:** on a retryable agent failure, `_maybe_refresh_catalog_background()` in `orchestrator.py` schedules a background refresh, at most once a minute (`POOL_REFRESH_COOLDOWN` in `orchestrator/constants.py`), so a 404 from a retired model ID is followed by current IDs without hammering the providers' `/models` endpoints.
 
-`ModelDispatcher.models_by_capability()` groups the registry by what a model can do (reasoning, tools, vision, embeddings, ...) for the System page and `north models`. It is display only; routing never reads it.
+`ModelDispatcher.models_by_capability()` groups the registry by what a model can do (reasoning, tools, vision, embeddings, ...) for the model lists of the Settings page's Models panel and `north models`. It is display only; routing never reads it.
 
 ### 8.3 Inference Strategy
 
-The power dial (eco, cruise, sport) reshapes each part's chain ordering and never its requirements. Set via natural language ("switch to eco mode") or `POST /orchestrator/settings`; persisted to `~/.north/settings.json`; default **cruise**.
+The Models panel on the Settings page is the one place models and power are set (#80). It has a Default row and a row for each kind of work (`WorkKind` in `config/strategy.py`): your tasks, checks, approvals and background. `kind_of` in `inference/routing/parts.py` says which kind each part is; a part named nowhere is your tasks. A kind with no row of its own is "Same as default". A row is Auto with a power, or a model you chose. `POST /orchestrator/settings` changes rows by name (`{"models": {"background": {"model": "", "power": "eco"}}}`); they are persisted to `~/.north/settings.json`. "Switch to eco mode" and `/power` set the Default row's power.
+
+Power (eco, cruise, sport) reshapes an Auto row's chain ordering and never its requirements; default **cruise**.
 
 ```
 eco     every part cheapest-first, keeping its quality floor
@@ -986,7 +988,7 @@ cruise  each part's own profile (default)
 sport   every part ordered on quality; cheapest-first profiles are dropped
 ```
 
-A part that needs tools still needs tools at every setting. Under manual routing there is nothing to order: the one pinned model answers. The current strategy is shown in the TUI status bar.
+A part that needs tools still needs tools at every setting. Under a chosen model there is nothing to order: that model is the only one called, and if it fails the call stops. The Default row's power is shown in the TUI status bar.
 
 ### 8.4 Parts, not priorities
 
@@ -1169,7 +1171,7 @@ match the request, your profile, `judgement_rules.md` and your past decisions fo
 the same agent, and returns a decision with a one-line reason and the memory
 items it used. Both are stored on the card. Text an agent wrote is fenced as
 untrusted. It routes on its own `approval_decider` part, ranked on intelligence,
-so manual routing uses the pinned model. When it cannot decide (no model, an
+and follows the Approvals row of the Models panel. When it cannot decide (no model, an
 error, an unreadable reply) the card waits for you: the one case autonomous
 pauses. Prepared work (tier 4) skips tiers 5 and 6 and goes straight to it,
 because neither reads the fields.

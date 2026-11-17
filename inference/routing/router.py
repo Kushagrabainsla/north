@@ -32,7 +32,7 @@ from inference.failure import Failure, OutageCorroboration, Scope, classify, inv
 from inference.model_policy import model_matches
 from inference.routing.availability import AvailabilityView
 from inference.routing.chain import Candidate, ChainWalk, Requirements, context_of, narrow
-from inference.routing.parts import PartProfile, profile_for, with_power
+from inference.routing.parts import PartProfile, kind_of, profile_for, with_power
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +74,8 @@ class ChainRouter:
         on_latency: LatencySink | None = None,
         demoted: Callable[[str], bool] | None = None,
         slow: Callable[[str], bool] | None = None,
-        power: Callable[[], str | None] | None = None,
-        pinned: Callable[[], str] | None = None,
+        power: Callable[[str], str | None] | None = None,
+        pinned: Callable[[str], str] | None = None,
     ) -> None:
         self._catalog = catalog
         self._decisions = decisions
@@ -87,8 +87,9 @@ class ChainRouter:
         self._on_latency = on_latency
         self._demoted = demoted
         self._slow = slow
-        # Manual routing: the one model the user chose, read live so switching
-        # back to auto takes effect on the next call rather than the next restart.
+        # The model the user chose for a part's kind of work, and the power for one left
+        # on Auto. Both take the part and are read live, so a change in Settings takes
+        # effect on the next call rather than the next restart.
         self._pinned = pinned
         self._power = power
 
@@ -120,8 +121,8 @@ class ChainRouter:
         different fix, and is never reported as a context overflow.
         """
         profile = profile_for(component, self._profiles)
-        profile = with_power(profile, self._power() if self._power else None)
-        full = self._only_pinned(self._catalog.chain_for(profile, self._demoted))
+        profile = with_power(profile, self._power(component) if self._power else None)
+        full = self._only_pinned(component, self._catalog.chain_for(profile, self._demoted))
         eligible = narrow(
             full,
             Requirements(capabilities=requirements.capabilities, exclude=requirements.exclude),
@@ -155,8 +156,8 @@ class ChainRouter:
             raise ContextTooLargeError(requirements.min_context, largest)
         return self._quickest_first(narrow(fits_context, requirements)), profile
 
-    def _only_pinned(self, chain: list[Candidate]) -> list[Candidate]:
-        """Under manual routing, reduce the chain to the one model that was named.
+    def _only_pinned(self, component: str, chain: list[Candidate]) -> list[Candidate]:
+        """When the user chose a model for this part's kind of work, reduce the chain to it.
 
         A *hard* pin, unlike ``PartProfile.pinned_model``, which moves a model to
         the head and keeps the rest behind it. Falling back is right when north is
@@ -178,7 +179,7 @@ class ChainRouter:
         fails as a context overflow, which is the true reason, rather than being
         reported as an unavailable pin.
         """
-        pin = (self._pinned() if self._pinned else "") or ""
+        pin = (self._pinned(component) if self._pinned else "") or ""
         if not pin:
             return chain
         kept: list[Candidate] = []
@@ -189,8 +190,8 @@ class ChainRouter:
             kept.append(candidate if matching == candidate.endpoints else replace(candidate, endpoints=matching))
         if not kept:
             raise PinnedModelUnavailableError(
-                f"Manual routing is pinned to {pin!r}, which nothing in the model catalog matches. "
-                "Pick another model, or switch routing back to auto."
+                f"Settings names {pin!r} for {kind_of(component).value}, which nothing in the model catalog "
+                "matches. Choose another model in Settings > Models, or set that row to Auto."
             )
         return kept
 

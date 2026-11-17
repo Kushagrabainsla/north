@@ -164,9 +164,6 @@ class CostTracker(InferenceRouter):
     def models_by_capability(self) -> dict[str, ModelGroup]:
         return self._inner.models_by_capability()
 
-    def part_chains(self, limit: int = 6) -> list[dict]:
-        return self._inner.part_chains(limit)
-
     def get_context_window(self, model_id: str) -> int:
         return self._inner.get_context_window(model_id)
 

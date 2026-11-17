@@ -11,7 +11,14 @@ vi.mock("./hooks", async (importOriginal) => ({
   ...await importOriginal<typeof import("./hooks")>(),
   useResource: (path: string) => ({
     data: path === "/web/api/browser/profiles" ? { profiles: [], tests: {} } : {
-      routing: "auto", power: "cruise", autonomy: "safe",
+      power: "cruise", autonomy: "safe",
+      models: {
+        default: { model: "", power: "cruise" },
+        kinds: [
+          { kind: "tasks", label: "Your tasks", description: "The work you ask north to do.", choice: null },
+          { kind: "background", label: "Background", description: "Small jobs.", choice: { model: "", power: "eco" } },
+        ],
+      },
       autonomy_options: [{ value: "safe", description: "Review actions" }],
       timezone: "UTC", timezone_options: ["UTC"],
     },
@@ -46,7 +53,7 @@ describe("browser profile presentation", () => {
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(DialogProvider, null, createElement(SettingsPage))));
     const titles = [...markup.matchAll(/<h2>(.*?)<\/h2>/g)].map(match => match[1]);
     // Panel titles, the Connections section and, inside their panels, the Telegram and Secrets forms.
-    expect(titles).toEqual(["Model routing", "Power", "Autonomy", "Time zone", "Connections", "Providers", "Coding agents", "Browser profiles", "Telegram", "Connect a bot", "Secrets", "Add a secret"]);
+    expect(titles).toEqual(["Models", "Autonomy", "Time zone", "Connections", "Providers", "Coding agents", "Browser profiles", "Telegram", "Connect a bot", "Secrets", "Add a secret"]);
   });
 
   it("uses the kit's secondary button and a helpful empty state", () => {

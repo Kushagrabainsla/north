@@ -3,8 +3,7 @@ import { api, post } from "../api";
 import { HealthIndicator, PageHeader, Panel, unpricedNote, YoloBadge } from "../components";
 import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
-import { Button, EntityTable, ListRow, Note, Notice, ResourceView, Stat, StatGrid, Status } from "../kit";
-import type { ChainModel, PartChain } from "./Settings";
+import { Button, EntityTable, ListRow, Notice, ResourceView, Stat, StatGrid, Status } from "../kit";
 
 type LastUpdate = { state: "running" | "updated" | "failed" | "cancelled"; detail: string; at: string };
 export type UpdateStatus = { version: string; commit: string | null; last: LastUpdate | null };
@@ -19,15 +18,6 @@ export function lastUpdateText(last: LastUpdate | null): string {
     failed: `failed ${last.at}`,
     cancelled: `cancelled ${last.at}`,
   }[last.state];
-}
-
-/** The facts about one rung of a model chain: who serves it, its price, its score. */
-export function chainModelFacts(model: ChainModel): string[] {
-  return [
-    model.providers.join(", "),
-    model.price ? `$${model.price.toFixed(6)}/tok` : "free",
-    `score ${model.score.toFixed(3)}`,
-  ];
 }
 
 // An install can take a few minutes on a cold cache; past this, something is wrong.
@@ -107,11 +97,6 @@ export function SystemPage() {
     "/orchestrator/inference/costs?period=month",
     15000,
   );
-  const chains = useResource<PartChain[]>(
-    "/orchestrator/inference/chains",
-    20000,
-  );
-  const [expandedPool, setExpandedPool] = useState<string | null>(null);
   const totalCost = Number(
     costs.data?.total_cost_usd ?? metrics.data?.total_cost_usd ?? 0,
   );
@@ -124,7 +109,7 @@ export function SystemPage() {
     <div className="page">
       <PageHeader
         title="System"
-        subtitle="Health, model choice and cost."
+        subtitle="Health, cost and what north runs on."
       />
       <div className="system-hero">
         <HealthIndicator variant="hero" />
@@ -135,41 +120,7 @@ export function SystemPage() {
         <Stat label="Output tokens" value={Number(metrics.data?.total_tokens_out || 0).toLocaleString()} />
         <Stat label="Model cost · month" value={`$${totalCost.toFixed(4)}${unpricedNote(unpriced)}`} />
       </StatGrid>
-      {/* What actually picks a model. This panel used to show "model pools" -
-        capability buckets recomputed for the panel alone, left over from the
-        router that was deleted. Grouping is not selection: routing ranks a
-        chain per part of a task and walks it in order, which is what this is. */}
-      <Panel title="How a model is picked" label="Live chain per part">
-        <ResourceView resource={chains} isEmpty={(data) => !data.length}
-          empty="Routing is not ready - the model catalog has not loaded yet.">
-          {(data) => <div>{data.map((part) => {
-            const open = expandedPool === part.part;
-            return (
-              <ListRow
-                key={part.part}
-                title={part.part}
-                description={part.models[0] ? `Uses ${part.models[0].model}` : "No model qualifies"}
-                onOpen={() => setExpandedPool(open ? null : part.part)}
-              >
-                {open && <Note>{`${part.eligible} eligible · ranked by ${part.order_by.replace(/_/g, " ")}${part.requires.length ? ` · needs ${part.requires.join(", ")}` : ""}`}</Note>}
-                {open && (part.models.length
-                  ? <div className="model-list">{part.models.map((model, index) => (
-                    // Why north would walk past this rung right now.
-                    <ListRow
-                      key={model.model}
-                      title={`${index + 1}. ${model.model}`}
-                      muted={!model.available}
-                      description={model.available ? undefined : `Skipped now: ${model.skipped_because}`}
-                      meta={chainModelFacts(model)}
-                      status={!model.available && <Status label="Skipped" tone="warn" />}
-                    />
-                  ))}</div>
-                  : <Notice tone="warning">Nothing qualifies for this part right now.</Notice>)}
-              </ListRow>
-            );
-          })}</div>}
-        </ResourceView>
-      </Panel>
+      {/* Which models north uses, and the power, are on the Settings page only (#80). */}
       <div className="two-column">
         <Panel title="Cost by model" label="Month to date">
           <ResourceView resource={costs}>
@@ -184,14 +135,6 @@ export function SystemPage() {
           </ResourceView>
         </Panel>
         <Panel title="Runtime configuration">
-          <ListRow title="Routing" description={settings?.routing || "–"} />
-          {/* Only shown when it is in force: a remembered pin that auto has released
-            would read here as the model north is using, which it is not. */}
-          {settings?.model && <ListRow title="Pinned model" description={settings.model} />}
-          <ListRow
-            title="Power"
-            description={settings?.routing === "manual" ? "not in use" : settings?.power || "–"}
-          />
           <ListRow title="Autonomy" description={settings?.autonomy || "–"} badge={<YoloBadge mode={settings?.autonomy} />} />
           {/* Depends on a binary north cannot install for you, so the row carries
             what to do about it rather than only that it is missing. */}

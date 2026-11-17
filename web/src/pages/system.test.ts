@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { endpointLines, rollUp } from "./routing";
-import { chainModelFacts, lastUpdateText } from "./System";
+import { lastUpdateText } from "./System";
 
 describe("how the last update went", () => {
   it("says so when north was never updated from here", () => {
@@ -13,14 +13,6 @@ describe("how the last update went", () => {
     expect(lastUpdateText({ state: "failed", detail: "Install failed", at })).toBe("failed Nov 9, 8:17 PM");
     expect(lastUpdateText({ state: "running", detail: "", at })).toBe("updating since Nov 9, 8:17 PM");
     expect(lastUpdateText({ state: "cancelled", detail: "", at })).toBe("cancelled Nov 9, 8:17 PM");
-  });
-});
-
-describe("a model chain rung", () => {
-  it("names who serves it, its price and its score", () => {
-    const model = { model: "m", score: 0.91234, price: 0.000002, providers: ["openai", "azure"], available: true, skipped_because: "" };
-    expect(chainModelFacts(model)).toEqual(["openai, azure", "$0.000002/tok", "score 0.912"]);
-    expect(chainModelFacts({ ...model, price: null })[1]).toBe("free");
   });
 });
 

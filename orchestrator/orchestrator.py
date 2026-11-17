@@ -779,7 +779,9 @@ class Orchestrator:
             return False
 
         self._north_settings.set_power(mode)
-        msg = f"Strategy set to **{mode.value}**. {describe(mode)}"
+        msg = f"Default power set to **{mode.value}**. {describe(mode)}"
+        if not self._north_settings.default_model.auto:
+            msg += " The default row uses a chosen model, so this is used only when that row is set to Auto."
         await self._journal.record(task_id, "agent_completed", agent="orchestrator", output=msg, event="task_completed")
         await self._stream_manager.emit_done(task_id)
         return True

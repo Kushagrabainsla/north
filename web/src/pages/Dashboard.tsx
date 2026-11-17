@@ -5,12 +5,9 @@ import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
 import { SetupReminder } from "./Setup";
 
-/** What decides the model: the pinned one under manual routing, where power is not in use, else power. */
+/** The approval mode. Models and power are on the Settings page only (#80): a copy here disagreed with it. */
 export function dialsLine(system: DashboardData["system"]): string {
-  // The model's own name; the provider prefix crowded the health label out of the tile.
-  const pinned = system.routing === "manual" && system.model ? system.model.split(":").pop() : "";
-  const dial = pinned ? `Model ${pinned} (pinned)` : `Power ${system.power}`;
-  return `${dial} · ${system.autonomy}`;
+  return `Autonomy ${system.autonomy}`;
 }
 
 /** What memory holds, counted. The tile said "4 context documents" over an empty memory. */

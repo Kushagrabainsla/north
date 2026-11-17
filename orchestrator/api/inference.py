@@ -51,40 +51,6 @@ async def inference_models() -> dict[str, ModelPoolOut]:
     return {name: ModelPoolOut(name=pool.name, models=pool.models) for name, pool in pools.items()}
 
 
-class ChainModelOut(BaseModel):
-    """One rung of a chain, and whether north could call it right now."""
-
-    model: str
-    score: float
-    price: float | None = None
-    providers: list[str] = []
-    available: bool = True
-    skipped_because: str = ""
-
-
-class PartChainOut(BaseModel):
-    """What one part of a task requires, and the models it would try in order."""
-
-    part: str
-    requires: list[str] = []
-    order_by: str
-    min_context: int = 0
-    eligible: int
-    models: list[ChainModelOut] = []
-
-
-@router.get("/inference/chains", response_model=list[PartChainOut])
-async def inference_chains(limit: int = 6) -> list[PartChainOut]:
-    """How north actually picks a model: one ranked chain per part of a task.
-
-    The pools endpoint above is a catalog view that selects nothing - a leftover
-    grouping from the router that was deleted. This is the live thing: the
-    chain, in walk order, for each part, honouring the routing mode, the power
-    dial and any pinned model at the moment it is asked.
-    """
-    return [PartChainOut(**part) for part in _get_inference_router().part_chains(limit)]
-
-
 class ProviderModelsOut(BaseModel):
     """Every model one provider serves, for choosing one by hand.
 
@@ -99,7 +65,7 @@ class ProviderModelsOut(BaseModel):
 
 @router.get("/inference/catalog", response_model=list[ProviderModelsOut])
 async def inference_catalog() -> list[ProviderModelsOut]:
-    """Reachable models, grouped by provider - what manual routing picks from."""
+    """Reachable models, grouped by provider - what a row of the Models panel picks from."""
     by_provider: dict[str, set[str]] = {}
     for pool in _get_inference_router().models_by_capability().values():
         for entry in pool.models:

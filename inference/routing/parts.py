@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from config.strategy import WorkKind
+
 # Capability requirement names. These are the ModelFacts boolean fields, minus
 # the "supports_" prefix, so a profile reads as prose.
 TOOLS = "tools"
@@ -145,6 +147,39 @@ def profile_for(component: str, overrides: dict[str, PartProfile] | None = None)
         # parent's policy rather than falling all the way back.
         return replace(table[base], part=label)
     return replace(FALLBACK_PROFILE, part=label or "(unknown)")
+
+
+# Which row of the Settings page's Models panel each part follows (#80). A part named
+# nowhere is your task's own work - north, or an agent you made - so a new part gets
+# the model you chose for your tasks until it is added here.
+_KINDS: dict[str, WorkKind] = {
+    "critic": WorkKind.CHECKS,
+    "north_star_checker": WorkKind.CHECKS,
+    "approval_decider": WorkKind.APPROVALS,
+    **dict.fromkeys(
+        (
+            *_BACKGROUND_PARTS,
+            "fact_supersede",
+            "fact_glossary",
+            "fact_dates",
+            "context_injector",
+            "bootstrap",
+        ),
+        WorkKind.BACKGROUND,
+    ),
+}
+# Summaries that run inside another part's loop are background work, whoever runs them.
+_BACKGROUND_SUFFIXES = (COMPACT_SUFFIX, "tool-summary")
+
+
+def kind_of(component: str) -> WorkKind:
+    """The kind of work a ``component`` label is, for the model the user chose for it."""
+    label = (component or "").strip()
+    _, nested, suffix = label.rpartition(NESTED_SEPARATOR)
+    if nested and suffix in _BACKGROUND_SUFFIXES:
+        return WorkKind.BACKGROUND
+    # A nested part ("extraction_pipeline:dedup") is the kind of the part it runs inside.
+    return _KINDS.get(label.split(NESTED_SEPARATOR, 1)[0], WorkKind.TASKS)
 
 
 def with_power(profile: PartProfile, power: str | None) -> PartProfile:

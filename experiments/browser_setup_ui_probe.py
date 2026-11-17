@@ -241,11 +241,12 @@ def main():
         # The existing Settings dials keep their order. Browser profiles is last
         # and spans both desktop columns instead of squeezing them into one.
         click('.header-actions a[href="#/settings"]')
-        run("wait", "text", "Model routing")
+        run("wait", "text", "Models")
         headings = evaluate(
             "[...document.querySelectorAll('.settings-grid > .panel > header h2')].map(e => e.textContent)"
         )
-        assert headings == ["Model routing", "Power", "Autonomy", "Time zone", "Browser profiles"], headings
+        assert headings[:3] == ["Models", "Autonomy", "Time zone"], headings
+        assert "Browser profiles" in headings, headings
         for width in (1440, 820, 390):
             layouts[f"settings-{width}"] = asyncio.run(check_layout(width, f"settings-{width}"))
             spans_grid = evaluate(

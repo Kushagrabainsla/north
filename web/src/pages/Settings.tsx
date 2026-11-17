@@ -4,41 +4,51 @@ import { BrowserProfiles } from "../browserProfiles";
 import { CodingAgents, ProviderConnections, Secrets, TelegramConnection } from "../connections";
 import { configureDisplayTimezone, PageHeader, Panel, YoloBadge } from "../components";
 import { useResource } from "../hooks";
-import { Button, Empty, Field, Loading, Notice, SectionHeader, Tabs, Note } from "../kit";
-
-export interface ChainModel {
-  model: string;
-  score: number;
-  price: number | null;
-  providers: string[];
-  available: boolean;
-  skipped_because: string;
-}
-/** One part of a task, and the models north would try for it, in order. */
-export interface PartChain {
-  part: string;
-  requires: string[];
-  order_by: string;
-  min_context: number;
-  eligible: number;
-  models: ChainModel[];
-}
+import { Button, Empty, Field, ListRow, Loading, Notice, SectionHeader, Tabs, Note } from "../kit";
 
 export interface ModeOption {
   value: string;
   description: string;
+}
+/** One row of the Models panel: a model as "provider:model_id", or "" for Auto ranked by power. */
+export interface ModelRow {
+  model: string;
+  power: string;
+}
+/** A kind of work, and its own row - null when it is "Same as default". */
+export interface KindRow {
+  kind: string;
+  label: string;
+  description: string;
+  choice: ModelRow | null;
+}
+export interface ModelsData {
+  default: ModelRow;
+  kinds: KindRow[];
 }
 export interface SettingsData {
   power: string;
   autonomy: string;
   // The approval modes, served by the API so every surface lists the same ones.
   autonomy_options: ModeOption[];
-  routing: string;
-  model: string;
+  models: ModelsData;
   timezone: string;
   timezone_options: string[];
   local_time: string;
 }
+export type SettingsUpdate = Partial<Omit<SettingsData, "models">> & {
+  models?: Record<string, ModelRow | null>;
+};
+
+export type RowMode = "same" | "auto" | "model";
+
+export const rowMode = (choice: ModelRow | null): RowMode =>
+  !choice ? "same" : choice.model ? "model" : "auto";
+
+/** What a row runs on, in a few words: the model's own name, or Auto and its power. */
+export const describeChoice = (choice: ModelRow): string =>
+  // Split once: a model id may itself contain a colon.
+  choice.model ? choice.model.slice(choice.model.indexOf(":") + 1) : `Auto, ${choice.power}`;
 export interface ProviderModels {
   provider: string;
   models: string[];
@@ -106,6 +116,8 @@ export function ModelPicker({
           disabled={busy || !models.length}
           onChange={(event) => onPick(`${provider}:${event.target.value}`)}
         >
+          {/* With nothing chosen, a placeholder: else a provider with one model offers no change to pick. */}
+          {!chosenModel && <option value="" disabled>Choose a model</option>}
           {(models.includes(chosenModel) || !chosenModel
             ? models
             : [chosenModel, ...models]
@@ -120,11 +132,81 @@ export function ModelPicker({
   );
 }
 
+/** One row of the Models panel. "Choose a model" saves nothing until a model is picked. */
+function ModelRowEditor({
+  label,
+  description,
+  choice,
+  fallback,
+  busy,
+  onSave,
+}: {
+  label: string;
+  description: string;
+  choice: ModelRow | null;
+  // The Default row, which a kind "Same as default" uses. Absent on the Default row itself.
+  fallback?: ModelRow;
+  busy: boolean;
+  onSave: (choice: ModelRow | null) => void;
+}) {
+  const [choosing, setChoosing] = useState(false);
+  const mode = choosing ? "model" : rowMode(choice);
+  const power = choice?.power || "cruise";
+  const pick = (next: RowMode) => {
+    if (busy || next === mode) return;
+    setChoosing(next === "model");
+    if (next === "same") onSave(null);
+    if (next === "auto") onSave({ model: "", power });
+  };
+  return (
+    <ListRow title={label} description={description}>
+      <div className="model-row">
+        <Field label="Uses">
+          <Tabs
+            label={`${label} uses`}
+            value={mode}
+            disabled={busy}
+            onChange={pick}
+            items={[
+              // Short, read after "Uses": they share one line on a phone.
+              ...(fallback ? [{ value: "same" as RowMode, label: "default" }] : []),
+              { value: "auto" as RowMode, label: "auto" },
+              { value: "model" as RowMode, label: "model" },
+            ]}
+          />
+        </Field>
+        {mode === "auto" && (
+          <Field label="Power">
+            <Tabs
+              label={`${label} power`}
+              value={power}
+              disabled={busy}
+              onChange={(value) => onSave({ model: "", power: value })}
+              items={POWER_LEVELS.map((value) => ({ value, label: value }))}
+            />
+          </Field>
+        )}
+      </div>
+      {mode === "same" && fallback && <Note>Same as the Default row: {describeChoice(fallback)}.</Note>}
+      {mode === "model" && (
+        <ModelPicker
+          value={choice?.model || ""}
+          busy={busy}
+          onPick={(spec) => {
+            setChoosing(false);
+            onSave({ model: spec, power });
+          }}
+        />
+      )}
+    </ListRow>
+  );
+}
+
 export function SettingsPage() {
   const resource = useResource<SettingsData>("/orchestrator/settings");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const update = async (body: Partial<SettingsData>) => {
+  const update = async (body: SettingsUpdate) => {
     // A dial is one choice at a time: a second press while the first saves is dropped.
     if (busy) return;
     setBusy(true);
@@ -139,77 +221,52 @@ export function SettingsPage() {
       setBusy(false);
     }
   };
-  const routing = resource.data?.routing || "auto";
   const autonomy = resource.data?.autonomy;
   const autonomyOptions = resource.data?.autonomy_options || [];
   const currentMode = autonomyOptions.find(
     (option) => option.value === autonomy,
   );
-  const manual = routing === "manual";
-  // Manual routing needs a model, and the server refuses the switch without one.
-  // So choosing "manual" with nothing stored opens the picker and waits: the
-  // switch is made by picking a model, which is the decision anyway.
-  const [choosing, setChoosing] = useState(false);
-  const pickRouting = (value: "auto" | "manual") => {
-    if (busy) return;
-    if (value === "auto") {
-      setChoosing(false);
-      void update({ routing: "auto" });
-    } else if (resource.data?.model) void update({ routing: "manual" });
-    else setChoosing(true);
-  };
+  const models = resource.data?.models;
   return (
     <div className="page">
       <PageHeader
         title="Settings"
-        subtitle="How North picks models, asks and connects."
+        subtitle="Which models north uses, how it asks, and what it connects to."
         actions={<Button to="/setup">Setup guide</Button>}
       />
       {error && <Notice tone="error">{error}</Notice>}
       <div className="settings-grid">
-        <Panel title="Model routing">
-          <Tabs
-            label="Who picks the model"
-            value={manual || choosing ? "manual" : "auto"}
-            onChange={pickRouting}
-            items={[{ value: "auto", label: "auto" }, { value: "manual", label: "manual" }]}
-          />
+        {/* The one place models and power are shown and set (#80). */}
+        <Panel title="Models" className="models-panel">
           <Note>
-            {manual
-              ? "One model answers everything. North's ranking is skipped, and a model it cannot reach fails the call rather than falling back."
-              : choosing
-                ? "Pick the model that should answer everything."
-                : "North ranks every model it can reach against what each part of a task needs, and calls them in that order."}
+            Auto: north ranks the models it can reach for each part of the work. Eco tries the cheapest
+            first, cruise the best fit, sport the most capable. A model you choose is the only one
+            called: if it fails, the work stops.
           </Note>
-          {(manual || choosing) && (
-            <ModelPicker
-              value={resource.data?.model || ""}
-              busy={busy}
-              onPick={(spec) => {
-                setChoosing(false);
-                void update({ routing: "manual", model: spec });
-              }}
-            />
-          )}
-        </Panel>
-        {/* Ordering a chain of one is meaningless, so under manual the dial is
-          shown switched off rather than left looking live. */}
-        <Panel
-          title="Power"
-          label={manual ? "not in use" : undefined}
-          className={manual ? "panel-inert" : ""}
-        >
-          <Tabs
-            label="Power"
-            value={resource.data?.power || ""}
-            onChange={(value) => { if (!manual) void update({ power: value }); }}
-            items={POWER_LEVELS.map((value) => ({ value, label: value }))}
-          />
-          <Note>
-            {manual
-              ? "Nothing to order while one model is pinned. Switch routing to auto to use this."
-              : "Choose how aggressively North selects capable models."}
-          </Note>
+          {resource.loading && !models ? (
+            <Loading />
+          ) : models ? (
+            <div>
+              <ModelRowEditor
+                label="Default"
+                description="What every kind of work below uses, unless you change its row."
+                choice={models.default}
+                busy={busy}
+                onSave={(choice) => choice && void update({ models: { default: choice } })}
+              />
+              {models.kinds.map((row) => (
+                <ModelRowEditor
+                  key={row.kind}
+                  label={row.label}
+                  description={row.description}
+                  choice={row.choice}
+                  fallback={models.default}
+                  busy={busy}
+                  onSave={(choice) => void update({ models: { [row.kind]: choice } })}
+                />
+              ))}
+            </div>
+          ) : null}
         </Panel>
         <Panel title="Autonomy">
           <Tabs

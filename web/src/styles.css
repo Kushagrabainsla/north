@@ -108,7 +108,7 @@ a { color: inherit; text-decoration: none; }
 .list-row.compact { padding: 6px 0; }
 .status { display: inline-block; max-width: 100%; font: 500 8px "DM Mono", monospace; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
 .briefing-panel { background: linear-gradient(120deg, rgba(42,35,18,.7), rgba(16,19,22,.95)); }
-.metric span, .muted { color: var(--muted); font-size: 9px; }.model-list { border-top: 1px solid var(--line-soft); padding: 4px 0 8px 10px; max-height: clamp(220px, 34vh, 620px); overflow: auto; }/* Scrolls within the panel instead of running off the bottom of the page: a complete bootstrap lists every document it read, which is ninety-odd rows and several screens of scrolling to get past. */.bootstrap-list { display: flex; flex-direction: column; max-height: clamp(340px, 56vh, 900px); overflow: auto; }.notice { margin-bottom: 12px; padding: 11px 13px; border: 1px solid rgba(181,243,109,.25); background: var(--accent-soft); color: var(--accent); border-radius: 9px; }
+.metric span, .muted { color: var(--muted); font-size: 9px; }/* Scrolls within the panel instead of running off the bottom of the page: a complete bootstrap lists every document it read, which is ninety-odd rows and several screens of scrolling to get past. */.bootstrap-list { display: flex; flex-direction: column; max-height: clamp(340px, 56vh, 900px); overflow: auto; }.notice { margin-bottom: 12px; padding: 11px 13px; border: 1px solid rgba(181,243,109,.25); background: var(--accent-soft); color: var(--accent); border-radius: 9px; }
 .empty { display: grid; place-items: center; text-align: center; }
 .loading, .boot { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 60vh; }
 .boot { flex-direction: column; height: 100vh; }
@@ -158,7 +158,7 @@ a { color: inherit; text-decoration: none; }
 /* Verbose pages */
 .table-list { border: 1px solid var(--line-soft); background: var(--surface); border-radius: 11px; }.table-row > .status, .list-row > .status, .event-row > .status { justify-self: end; align-self: center; text-align: center; min-width: 70px; }
 .artifact-run { margin-top: 22px; }.artifact-run h3 { display: flex; align-items: baseline; gap: 10px; font-size: 11px; font-family: "DM Mono", monospace; color: var(--muted); font-weight: 400; margin: 0 0 8px; }.artifact-run h3 small { font-size: 9px; color: var(--muted); opacity: .7; }
-.two-column, .settings-grid { display: grid; grid-template-columns: 1fr 1fr; }.two-column .panel-content { max-height: clamp(380px, 58vh, 1000px); overflow: auto; }/* The decision is the part being checked, so it carries the colour. */.decision { font-weight: 700; }.memory-editor-grid { display: grid; grid-template-columns: 1fr 1fr; min-width: 0; }.memory-editor-grid > section { min-width: 0; }.memory-editor-grid > section + section { border-left: 1px solid var(--line); }.memory-preview { padding-bottom: 25px; overflow: auto; }.memory-preview .markdown { padding: 25px; }/* Scales with the window instead of sitting at a fixed 615px: on a tall monitor that left most of the screen unused, and on a short one it overflowed. */.document-editor { width: 100%; height: calc(100% - 35px); min-height: clamp(340px, 58vh, 900px); resize: none; border: 0; outline: 0; background: #0d1013; color: #e0e3e5; padding: 25px; font: 11px/1.7 "DM Mono", monospace; }.confidence { display: grid; grid-template-columns: 100px 1fr; align-items: center; gap: 8px; margin: 7px 0; font-size: 8px; }.confidence > i { height: 3px; overflow: hidden; }.confidence b { display: block; height: 100%; background: var(--accent); }.settings-grid .muted { margin: 14px 0 0; line-height: 1.5; }/* A panel whose controls cannot act right now. Dimmed rather than hidden, so   the setting is still findable and its state still legible. */.panel-inert { opacity: .5; }.model-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 14px; }.model-picker label { display: flex; flex-direction: column; gap: 5px; font: 9px "DM Mono", monospace; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }.model-picker select { padding: 8px; font-size: 11px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); max-width: 100%; }.system-hero { border: 1px solid rgba(181,243,109,.2); background: linear-gradient(120deg,rgba(38,55,29,.55),var(--surface)); border-radius: 13px; }.system-hero h2 { margin: 0; }.system-hero p { color: var(--muted); font-size: 10px; }
+.two-column, .settings-grid { display: grid; grid-template-columns: 1fr 1fr; }.two-column .panel-content { max-height: clamp(380px, 58vh, 1000px); overflow: auto; }/* The decision is the part being checked, so it carries the colour. */.decision { font-weight: 700; }.memory-editor-grid { display: grid; grid-template-columns: 1fr 1fr; min-width: 0; }.memory-editor-grid > section { min-width: 0; }.memory-editor-grid > section + section { border-left: 1px solid var(--line); }.memory-preview { padding-bottom: 25px; overflow: auto; }.memory-preview .markdown { padding: 25px; }/* Scales with the window instead of sitting at a fixed 615px: on a tall monitor that left most of the screen unused, and on a short one it overflowed. */.document-editor { width: 100%; height: calc(100% - 35px); min-height: clamp(340px, 58vh, 900px); resize: none; border: 0; outline: 0; background: #0d1013; color: #e0e3e5; padding: 25px; font: 11px/1.7 "DM Mono", monospace; }.confidence { display: grid; grid-template-columns: 100px 1fr; align-items: center; gap: 8px; margin: 7px 0; font-size: 8px; }.confidence > i { height: 3px; overflow: hidden; }.confidence b { display: block; height: 100%; background: var(--accent); }.settings-grid .muted { margin: 14px 0 0; line-height: 1.5; }.model-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 14px; }.system-hero { border: 1px solid rgba(181,243,109,.2); background: linear-gradient(120deg,rgba(38,55,29,.55),var(--surface)); border-radius: 13px; }.system-hero h2 { margin: 0; }.system-hero p { color: var(--muted); font-size: 10px; }
 
 @media (max-width: 1100px) {
   .cockpit-grid { grid-template-columns: 1fr 1fr; }.two-column { grid-template-columns: 1fr; }.full-panel { grid-column: 1/-1; }.wide-panel { grid-column: span 1; }
@@ -209,7 +209,6 @@ a { color: inherit; text-decoration: none; }
   /* Both halves of a split view stack in this width, so each gets the height
      it would have shared. */
   .two-column .panel-content { max-height: 64vh; }
-  .model-list { max-height: 40vh; }
   .bootstrap-list { max-height: 62vh; }
   .memory-editor-grid { grid-template-columns: 1fr; }
   .memory-editor-grid > section + section { border-left: 0; border-top: 1px solid var(--line); }
@@ -257,7 +256,7 @@ button, input, textarea, select { letter-spacing: inherit; }
 .sun-mark { border-radius: 4px; box-shadow: none; }
 /* The health sign stays a circle (its 50% radius above); only its glow goes. */
 .online-orb { box-shadow: none; }
-.timezone-picker select, .model-picker select, .card-field input, .card-field textarea, .card-field select,
+.timezone-picker select, .card-field input, .card-field textarea, .card-field select,
 .schedule-form input, .schedule-form textarea, .schedule-form select, .fact-editor select {
   border-radius: 3px; background: #0a0d0f;
 }
@@ -503,7 +502,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 .markdown pre { border-radius: 7px; background: #080b09; }
 .two-column, .settings-grid { gap: 12px; }
 
-.timezone-picker select, .model-picker select, .card-field input, .card-field textarea, .card-field select,
+.timezone-picker select, .card-field input, .card-field textarea, .card-field select,
 .schedule-form input, .schedule-form textarea, .schedule-form select, .fact-editor select,
 .flow-builder input, .flow-builder select, .flow-builder textarea, .tool-create input,
 .tool-create textarea, .provider-edit input {
@@ -765,7 +764,9 @@ button:not(:disabled):active { transform: translateY(1px); }
 .decision-overruled > small { font-size: 11px; }
 /* Setup uses the existing panels, segmented navigation and button variants.
    Page spacing is owned by .page, not extra margins on these panels. */
-.settings-grid > .browser-profiles { grid-column: 1 / -1; }
+.settings-grid > .browser-profiles, .settings-grid > .models-panel { grid-column: 1 / -1; }
+/* A Models row: what it uses, and its power when that is Auto, side by side. */
+.model-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 28px; margin-top: 8px; }
 .setup-reminder .panel-content { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 @media (max-width: 680px) {
   .setup-reminder .panel-content { align-items: flex-start; flex-direction: column; gap: 12px; }

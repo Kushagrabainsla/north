@@ -1,4 +1,4 @@
-"""Live user settings: the routing, power and autonomy dials."""
+"""Live user settings: the Models panel, and the autonomy and time zone dials."""
 
 from __future__ import annotations
 
@@ -6,10 +6,13 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from config.approval_mode import ApprovalMode, mode_options, require_approval_mode
-from config.strategy import NorthSettings, RoutingMode, StrategyMode
+from config.strategy import ModelChoice, NorthSettings, StrategyMode, WorkKind, describe_kind
 from orchestrator.api.deps import router
 from orchestrator.api_context import current_services
 from utils.time import configure_timezone, format_local, now_epoch, timezone_names
+
+# The key of the Models panel's first row; every other key is a kind of work.
+DEFAULT_ROW = "default"
 
 
 class ModeOption(BaseModel):
@@ -17,16 +20,33 @@ class ModeOption(BaseModel):
     description: str
 
 
+class ModelRow(BaseModel):
+    """One row: a model as "provider:model_id", or "" for Auto, which ranks by `power`."""
+
+    model: str = ""
+    power: str = StrategyMode.CRUISE.value
+
+
+class KindRow(BaseModel):
+    kind: str
+    label: str
+    description: str
+    # None is "Same as default".
+    choice: ModelRow | None = None
+
+
+class ModelsOut(BaseModel):
+    default: ModelRow = Field(default_factory=ModelRow)
+    kinds: list[KindRow] = Field(default_factory=list)
+
+
 class SettingsOut(BaseModel):
+    # The Default row's power, which `/power` and "switch to eco mode" change.
     power: str
     autonomy: str
     # The approval modes, from the one definition every surface shows.
     autonomy_options: list[ModeOption] = Field(default_factory=list)
-    # Who picks the model, and - under "manual" - which one, as
-    # "provider:model_id". `model` is reported whether or not it is in force, so
-    # switching back to manual does not make the user find their model again.
-    routing: str = "auto"
-    model: str = ""
+    models: ModelsOut = Field(default_factory=ModelsOut)
     timezone: str = "UTC"
     timezone_options: list[str] = Field(default_factory=list)
     local_time: str = ""
@@ -34,13 +54,26 @@ class SettingsOut(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    # Preferred dial names.
     power: str | None = None
     autonomy: str | None = None
-    routing: str | None = None
-    model: str | None = None
+    # Rows to change, by "default" or a kind of work. A kind sent as null is "Same as default".
+    models: dict[str, ModelRow | None] | None = None
     timezone: str | None = None
     initialize_timezone_only: bool = False
+
+
+def _row(choice: ModelChoice) -> ModelRow:
+    return ModelRow(model=choice.model, power=choice.power.value)
+
+
+def _models_out(settings_obj: NorthSettings | None) -> ModelsOut:
+    rows = []
+    for kind in WorkKind:
+        label, description = describe_kind(kind)
+        choice = settings_obj.kind_model(kind) if settings_obj else None
+        row = _row(choice) if choice is not None else None
+        rows.append(KindRow(kind=kind.value, label=label, description=description, choice=row))
+    return ModelsOut(default=_row(settings_obj.default_model if settings_obj else ModelChoice()), kinds=rows)
 
 
 def _settings_out(settings_obj: NorthSettings | None) -> SettingsOut:
@@ -49,13 +82,38 @@ def _settings_out(settings_obj: NorthSettings | None) -> SettingsOut:
         power=settings_obj.power.value if settings_obj else "cruise",
         autonomy=settings_obj.autonomy.value if settings_obj else ApprovalMode.ASK.value,
         autonomy_options=[ModeOption(**option) for option in mode_options()],
-        routing=settings_obj.routing_mode.value if settings_obj else "auto",
-        model=settings_obj.routing_model if settings_obj else "",
+        models=_models_out(settings_obj),
         timezone=settings_obj.timezone if settings_obj else "UTC",
         timezone_options=timezone_names(),
         local_time=format_local(now_epoch()),
         timezone_configured=settings_obj.timezone_configured if settings_obj else False,
     )
+
+
+def _power(value: str) -> StrategyMode:
+    try:
+        return StrategyMode(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Unknown power {value!r}. Valid: eco, cruise, sport") from None
+
+
+def _model_changes(rows: dict[str, ModelRow | None]) -> list[tuple[WorkKind | None, ModelChoice | None]]:
+    """Every row checked before any is saved, so a bad row cannot leave the panel half changed."""
+    changes: list[tuple[WorkKind | None, ModelChoice | None]] = []
+    for key, row in rows.items():
+        if key == DEFAULT_ROW:
+            if row is None:
+                raise HTTPException(status_code=422, detail="The default row needs a model, or none for Auto.")
+            changes.append((None, ModelChoice(model=row.model.strip(), power=_power(row.power))))
+            continue
+        try:
+            kind = WorkKind(key)
+        except ValueError:
+            valid = ", ".join([DEFAULT_ROW, *WorkKind])
+            raise HTTPException(status_code=422, detail=f"Unknown row {key!r}. Valid: {valid}") from None
+        choice = None if row is None else ModelChoice(model=row.model.strip(), power=_power(row.power))
+        changes.append((kind, choice))
+    return changes
 
 
 @router.get("/settings", response_model=SettingsOut)
@@ -66,7 +124,7 @@ async def get_settings() -> SettingsOut:
 
 @router.post("/settings", response_model=SettingsOut)
 async def update_settings(body: SettingsUpdate) -> SettingsOut:
-    """Update user settings live (power and/or autonomy). No restart needed."""
+    """Update user settings live. No restart needed."""
     settings_obj = current_services().north_settings
     # Validate first so a request that also changes another dial cannot be half
     # applied before a bad zone is discovered.
@@ -84,33 +142,18 @@ async def update_settings(body: SettingsUpdate) -> SettingsOut:
         if (cron_store := current_services().cron_store) is not None:
             await cron_store.zone_changed()
     if body.power is not None:
-        try:
-            mode = StrategyMode(body.power)
-        except ValueError:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown power {body.power!r}. Valid: eco, cruise, sport",
-            ) from None
+        mode = _power(body.power)
         if settings_obj is not None:
             settings_obj.set_power(mode)
 
-    if body.routing is not None or body.model is not None:
-        mode: RoutingMode | None = None
-        if body.routing is not None:
-            try:
-                mode = RoutingMode(body.routing)
-            except ValueError:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Unknown routing {body.routing!r}. Valid: auto, manual",
-                ) from None
-        # Manual routing with nothing named would route nothing at all, so it is
-        # refused here rather than failing on the next call the user makes.
-        pending_model = body.model if body.model is not None else (settings_obj.routing_model if settings_obj else "")
-        if mode is RoutingMode.MANUAL and not (pending_model or "").strip():
-            raise HTTPException(status_code=422, detail="Manual routing needs a model. Send one as provider:model_id.")
-        if settings_obj is not None:
-            settings_obj.set_routing(mode, body.model)
+    if body.models is not None:
+        for kind, choice in _model_changes(body.models):
+            if settings_obj is None:
+                continue
+            if kind is None and choice is not None:
+                settings_obj.set_default_model(choice)
+            elif kind is not None:
+                settings_obj.set_kind_model(kind, choice)
 
     if body.autonomy is not None:
         try:

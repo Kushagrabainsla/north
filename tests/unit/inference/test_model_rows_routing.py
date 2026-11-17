@@ -1,15 +1,16 @@
-"""Manual routing: one model answers everything, or the call fails saying so.
+"""The Models panel's rows decide each call: a chosen model answers, or the call fails saying so.
 
-The point of pinning is that the answer came from the model that was named. A pin
-that quietly fell back to something else would make every measurement taken under
-it worthless, so the failure is loud and the fallback does not exist.
+The point of choosing a model is that the answer came from the model that was named. A
+choice that quietly fell back to something else would make every measurement taken under
+it worthless, so the failure is loud and the fallback does not exist. Each kind of work
+follows its own row, or the Default row (#80).
 """
 
 from __future__ import annotations
 
 import pytest
 
-from config.strategy import NorthSettings, RoutingMode, StrategyMode
+from config.strategy import ModelChoice, NorthSettings, StrategyMode, WorkKind
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher
 from inference.exceptions import AllModelsRateLimitedError, PaymentRequiredError, PinnedModelUnavailableError
@@ -67,10 +68,11 @@ class _FailingProvider:
         raise self._exc_type(model_id, self.name)
 
 
-def _setup(tmp_path, **routing):
+def _setup(tmp_path, model: str = "", **kinds: ModelChoice):
     settings = NorthSettings(tmp_path / "settings.json")
-    if routing:
-        settings.set_routing(**routing)
+    settings.set_default_model(ModelChoice(model=model))
+    for kind, choice in kinds.items():
+        settings.set_kind_model(WorkKind(kind), choice)
     provider = _Provider("openrouter", {"good/strong-model": 0.95, "good/weak-model": 0.20})
     dispatcher = ModelDispatcher(
         [provider],
@@ -82,8 +84,8 @@ def _setup(tmp_path, **routing):
     return dispatcher, provider, settings
 
 
-async def _ask(dispatcher) -> str:
-    response = await dispatcher.complete(CompletionRequest(prompt="hi", component="coder"))
+async def _ask(dispatcher, component: str = "coder") -> str:
+    response = await dispatcher.complete(CompletionRequest(prompt="hi", component=component))
     return response.model_used
 
 
@@ -94,41 +96,56 @@ async def test_auto_picks_the_strongest_model(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_routes_to_the_named_model_however_weak(tmp_path) -> None:
+async def test_a_chosen_model_answers_however_weak(tmp_path) -> None:
     """The whole feature: the ranking is skipped, not merely overruled."""
-    dispatcher, provider, _settings = _setup(tmp_path, mode=RoutingMode.MANUAL, model="good/weak-model")
+    dispatcher, provider, _settings = _setup(tmp_path, model="good/weak-model")
     assert await _ask(dispatcher) == "good/weak-model"
     assert provider.calls == ["good/weak-model"]
 
 
 @pytest.mark.asyncio
-async def test_a_pin_nothing_matches_fails_loudly(tmp_path) -> None:
-    dispatcher, provider, _settings = _setup(tmp_path, mode=RoutingMode.MANUAL, model="model-that-left")
-    with pytest.raises(PinnedModelUnavailableError):
+async def test_a_chosen_model_nothing_matches_fails_loudly(tmp_path) -> None:
+    dispatcher, provider, _settings = _setup(tmp_path, model="model-that-left")
+    with pytest.raises(PinnedModelUnavailableError, match="for tasks"):
         await _ask(dispatcher)
     assert provider.calls == []  # never quietly served by something else
 
 
 @pytest.mark.asyncio
-async def test_switching_back_to_auto_releases_the_pin(tmp_path) -> None:
-    """The model is remembered, so returning to manual needs no second choice."""
-    dispatcher, _provider, settings = _setup(tmp_path, mode=RoutingMode.MANUAL, model="good/weak-model")
-    settings.set_routing(mode=RoutingMode.AUTO)
+async def test_setting_the_row_back_to_auto_releases_the_model(tmp_path) -> None:
+    dispatcher, _provider, settings = _setup(tmp_path, model="good/weak-model")
+    settings.set_default_model(ModelChoice())
 
     assert await _ask(dispatcher) == "good/strong-model"
-    assert settings.routing_model == "good/weak-model"  # kept
-    assert settings.pinned_model == ""  # but not applied
 
 
 @pytest.mark.asyncio
-async def test_a_provider_qualified_pin_is_honoured(tmp_path) -> None:
-    dispatcher, _provider, _settings = _setup(tmp_path, mode=RoutingMode.MANUAL, model="openrouter:good/weak-model")
+async def test_each_kind_of_work_follows_its_own_row(tmp_path) -> None:
+    """#80: your tasks on Auto get the strongest model; background work keeps the default's."""
+    dispatcher, provider, _settings = _setup(tmp_path, model="good/weak-model", tasks=ModelChoice())
+
+    assert await _ask(dispatcher, "coder") == "good/strong-model"
+    assert await _ask(dispatcher, "coder:compact") == "good/weak-model"
+    assert provider.calls == ["good/strong-model", "good/weak-model"]
+
+
+@pytest.mark.asyncio
+async def test_a_kind_can_have_a_chosen_model_while_the_default_is_auto(tmp_path) -> None:
+    dispatcher, _provider, _settings = _setup(tmp_path, background=ModelChoice(model="good/weak-model"))
+
+    assert await _ask(dispatcher, "north") == "good/strong-model"
+    assert await _ask(dispatcher, "north:tool-summary") == "good/weak-model"
+
+
+@pytest.mark.asyncio
+async def test_a_provider_qualified_model_is_honoured(tmp_path) -> None:
+    dispatcher, _provider, _settings = _setup(tmp_path, model="openrouter:good/weak-model")
     assert await _ask(dispatcher) == "good/weak-model"
 
 
 @pytest.mark.asyncio
-async def test_a_pin_on_another_provider_matches_nothing(tmp_path) -> None:
-    dispatcher, _provider, _settings = _setup(tmp_path, mode=RoutingMode.MANUAL, model="groq:good/weak-model")
+async def test_a_model_on_another_provider_matches_nothing(tmp_path) -> None:
+    dispatcher, _provider, _settings = _setup(tmp_path, model="groq:good/weak-model")
     with pytest.raises(PinnedModelUnavailableError):
         await _ask(dispatcher)
 
@@ -148,7 +165,7 @@ async def test_a_provider_qualified_pin_never_falls_through_to_another_provider(
     primary = _FailingProvider("primary", "primary/shared-model", PaymentRequiredError)
     backup = _Provider("backup", {"backup/shared-model": 0.5})
     settings = NorthSettings(tmp_path / "settings.json")
-    settings.set_routing(mode=RoutingMode.MANUAL, model="primary:primary/shared-model")
+    settings.set_default_model(ModelChoice(model="primary:primary/shared-model"))
     dispatcher = ModelDispatcher(
         [primary, backup],
         north_settings=settings,
@@ -163,12 +180,24 @@ async def test_a_provider_qualified_pin_never_falls_through_to_another_provider(
     assert backup.calls == []  # never quietly served by the provider the pin excluded
 
 
-def test_power_is_not_offered_while_a_model_is_pinned(tmp_path) -> None:
+def test_power_is_not_offered_while_a_model_is_chosen(tmp_path) -> None:
     """A chain of one has nothing to order, so the dial must not appear to act."""
-    dispatcher, _provider, settings = _setup(tmp_path, mode=RoutingMode.MANUAL, model="good/weak-model")
+    dispatcher, _provider, settings = _setup(tmp_path, model="good/weak-model")
     settings.set_power(StrategyMode.SPORT)
-    assert dispatcher._pinned_model() == "good/weak-model"
-    assert dispatcher._power_mode() is None
+    assert dispatcher._pinned_model("coder") == "good/weak-model"
+    assert dispatcher._power_mode("coder") is None
 
-    settings.set_routing(mode=RoutingMode.AUTO)
-    assert dispatcher._power_mode() == "sport"
+    settings.set_default_model(ModelChoice(power=StrategyMode.SPORT))
+    assert dispatcher._power_mode("coder") == "sport"
+
+
+def test_each_auto_row_has_its_own_power(tmp_path) -> None:
+    """The user's idea in #80: background on eco while your tasks run on sport."""
+    dispatcher, _provider, _settings = _setup(
+        tmp_path,
+        tasks=ModelChoice(power=StrategyMode.SPORT),
+        background=ModelChoice(power=StrategyMode.ECO),
+    )
+    assert dispatcher._power_mode("north") == "sport"
+    assert dispatcher._power_mode("extraction_pipeline:dedup") == "eco"
+    assert dispatcher._power_mode("critic") == "cruise"  # Same as default

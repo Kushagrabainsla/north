@@ -344,6 +344,10 @@ class NorthConfigTool(Tool):
         except ValueError:
             return ToolOutput(success=False, error=f"Unknown power mode {requested!r}. Valid: eco, cruise, sport.")
         north_settings.set_power(mode)
+        if not north_settings.default_model.auto:
+            # Saved, but not in use: the answer must not say north now runs on eco.
+            note = "The default row uses a chosen model, so this power is used only when that row is set to Auto."
+            return _dial_output("power", mode.value, note=note)
         return _dial_output("power", mode.value)
 
     async def _autonomy(self, params: dict) -> ToolOutput:

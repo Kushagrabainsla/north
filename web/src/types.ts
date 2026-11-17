@@ -211,7 +211,7 @@ export interface Notice {
 }
 
 export interface DashboardData {
-  system: { status: string; power: string; autonomy: string; routing?: string; model?: string | null };
+  system: { status: string; autonomy: string };
   scheduled?: number;
   memory?: { facts: number; documents: number; of_documents: number };
   attention: Approval[];

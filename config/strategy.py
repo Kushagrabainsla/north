@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,18 +22,59 @@ class StrategyMode(StrEnum):
     SPORT = "sport"  # most capable model first - maximise quality
 
 
-class RoutingMode(StrEnum):
-    """Who picks the model: north, or the user.
+class WorkKind(StrEnum):
+    """The kinds of work north does, each with its own row on the Settings page (#80).
 
-    ``AUTO`` is the whole of what north does today - rank every model it can
-    reach against what this part of the task needs, and walk that chain. ``MANUAL``
-    names one model and calls only that, which is what makes an experiment
-    repeatable: hold the model still, change one thing, compare. Everything the
-    ranking would have decided is skipped, so the power dial means nothing here.
+    Which part of north belongs to which kind is `inference.routing.parts.kind_of`.
     """
 
-    AUTO = "auto"
-    MANUAL = "manual"
+    TASKS = "tasks"  # the work you ask for
+    CHECKS = "checks"  # north checking its own answers against the task and your goals
+    APPROVALS = "approvals"  # deciding for you whether an action is safe
+    BACKGROUND = "background"  # memory upkeep, summaries and the other small jobs
+
+
+_KIND_TEXT = {
+    WorkKind.TASKS: ("Your tasks", "The work you ask north to do."),
+    WorkKind.CHECKS: ("Checks", "North checks an answer, and compares a task with your goals."),
+    WorkKind.APPROVALS: ("Approvals", "North decides for you if an action is safe."),
+    WorkKind.BACKGROUND: ("Background", "Memory upkeep, summaries and other small jobs."),
+}
+
+
+def describe_kind(kind: WorkKind) -> tuple[str, str]:
+    """The name and one-line description every surface shows for a kind of work."""
+    return _KIND_TEXT[kind]
+
+
+@dataclass(frozen=True)
+class ModelChoice:
+    """One row of the Models panel: a model you chose, or north choosing with a power.
+
+    ``model`` is "provider:model_id", or "" for Auto: north ranks every model it can
+    reach and walks that chain, ordered by ``power``. A chosen model is the only one
+    called - a model that fails stops the call rather than falling back, because the
+    point of naming it is that the answer came from it. So power means nothing there.
+    """
+
+    model: str = ""
+    power: StrategyMode = StrategyMode.CRUISE
+
+    @property
+    def auto(self) -> bool:
+        return not self.model
+
+    def as_dict(self) -> dict[str, str]:
+        # Power is kept under a chosen model too, so a row set back to Auto has its power again.
+        return {"model": self.model, "power": self.power.value}
+
+    @classmethod
+    def parse(cls, raw: object) -> ModelChoice:
+        """A row from settings.json or the API; raises ValueError for an unknown power."""
+        if not isinstance(raw, dict):
+            raise ValueError(f"A model row is an object, not {raw!r}")
+        model = str(raw.get("model") or "").strip()
+        return cls(model=model, power=StrategyMode(str(raw.get("power") or StrategyMode.CRUISE.value)))
 
 
 _DESCRIPTIONS = {
@@ -49,8 +91,6 @@ def describe(mode: StrategyMode) -> str:
 class NorthSettings:
     """Persistent user settings stored at ~/.north/settings.json."""
 
-    _DEFAULT_POWER = StrategyMode.CRUISE
-    _DEFAULT_ROUTING = RoutingMode.AUTO
     # There is no approval timeout: a card waits until it is answered
     # (CODING_STYLE §13.5). An older settings.json may still carry
     # "approval_timeout_seconds"; it is ignored and dropped on the next save.
@@ -64,18 +104,16 @@ class NorthSettings:
         from config.approval_mode import ApprovalMode
 
         self._path = path
-        self._power: StrategyMode = self._DEFAULT_POWER
+        # The Models panel: the Default row, and a row for each kind of work that does not
+        # use it. A kind with no row here is "Same as default".
+        self._default = ModelChoice()
+        self._kinds: dict[WorkKind, ModelChoice] = {}
         # Startup default (e.g. from NORTH_APPROVAL_MODE); settings.json overrides it.
         self._autonomy: ApprovalMode = default_approval_mode or ApprovalMode.ASK
         # Per-part routing overrides (see inference/routing/parts.py). Profiles are
         # data, so an install can retune which part gets which model without a code
         # change. Persisted only when deliberately set, like scoring above.
         self._routing_parts: dict[str, object] = {}
-        # Who picks the model, and - in manual mode - which one. The model is kept
-        # even while the mode is auto, so switching back to manual does not make
-        # the user find their model again.
-        self._routing_mode: RoutingMode = self._DEFAULT_ROUTING
-        self._routing_model: str = ""
         # A named zone is persisted rather than an offset so recurring wall
         # clocks continue to mean the same thing through daylight-saving time.
         self._timezone: str = default_timezone if _is_known_timezone(default_timezone) else "UTC"
@@ -93,22 +131,14 @@ class NorthSettings:
             return
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
-            raw_power = data.get("power")
-            self._power = StrategyMode(raw_power or self._DEFAULT_POWER.value)
             raw_autonomy = data.get("autonomy")
             self._autonomy = parse_approval_mode(raw_autonomy) or self._autonomy
             routing = data.get("routing")
-            if isinstance(routing, dict):
-                if isinstance(routing.get("parts"), dict):
-                    self._routing_parts = routing["parts"]
-                # An unreadable mode falls back to auto rather than failing the
-                # load: north picking a model is always a working answer, where
-                # a half-understood manual setting is not.
-                try:
-                    self._routing_mode = RoutingMode(str(routing.get("mode") or self._DEFAULT_ROUTING.value))
-                except ValueError:
-                    logger.warning("Unknown routing mode %r in settings.json - using auto", routing.get("mode"))
-                self._routing_model = str(routing.get("model") or "")
+            if not isinstance(routing, dict):
+                routing = {}
+            if isinstance(routing.get("parts"), dict):
+                self._routing_parts = routing["parts"]
+            self._load_models(routing, data.get("power"))
             raw_timezone = str(data.get("timezone") or "").strip()
             if raw_timezone:
                 if _is_known_timezone(raw_timezone):
@@ -139,33 +169,69 @@ class NorthSettings:
                 exc,
             )
 
+    def _load_models(self, routing: dict, old_power: object) -> None:
+        """Read the Models panel; an unreadable row is dropped, never the whole file.
+
+        Before #80 there was one choice for all of north: `routing.mode` and `routing.model`,
+        and `power` at the top level. That one choice becomes the Default row, and every
+        kind uses it, so nothing changes until a row is changed.
+        """
+        if "default" in routing:
+            self._default = self._read_row(routing["default"], "default") or ModelChoice()
+        else:
+            model = str(routing.get("model") or "") if routing.get("mode") == "manual" else ""
+            self._default = self._read_row({"model": model, "power": old_power}, "default") or ModelChoice()
+        kinds = routing.get("kinds")
+        for name, raw in (kinds if isinstance(kinds, dict) else {}).items():
+            try:
+                kind = WorkKind(name)
+            except ValueError:
+                logger.warning("Unknown kind of work %r in settings.json - ignored", name)
+                continue
+            if (row := self._read_row(raw, name)) is not None:
+                self._kinds[kind] = row
+
+    @staticmethod
+    def _read_row(raw: object, name: str) -> ModelChoice | None:
+        try:
+            return ModelChoice.parse(raw)
+        except ValueError:
+            logger.warning("Unreadable %s row in settings.json - using its default: %r", name, raw)
+            return None
+
     @property
     def power(self) -> StrategyMode:
-        return self._power
+        """The Default row's power: what "switch to eco mode" and `/power` change."""
+        return self._default.power
 
     @property
     def autonomy(self) -> ApprovalMode:
         return self._autonomy
 
     @property
-    def routing_mode(self) -> RoutingMode:
-        """Whether north picks the model, or the user has pinned one."""
-        return self._routing_mode
+    def default_model(self) -> ModelChoice:
+        """The Default row: what every kind of work without its own row uses."""
+        return self._default
 
-    @property
-    def routing_model(self) -> str:
-        """The pinned model as ``provider:model_id``. Only meaningful in manual mode."""
-        return self._routing_model
+    def kind_model(self, kind: WorkKind) -> ModelChoice | None:
+        """The row a kind of work has, or None for "Same as default"."""
+        return self._kinds.get(kind)
 
-    @property
-    def pinned_model(self) -> str:
-        """The model to route to, or "" when north is choosing.
+    def model_for(self, kind: WorkKind) -> ModelChoice:
+        """The choice in force for one kind of work - the one question routing asks."""
+        return self._kinds.get(kind, self._default)
 
-        The one question routing actually asks. Reading the mode and the model
-        separately is how a pin left behind by a switch back to auto ends up
-        silently applied.
-        """
-        return self._routing_model if self._routing_mode is RoutingMode.MANUAL else ""
+    def set_default_model(self, choice: ModelChoice) -> None:
+        self._default = choice
+        self._save()
+
+    def set_kind_model(self, kind: WorkKind, choice: ModelChoice | None) -> None:
+        """Give a kind its own row, or None to make it "Same as default" again."""
+        if choice is None:
+            self._kinds.pop(kind, None)
+        else:
+            self._kinds[kind] = choice
+        self._save()
 
     @property
     def routing_parts(self) -> dict[str, object]:
@@ -177,16 +243,9 @@ class NorthSettings:
         """The IANA zone North uses for local dates, times, and new schedules."""
         return self._timezone
 
-    def set_routing(self, mode: RoutingMode | None = None, model: str | None = None) -> None:
-        """Change who picks the model, the model itself, or both."""
-        if mode is not None:
-            self._routing_mode = mode
-        if model is not None:
-            self._routing_model = model.strip()
-        self._save()
-
     def set_power(self, mode: StrategyMode) -> None:
-        self._power = mode
+        """Set the Default row's power. It is used when the row is Auto."""
+        self._default = replace(self._default, power=mode)
         self._save()
 
     def set_autonomy(self, mode: ApprovalMode) -> None:
@@ -241,7 +300,6 @@ class NorthSettings:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             data: dict[str, object] = {
-                "power": self._power.value,
                 "autonomy": self._autonomy.value,
                 "timezone": self._timezone,
                 "timezone_configured": self._timezone_configured,
@@ -249,9 +307,10 @@ class NorthSettings:
                 "setup": self._setup_progress,
                 "my_lights": self._my_lights,
             }
-            routing: dict[str, object] = {"mode": self._routing_mode.value}
-            if self._routing_model:
-                routing["model"] = self._routing_model
+            routing: dict[str, object] = {
+                "default": self._default.as_dict(),
+                "kinds": {kind.value: choice.as_dict() for kind, choice in self._kinds.items()},
+            }
             if self._routing_parts:
                 routing["parts"] = self._routing_parts
             data["routing"] = routing

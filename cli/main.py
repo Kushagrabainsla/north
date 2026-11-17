@@ -1203,6 +1203,23 @@ def metrics(
     _console.print()
 
 
+def _models_line(models: object) -> str:
+    """The Models panel in one line: the Default row, then each kind with its own row."""
+    if not isinstance(models, dict) or not isinstance(models.get("default"), dict):
+        return ""
+
+    def described(row: dict) -> str:
+        return row.get("model") or f"auto ({row.get('power') or 'cruise'})"
+
+    rows = [f"default {described(models['default'])}"]
+    rows += [
+        f"{kind['kind']} {described(kind['choice'])}"
+        for kind in models.get("kinds") or []
+        if isinstance(kind, dict) and isinstance(kind.get("choice"), dict)
+    ]
+    return " · ".join(rows)
+
+
 @app.command("status")
 def status() -> None:
     """Show a live snapshot of the running north instance.
@@ -1248,14 +1265,8 @@ def status() -> None:
     except Exception:
         settings, power, autonomy = {}, "?", "?"
     badge = f"  {YOLO_BADGE}" if autonomy == ApprovalMode.YOLO else ""
-    if settings.get("routing") == "manual" and settings.get("model"):
-        # A pinned model decides; power is not in use (the Settings page says so). This said "power cruise".
-        _console.print(
-            f"  [dim]model     [/dim] {settings['model']} (pinned; power not in use)   "
-            f"[bright_black](autonomy: {autonomy})[/bright_black]{badge}"
-        )
-    else:
-        _console.print(f"  [dim]power     [/dim] {power}   [bright_black](autonomy: {autonomy})[/bright_black]{badge}")
+    models = _models_line(settings.get("models")) or f"default auto ({power})"
+    _console.print(f"  [dim]models    [/dim] {models}   [bright_black](autonomy: {autonomy})[/bright_black]{badge}")
 
     # ── Inference models per pool ──
     try:

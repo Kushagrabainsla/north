@@ -16,10 +16,8 @@ const render = () => renderToStaticMarkup(createElement(MemoryRouter, null, crea
 // Issue #76, P12 and P14: the System tile said "Power cruise · ask" while a pinned model decided and
 // Settings said power was not in use; the Memory tile said "4 context documents" over an empty memory.
 describe("the dashboard's tiles say what is so", () => {
-  it("names the pinned model, not power, under manual routing", () => {
-    const pinned = { status: "online", power: "cruise", autonomy: "ask", routing: "manual", model: "anthropic:claude-haiku-5-5" };
-    expect(dialsLine(pinned)).toBe("Model claude-haiku-5-5 (pinned) · ask");
-    expect(dialsLine({ ...pinned, routing: "auto", model: null })).toBe("Power cruise · ask");
+  it("names the approval mode only: models and power are on the Settings page (#80)", () => {
+    expect(dialsLine({ status: "online", autonomy: "ask" })).toBe("Autonomy ask");
   });
 
   it("counts what memory holds", () => {
@@ -45,7 +43,7 @@ describe("the dashboard page", () => {
 
   it("shows sessions as cards that open them, and lists as the kit's rows", () => {
     served.data = { "/web/api/dashboard": {
-      system: { status: "online", power: "cruise", autonomy: "ask" },
+      system: { status: "online", autonomy: "ask" },
       attention: [], notices: [], cron: [], jobs: [], metrics: {},
       active_tasks: [{ task_id: "task-123456789", status: "running", created_at: "" }],
       conversations: [{ id: "c1", title: "Trip planning", source: "web", updated_at: "" }],
