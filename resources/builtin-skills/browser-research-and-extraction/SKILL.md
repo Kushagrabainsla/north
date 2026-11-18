@@ -86,7 +86,7 @@ Use `read` to extract clean readability text/markdown from documentation or blog
 3. Use `diff=True` on `inspect` after an action to see only what changed on the page rather than re-reading the entire tree.
 
 ### 4. Deterministic State Verification (`action="assert"`)
-Use `assert` in testing or conductor loops:
+Use `assert` to check a page in a test or a retry loop:
 ```json
 {
   "action": "assert",

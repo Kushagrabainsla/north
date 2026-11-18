@@ -20,4 +20,4 @@ description: "Use before declaring any north code change done - to confirm tests
 5. State the evidence in your final answer - exactly what you ran and the result.
 
 ## Done when
-- Focused tests + lint are green (plus the full suite if shared code changed), and the evidence is stated.
+- Focused tests and the linter are green (plus the full suite if shared code changed), and the evidence is stated.

@@ -26,7 +26,7 @@ description: "Use when restructuring code whose behaviour must stay identical - 
 2. **Ensure characterization tests capture CURRENT behaviour.** Add them if missing. These are your safety net.
 3. **Refactor in small steps.** Run the project's type checker on changed files with `bash` after each step. Run relevant tests via `bash` with adequate timeout. Every step must leave the system in a passing state.
 4. **Verify public signatures / return types are unchanged** (or update every caller in the same change).
-5. **Run `lint(path=..., fix=true)` on all changed files** to match project style.
+5. **Run the project's linter on all changed files with `bash`** to match project style.
 6. **Commit after each logical slice.** Don't batch unrelated refactors into one commit.
 
 ## Common Patterns

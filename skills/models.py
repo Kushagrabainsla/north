@@ -60,7 +60,7 @@ class SkillExecution:
 
 @dataclass(frozen=True)
 class Skill:
-    """One reusable procedure an engineering agent can be given.
+    """One reusable procedure an agent can be given.
 
     ``description`` is the retrieval key and must be written as a trigger ("Use
     when ...") so semantic selection matches it to the right tasks. ``body`` is
@@ -77,9 +77,9 @@ class Skill:
     status: str = "active"
     # Task ids a learned skill was distilled from (empty for built-in skills).
     provenance: tuple[str, ...] = ()
-    # Agent domains this skill may be injected into. Defaults to engineering (where
-    # nearly all skills belong); a skill for another domain (e.g. the literature-review
-    # skill, which serves the general assistant) declares the domains it serves.
+    # Who may be given this skill. `engineering` (the default): the coding agents, in the
+    # briefing north writes before a coding run (orchestrator/coding_briefing.py).
+    # `general`: north's own agent. A skill for both declares both.
     domains: frozenset[str] = frozenset({"engineering"})
     intents: frozenset[str] = frozenset()
     # Advisory skills omit this. Flows may reference only executable skills.

@@ -59,7 +59,12 @@ class MemoryBriefing:
     async def _skill_notes(self, task: str) -> list[str]:
         if self._skills is None:
             return []
-        chosen = await self._skills.select(task)
+        # Only active skills tagged `engineering`: a general skill (wellness, job applications) or a retired one
+        # is not a coding procedure.
+        candidates = self._skills.serving(DOMAIN)
+        if not candidates:
+            return []
+        chosen = await self._skills.select(task, candidates=candidates)
         return [
             f"A procedure that fits this kind of task ({skill.name}):\n{_clean(skill.body)[:_SKILL_CHARS]}"
             for skill in chosen[:_SKILLS]

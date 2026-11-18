@@ -140,7 +140,7 @@ Make one simplification at a time. Run tests after each change. Submit refactori
 FOR EACH SIMPLIFICATION:
 1. Make the change
 2. Run the project's type checker on the file with `bash` (e.g. `mypy file.py`)
-3. Run lint(path=..., fix=true)
+3. Run the project's linter on the file with `bash`, with its fix option (e.g. `ruff check --fix file.py`)
 4. Run relevant tests
 5. If tests pass -> commit (or continue to next simplification)
 6. If tests fail -> revert and reconsider

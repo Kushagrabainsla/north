@@ -52,6 +52,10 @@ class SkillSelector:
         # changed a skill and whether that caller remembered to invalidate us.
         self._embeddings: dict[str, tuple[str, list[float]]] | None = None
 
+    def serving(self, domain: str) -> list[Skill]:
+        """The active skills tagged for *domain*: the candidates a caller in that domain may be given."""
+        return [skill for skill in self._registry.all() if skill.available_to(domain)]
+
     async def unavailable(self) -> str:
         """Why skills cannot be selected right now, found by embedding a line; "" when they can.
 

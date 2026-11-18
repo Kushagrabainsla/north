@@ -29,7 +29,7 @@ For each slice:
 1. **Implement** the smallest complete piece of functionality
 2. **Test** - run the relevant tests (or write one if none exists)
 3. **Verify** - the project's type checker and linter on changed files, with `bash`
-4. **Commit** - `git(action="add", args="path/to/file")` per file, then `git(action="commit", args="...")`
+4. **Commit** - `git add path/to/file` per file, then `git commit -m "..."`, with `bash`
 5. **Move to the next slice** - carry forward, don't restart
 
 ## Slicing Strategies
@@ -138,19 +138,16 @@ After each increment, verify with the project's own commands:
 
 - [ ] The change does one thing and does it completely
 - [ ] The project's type checker passes on changed files (run with `bash`)
-- [ ] `lint(path=..., fix=true)` passes
+- [ ] The project's linter passes on changed files (run with `bash`)
 - [ ] Relevant tests pass via `bash` with adequate timeout
 - [ ] The new functionality works as expected
 - [ ] The change is committed with a descriptive message
 
-## Working with north's agents
+## Keeping the slices visible
 
-When implementing through the coder agent, the agent follows this discipline by default. The coder's plan (`update_plan`) naturally enforces incremental slices.
-
-When you are the coder:
-- Use `update_plan` with your intended steps (understand, design, change file A, verify, ...)
-- Keep exactly one step `in_progress`
-- Run the project's type checker with `bash` after every file change
+- Write your intended steps as a plan before the first change (understand, design, change file A, verify, ...)
+- Keep exactly one step in progress
+- Run the project's type checker after every file change
 - Run tests after every logical slice, not just at the end
 
 ## Common Rationalizations

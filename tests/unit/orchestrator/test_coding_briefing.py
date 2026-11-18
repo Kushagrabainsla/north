@@ -30,15 +30,55 @@ class FakeSkills:
     def __init__(self, skills=(), raises: bool = False) -> None:
         self.skills = list(skills)
         self.raises = raises
+        self.candidates: list | None = None
 
-    async def select(self, task):
+    def serving(self, domain):
+        return [skill for skill in self.skills if domain in skill.domains]
+
+    async def select(self, task, candidates=None):
         if self.raises:
             raise RuntimeError("no embeddings")
-        return self.skills
+        self.candidates = candidates
+        return list(candidates if candidates is not None else self.skills)
 
 
-def _skill(name: str, body: str):
-    return SimpleNamespace(name=name, body=body)
+def _skill(name: str, body: str, domains=("engineering",)):
+    return SimpleNamespace(name=name, body=body, domains=frozenset(domains))
+
+
+async def test_only_skills_for_coding_are_offered() -> None:
+    """A general skill, such as wellness coaching, is not a coding procedure (issue #66)."""
+    skills = FakeSkills([_skill("tdd", "Test first."), _skill("wellness-coaching", "Breathe.", domains=("general",))])
+
+    text = await MemoryBriefing(FakeMemory(), skills).brief("t", "/r")
+
+    assert [skill.name for skill in skills.candidates] == ["tdd"]
+    assert "Test first." in text and "Breathe." not in text
+
+
+async def test_the_selector_serves_only_active_skills_of_a_domain() -> None:
+    from pathlib import Path
+
+    from skills.models import Skill
+    from skills.selector import SkillSelector
+
+    def skill(name, domains, status="active"):
+        return Skill(
+            name=name, description=name, body="b", directory=Path("."), status=status, domains=frozenset(domains)
+        )
+
+    registry = SimpleNamespace(
+        all=lambda: [
+            skill("debugging", {"engineering"}),
+            skill("both", {"general", "engineering"}),
+            skill("wellness", {"general"}),
+            skill("old", {"engineering"}, status="retired"),
+        ]
+    )
+
+    served = SkillSelector(registry, embed_fn=None).serving("engineering")
+
+    assert [s.name for s in served] == ["debugging", "both"]
 
 
 async def test_the_users_facts_and_profile_are_handed_over() -> None:
