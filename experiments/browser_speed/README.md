@@ -110,4 +110,21 @@ Compare them with `compare.py BEFORE_DIR AFTER_DIR`. Medians:
 - Total tokens follow the number of turns, which the model chooses. The Wikipedia after runs took more turns: the model left out `profile_id` and retried, and searched in more steps. Both versions show such retries.
 - 3 runs per task is a small sample; a single run varied from 66 s to 125 s.
 
+### Batch read: three pages in one call (`20261118-124428` before, `20261118-124700` after)
+
+Task `three`: read three Wikipedia articles and give each person's birth year. 3 runs each, `f4483c4` against the batch code.
+
+| Median | before | after | change |
+|---|---|---|---|
+| Wall time | 44.5 s | 28.5 s | -36% |
+| Turns | 7 | 4 | -43% |
+| Browser calls | 4 | 2 | -50% |
+| Input tokens | 113,756 | 58,194 | -49% |
+| Cost | $0.019 | $0.010 | -48% |
+
+- All 3 after runs used one `read` with three `urls`.
+- The three pages loaded in parallel in about 1 s (9.4 s in the first run, which also created North's window).
+- Most of the batch call is now the decider's one ruling on the new site: 1.2 s to 15 s.
+- Before, the second and third reads already took 0.27 s each (the scope fix); the saving is the model turns between them.
+
 Not changed yet: finding 3, and the decider call on each `click`, `fill`, `press`, `eval` and `close` (3 to 7 s each).

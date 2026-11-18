@@ -45,6 +45,12 @@ TASKS = {
         "Using my {profile} browser profile, go to https://en.wikipedia.org, type 'Ada Lovelace' in the "
         "search box and search, open her article, and tell me her birth date and one notable work."
     ),
+    # Several independent pages: the case a batch read is for.
+    "three": (
+        "Using my {profile} browser profile, read the Wikipedia articles on Ada Lovelace, Alan Turing and "
+        "Grace Hopper (https://en.wikipedia.org/wiki/Ada_Lovelace, https://en.wikipedia.org/wiki/Alan_Turing, "
+        "https://en.wikipedia.org/wiki/Grace_Hopper) and tell me each one's birth year and best-known work."
+    ),
 }
 _ALLOWED_SITES = ("news.ycombinator.com", "ycombinator.com", "wikipedia.org")
 

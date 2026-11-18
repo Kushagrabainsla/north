@@ -77,6 +77,18 @@ _BROWSER_APPS = {
     "BraveSoftware/Brave-Browser": ("Brave Browser", "com.brave.Browser"),
 }
 _FRONT_GRACE_SECONDS = 1.0
+# A batch read: pages read at the same time, and the text each page may give. Three tabs at once is
+# fast and still looks like a person to a site such as LinkedIn; the text shares one tool result.
+PARALLEL_READS = 3
+_BATCH_TEXT_CHARS = 36_000
+_MIN_PAGE_CHARS = 2_000
+
+
+def page_chars(pages: int) -> int:
+    """The text each page of a batch read of *pages* may give, so all of them fit one tool result."""
+    return max(_MIN_PAGE_CHARS, _BATCH_TEXT_CHARS // max(pages, 1))
+
+
 _PAGE_CHANGING = frozenset(
     {"goto", "navigate", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "eval", "upload"}
 )
@@ -242,6 +254,9 @@ class TaskWindowBrowser:
         self._north_home = north_home
         self._daemons: dict[str, subprocess.Popen] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # One tab created at a time per profile: the first one can create North's window, and two at once
+        # could each create one.
+        self._creating: dict[str, asyncio.Lock] = {}
         self._install_lock = asyncio.Lock()
         # uid -> (role, name) last shown per task, to refuse clicks on a changed element.
         self._seen: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
@@ -537,6 +552,8 @@ class TaskWindowBrowser:
         session = self._session(profile, task_id)
         if action in {"goto", "navigate"}:
             return await self._open(profile, session, params)
+        if action == "read" and params.get("urls"):
+            return {"pages": await self._read_many(profile, task_id, list(params["urls"]))}
         if action == "read":
             if params.get("url"):
                 await self._open(profile, session, params)
@@ -616,13 +633,38 @@ class TaskWindowBrowser:
         listing = self._text(await self._tool(profile, "tabs_list", {"sessionToken": session}))
         if listing.startswith("no tabs"):
             arguments = {"url": url, "task": _TASK_GROUP, "longRunning": True, "sessionToken": session}
-            async with _front_kept(profile):  # the first tab may create North's window
-                await self._tool(profile, "tabs_create", arguments)
+            async with self._creating.setdefault(profile.id, asyncio.Lock()), _front_kept(profile):
+                await self._tool(profile, "tabs_create", arguments)  # the first tab may create North's window
             with contextlib.suppress(BridgeInputError):  # a slow page is still open, as with navigate
                 await self._wait(profile, session, {"condition": "loaded", "timeout_seconds": 15})
         else:
             await self._tool(profile, "navigate", {"url": url, "sessionToken": session})
         return await self._script(profile, session, "JSON.stringify({url: location.href, title: document.title})")
+
+    async def _read_many(self, profile: BrowserProfile, task_id: str, urls: list[str]) -> list[dict]:
+        """Read *urls*, PARALLEL_READS at a time, each in a tab of its own that is closed after; in order.
+
+        One page that fails says why and does not stop the others. The task's own tab is not touched.
+        """
+        limit = asyncio.Semaphore(PARALLEL_READS)
+        chars = page_chars(len(urls))
+
+        async def read(number: int, url: str) -> dict:
+            slot = f"{task_id}#read{number}"
+            session = self._session(profile, slot)
+            async with limit:
+                try:
+                    page = await self._open(profile, session, {"url": url})
+                    result = await self._tool(profile, "get_page_text", {"sessionToken": session, "maxLength": chars})
+                    text = self._text(result)
+                    return {"url": page["url"], "title": page["title"], "content": text, "cut": len(text) >= chars}
+                except (BridgeInputError, _ToolError, KeyError, ValueError) as exc:
+                    return {"url": url, "error": str(exc)}
+                finally:
+                    with contextlib.suppress(BridgeInputError, _ToolError, OSError, RuntimeError, httpx.HTTPError):
+                        await self._close(profile, slot)
+
+        return list(await asyncio.gather(*(read(number, url) for number, url in enumerate(urls))))
 
     async def _inspect(self, profile: BrowserProfile, task_id: str, session: str, params: dict) -> dict:
         limit = min(max(int(params.get("limit") or 100), 1), 1000)

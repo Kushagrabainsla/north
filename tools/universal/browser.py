@@ -36,7 +36,7 @@ from config.browser_connection import cdp_http_base as _cdp_http_base
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal.browser_describe import describe_browser_call
-from tools.universal.browser_taskwindow import TaskWindowBrowser
+from tools.universal.browser_taskwindow import TaskWindowBrowser, page_chars
 from utils.net import HostNotFoundError, UnsafeUrlError, validate_public_url
 from utils.processes import stop_process_group
 from utils.spans import span
@@ -68,6 +68,8 @@ _IDENTITY_KEYS = frozenset(
     {"profile_verified", "login_verified", "connection_id", "extension_version", "profile_id", "profile_name"}
 )
 _IDENTITY_ACTIONS = frozenset({"preflight", "status"})
+# Pages one batch read may name (issue #83): read in one call, in parallel tabs where the bridge allows.
+_MAX_BATCH_URLS = 10
 
 
 def _site(url: str) -> str:
@@ -82,6 +84,15 @@ def _task_page(task_id: object) -> str:
 
 def _profile_ask(label: str, action: str, params: dict[str, Any]) -> str:
     """What the card asks: opening a site covers reading it for the rest of the task, so it says so."""
+    if action == "read" and (urls := params.get("urls")):
+        sites = sorted({_site(str(url)) for url in urls})
+        if len(sites) == 1:
+            return (
+                f"Open and read {len(urls)} pages on {sites[0]} in {label}. For the rest of this task North can "
+                f"read pages on {sites[0]} in this profile without asking again; it asks before other sites and "
+                "before clicking, typing, uploading or submitting."
+            )
+        return f"Open and read {len(urls)} pages in {label}, on {', '.join(sites)}. A yes covers these pages only."
     url = str(params.get("url") or "") if action in _NAVIGATING_ACTIONS else ""
     if site := _site(url):
         return (
@@ -448,10 +459,31 @@ class _Payload:
 
 
 def _unsafe_url_reason(action: str, params: dict[str, Any]) -> str:
-    """Why this navigation must not happen, or "" when it is safe."""
-    url = params.get("url", "")
-    if not url or action not in _NAVIGATING_ACTIONS:
+    """Why this navigation must not happen, or "" when it is safe: every page of a batch read is checked."""
+    if action not in _NAVIGATING_ACTIONS:
         return ""
+    for url in [params.get("url", ""), *(params.get("urls") or [])]:
+        if url and (reason := _unsafe_page(str(url))):
+            return reason
+    return ""
+
+
+def _batch_problem(params: dict[str, Any]) -> str:
+    """Why a batch read's `urls` cannot be used, or "" when they can (or the call names none)."""
+    urls = params.get("urls")
+    if urls in (None, []):
+        return ""
+    if params.get("action") not in (None, "", "read"):
+        return "Only action='read' takes 'urls'."
+    if not isinstance(urls, list) or not all(isinstance(url, str) and url.strip() for url in urls):
+        return "'urls' must be a list of page addresses."
+    if len(urls) > _MAX_BATCH_URLS:
+        return f"Read at most {_MAX_BATCH_URLS} pages in one call; read the rest in a second call."
+    return ""
+
+
+def _unsafe_page(url: str) -> str:
+    """Why opening *url* must not happen, or ""."""
     # Loopback stays reachable so agents can drive a locally served app under test.
     if urlparse(url).hostname in _LOOPBACK_HOSTNAMES:
         return ""
@@ -590,6 +622,19 @@ def _format_article(article: dict[str, Any]) -> str:
     return f"## {title}{byline}\n\n{content}"
 
 
+def _format_pages(pages: list[dict[str, Any]]) -> str:
+    """A batch read's pages, in the order asked, each under its title and URL."""
+    parts = []
+    for number, page in enumerate(pages, 1):
+        if page.get("error"):
+            parts.append(f"## {number}. {page['url']}\nCould not read it: {page['error']}")
+            continue
+        cut = "\n(Cut to fit beside the other pages: read this URL alone for the rest.)" if page.get("cut") else ""
+        title = page.get("title") or page["url"]
+        parts.append(f"## {number}. {title}\nURL: {page['url']}\n\n{page.get('content', '')}{cut}")
+    return "\n\n".join(parts)
+
+
 def _on_page(data: dict[str, Any], text: str) -> str:
     """*text* after the URL it was read on, when the result names one."""
     url = data.get("url") or (data.get("navigation") or {}).get("url") or ""
@@ -666,7 +711,8 @@ class BrowserTool(Tool):
         "Actions:\n"
         "  - 'goto' (or 'navigate'): Navigate to URL.\n"
         "  - 'extract': Structured records; existing Chrome supports HTML tables; read/inspect for other listings.\n"
-        "  - 'read': Reader-mode extraction of clean article/doc text without ads/nav.\n"
+        "  - 'read': Reader-mode text of a page (url), or of up to 10 pages at once (urls), which load in "
+        "parallel: when you need several pages, read them all in one call.\n"
         "  - 'inspect': Accessibility Tree (AXTree) with stable numeric UIDs (e.g. n12), or diff=True.\n"
         "  - 'click', 'dblclick': Click element by UID (e.g. uid='n12'), selector, or coordinates.\n"
         "  - 'fill', 'type', 'press': Enter text into input fields or send key presses.\n"
@@ -716,6 +762,15 @@ class BrowserTool(Tool):
             "url": {
                 "type": "string",
                 "description": "URL to navigate to (required for goto/navigate/read).",
+            },
+            "urls": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": _MAX_BATCH_URLS,
+                "description": (
+                    "For read: several pages in one call, read in parallel. Pass every page you need at once, "
+                    "not one read per page."
+                ),
             },
             "profile_id": {
                 "type": "string",
@@ -931,6 +986,8 @@ class BrowserTool(Tool):
         why = browser_unavailable()
         if why:
             return f"The browser cannot work here: {why}."
+        if problem := _batch_problem(input.params or {}):
+            return problem
         # A call that names no saved profile is refused before the approval layer: the memory decider
         # spent 28 s ruling on "84b241fdce825114]" (a stray bracket) before run() refused it (issue #83).
         if (profile_id := (input.params or {}).get("profile_id")) and not any(
@@ -977,6 +1034,9 @@ class BrowserTool(Tool):
         url = params.get("url") if action in _NAVIGATING_ACTIONS else None
         key = (str(params.get("task_id") or "default"), profile_id)
         site = _site(str(url)) if url else self._open_sites.get(key, "")
+        if action == "read" and params.get("urls"):
+            sites = {_site(str(page)) for page in params["urls"]}
+            site = sites.pop() if len(sites) == 1 else ""  # pages on several sites: the yes covers only them
         return f"reading pages on {site} in profile {profile_id} ({config_id[:12]})" if site else ""
 
     async def describe(self, input: ToolInput) -> ApprovalRequest:
@@ -1004,6 +1064,7 @@ class BrowserTool(Tool):
                 and binding
                 and binding[0] == profile.model_dump_json()
                 and action not in {"goto", "navigate", "preflight", "status", "close"}
+                and not params.get("urls")
             ):
                 try:
                     resolved, _ = self._resolve_profile(params)
@@ -1092,6 +1153,8 @@ class BrowserTool(Tool):
         shown = data if action in _IDENTITY_ACTIONS else {k: v for k, v in data.items() if k not in _IDENTITY_KEYS}
         if action == "extract" and "items" in data:
             return _format_records(data)
+        if action == "read" and "pages" in data:
+            return _format_pages(data["pages"])
         if action == "read" and "article" in data:
             return _on_page(data, _format_article(data["article"]))
         tree = data.get("tree") or data.get("snapshot")
@@ -1100,6 +1163,26 @@ class BrowserTool(Tool):
         if action == "assert":
             return _format_assertion(shown)
         return json.dumps(shown)
+
+    async def _read_each(self, input: ToolInput, urls: list[str]) -> ToolOutput:
+        """A batch read in North's own browser: each page in turn, still one call and one model turn.
+
+        chrome-agent drives one page of a task at a time; your existing Chrome reads them in parallel.
+        """
+        chars = page_chars(len(urls))
+        pages: list[dict[str, Any]] = []
+        for url in urls:
+            single = {key: value for key, value in input.params.items() if key != "urls"} | {"url": url}
+            output = await self.run(input.model_copy(update={"params": single}))
+            if not output.success:
+                pages.append({"url": url, "error": output.error or "the page could not be read"})
+                continue
+            article = output.data.get("article") or {}
+            content = str(article.get("content", article.get("text", "")))
+            pages.append(
+                {"url": url, "title": article.get("title", ""), "content": content[:chars], "cut": len(content) > chars}
+            )
+        return ToolOutput(success=True, data={"action": "read", "pages": pages})
 
     async def _native_call(self, profile, params: dict) -> ToolOutput:
         if self._existing_browser is None:
@@ -1253,6 +1336,9 @@ class BrowserTool(Tool):
         unsafe_url = _unsafe_url_reason(action, params)
         if unsafe_url:
             return ToolOutput(success=False, error=unsafe_url)
+
+        if action == "read" and params.get("urls"):
+            return await self._read_each(input, list(params["urls"]))
 
         if action == "preflight" and profile is None:
             return ToolOutput(success=False, error="Preflight checks a saved profile: pass profile_id.")
