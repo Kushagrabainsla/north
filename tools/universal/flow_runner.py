@@ -199,6 +199,35 @@ class FlowRunner:
         finally:
             self._resuming.discard(run.run_id)
 
+    def background(self, since: datetime, limit: int = 8) -> list[dict[str, Any]]:
+        """What ran in the background since *since*, newest first: what north did while you were away.
+
+        Every run but a test run, with its own status (a job's status went stale once its run was resumed)
+        and the last file it saved that is still there. North's own flows show only when they did not
+        finish or saved something: a finished cleanup every night is not news.
+        """
+        runs = []
+        for run in self._store.list_runs(limit=200):
+            if run.test_mode or datetime.fromisoformat(run.updated_at) < since:
+                continue
+            files = [path for path in produced_files(run) if Path(path).expanduser().is_file()]
+            if self._is_norths_own(run.flow_name) and run.status == "completed" and not files:
+                continue
+            runs.append(
+                {
+                    "run_id": run.run_id,
+                    "flow": run.flow_name,
+                    "status": run.status,
+                    "trigger": run.trigger,
+                    "at": run.updated_at,
+                    "error": run.error,
+                    "file": str(Path(files[-1]).expanduser()) if files else "",
+                }
+            )
+            if len(runs) == limit:
+                break
+        return runs
+
     async def ask_about_unasked_stops(self) -> int:
         """Leave the Resume/Discard card for each paused run that has none; return how many.
 
@@ -688,8 +717,8 @@ def _could_not_start(flow_name: str) -> str:
 _MAX_DELIVERED_CHARS = 3_500  # Telegram takes 4,096 per message, with the card's own lines around it
 
 
-def _produced(run: FlowRun) -> str:
-    """What a finished run made, for the user: the last file it wrote, else its last step's summary."""
+def produced_files(run: FlowRun) -> list[str]:
+    """Every file *run*'s steps say they saved, in order: artifacts, a `file` result, or one named in the answer."""
     files: list[str] = []
     for item in run.outputs:
         data = item.get("data") or {}
@@ -700,6 +729,12 @@ def _produced(run: FlowRun) -> str:
         # A step whose answer is the JSON naming what it saved: delivered, the JSON itself reached the
         # dashboard as the news briefing's text, {"artifacts": ["/Users/…/2026-11-06.md"]}.
         files.extend(_artifacts_in(data.get("summary") or data.get("output")))
+    return files
+
+
+def _produced(run: FlowRun) -> str:
+    """What a finished run made, for the user: the last file it wrote, else its last step's summary."""
+    files = produced_files(run)
     for path in reversed(files):
         try:
             text = Path(path).expanduser().read_text(encoding="utf-8").strip()

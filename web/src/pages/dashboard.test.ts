@@ -49,13 +49,22 @@ describe("the dashboard page", () => {
       system: { status: "online", autonomy: "ask" },
       attention: [], notices: [], metrics: {},
       conversations: [{ id: "c1", title: "Trip planning", source: "web", updated_at: "" }],
-      artifacts: [{ id: "a1", name: "2026-11-10.md", kind: "news", media_type: "text/markdown", is_today: true }],
+      background: [
+        { run_id: "r1", flow: "daily-news-briefing", status: "completed", trigger: "schedule", at: "", error: "",
+          file_name: "2026-11-18.md", file_id: "f1" },
+        { run_id: "r2", flow: "daily-research-briefing", status: "paused", trigger: "schedule", at: "",
+          error: "Step 'compile' ran, but twice did not report its result", file_name: "", file_id: "" },
+      ],
     } };
     const html = render();
     expect(html.match(/full-panel/g)).toHaveLength(3);
     expect(html.indexOf(">Attention<")).toBeLessThan(html.indexOf(">Sessions<"));
     expect(html).toMatch(/<a class="kit-card-head" href="\/sessions\/c1"[^>]*>.*<b>Trip planning<\/b>/);
-    expect(html).toMatch(/<a class="kit-button kit-button-primary kit-button-sm" href="\/artifacts"[^>]*><span>Open artifact<\/span>/);
+    // What north did while you were away, in place of a tile for one person's briefing flows.
+    expect(html).toContain(">Background<");
+    expect(html).toContain('href="/web/api/artifacts/f1/file"');
+    expect(html).toContain("twice did not report its result");
+    for (const old of ["Today&#x27;s briefing", "Latest briefing"]) expect(html).not.toContain(old);
     for (const gone of [">Active now<", ">Memory<", ">Artifacts<", ">Flows<"]) expect(html).not.toContain(gone);
     // Issue #81: eight rows of north's own "inference call · memory · completed" said nothing.
     expect(html).not.toContain("Latest events");

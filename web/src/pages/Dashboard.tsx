@@ -37,8 +37,7 @@ export function Dashboard() {
     {loading ? <Loading/> : <Notice tone="error">{error || "Dashboard unavailable"}</Notice>}
   </div>;
   const totalCost = Number(data.metrics.total_cost_usd || 0);
-  const briefing = data.artifacts.find(artifact => artifact.kind === "news");
-  const todaysBriefing = briefing?.is_today === true;
+  const background = data.background ?? [];
   return <div className="page dashboard-page">
     {header}
     {error && <Notice tone="error">{error}</Notice>}
@@ -60,10 +59,15 @@ export function Dashboard() {
       <Panel title="Usage" label="Last 7 days" to="/insights">
         <StatGrid><Stat label="Tasks" value={String(data.metrics.total_tasks || 0)}/><Stat label="Model cost" value={<>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</>}/></StatGrid>
       </Panel>
-      <Panel title={todaysBriefing ? "Today's briefing" : "Latest briefing"} label="Daily intelligence" to="/artifacts" className="full-panel briefing-panel">
-        {briefing ? <ListRow title={briefing.name}
-          description={todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}
-          actions={<Button variant="primary" size="sm" to="/artifacts">Open artifact</Button>}/> : <Empty>No briefing has been generated yet.</Empty>}
+      {/* What north did while you were away: the last day's flow runs, your own and north's when they matter.
+        It replaced a tile for one person's briefing flows, which vanilla north does not have. */}
+      <Panel title="Background" label="Last 24 hours" to="/flows" className="full-panel">
+        {background.length ? background.map(run => <ListRow key={run.run_id} title={run.flow}
+          meta={[timeAgo(run.at), run.file_name].filter(Boolean)}
+          description={run.status === "completed" ? undefined : run.error || undefined}
+          status={<Status value={run.status}/>}
+          actions={run.file_id ? <a className="kit-button kit-button-secondary kit-button-sm" href={`/web/api/artifacts/${encodeURIComponent(run.file_id)}/file`} target="_blank" rel="noreferrer"><span>Open</span></a> : undefined}/>)
+          : <Empty>Nothing ran in the background in the last day.</Empty>}
       </Panel>
       {/* No Flows tile: a run that needs you is a card under Attention, and the Flows page lists the rest. */}
       {/* No "Latest events" panel: north's own background calls filled it, eight rows of "inference call ·

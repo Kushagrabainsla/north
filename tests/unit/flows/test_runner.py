@@ -949,6 +949,29 @@ async def test_every_paused_run_has_its_card_the_ones_a_shutdown_cut_off_too(tmp
     assert "North stopped during this step" in cut.message
 
 
+async def test_background_lists_what_ran_while_you_were_away(tmp_path):
+    """The dashboard's Background tile: the last day's runs, each with its own status and saved file."""
+    from datetime import timedelta
+
+    runner, store, _ = _waiting_runner(tmp_path)  # its "demo" flow is one north ships
+    briefing = tmp_path / "2026-11-18.md"
+    briefing.write_text("# Briefing\n")
+    saved = [{"step": "s", "data": {"result": {"file": str(briefing)}}}]
+    store.create(run_id="mine", flow_name="daily-news-briefing", task_id="t1", trigger="schedule")
+    store.update("mine", status="completed", current_step=1, outputs=saved, error="")
+    store.create(run_id="stopped", flow_name="daily-research-briefing", task_id="t2", trigger="schedule")
+    store.update("stopped", status="paused", current_step=0, outputs=[], error="it stopped")
+    store.create(run_id="cleanup", flow_name="demo", task_id="t3", trigger="schedule")
+    store.update("cleanup", status="completed", current_step=1, outputs=[], error="")  # north's, nothing made
+    store.create(run_id="trial", flow_name="daily-news-briefing", task_id="t4", trigger="manual", test_mode=True)
+
+    rows = runner.background(localnow() - timedelta(days=1))
+
+    assert [row["run_id"] for row in rows] == ["stopped", "mine"]
+    assert rows[1]["file"] == str(briefing) and rows[0]["error"] == "it stopped"
+    assert runner.background(localnow() + timedelta(minutes=1)) == []  # nothing since
+
+
 class GatedAgent(OutOfModelsAgent):
     """Once models are back, each call waits at ``gate``, so a test can act while a step runs."""
 

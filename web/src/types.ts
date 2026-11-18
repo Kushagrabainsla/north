@@ -223,7 +223,19 @@ export interface DashboardData {
   notices: Notice[];
   conversations: Conversation[];
   metrics: Record<string, unknown>;
-  artifacts: Artifact[];
+  background?: BackgroundRun[];
+}
+
+// One flow run of the last day, as the dashboard's Background tile lists it.
+export interface BackgroundRun {
+  run_id: string;
+  flow: string;
+  status: string;
+  trigger: string;
+  at: string;
+  error: string;
+  file_name: string;
+  file_id: string;
 }
 
 // One endpoint a routing walk passed over, and why. `tried` separates the two

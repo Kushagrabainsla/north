@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import logging
 import os
 import re
@@ -38,7 +39,7 @@ from orchestrator.models import Prompt, TaskRequest
 from tools.home import Home
 from tools.universal.browser import browser_availability
 from utils.secrets import redact
-from utils.time import epoch_to_local, localnow
+from utils.time import localnow
 from utils.version import NORTH_VERSION
 from web.artifacts import (
     allowed_output_roots,
@@ -1462,6 +1463,27 @@ async def get_artifact_file(artifact_id: str) -> FileResponse:
     return FileResponse(path, media_type=artifact_media_type(path))
 
 
+def _background() -> list[dict[str, Any]]:
+    """What north did while you were away: the last day's flow runs, each with a link to the file it saved."""
+    runner = current_services().flow_runner
+    if runner is None:
+        return []
+    home = current_services().require("north_home")
+    since = localnow() - datetime.timedelta(days=1)
+    rows = []
+    for run in runner.background(since):
+        path = Path(run.pop("file")) if run.get("file") else None
+        readable = path is not None and _is_readable_artifact(path)
+        rows.append(
+            {
+                **run,
+                "file_name": path.name if path is not None else "",
+                "file_id": encode_artifact_id(path, home) if readable and path is not None else "",
+            }
+        )
+    return rows
+
+
 async def _system_facts() -> dict[str, Any]:
     """What the dashboard's System tile says: what you would otherwise go and look up.
 
@@ -1502,19 +1524,11 @@ async def _system_facts() -> dict[str, Any]:
 
 @router.get("/dashboard")
 async def dashboard() -> dict[str, Any]:
-    system, metrics, conversations, artifacts = await asyncio.gather(
+    system, metrics, conversations = await asyncio.gather(
         _system_facts(),
         current_services().require("ledger").get_metrics(days=7),
         current_services().require("conversation_store").list(limit=6),
-        asyncio.to_thread(_list_artifacts_sync, 100),
     )
-    today = localnow().date()
-    # Only the latest briefing: the dashboard's Artifacts tile is gone, and the Artifacts page lists the rest.
-    latest_briefing = next((artifact for artifact in artifacts if artifact["kind"] == "news"), None)
-    dashboard_artifacts = [
-        {**artifact, "is_today": epoch_to_local(artifact["updated_at"]).date() == today}
-        for artifact in ([latest_briefing] if latest_briefing else [])
-    ]
     return {
         "system": system,
         # No Flows tile: a run that needs you is a card under Attention, and the Flows page lists the rest.
@@ -1523,5 +1537,6 @@ async def dashboard() -> dict[str, Any]:
         "conversations": [_conversation_payload(item) for item in conversations],
         "metrics": metrics,
         # No latest events: north's own background calls filled them, and they said nothing (issue #81).
-        "artifacts": dashboard_artifacts,
+        # What ran in the background in the last day, in place of a tile for one person's briefing flows.
+        "background": _background(),
     }
