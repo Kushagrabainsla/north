@@ -364,6 +364,16 @@ class ApprovalStore:
         ]
         return sorted(decided, key=lambda card: card.created_at)
 
+    def decided_since(self, since: datetime) -> list[Card]:
+        """Every card decided (by you or for you) that was raised after *since*, oldest first."""
+        decided = [
+            card
+            for card in self._cards.values()
+            if card.status in (ApprovalDecision.APPROVED, ApprovalDecision.REJECTED, ApprovalDecision.ANSWERED)
+            and card.created_at >= since
+        ]
+        return sorted(decided, key=lambda card: card.created_at)
+
     def all(self, limit: int = 100) -> list[Card]:
         """Every card still waiting, however many, then the latest *limit* decided, newest first."""
         cards = sorted(self._cards.values(), key=lambda c: c.created_at, reverse=True)

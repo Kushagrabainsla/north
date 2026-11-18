@@ -8,6 +8,7 @@ session, in Safe and Autonomous, and never lets a send or a spend through.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -101,7 +102,7 @@ async def test_asking_each_time_keeps_no_rule_and_a_kept_rule_is_not_offered_aga
     policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTONOMOUS, approval_memory=memory, decider=_Decider())
     assert (await policy.rule(_action(), "t2")).decided_by == DecidedBy.MEMORY_DECIDER
 
-    standing_rules.record(offer, ApprovalDecision.APPROVED, standing_rules.ALWAYS, memory)
+    # "Ask me each time" is kept: north does not offer that rule again.
     second = _card()
     store.add(second)
     await orchestrator.respond_approval(second.id, ApprovalDecision.APPROVED, "Approve")
@@ -111,13 +112,13 @@ async def test_asking_each_time_keeps_no_rule_and_a_kept_rule_is_not_offered_aga
 async def test_a_standing_no_refuses_and_a_standing_yes_never_lets_a_send_through(tmp_path: Path) -> None:
     memory = ApprovalMemory(tmp_path / "memory.db")
     policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTONOMOUS, approval_memory=memory, decider=_Decider())
-    offer = standing_rules.offer(_card(), ApprovalDecision.APPROVED, memory)
+    card = _card()
 
-    standing_rules.record(offer, ApprovalDecision.APPROVED, standing_rules.ALWAYS, memory)
+    standing_rules.keep("browser", SCOPE, ApprovalDecision.APPROVED, memory, card)
     sending = await policy.rule(_action(reaches_third_party=True), "t1")
     assert sending.decided_by == DecidedBy.MEMORY_DECIDER  # the rule did not decide it
 
-    standing_rules.record(offer, ApprovalDecision.REJECTED, standing_rules.NEVER, memory)
+    standing_rules.keep("browser", SCOPE, ApprovalDecision.REJECTED, memory, card)
     assert (await policy.rule(_action(), "t1")).verdict is Verdict.REFUSE
 
 
@@ -126,4 +127,57 @@ def test_nothing_is_offered_for_a_card_with_no_rule_scope_or_answer_that_is_not_
     assert standing_rules.offer(_card(rule_scope=""), ApprovalDecision.APPROVED, memory) is None
     assert standing_rules.offer(_card(), ApprovalDecision.TASK_ENDED, memory) is None
     assert standing_rules.offer(_card(source="flow"), ApprovalDecision.APPROVED, memory) is None
-    assert standing_rules.made(_card(), standing_rules.ALWAYS) is None  # not an offer
+    assert standing_rules.answers(_card(), standing_rules.ALWAYS, {}) == []  # not an offer
+
+
+def _ruled(store: ApprovalStore, scope: str, decision: str, by: str = DecidedBy.MEMORY_DECIDER) -> None:
+    """A card the memory decider (or you) decided, as the approval layer records it."""
+    card = _card(rule_scope=scope)
+    UserInteraction(store).record_resolved(card, Answer(decision, "", "because", by))
+
+
+async def test_the_morning_card_asks_about_what_the_decider_ruled_on_twice(tmp_path: Path) -> None:
+    store, memory = ApprovalStore(), ApprovalMemory(tmp_path / "memory.db")
+    twice, once, mixed = SCOPE, "browser fill on linkedin.com in profile p1 (3f2a)", "browser click on x.test in p1"
+    for scope, decision in [(twice, "approved"), (twice, "approved"), (twice, "approved"), (once, "approved")]:
+        _ruled(store, scope, decision)
+    _ruled(store, mixed, "approved")
+    _ruled(store, mixed, "rejected")
+    _ruled(store, once, "approved", by=DecidedBy.YOU)  # yours are offered after the card itself
+
+    card = standing_rules.digest(store.decided_since(datetime.now(UTC) - timedelta(days=1)), memory)
+
+    [field] = card.fields
+    assert field.name == f"browser|{twice}" and "allowed this 3 times" in field.label
+    assert field.options == [standing_rules.ALWAYS, standing_rules.EACH_TIME]
+    assert card.source == standing_rules.DIGEST_SOURCE and not card.blocking
+
+
+async def test_your_answers_to_the_morning_card_become_rules_or_stop_the_asking(tmp_path: Path) -> None:
+    store, memory = ApprovalStore(), ApprovalMemory(tmp_path / "memory.db")
+    other = "browser fill on linkedin.com in profile p1 (3f2a)"
+    for scope in (SCOPE, SCOPE, other, other):
+        _ruled(store, scope, "approved")
+    card = standing_rules.digest(store.decided_since(datetime.now(UTC) - timedelta(days=1)), memory)
+    store.add(card)
+
+    answers = {f"browser|{SCOPE}": standing_rules.ALWAYS, f"browser|{other}": standing_rules.EACH_TIME}
+    await _orchestrator(store, memory).respond_approval(card.id, ApprovalDecision.ANSWERED, "", values=answers)
+
+    policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTONOMOUS, approval_memory=memory, decider=_Decider())
+    assert (await policy.rule(_action(), "t9")).decided_by == DecidedBy.REPLAY
+    assert standing_rules.settled("browser", other, memory)
+    assert standing_rules.digest(store.decided_since(datetime.now(UTC) - timedelta(days=1)), memory) is None
+
+
+async def test_the_morning_card_comes_once_a_day_from_eight(tmp_path: Path) -> None:
+    store, memory = ApprovalStore(), ApprovalMemory(tmp_path / "memory.db")
+    interaction = UserInteraction(store)
+    for _ in range(2):
+        _ruled(store, SCOPE, "approved")
+    morning = datetime.now(UTC).astimezone().replace(hour=7, minute=30)
+
+    assert await standing_rules.offer_morning_digest(store, memory, interaction, morning) is None
+    made = await standing_rules.offer_morning_digest(store, memory, interaction, morning.replace(hour=8))
+    assert made is not None and made in store.pending()
+    assert await standing_rules.offer_morning_digest(store, memory, interaction, morning.replace(hour=11)) is None

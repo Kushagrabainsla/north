@@ -2,45 +2,76 @@
 
 In Autonomous mode the memory decider leaves a card for you when nothing you stated
 covers a step, and your answer used to teach north only that exact action: on
-2026-11-18 it asked about a fifth LinkedIn profile after you had allowed four. Now,
-after you answer a card yourself, north offers once to make the answer a rule. The
-rule names the kind of action and where, in the words of the tool (`Action.rule_scope`),
-and applies in every task, flow and session, in the modes that replay your answers
-(Safe and Autonomous). A rule is one row of approval memory, so the Memory page lists
-it and can remove it.
+2026-11-18 it asked about a fifth LinkedIn profile after you had allowed four. Two
+cards now turn answers into rules:
 
-Only a yes that may stand for the next one is offered: never a send, a spend or a
-change to north's own settings (`approval.policy.may_replay_yes`).
+- After you answer a card yourself, north offers once to make your answer a rule.
+- Each morning, one card in your attention panel lists the kinds of action the memory
+  decider ruled on at least twice in the last day and that have no rule, and asks for
+  each whether its ruling should become yours. A decider's yes is not your yes: only
+  your answer makes the rule.
+
+A rule names the kind of action and where, in the words of the tool (`Action.rule_scope`),
+and applies in every task, flow and session, in the modes that replay your answers (Safe
+and Autonomous). It is one row of approval memory, so the Memory page lists it and can
+remove it. "No, ask me each time" is kept too, so north does not ask about that kind again.
+
+Only a yes that may stand for the next one is offered: never a send, a spend or a change
+to north's own settings (`approval.policy.may_replay_yes`).
 """
 
 from __future__ import annotations
 
+import asyncio
+import datetime
+import logging
+from collections import defaultdict
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from approval.models import ApprovalDecision, Card, CardType
+from approval.models import ApprovalDecision, Card, CardField, CardType, DecidedBy
 from approval.policy import standing_rule_key
+from utils.time import local_timezone, localnow
 
 if TYPE_CHECKING:
     from approval.approval_memory import ApprovalMemory
+    from approval.interaction import UserInteraction
+    from approval.store import ApprovalStore
+
+logger = logging.getLogger(__name__)
 
 SOURCE = "standing_rule"
+DIGEST_SOURCE = "standing_rule_digest"
 ALWAYS = "Yes, always allow it"
 NEVER = "Yes, never allow it"
 EACH_TIME = "No, ask me each time"
+# What "ask me each time" is kept as: a decision that never replays, and settles the scope.
+DECLINED = "declined"
+# The morning card: from this local hour, once a day; a kind of action ruled on at least this often.
+DIGEST_HOUR = 8
+_MIN_RULINGS = 2
+_MAX_DIGEST_QUESTIONS = 5
+_DIGEST_CHECK_SECONDS = 3600
 _CARD_TEXT_CHARS = 300
+_ANSWERS = {ALWAYS: ApprovalDecision.APPROVED, NEVER: ApprovalDecision.REJECTED, EACH_TIME: DECLINED}
+
+
+def settled(agent: str, scope: str, memory: ApprovalMemory) -> bool:
+    """Whether you already answered for *scope*: a rule, or "ask me each time"."""
+    return memory.latest(agent, standing_rule_key(scope)) is not None
 
 
 def offer(card: Card, decision: str, memory: ApprovalMemory) -> Card | None:
     """The card that asks whether to make your answer to *card* a rule, or None when none fits.
 
-    None for a card that names no rule scope, one north answered, an answer that is not a yes
-    or a no, and a scope that already has a rule.
+    None for a card that names no rule scope, one north made for itself, an answer that is
+    not a yes or a no, and a scope you already answered for.
     """
     if card.type is not CardType.APPROVAL or not card.rule_scope or card.source:
         return None
     if decision not in (ApprovalDecision.APPROVED, ApprovalDecision.REJECTED):
         return None
-    if memory.recall(card.agent, standing_rule_key(card.rule_scope)) is not None:
+    if settled(card.agent, card.rule_scope, memory):
         return None
     allowed = decision == ApprovalDecision.APPROVED
     verb = "allow" if allowed else "refuse"
@@ -64,15 +95,109 @@ def offer(card: Card, decision: str, memory: ApprovalMemory) -> Card | None:
     )
 
 
-def made(card: Card, chosen_option: str) -> str | None:
-    """The decision ("approved" or "rejected") your answer to an offer makes a rule, or None."""
-    if card.source != SOURCE or not card.rule_scope:
+def digest(decided: list[Card], memory: ApprovalMemory) -> Card | None:
+    """The morning card: what the memory decider ruled on at least twice, unsettled, as one question each.
+
+    A kind of action it both allowed and refused is left out: its rulings do not say what a rule
+    should be. The kinds ruled on most come first.
+    """
+    rulings: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for card in decided:
+        if card.decided_by == DecidedBy.MEMORY_DECIDER and card.rule_scope and card.status in _RULINGS:
+            rulings[(card.agent, card.rule_scope)].append(card.status)
+    fields = []
+    for (agent, scope), statuses in sorted(rulings.items(), key=lambda item: -len(item[1])):
+        if len(statuses) < _MIN_RULINGS or len(set(statuses)) > 1 or settled(agent, scope, memory):
+            continue
+        allowed = statuses[0] == ApprovalDecision.APPROVED
+        verb = "allow" if allowed else "refuse"
+        fields.append(
+            CardField(
+                name=f"{agent}|{scope}",
+                label=(
+                    f"North's approval model {'allowed' if allowed else 'refused'} this {len(statuses)} times: "
+                    f"{verb} {scope}. Make it your rule?"
+                ),
+                editable=True,
+                options=[ALWAYS if allowed else NEVER, EACH_TIME],
+            )
+        )
+        if len(fields) == _MAX_DIGEST_QUESTIONS:
+            break
+    if not fields:
         return None
-    return {ALWAYS: ApprovalDecision.APPROVED, NEVER: ApprovalDecision.REJECTED}.get(chosen_option)
+    return Card.new(
+        type=CardType.QUESTION,
+        task_id="",
+        agent="north",
+        title="Rules to confirm",
+        message=(
+            "North's approval model decided these for you more than once yesterday. Each answer of yours "
+            "becomes a rule for every task, flow and session in Safe and Autonomous modes, or stops north "
+            "asking about it. You can remove a rule on the Memory page."
+        ),
+        fields=fields,
+        blocking=False,
+        source=DIGEST_SOURCE,
+    )
 
 
-def record(card: Card, decision: str, chosen_option: str, memory: ApprovalMemory) -> None:
-    """Keep the rule your answer made, under the key the policy recalls it by."""
-    verb = "allow" if decision == ApprovalDecision.APPROVED else "refuse"
-    labelled = card.model_copy(update={"action_label": f"Standing rule: {verb} {card.rule_scope}"})
-    memory.record(card.agent, standing_rule_key(card.rule_scope), decision, card=labelled, chosen_option=chosen_option)
+_RULINGS = (ApprovalDecision.APPROVED, ApprovalDecision.REJECTED)
+
+
+def answers(card: Card, chosen_option: str, values: dict[str, str]) -> list[tuple[str, str, str]]:
+    """What your answer to an offer or a morning card settles: (agent, scope, decision) for each question."""
+    if card.source == SOURCE and card.rule_scope:
+        asked = [(card.agent, card.rule_scope, chosen_option)]
+    elif card.source == DIGEST_SOURCE:
+        asked = [(*field.name.split("|", 1), values.get(field.name, "")) for field in card.fields if "|" in field.name]
+    else:
+        return []
+    return [(agent, scope, decision) for agent, scope, answer in asked if (decision := _ANSWERS.get(str(answer)))]
+
+
+def keep(agent: str, scope: str, decision: str, memory: ApprovalMemory, card: Card) -> None:
+    """Keep what you settled for *scope*, under the key the policy recalls it by."""
+    if decision == DECLINED:
+        label = f"No rule, ask each time: {scope}"
+    else:
+        label = f"Standing rule: {'allow' if decision == ApprovalDecision.APPROVED else 'refuse'} {scope}"
+    labelled = card.model_copy(update={"action_label": label})
+    memory.record(agent, standing_rule_key(scope), decision, card=labelled)
+
+
+async def morning_digest(
+    store: ApprovalStore,
+    memory: ApprovalMemory,
+    interaction: UserInteraction,
+    now: Callable[[], datetime.datetime] = localnow,
+) -> None:
+    """Put the morning card in your attention panel once a day, from DIGEST_HOUR in your time zone.
+
+    Checked hourly against the wall clock, which keeps counting while the Mac sleeps. A day that
+    already has a morning card gets no other, after a restart too.
+    """
+    while True:
+        try:
+            await offer_morning_digest(store, memory, interaction, now())
+        except Exception:
+            logger.warning("Could not make this morning's rules card", exc_info=True)
+        await asyncio.sleep(_DIGEST_CHECK_SECONDS)
+
+
+async def offer_morning_digest(
+    store: ApprovalStore, memory: ApprovalMemory, interaction: UserInteraction, now: datetime.datetime
+) -> Card | None:
+    """This morning's card, put in your attention panel, or None when it is too early, made, or empty."""
+    from approval.interaction import CardEvent
+
+    if now.hour < DIGEST_HOUR:
+        return None
+    today = now.date()
+    zone = local_timezone()
+    if any(card.source == DIGEST_SOURCE and card.created_at.astimezone(zone).date() == today for card in store.all()):
+        return None
+    card = digest(store.decided_since(now - datetime.timedelta(days=1)), memory)
+    if card is not None:
+        await interaction.offer(card, event=CardEvent.QUESTION)
+    return card

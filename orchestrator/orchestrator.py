@@ -560,8 +560,10 @@ class Orchestrator:
         if self._approval_memory is None:
             return
         try:
-            if (rule := standing_rules.made(card, chosen_option)) is not None:
-                standing_rules.record(card, rule, chosen_option, self._approval_memory)
+            resolved = self._approval_store.get(card.id) or card
+            if settled := standing_rules.answers(card, chosen_option, dict(resolved.response or {})):
+                for agent, scope, rule in settled:
+                    standing_rules.keep(agent, scope, rule, self._approval_memory, card)
             elif (offer := standing_rules.offer(card, decision, self._approval_memory)) is not None:
                 await self._interaction.offer(offer, event=CardEvent.QUESTION)
         except Exception:

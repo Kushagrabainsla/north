@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from agents.constants import NORTH_AGENT
 from agents.models import AgentDependencies
 from agents.registry import AgentRegistry
+from approval import standing_rules
 from approval.approval_memory import ApprovalMemory
 from approval.approvals import Approvals
 from approval.batching import BatchingNotifier
@@ -1273,6 +1274,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 asyncio.create_task(
                     _guarded(_maintain_fact_store(deps.fact_store, deps.context_store), "fact_maintenance"),
                     name="fact_maintenance",
+                )
+            )
+        if approvals.interaction is not None:
+            # Each morning, the kinds of action the memory decider ruled on, for you to make your rules.
+            background_tasks.append(
+                asyncio.create_task(
+                    _guarded(
+                        standing_rules.morning_digest(deps.approval_store, approval_memory, approvals.interaction),
+                        "rules_digest",
+                    ),
+                    name="rules_digest",
                 )
             )
     else:

@@ -197,6 +197,20 @@ class ApprovalMemory:
         """Return the user's prior decision ('approved'/'rejected') for this action, or None."""
         return self._ensure_cache().get(_fingerprint(agent, message))
 
+    def latest(self, agent: str, message: str) -> str | None:
+        """Your latest decision of any kind for this action, replayable or not, or None."""
+        try:
+            with open_db_connection(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT decision FROM decisions WHERE fingerprint = ? AND decided_by = 'you' "
+                    "ORDER BY id DESC LIMIT 1",
+                    (_fingerprint(agent, message),),
+                ).fetchone()
+        except Exception:
+            logger.warning("ApprovalMemory: failed to read the latest decision", exc_info=True)
+            return None
+        return str(row["decision"]) if row else None
+
     def all_decisions(self) -> list[dict[str, object]]:
         """Every action north replays a decision for, with your latest answer, newest first.
 
