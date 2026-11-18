@@ -35,17 +35,15 @@ _DONE = {"completed", "failed", "cancelled", "dead", "timed_out", "error"}
 _TIMEOUT_S = 900
 
 # Read-only work on public pages, with the steps real browser tasks take: open, read,
-# inspect, click, fill and press. Each closes its tab so nothing stays in the user's Chrome.
+# inspect, click, fill and press. North closes each task's tab when the task ends, after a screenshot.
 TASKS = {
     "hn": (
         "Using my {profile} browser profile, open https://news.ycombinator.com, open the comments page "
-        "of the top story, and tell me the story title and one line on each of the top 3 comments. "
-        "Close the browser tab when you are done."
+        "of the top story, and tell me the story title and one line on each of the top 3 comments."
     ),
     "wiki": (
         "Using my {profile} browser profile, go to https://en.wikipedia.org, type 'Ada Lovelace' in the "
-        "search box and search, open her article, and tell me her birth date and one notable work. "
-        "Close the browser tab when you are done."
+        "search box and search, open her article, and tell me her birth date and one notable work."
     ),
 }
 _ALLOWED_SITES = ("news.ycombinator.com", "ycombinator.com", "wikipedia.org")
@@ -169,6 +167,9 @@ def main(argv: list[str]) -> None:
             shutil.copy2(part, out / "tasks" / part.name)
         if (home / "north.log").exists():
             shutil.copy2(home / "north.log", out / "north.log")
+        # North's screenshot of each task's last page (BrowserTool.end_task).
+        for shot in home.joinpath("tasks").glob("*/browser-*.png"):
+            shutil.copy2(shot, out / f"{shot.parent.name}-{shot.name}")
         (out / "results.json").write_text(json.dumps(results, indent=2, default=str))
         (home / "browser" / "taskwindow" / profile_id).unlink()  # the link, never the user's folder
         shutil.rmtree(home.parent, ignore_errors=True)

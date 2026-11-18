@@ -79,6 +79,10 @@ class UserInteraction:
         self._ledger = ledger
         self._notices = notices
 
+    def waiting_on_you(self, task_id: str) -> bool:
+        """Whether a card of *task_id* still waits for your answer, such as work handed over to you."""
+        return any(card.task_id == task_id for card in self._store.pending())
+
     async def request_approval_status(
         self,
         *,

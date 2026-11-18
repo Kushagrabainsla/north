@@ -632,7 +632,7 @@ class TaskWindowBrowser:
             uid, _, rest = line.strip().removeprefix("uid=").partition(" ")
             role, _, name = rest.partition(" ")
             seen[uid] = (role, name)
-        return {"snapshot": page["snapshot"], "tree": page["snapshot"], "url": page["url"], "title": page["title"]}
+        return {"snapshot": page["snapshot"], "url": page["url"], "title": page["title"]}
 
     async def _click(self, profile: BrowserProfile, task_id: str, session: str, params: dict, *, double: bool) -> dict:
         if params.get("xy") and not (params.get("uid") or params.get("selector")):
@@ -692,6 +692,25 @@ class TaskWindowBrowser:
             raise BridgeInputError("The browser returned no image.")
         await asyncio.to_thread(Path(filename).write_bytes, base64.b64decode(image["data"]))
         return {"filename": filename}
+
+    async def finish(self, profile: BrowserProfile, task_id: str, screenshot: Path) -> bool:
+        """Save what the task's tab shows to *screenshot*, then close the tab. True when the file was saved.
+
+        Neither step may raise: this runs after the task has ended, and one failure must not stop the other.
+        """
+        session = self._session(profile, task_id)
+        saved = False
+        try:
+            await asyncio.to_thread(screenshot.parent.mkdir, parents=True, exist_ok=True)
+            await self._screenshot(profile, session, {"filename": str(screenshot)})
+            saved = True
+        except (BridgeInputError, _ToolError, OSError, RuntimeError, httpx.HTTPError):
+            logger.warning("could not save the last page of task %s in %s", task_id, profile.name, exc_info=True)
+        try:
+            await self._close(profile, task_id)
+        except (_ToolError, OSError, RuntimeError, httpx.HTTPError):
+            logger.warning("could not close task %s's tab in %s", task_id, profile.name, exc_info=True)
+        return saved
 
     async def _close(self, profile: BrowserProfile, task_id: str) -> None:
         session = self._session(profile, task_id)

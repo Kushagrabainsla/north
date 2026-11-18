@@ -81,4 +81,13 @@ Fixed after this replay: finding 1 (a decider's yes covers the site, and the dec
 
 6. **A call for an unknown profile went to the decider first.** Fixed: `unavailable()` refuses it before any card.
 
-Not changed yet: findings 3 and 4, and the decider call on each `click`, `fill`, `press`, `eval` and `close` (3 to 7 s each).
+### Replay with one copy per result and tab closing (`20261118-114011`)
+
+- Hacker News: 68 s, 9 turns. The model used four `eval` calls this time, and one decider call on them took 17 s.
+- Results the model got: `goto` 165 characters (was 765-864), `click` 117 (was 673).
+- At task end north saved the comments page as `browser-<profile id>.png` in the task folder and closed the tab.
+  The prompt no longer asks the model to close it.
+
+Finding 4 is fixed: the model gets one copy of each result, and no profile-check fields outside `preflight` and `status`.
+
+Not changed yet: finding 3, and the decider call on each `click`, `fill`, `press`, `eval` and `close` (3 to 7 s each).

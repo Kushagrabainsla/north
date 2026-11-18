@@ -1378,7 +1378,9 @@ class AgenticLLMAgent(LLMAgent):
                 if data.get("data"):
                     data["data"].pop("base64_image", None)
                     data["data"].pop("mime_type", None)
-                data["formatted"] = tool_map[tool_name].format_output(result.data or {})
+                data.update(_one_copy(tool_map[tool_name], result.data or {}))
+                if tool_map[tool_name].model_reads_formatted:
+                    data.pop("data", None)
             else:
                 data = result.model_dump()
         except Exception as exc:
@@ -1435,6 +1437,18 @@ def _answered_by(card: Card) -> str:
     return _ANSWERED_BY.get(card.decided_by or DecidedBy.YOU, "north; the user has not seen this card")
 
 
+def _one_copy(tool: Tool, data: dict[str, Any]) -> dict[str, str]:
+    """`{"formatted": text}` when the tool's text adds something to its data, else {}.
+
+    The default text is the data's JSON again, so it was a second copy of every result (issue #83).
+    A tool that reads by its text alone (`model_reads_formatted`) always gets it.
+    """
+    formatted = tool.format_output(data)
+    if tool.model_reads_formatted or formatted != Tool.format_output(tool, data):
+        return {"formatted": formatted}
+    return {}
+
+
 def _tool_result_event(tool_name: str, result_str: str, success: bool) -> dict[str, Any]:
     """The run-history record of one tool result: what the model was shown.
 
@@ -1442,10 +1456,15 @@ def _tool_result_event(tool_name: str, result_str: str, success: bool) -> dict[s
     of the result is kept: a failed skill test recorded only "Skill selection tests
     failed.", though the model was told which prompts failed, and an `ask_user`
     result recorded no answer at all.
+
+    A successful result the model reads as data alone (see `_one_copy`) is shown as that data's JSON, the
+    text the terminal and the dashboard showed for it before the model stopped getting it twice.
     """
     event: dict[str, Any] = {"tool": tool_name, "success": success}
     try:
         parsed = json.loads(result_str)
+        if success and not parsed.get("formatted") and isinstance(parsed.get("data"), dict) and parsed["data"]:
+            parsed["formatted"] = json.dumps(parsed["data"], indent=2)
         if formatted := parsed.get("formatted"):
             event["formatted"] = formatted
         else:

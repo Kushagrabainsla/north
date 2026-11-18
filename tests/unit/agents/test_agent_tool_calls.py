@@ -183,3 +183,49 @@ async def test_each_tool_call_saves_where_its_time_went(tmp_path: Path) -> None:
     assert timing["action"] == "look"
     assert timing["ms"] >= 0
     assert set(timing["spans"]) == {"prepare", "run", "inner"}
+
+
+async def test_a_result_with_no_text_of_its_own_is_sent_once(tmp_path: Path) -> None:
+    """Issue #83: the default `formatted` text was the data's JSON again, a second copy of every result."""
+    from agents.agentic_llm_agent import _tool_result_event
+    from tools.base import Tool
+    from tools.models import ToolInput, ToolOutput
+
+    class _Plain(Tool):
+        name = "plain"
+        description = "returns data"
+
+        async def run(self, inp: ToolInput) -> ToolOutput:
+            return ToolOutput(success=True, data={"rows": [1, 2, 3]})
+
+    agent = _make_agent(tmp_path)
+    sent, _ = await agent._call_tool({"plain": _Plain()}, "plain", {}, _payload())
+    assert "formatted" not in json.loads(sent)
+    assert sent.count("rows") == 1
+    # The terminal and the dashboard still show the data, as they did.
+    assert json.loads(_tool_result_event("plain", sent, True)["formatted"]) == {"rows": [1, 2, 3]}
+
+
+async def test_the_browser_sends_one_copy_without_the_profile_check(tmp_path: Path) -> None:
+    """An inspect sent its page tree three times, and every result a 64-character connection_id."""
+    from tools.models import ToolInput, ToolOutput
+    from tools.universal.browser import BrowserTool
+
+    tree = 'uid=n1 link "Hacker News"'
+    identity = {"profile_verified": True, "connection_id": "c" * 64, "profile_id": "p1", "profile_name": "Work"}
+
+    class _Browser(BrowserTool):
+        async def execute(self, inp: ToolInput) -> ToolOutput:
+            action = inp.params["action"]
+            page = {"snapshot": tree, "url": "https://news.ycombinator.com/"} if action == "inspect" else {}
+            return ToolOutput(success=True, data={"action": action, **identity, **page})
+
+    agent = _make_agent(tmp_path)
+    tools = {"browser": _Browser()}
+    sent, _ = await agent._call_tool(tools, "browser", {"action": "inspect"}, _payload())
+    assert sent.count("Hacker News") == 1
+    assert "news.ycombinator.com" in sent
+    assert "connection_id" not in sent and "data" not in json.loads(sent)
+
+    checked, _ = await agent._call_tool(tools, "browser", {"action": "preflight"}, _payload())
+    assert "connection_id" in checked

@@ -61,6 +61,13 @@ _MAX_CDP_RESPONSE_BYTES = 1_000_000
 # Parameters that once attached chrome-agent to the user's own Chrome. Saved
 # profiles replaced them; they are refused, never silently ignored.
 _RAW_ATTACH_KEYS = ("connect", "copy_cookies")
+# The profile check's own fields. Every existing-profile result carried them, a 64-character
+# connection_id included, and the model was sent them again on each later turn (issue #83). Only the
+# check itself shows them to the model.
+_IDENTITY_KEYS = frozenset(
+    {"profile_verified", "login_verified", "connection_id", "extension_version", "profile_id", "profile_name"}
+)
+_IDENTITY_ACTIONS = frozenset({"preflight", "status"})
 
 
 def _site(url: str) -> str:
@@ -583,6 +590,12 @@ def _format_article(article: dict[str, Any]) -> str:
     return f"## {title}{byline}\n\n{content}"
 
 
+def _on_page(data: dict[str, Any], text: str) -> str:
+    """*text* after the URL it was read on, when the result names one."""
+    url = data.get("url") or (data.get("navigation") or {}).get("url") or ""
+    return f"URL: {url}\n{text}" if url else text
+
+
 def _format_assertion(data: dict[str, Any]) -> str:
     outcome = "PASS" if data.get("held", True) else "FAIL"
     return f"Assertion [{outcome}]: {json.dumps(data)}"
@@ -593,6 +606,7 @@ class BrowserTool(Tool):
 
     name = "browser"
     is_mutating = False
+    model_reads_formatted = True
     _MUTATING_ACTIONS = frozenset(
         {
             "click",
@@ -632,8 +646,10 @@ class BrowserTool(Tool):
         "to connect it once from the dashboard's Browser profiles; then retry preflight, not the interrupted action. "
         "Reuse it for "
         "the whole task and pauses; never navigate or close the user's unrelated tabs. Windows share "
-        "profile logins/cookies and are not separate accounts. Keep drafts open for review unless the "
-        "user requests close; close affects only the task's North-owned tab, never Chrome itself. "
+        "profile logins/cookies and are not separate accounts. When the task ends, North saves a screenshot "
+        "of the task's tab in the task folder and closes the tab; a draft left for the user stays open while "
+        "its request_approval (wait=false) card waits. close affects only the task's North-owned tab, never "
+        "Chrome itself. "
         "If an action's outcome is unknown, inspect and ask for review; never repeat it automatically. "
         "Check the expected account on the target site; if already signed in, "
         "reuse that session without asking the user to log in again. Saved passwords alone do not "
@@ -1071,16 +1087,19 @@ class BrowserTool(Tool):
         return args
 
     def format_output(self, data: dict[str, Any]) -> str:
+        """The one copy of a result the model reads (`model_reads_formatted`)."""
         action = data.get("action", "")
+        shown = data if action in _IDENTITY_ACTIONS else {k: v for k, v in data.items() if k not in _IDENTITY_KEYS}
         if action == "extract" and "items" in data:
             return _format_records(data)
         if action == "read" and "article" in data:
-            return _format_article(data["article"])
-        if action == "inspect" and "tree" in data:
-            return f"### Accessibility Tree:\n```yaml\n{data['tree']}\n```"
+            return _on_page(data, _format_article(data["article"]))
+        tree = data.get("tree") or data.get("snapshot")
+        if action == "inspect" and tree:
+            return _on_page(data, f"### Accessibility Tree:\n```yaml\n{tree}\n```")
         if action == "assert":
-            return _format_assertion(data)
-        return json.dumps(data, indent=2)
+            return _format_assertion(shown)
+        return json.dumps(shown)
 
     async def _native_call(self, profile, params: dict) -> ToolOutput:
         if self._existing_browser is None:
@@ -1140,12 +1159,13 @@ class BrowserTool(Tool):
             logger.warning("could not close %s, which north opened", " ".join(target), exc_info=True)
 
     async def end_task(self, task_id: str) -> None:
-        """Close what *task_id* opened through chrome-agent: its page in each North-managed profile, its own browser.
+        """Close what *task_id* opened: its page in each North-managed profile, its own browser, its tabs in yours.
 
         They stayed open until north stopped, a tab for every task, one holding a URL
-        with a secret in it (issue #76, W1). What a task left in your existing Chrome
-        stays there, as its drafts do.
+        with a secret in it (issue #76, W1). Tabs in your existing Chrome stayed for
+        good and piled up in North's tab group (issue #83).
         """
+        await self._finish_existing_tabs(task_id)
         page = _task_page(task_id)
         pages = sorted(opened for opened in self._opened_pages if opened[1] == page)
         self._opened_pages.difference_update(pages)
@@ -1154,6 +1174,31 @@ class BrowserTool(Tool):
         if task_id in self._started_browsers:  # a plain session's browser is named after its task
             self._started_browsers.discard(task_id)
             await self._close("--browser", task_id)
+
+    async def _finish_existing_tabs(self, task_id: str) -> None:
+        """Save each tab the task left open in your Chrome as a screenshot in the task's folder, then close it.
+
+        The screenshot is the record of what north saw last; it is never sent to a model. A tab stays open
+        while a card of the task still waits for you, such as a draft handed over to send yourself.
+        """
+        if self._existing_browser is None:
+            return
+        interaction = self._approvals().interaction
+        if interaction is not None and interaction.waiting_on_you(task_id):
+            return
+        from utils.handoff import handoff_dir_for
+
+        for key in [key for key in self._open_sites if key[0] == task_id]:
+            profile = next((p for p in self._profiles() if p.id == key[1] and p.context == "existing"), None)
+            if profile is None:
+                continue
+            self._open_sites.pop(key, None)
+            self._verified_bindings.pop(key, None)
+            screenshot = Path(handoff_dir_for(task_id)) / f"browser-{profile.id}.png"
+            if await self._existing_browser.finish(profile, task_id, screenshot):
+                logger.info(
+                    "Closed task %s's tab in %s; its last page is saved in %s", task_id, profile.name, screenshot
+                )
 
     async def aclose(self) -> None:
         """Close every browser north started; disconnect existing Chrome without closing the user's browser.

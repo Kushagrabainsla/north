@@ -51,6 +51,10 @@ class Tool(ABC):
     # A tool that starts runs of its own (a flow's test run, `run_flow`). Those runs' steps take the lock for
     # their own changes, so holding it for the whole tool call left them waiting on their parent for ever.
     starts_runs: bool = False
+    # True when `format_output` carries everything the model needs from a result: the model then reads that
+    # text alone, not the data beside it. Off, the model reads the data, and the text too when it says more
+    # than the data's JSON. Both at once sent a browser page tree three times, on every later turn (issue #83).
+    model_reads_formatted: bool = False
     # The names of your secrets this tool reads with `secret(name)` (CODING_STYLE §7.6). North gives a call
     # only these, and its approval card names them.
     uses_secrets: tuple[str, ...] = ()
