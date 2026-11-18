@@ -113,6 +113,7 @@ from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.list_schedules import ListSchedulesTool
 from tools.universal.offered_before import OfferedBeforeTool
 from tools.universal.query_metrics import QueryMetricsTool
+from tools.universal.remember import RememberTool
 from tools.universal.run_flow import RunFlowTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from tools.universal.update_plan import UpdatePlanTool
@@ -281,6 +282,8 @@ def _build_tool_registry(
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
     if deps.fact_store is not None:
         tool_registry.register(ForgetTool(deps.fact_store, deps.context_store))
+        # Its pair: a fact north finds in a file or a page is kept, as unconfirmed (issue #82, item 9).
+        tool_registry.register(RememberTool(deps.fact_store, deps.context_store))
     deps.offered_store = SeenStore(settings.north_home / "jobs.db")  # shared with the agents: one memory
     tool_registry.register(OfferedBeforeTool(deps.offered_store))
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))

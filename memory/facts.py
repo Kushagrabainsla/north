@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS context_facts (
     valid_from      TEXT,
     valid_until     TEXT,
     dates_checked   INTEGER  NOT NULL DEFAULT 0,
-    about           TEXT
+    about           TEXT,
+    confirmed       INTEGER  NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_context_facts_cat_updated ON context_facts (category, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_context_facts_updated ON context_facts (updated_at DESC);
@@ -85,6 +86,8 @@ _MIGRATION_STATEMENTS = [
     "ALTER TABLE context_facts ADD COLUMN valid_until TEXT",
     "ALTER TABLE context_facts ADD COLUMN dates_checked INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE context_facts ADD COLUMN about TEXT",
+    # 0 for a fact north found itself (the `remember` tool) and the user has not stated; see `_with_dates`.
+    "ALTER TABLE context_facts ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 1",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_about ON context_facts (subject, about, status)",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_cat_updated ON context_facts (category, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_updated ON context_facts (updated_at DESC)",
@@ -317,12 +320,22 @@ def _show_day(day: str) -> str:
     return date.fromisoformat(day).strftime("%b %-d, %Y")
 
 
-def _with_dates(content: str, valid_from: str | None, valid_until: str | None, observed_at: str | None) -> str:
+def _with_dates(
+    content: str,
+    valid_from: str | None,
+    valid_until: str | None,
+    observed_at: str | None,
+    found_in: str | None = None,
+) -> str:
     """The fact with when it is true, so a model can tell the present from the past.
 
     North read an internship offer in September and kept "the internship is
     full-time" as a bare present-tense sentence two months after it ended. A fact
     with no dates says when it was learned instead, which is the next best clue.
+
+    *found_in* is where north read a fact the user has not stated: it is shown as
+    unconfirmed. Measured on concurrent agents, the label, not retraction, is what
+    kept a wrong found fact from spreading (issue #82, item 9).
     """
     if valid_from and valid_until:
         note = f"true from {_show_day(valid_from)} until {_show_day(valid_until)}"
@@ -333,8 +346,15 @@ def _with_dates(content: str, valid_from: str | None, valid_until: str | None, o
     elif learned := _learned_day(observed_at):
         note = f"noted {_show_day(learned)}"
     else:
-        return content
-    return f"{content} ({note})"
+        note = ""
+    if found_in is not None:
+        note = "; ".join(part for part in (note, f"unconfirmed: north read it in {found_in or 'a source'}") if part)
+    return f"{content} ({note})" if note else content
+
+
+def _found_in(row: Any) -> str | None:
+    """Where north read an unconfirmed fact (a row with `confirmed` and `source_path`), or None when confirmed."""
+    return None if row["confirmed"] else (row["source_path"] or "")
 
 
 class _Cached(NamedTuple):
@@ -347,6 +367,7 @@ class _Cached(NamedTuple):
     valid_from: str | None
     valid_until: str | None
     observed_at: str | None
+    found_in: str | None = None
 
 
 def _retention_rank_sql() -> str:
@@ -754,13 +775,13 @@ class FactStore:
         out: dict[str, list[str]] = {}
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT category, content, valid_from, valid_until, observed_at FROM context_facts "
-                f"WHERE {_CURRENT_SQL} ORDER BY category, updated_at DESC",
+                "SELECT category, content, valid_from, valid_until, observed_at, confirmed, source_path "
+                f"FROM context_facts WHERE {_CURRENT_SQL} ORDER BY category, updated_at DESC",
                 (_today(),),
             ).fetchall()
         for r in rows:
             out.setdefault(r["category"], []).append(
-                _with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"])
+                _with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"], _found_in(r))
             )
         return out
 
@@ -874,10 +895,13 @@ class FactStore:
         dates_checked: bool = False,
         about: str | None = None,
         said_at: datetime | None = None,
+        confirmed: bool = True,
     ) -> bool:
         """Embed and persist one fact with full provenance. Returns True when a new row was inserted.
 
         This is the extended version used by bootstrap and other provenance-aware writers.
+        *confirmed* is False for a fact north found itself and the user has not stated; a
+        later confirmed statement of the same fact confirms it.
         """
         content = content.strip()
         if not content:
@@ -904,20 +928,23 @@ class FactStore:
                 source_hash=source_hash,
                 source_mtime=source_mtime,
                 evidence=evidence,
+                confirmed=confirmed,
             )
 
         # Exact-match dedup runs BEFORE any embedding call: identical content
         # is a duplicate by definition, and skipping the embed for it saves
         # rate-limit budget as well as rows.
         if await asyncio.to_thread(self._find_exact_sync, category, content):
-            await asyncio.to_thread(self._touch_sync, category, content, dates)
+            await asyncio.to_thread(self._touch_sync, category, content, dates, confirmed)
+            self.invalidate_cache()
             return False
 
         # Normalized text dedup (catches paraphrases like
         # "User studies CS at SJSU" vs "User studies computer science at San Jose State University")
         matched_id = await asyncio.to_thread(self._find_normalized_sync, category, content)
         if matched_id:
-            await asyncio.to_thread(self._touch_by_id_sync, matched_id, dates)
+            await asyncio.to_thread(self._touch_by_id_sync, matched_id, dates, confirmed)
+            self.invalidate_cache()
             return False
         new_emb: list[float] = []
         try:
@@ -949,6 +976,7 @@ class FactStore:
             evidence,
             dates,
             dates_checked,
+            confirmed=confirmed,
         )
         self.invalidate_cache()
         # Runs after the write, not before: learning that "the internship ended"
@@ -980,7 +1008,8 @@ class FactStore:
         """
         subject = str(provenance.get("subject") or "user")
         said = said_at.isoformat()
-        fact_id = await asyncio.to_thread(self._restate_sync, category, subject, about, content, said, dates)
+        confirmed = bool(provenance.get("confirmed", True))
+        fact_id = await asyncio.to_thread(self._restate_sync, category, subject, about, content, said, dates, confirmed)
         inserted = fact_id is None
         new_emb: list[float] = []
         if inserted:
@@ -1002,6 +1031,7 @@ class FactStore:
                 dates_checked,
                 about,
                 said,
+                confirmed=confirmed,
             )
         retired = await asyncio.to_thread(self._keep_newest_sync, subject, about)
         self.invalidate_cache()
@@ -1028,11 +1058,13 @@ class FactStore:
         content: str,
         said: str,
         dates: tuple[str | None, str | None],
+        confirmed: bool = True,
     ) -> str | None:
         """The id of the current fact saying *content* about *about* - or saying it with no label - now restated.
 
         A fact stored before labels existed takes the label. None when no
-        current fact says it.
+        current fact says it. A confirmed restatement confirms a found fact; a found one
+        never unconfirms what the user stated.
         """
         normalized = _normalize_for_dedup(content)
         with open_db_connection(self._db_path) as conn:
@@ -1046,8 +1078,9 @@ class FactStore:
                 conn.execute(
                     "UPDATE context_facts SET about = ?, updated_at = ?, "
                     "observed_at = MAX(COALESCE(observed_at, updated_at), ?), "
-                    "valid_from = COALESCE(?, valid_from), valid_until = COALESCE(?, valid_until) WHERE id = ?",
-                    (about, datetime.now(UTC).isoformat(), said, *dates, match),
+                    "valid_from = COALESCE(?, valid_from), valid_until = COALESCE(?, valid_until), "
+                    "confirmed = MAX(confirmed, ?) WHERE id = ?",
+                    (about, datetime.now(UTC).isoformat(), said, *dates, int(confirmed), match),
                 )
         return match
 
@@ -1115,7 +1148,7 @@ class FactStore:
         today = _today()
         scored = [
             (
-                _with_dates(fact.content, fact.valid_from, fact.valid_until, fact.observed_at),
+                _with_dates(fact.content, fact.valid_from, fact.valid_until, fact.observed_at, fact.found_in),
                 cosine_similarity(qvec, fact.embedding),
             )
             for fact in cache
@@ -1136,7 +1169,7 @@ class FactStore:
         try:
             qvec_json = json.dumps(qvec)
             sql = (
-                "SELECT content, valid_from, valid_until, observed_at, "
+                "SELECT content, valid_from, valid_until, observed_at, confirmed, source_path, "
                 "(1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
                 "FROM context_facts "
                 "WHERE embedding IS NOT NULL AND embedding != '' AND embedding != '[]' "
@@ -1161,7 +1194,10 @@ class FactStore:
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(sql, params).fetchall()
             scored = [
-                (_with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"]), r["similarity"])
+                (
+                    _with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"], _found_in(r)),
+                    r["similarity"],
+                )
                 for r in rows
             ]
             return _apply_recall_cutoff(scored, max_results)
@@ -1332,22 +1368,31 @@ class FactStore:
                 return row["id"]
         return None
 
-    def _touch_sync(self, category: str, content: str, dates: tuple[str | None, str | None] = (None, None)) -> None:
+    def _touch_sync(
+        self,
+        category: str,
+        content: str,
+        dates: tuple[str | None, str | None] = (None, None),
+        confirmed: bool = True,
+    ) -> None:
         """Refresh recency of an existing fact (exact-match dedup path), adding any dates now known."""
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 "UPDATE context_facts SET updated_at = ?, valid_from = COALESCE(?, valid_from), "
-                "valid_until = COALESCE(?, valid_until) WHERE category = ? AND content = ?",
-                (datetime.now(UTC).isoformat(), *dates, category, content),
+                "valid_until = COALESCE(?, valid_until), confirmed = MAX(confirmed, ?) "
+                "WHERE category = ? AND content = ?",
+                (datetime.now(UTC).isoformat(), *dates, int(confirmed), category, content),
             )
 
-    def _touch_by_id_sync(self, fact_id: str, dates: tuple[str | None, str | None] = (None, None)) -> None:
+    def _touch_by_id_sync(
+        self, fact_id: str, dates: tuple[str | None, str | None] = (None, None), confirmed: bool = True
+    ) -> None:
         """Refresh recency of an existing fact by ID (normalized dedup path), adding any dates now known."""
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 "UPDATE context_facts SET updated_at = ?, valid_from = COALESCE(?, valid_from), "
-                "valid_until = COALESCE(?, valid_until) WHERE id = ?",
-                (datetime.now(UTC).isoformat(), *dates, fact_id),
+                "valid_until = COALESCE(?, valid_until), confirmed = MAX(confirmed, ?) WHERE id = ?",
+                (datetime.now(UTC).isoformat(), *dates, int(confirmed), fact_id),
             )
 
     def _find_similar_sync(self, category: str, emb: list[float], threshold: float) -> str | None:
@@ -1409,6 +1454,7 @@ class FactStore:
         dates_checked: bool = False,
         about: str | None = None,
         observed_at: str | None = None,
+        confirmed: bool = True,
     ) -> tuple[bool, str]:
         """Insert *content*; returns (is_new_row, fact_id).
 
@@ -1421,8 +1467,8 @@ class FactStore:
                 conn.execute(
                     "UPDATE context_facts SET content = ?, embedding = ?, updated_at = ?, "
                     "valid_from = COALESCE(?, valid_from), valid_until = COALESCE(?, valid_until), "
-                    "dates_checked = MAX(dates_checked, ?) WHERE id = ?",
-                    (content, emb_json, now, *dates, int(dates_checked), replace_id),
+                    "dates_checked = MAX(dates_checked, ?), confirmed = MAX(confirmed, ?) WHERE id = ?",
+                    (content, emb_json, now, *dates, int(dates_checked), int(confirmed), replace_id),
                 )
                 return False, replace_id
             fact_id = generate_id()
@@ -1430,8 +1476,8 @@ class FactStore:
                 """INSERT INTO context_facts
                 (id, content, category, embedding, updated_at, subject, confidence, status,
                  source_path, source_hash, source_mtime, evidence, observed_at,
-                 valid_from, valid_until, dates_checked, about)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 valid_from, valid_until, dates_checked, about, confirmed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     fact_id,
                     content,
@@ -1449,6 +1495,7 @@ class FactStore:
                     *dates,
                     int(dates_checked),
                     about,
+                    int(confirmed),
                 ),
             )
             # Retention: keep the store (and every scan over it) bounded, giving
@@ -1469,7 +1516,7 @@ class FactStore:
         """Every active fact with a usable vector. Ended ones are filtered at search time, by the day."""
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT id, content, embedding, category, valid_from, valid_until, observed_at "
+                "SELECT id, content, embedding, category, valid_from, valid_until, observed_at, confirmed, source_path "
                 "FROM context_facts WHERE status = ?",
                 (_STATUS_ACTIVE,),
             ).fetchall()
@@ -1482,7 +1529,14 @@ class FactStore:
             if emb:
                 cached.append(
                     _Cached(
-                        r["id"], r["content"], emb, r["category"], r["valid_from"], r["valid_until"], r["observed_at"]
+                        r["id"],
+                        r["content"],
+                        emb,
+                        r["category"],
+                        r["valid_from"],
+                        r["valid_until"],
+                        r["observed_at"],
+                        _found_in(r),
                     )
                 )
         return cached
@@ -1490,14 +1544,19 @@ class FactStore:
     def _recent_facts_sync(self, limit: int, allowed_categories: frozenset[str] | None = None) -> list[str]:
         if allowed_categories is not None and not allowed_categories:
             return []
-        sql = f"SELECT content, valid_from, valid_until, observed_at FROM context_facts WHERE {_CURRENT_SQL}"
+        sql = (
+            "SELECT content, valid_from, valid_until, observed_at, confirmed, source_path "
+            f"FROM context_facts WHERE {_CURRENT_SQL}"
+        )
         params: list[Any] = [_today()]
         if allowed_categories is not None:
             sql += f" AND category IN ({','.join('?' * len(allowed_categories))})"
             params += allowed_categories
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(f"{sql} ORDER BY updated_at DESC LIMIT ?", (*params, limit)).fetchall()
-        return [_with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"]) for r in rows]
+        return [
+            _with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"], _found_in(r)) for r in rows
+        ]
 
     def _count_sync(self, category: str | None = None) -> int:
         with open_db_connection(self._db_path) as conn:
@@ -1506,7 +1565,10 @@ class FactStore:
             return conn.execute("SELECT COUNT(*) FROM context_facts").fetchone()[0]
 
     def _all_facts_sync(self, category: str | None) -> list[dict]:
-        columns = "id, content, category, subject, about, confidence, status, updated_at, valid_from, valid_until"
+        columns = (
+            "id, content, category, subject, about, confidence, status, updated_at, valid_from, valid_until, "
+            "confirmed, source_path"
+        )
         with open_db_connection(self._db_path) as conn:
             if category:
                 rows = conn.execute(
