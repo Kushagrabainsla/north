@@ -12,6 +12,7 @@ from config import secret_store
 from tools._path import target_path
 from tools._schema import conform_params
 from tools.models import ToolInput, ToolOutput
+from utils.spans import span
 from utils.workspace_lock import workspace_lock
 
 if TYPE_CHECKING:
@@ -110,22 +111,27 @@ class Tool(ABC):
 
     async def _decided(self, input: ToolInput) -> ToolOutput:
         """`execute` without the secrets: the call conformed, decided where it changes something, then run."""
-        input, error, request = await self.prepare(input)
+        with span("prepare"):
+            input, error, request = await self.prepare(input)
         if error:
             return ToolOutput(success=False, error=error)
         if not self.mutates(input.params):
             # A read changes nothing, but it can still go round a "no" given earlier in the task.
             if (said_no := self._approvals().refused_paths(self.reads(input), input.params.get("task_id"))) is not None:
                 return ToolOutput(success=False, failure_kind="refused", error=f"Blocked: {said_no}.")
-            return await self.run(input)
+            with span("run"):
+                return await self.run(input)
         if request is None:
-            return await self._noted_change(input, None)
+            with span("run"):
+                return await self._noted_change(input, None)
         approvals = self._approvals()
         task_id = input.params.get("task_id")
-        decision = await approvals.decide(request, task_id=task_id)
+        with span("decide"):
+            decision = await approvals.decide(request, task_id=task_id)
         if not decision.allowed:
             return _refused(decision, request)
-        output = await self._noted_change(input.model_copy(update={"approved": request}), request)
+        with span("run"):
+            output = await self._noted_change(input.model_copy(update={"approved": request}), request)
         if output.success:
             approvals.completed(request, task_id)
         return output

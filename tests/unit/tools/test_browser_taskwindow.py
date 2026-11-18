@@ -246,3 +246,14 @@ async def test_front_goes_back_to_the_users_app_only_when_chrome_jumped(tmp_path
     async with bridge._front_kept(chrome):
         pass
     assert restored == []
+
+
+@pytest.mark.asyncio
+async def test_a_key_press_goes_to_the_element_the_call_names(adapter, profile):
+    """Issue #83: Enter after filling a search box went to whatever had focus, so the search never ran."""
+    adapter._tool = AsyncMock(side_effect=[text("null"), text("pressed")])
+    output = await adapter.call(profile, {"action": "press", "task_id": "t", "selector": "#q", "value": "Enter"})
+    assert output.success
+    (focus, focus_args), (press, press_args) = [call.args[1:3] for call in adapter._tool.call_args_list]
+    assert focus == "javascript_execute" and '"#q"' in focus_args["code"] and ".focus()" in focus_args["code"]
+    assert press == "computer" and press_args["key"] == "Enter"

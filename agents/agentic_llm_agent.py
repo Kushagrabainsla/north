@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -53,6 +54,7 @@ from tools.retrieval import tool_index_documents
 from tools.universal.offered_before import OFFERED_SCOPE
 from utils.execution_context import current_execution
 from utils.retired_tools import current_tool
+from utils.spans import collecting, totals
 from utils.tasks import spawn
 from utils.text import normalize_dashes
 from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
@@ -366,8 +368,11 @@ class AgenticLLMAgent(LLMAgent):
 
         for call, result_str, success, _ in results:
             if self._deps.stream_manager and payload.task_id:
+                # `chars`: the size of what the model is given, so a run's token cost per tool can be read back.
                 await self._deps.stream_manager.emit(
-                    payload.task_id, "tool_result", _tool_result_event(call.name, result_str, success)
+                    payload.task_id,
+                    "tool_result",
+                    {**_tool_result_event(call.name, result_str, success), "chars": len(result_str)},
                 )
             await self._record_tool_call_confidence(call.name, result_str, success)
 
@@ -1357,7 +1362,10 @@ class AgenticLLMAgent(LLMAgent):
             return _failed_json(_not_loaded(tool_name, tool_map, payload)), []
         tool_input = _tool_input(payload, params).model_copy(update={"before_change": self._before_change(payload)})
         try:
-            result = await tool_map[tool_name].execute(tool_input)
+            started = time.perf_counter()
+            with collecting() as spans:
+                result = await tool_map[tool_name].execute(tool_input)
+            await self._emit_tool_timing(payload, tool_name, params, (time.perf_counter() - started) * 1000, spans)
             images: list[tuple[str, str]] = []
             if result.success:
                 if result.data and "base64_image" in result.data and "mime_type" in result.data:
@@ -1377,6 +1385,17 @@ class AgenticLLMAgent(LLMAgent):
             logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
             return _failed_json(str(exc)), []
         return json.dumps(data), images
+
+    async def _emit_tool_timing(
+        self, payload: AgentPayload, tool_name: str, params: dict[str, Any], ms: float, spans: list[tuple[str, float]]
+    ) -> None:
+        """Save where one tool call's time went: preparing, deciding, running, and the steps inside (issue #83)."""
+        if not (self._deps.stream_manager and payload.task_id):
+            return
+        timing: dict[str, Any] = {"tool": tool_name, "ms": round(ms, 1), "spans": totals(spans)}
+        if isinstance(action := params.get("action"), str):
+            timing["action"] = action
+        await self._deps.stream_manager.emit(payload.task_id, "tool_timing", timing)
 
 
 _EMPTY: tuple[Any, ...] = (None, "", [], {})

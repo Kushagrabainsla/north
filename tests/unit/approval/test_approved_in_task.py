@@ -83,3 +83,13 @@ async def test_a_device_named_in_another_case_is_the_same_action() -> None:
     assert lower is not None and title is not None
     assert lower.action.describe() == title.action.describe()
     assert "Living room lights" in title.message
+
+
+def test_the_decider_is_told_what_a_yes_covers() -> None:
+    """Its yes covers the scope for the rest of the task (issue #83), so it must judge with that in view."""
+    from approval.decider import _action_facts
+    from approval.policy import Action, ActionKind
+
+    action = Action(agent="browser", kind=ActionKind.BROWSER, summary="goto", scope="reading pages on example.com")
+    assert "a yes also covers, for the rest of this task: reading pages on example.com" in _action_facts(action)
+    assert "covers" not in _action_facts(Action(agent="browser", kind=ActionKind.BROWSER, summary="click"))

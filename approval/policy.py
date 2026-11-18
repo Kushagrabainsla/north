@@ -32,6 +32,7 @@ from approval.models import ApprovalDecision, DecidedBy, MemoryRef
 from approval.session import NO_SESSION, Session, SessionReader
 from approval.unattended import forbidden_reason
 from config.approval_mode import YES_ANSWER, ApprovalMode, affirmative_option
+from utils.spans import span
 
 if TYPE_CHECKING:
     from approval.approval_memory import ApprovalMemory
@@ -335,7 +336,8 @@ class ApprovalPolicy:
             session = await self._session(card.task_id)
             if card.asks_several:
                 return await self._answer_each(card, self.decider, session)
-            return await self.decider.answer(card, session)
+            with span("memory_decider"):
+                return await self.decider.answer(card, session)
         return None
 
     @staticmethod
@@ -372,7 +374,8 @@ class ApprovalPolicy:
         if self.decider is None:
             return Ruling(Verdict.ASK, "the memory decider could not decide")
         session = await self._session(task_id)
-        answer = await self.decider.rule(action, session)
+        with span("memory_decider"):
+            answer = await self.decider.rule(action, session)
         if answer is None:
             return Ruling(Verdict.ASK, "the memory decider could not decide")
         if answer.decision == ApprovalDecision.APPROVED:

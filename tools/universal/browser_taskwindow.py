@@ -30,6 +30,7 @@ import httpx
 from tools.models import ToolOutput
 from utils.desktop import activate, frontmost_app
 from utils.runtime_resources import resource_path
+from utils.spans import span
 
 if TYPE_CHECKING:
     from config.browser_profiles import BrowserProfile
@@ -396,6 +397,10 @@ class TaskWindowBrowser:
 
     async def verify(self, profile: BrowserProfile, *, wait: bool = True) -> dict:
         """Prove the extension answering this profile's daemon lives in this profile."""
+        with span("bridge.verify"):
+            return await self._verify(profile, wait=wait)
+
+    async def _verify(self, profile: BrowserProfile, *, wait: bool) -> dict:
         port, health = await self._ensure_daemon(profile)
         if wait and not health.get("extensionConnected"):
             health = await self._await_connection(profile, port)
@@ -408,7 +413,8 @@ class TaskWindowBrowser:
         # The folder holds this daemon's one-time pairing code, so the profile
         # that loaded this folder, and only it, is the one this daemon drives.
         folder = str(self.extension_dir(profile))
-        loading = await asyncio.to_thread(profiles_loading, Path(profile.data_directory), NORTH_EXTENSION_ID)
+        with span("bridge.profiles_loading"):
+            loading = await asyncio.to_thread(profiles_loading, Path(profile.data_directory), NORTH_EXTENSION_ID)
         holders = sorted(directory for directory, path in loading.items() if path == folder)
         if holders != [profile.profile_directory]:
             raise BridgeInputError(
@@ -441,6 +447,10 @@ class TaskWindowBrowser:
     # Tool calls -----------------------------------------------------------
 
     async def _tool(self, profile: BrowserProfile, name: str, arguments: dict, timeout: float = 60) -> dict:
+        with span(f"bridge.{name}"):
+            return await self._tool_call(profile, name, arguments, timeout)
+
+    async def _tool_call(self, profile: BrowserProfile, name: str, arguments: dict, timeout: float) -> dict:
         port = await asyncio.to_thread(self._port, profile)
         body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
         try:
@@ -553,11 +563,13 @@ class TaskWindowBrowser:
                 profile, "form_input", {"selector": _selector(params), "value": value, "sessionToken": session}
             )
             return {}
+        if action in {"type", "press"} and (params.get("uid") or params.get("selector")):
+            # The keys go to the element the call names. A press ignored it, so "fill the search box, press
+            # Enter" sent Enter to whatever had focus, the search never ran, and each wait after it ran out (#83).
+            await self._script(
+                profile, session, f"document.querySelector({json.dumps(_selector(params))})?.focus(); 'null'"
+            )
         if action == "type":
-            if params.get("uid") or params.get("selector"):
-                await self._script(
-                    profile, session, f"document.querySelector({json.dumps(_selector(params))})?.focus(); 'null'"
-                )
             await self._tool(
                 profile, "computer", {"action": "type", "text": str(params.get("value", "")), "sessionToken": session}
             )

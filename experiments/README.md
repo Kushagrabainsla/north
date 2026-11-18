@@ -7,6 +7,10 @@ same primitives, but it must not import recorded results.
 
 ## Experiments
 
+- [`browser_speed/`](browser_speed/README.md) — where a browser task's time and tokens go (issue #83),
+  from north's own run events, and a replay of two read-only tasks through your Chrome bridge.
+  On 2026-11-18 the memory decider took 55-86% of the browser time in Autonomous, because its yes
+  did not cover reading the open site. Therefore its yes now covers what a person's yes covers.
 - [`browser_profiles_probe.py`](browser_profiles_probe.py) — disposable real Chrome
   sessions: separate synthetic logins, open-session reuse versus close/reopen,
   actual profile-directory checks, and North's connection/wrong-profile gate.

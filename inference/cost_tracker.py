@@ -17,6 +17,7 @@ See docs/CODING_STYLE.md Sections 2.2, 3, 6.4.
 from __future__ import annotations
 
 import logging
+import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -109,7 +110,7 @@ class CostTracker(InferenceRouter):
             while len(self._task_costs) > _MAX_TRACKED_TASKS:
                 self._task_costs.popitem(last=False)
 
-    async def _record_call(self, request: Any, response: Any, request_kind: str) -> None:
+    async def _record_call(self, request: Any, response: Any, request_kind: str, started: float) -> None:
         if self._call_sink is None:
             return
         component = str(getattr(request, "component", "unknown") or "unknown")
@@ -124,6 +125,8 @@ class CostTracker(InferenceRouter):
             # None for a call north cannot price: recorded as unpriced, not as free.
             "cost_usd": float(getattr(response, "cost_usd", 0.0) or 0.0) if getattr(response, "priced", True) else None,
             "run_id": getattr(request, "run_id", None),
+            # How long the model took, so a slow task shows whether the model or a tool was slow (issue #83).
+            "duration_ms": round((time.perf_counter() - started) * 1000),
         }
         try:
             await self._call_sink(getattr(request, "task_id", None), data)
@@ -131,9 +134,10 @@ class CostTracker(InferenceRouter):
             logger.warning("Could not record inference call telemetry for %s", component, exc_info=True)
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        started = time.perf_counter()
         response = await self._inner.complete(request)
         self._add_cost(request.task_id, response.cost_usd)
-        await self._record_call(request, response, "completion")
+        await self._record_call(request, response, "completion", started)
         return response
 
     async def complete_with_tools(
@@ -141,21 +145,24 @@ class CostTracker(InferenceRouter):
         request: ToolCallRequest,
         token_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> ToolCallResponse:
+        started = time.perf_counter()
         response = await self._inner.complete_with_tools(request, token_callback)
         self._add_cost(request.task_id, response.cost_usd)
-        await self._record_call(request, response, "tool_completion")
+        await self._record_call(request, response, "tool_completion", started)
         return response
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
+        started = time.perf_counter()
         response = await self._inner.embed(request)
         self._add_cost(request.task_id, response.cost_usd)
-        await self._record_call(request, response, "embedding")
+        await self._record_call(request, response, "embedding", started)
         return response
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
+        started = time.perf_counter()
         response = await self._inner.transcribe(request)
         self._add_cost(request.task_id, response.cost_usd)
-        await self._record_call(request, response, "transcription")
+        await self._record_call(request, response, "transcription", started)
         return response
 
     async def refresh_catalog(self) -> None:

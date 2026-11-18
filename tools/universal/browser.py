@@ -39,6 +39,7 @@ from tools.universal.browser_describe import describe_browser_call
 from tools.universal.browser_taskwindow import TaskWindowBrowser
 from utils.net import HostNotFoundError, UnsafeUrlError, validate_public_url
 from utils.processes import stop_process_group
+from utils.spans import span
 
 if TYPE_CHECKING:
     from approval.approvals import Request as ApprovalRequest
@@ -457,6 +458,12 @@ def _unsafe_url_reason(action: str, params: dict[str, Any]) -> str:
 
 
 async def _run_chrome_agent(command: list[str], timeout: int) -> _CommandResult:
+    """One chrome-agent process: started, run and stopped for each browser step."""
+    with span("chrome_agent"):
+        return await _run_chrome_agent_process(command, timeout)
+
+
+async def _run_chrome_agent_process(command: list[str], timeout: int) -> _CommandResult:
     try:
         proc = await asyncio.create_subprocess_exec(
             *command,
@@ -906,7 +913,15 @@ class BrowserTool(Tool):
 
     async def unavailable(self, input: ToolInput) -> str:
         why = browser_unavailable()
-        return f"The browser cannot work here: {why}." if why else ""
+        if why:
+            return f"The browser cannot work here: {why}."
+        # A call that names no saved profile is refused before the approval layer: the memory decider
+        # spent 28 s ruling on "84b241fdce825114]" (a stray bracket) before run() refused it (issue #83).
+        if (profile_id := (input.params or {}).get("profile_id")) and not any(
+            profile.id == profile_id and profile.enabled for profile in self._profiles()
+        ):
+            return "Browser profile is missing or disabled. Select an enabled profile from list_profiles."
+        return ""
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
         """Classify writes and any use of a signed-in profile per call; True means the approval layer decides.
@@ -950,6 +965,10 @@ class BrowserTool(Tool):
 
     async def describe(self, input: ToolInput) -> ApprovalRequest:
         """Look at the page first, so the card says what the action lands on (`browser_describe`)."""
+        with span("browser.describe"):
+            return await self._describe(input)
+
+    async def _describe(self, input: ToolInput) -> ApprovalRequest:
         params = input.params or {}
         if params.get("profile_id"):
             from approval.approvals import Request

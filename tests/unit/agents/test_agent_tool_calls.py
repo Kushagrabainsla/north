@@ -150,3 +150,36 @@ async def test_offered_before_tells_the_agent_before_it_does_the_work(tmp_path: 
 
     assert seen.data == {"offered": True} and new.data == {"offered": False}
     assert not tool.mutates({"item_keys": ["x"]}), "a read, never a card"
+
+
+async def test_each_tool_call_saves_where_its_time_went(tmp_path: Path) -> None:
+    """Issue #83: one event per call with its total time and the steps inside it."""
+    from tools.base import Tool
+    from tools.models import ToolInput, ToolOutput
+    from utils.spans import span
+
+    class _Stream:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit(self, task_id: str, event: str, data: dict) -> None:
+            self.events.append((event, data))
+
+    class _Stepping(Tool):
+        name = "stepping"
+        description = "has one inner step"
+
+        async def run(self, inp: ToolInput) -> ToolOutput:
+            with span("inner"):
+                await asyncio.sleep(0)
+            return ToolOutput(success=True, data={})
+
+    stream = _Stream()
+    agent = _make_agent(tmp_path, stream_manager=stream)
+    await agent._call_tool({"stepping": _Stepping()}, "stepping", {"action": "look"}, _payload())
+
+    [timing] = [data for event, data in stream.events if event == "tool_timing"]
+    assert timing["tool"] == "stepping"
+    assert timing["action"] == "look"
+    assert timing["ms"] >= 0
+    assert set(timing["spans"]) == {"prepare", "run", "inner"}

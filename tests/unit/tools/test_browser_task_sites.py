@@ -199,3 +199,49 @@ async def test_in_a_north_managed_profile_reading_an_opened_site_does_not_ask_ag
     assert not await _asks(tool, store, profile="research", action="goto", url="https://example.org/verify?s=1")
     assert not await _asks(tool, store, profile="research", action="text")
     assert await _asks(tool, store, profile="research", action="goto", url="https://another.example/")
+
+
+@pytest.mark.asyncio
+async def test_in_autonomous_mode_the_deciders_yes_to_a_site_covers_reading_it(settings) -> None:
+    """Issue #83: the memory decider was asked again for every page of a site it had let north open.
+
+    It took 3-9 s a call, most of a browser task's time. Its yes now covers what a person's yes
+    covers, and it is told so; another site and any change still go to it.
+    """
+    from approval.models import DecidedBy
+    from approval.policy import Answer
+
+    class _Decider:
+        def __init__(self) -> None:
+            self.actions = []
+
+        async def rule(self, action, session=None):
+            self.actions.append(action)
+            return Answer(ApprovalDecision.APPROVED, "", "the user asked for this", DecidedBy.MEMORY_DECIDER)
+
+    decider = _Decider()
+    store = ApprovalStore()
+    tool = _tool(settings, store)
+    bind_approvals(tool, ApprovalMode.AUTONOMOUS, store=store, decider=decider)
+
+    # Opening the page may be on your safe list; the first read on the site then goes to the decider.
+    await _asks(tool, store, action="goto", url="https://www.linkedin.com/feed/")
+    await _asks(tool, store, action="inspect")
+    await _asks(tool, store, action="extract")
+    await _asks(tool, store, action="read", url="https://www.linkedin.com/in/someone/")
+    assert [a.summary.split()[0] for a in decider.actions] == ["inspect"]
+    assert "linkedin.com" in decider.actions[0].scope
+
+    await _asks(tool, store, action="click", uid="n1")
+    await _asks(tool, store, action="click", uid="n1")
+    assert [a.summary.split()[0] for a in decider.actions] == ["inspect", "click", "click"]
+
+
+@pytest.mark.asyncio
+async def test_a_call_naming_no_saved_profile_is_refused_before_any_card(settings) -> None:
+    """Issue #83: a stray bracket in profile_id cost a 28 s decider call before the call was refused."""
+    store = ApprovalStore()
+    tool = _tool(settings, store)
+    output = await tool.execute(ToolInput(params={"profile_id": "university]", "task_id": TASK, "action": "inspect"}))
+    assert not output.success and "missing or disabled" in output.error
+    assert not store.pending() and not store.all(10)

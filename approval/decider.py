@@ -257,6 +257,9 @@ def _action_facts(action: Action) -> str:
     lines += [f"- {name}" for name, present in flags.items() if present]
     if action.done_before:
         lines.append(f"- an earlier run of this flow already did this exact action, on {action.done_before}")
+    if action.scope:
+        # A yes covers this for the rest of the task, as it does on your card (approval.approvals).
+        lines.append(f"- a yes also covers, for the rest of this task: {action.scope}")
     return "\n".join(lines)
 
 

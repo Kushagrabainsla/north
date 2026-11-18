@@ -37,3 +37,16 @@ async def test_cost_tracker_emits_content_free_call_attribution() -> None:
     assert [item[1]["category"] for item in recorded] == ["planning", "agent"]
     assert recorded[1][1]["run_id"] == "r1"
     assert "private" not in str(recorded)
+
+
+async def test_each_recorded_call_says_how_long_the_model_took() -> None:
+    """Issue #83: a slow task must show whether the model or a tool was slow."""
+    recorded: list[dict] = []
+
+    async def sink(task_id: str | None, data: dict) -> None:
+        recorded.append(data)
+
+    tracker = CostTracker(MockInferenceRouter(), call_sink=sink)
+    await tracker.complete(CompletionRequest(prompt="p", component="planner", task_id="t1"))
+    assert isinstance(recorded[0]["duration_ms"], int)
+    assert recorded[0]["duration_ms"] >= 0

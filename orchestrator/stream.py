@@ -46,6 +46,7 @@ _DURABLE_EVENTS = frozenset(
         "agent_failed",
         "tool_called",
         "tool_result",
+        "tool_timing",  # where one tool call's time went (utils.spans, issue #83)
         "skill_selected",
         "model",
         "model_response",

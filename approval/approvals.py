@@ -22,6 +22,7 @@ from approval.models import ApprovalDecision, Card, CardType, DecidedBy
 from approval.policy import Action, Answer, ApprovalPolicy, Ruling, Verdict, may_replay_yes
 from approval.unattended import forbidden_reason
 from config.approval_mode import approve_option
+from utils.spans import span
 from utils.time import format_local
 
 if TYPE_CHECKING:
@@ -128,7 +129,7 @@ class Approvals:
         if self._take_grant(request, task_id):
             return Decision(Verdict.ALLOW, "decided with the other calls on the card that named it")
         if covered := self._approved_in_task(request, task_id):
-            ruling = Ruling(Verdict.ALLOW, f"you approved {covered} earlier in this task", DecidedBy.REPLAY)
+            ruling = Ruling(Verdict.ALLOW, f"a yes earlier in this task covers {covered}", DecidedBy.REPLAY)
             self._record(request, ruling, task_id)
             return Decision(ruling.verdict, ruling.rule)
         request = self._with_flow_history(request, task_id)
@@ -138,6 +139,11 @@ class Approvals:
             return await self._ask(request, task_id, note)
         if ruling.verdict is Verdict.ASK:
             return await self._ask(request, task_id, note)
+        if ruling.allowed and ruling.decided_by == DecidedBy.MEMORY_DECIDER:
+            # The decider answers for you, and is shown what a yes covers: its yes covers the same.
+            # Kept only for a person's yes, a decider in autonomous mode was asked again for every page
+            # of a site it had just let north open, about 3-9 s each (issue #83).
+            self._remember_yes(request, task_id)
         if _worth_recording(request.action):
             self._record(request, ruling, task_id)
         return Decision(ruling.verdict, ruling.rule)
@@ -197,7 +203,8 @@ class Approvals:
             options=list(APPROVAL_DEFAULT_OPTIONS),
             action_key="\n".join(request.action.describe() for request in requests),
         )
-        card = await self._interaction.ask_person(card, event=CardEvent.APPROVAL)
+        with span("ask_person"):
+            card = await self._interaction.ask_person(card, event=CardEvent.APPROVAL)
         if card.status == ApprovalDecision.REJECTED and self._rejections is not None:
             for request in requests:
                 self._rejections.record(task_id, request.action.named_paths(), request.action.summary)
@@ -229,8 +236,14 @@ class Approvals:
                 )
         return None
 
+    def _remember_yes(self, request: Request, task_id: str | None) -> None:
+        """Let a yes to *request* cover the same action, and its scope, for the rest of the task."""
+        if task_id:
+            covers = (request.action.describe(), request.action.scope)
+            self._approved.setdefault(task_id, set()).update(key for key in covers if key)
+
     def _approved_in_task(self, request: Request, task_id: str | None) -> str:
-        """What a person approved earlier in this task that covers this request, or "".
+        """What a yes earlier in this task covers of this request (yours or the memory decider's), or "".
 
         The exact action, or its scope: the yes to opening a site in a profile covers
         reading that site there for the rest of the task. That memory was the browser's
@@ -291,11 +304,11 @@ class Approvals:
         card = self._card(request, task_id)
         if note:
             card = card.model_copy(update={"message": _with_note(card.message, note)})
-        card = await self._interaction.ask_person(card, event=CardEvent.APPROVAL)
+        with span("ask_person"):
+            card = await self._interaction.ask_person(card, event=CardEvent.APPROVAL)
         verdict = Verdict.ALLOW if card.status == ApprovalDecision.APPROVED else Verdict.REFUSE
-        if verdict is Verdict.ALLOW and task_id:
-            covers = (request.action.describe(), request.action.scope)
-            self._approved.setdefault(task_id, set()).update(key for key in covers if key)
+        if verdict is Verdict.ALLOW:
+            self._remember_yes(request, task_id)
         if card.status == ApprovalDecision.REJECTED and task_id and self._rejections is not None:
             self._rejections.record(task_id, request.action.named_paths(), request.action.summary)
         return Decision(verdict, "you decided", status=card.status)
