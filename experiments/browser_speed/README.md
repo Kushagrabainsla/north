@@ -90,4 +90,24 @@ Fixed after this replay: finding 1 (a decider's yes covers the site, and the dec
 
 Finding 4 is fixed: the model gets one copy of each result, and no profile-check fields outside `preflight` and `status`.
 
+### A/B: before (`766e6d6`) and after (`f4483c4`), 3 runs of each task
+
+Same harness and prompts, run one after the other on 2026-11-18 (`20261118-115552` before, `20261118-120551` after).
+Compare them with `compare.py BEFORE_DIR AFTER_DIR`. Medians:
+
+| | Hacker News before | after | change | Wikipedia before | after | change |
+|---|---|---|---|---|---|---|
+| Wall time | 72.6 s | 42.5 s | -42% | 117.5 s | 92.1 s | -22% |
+| Browser time | 48.2 s | 11.3 s | -77% | 80.9 s | 64.6 s | -20% |
+| Browser time per call | 5.7 s | 1.9 s | -67% | 7.4 s | 4.3 s | -41% |
+| Turns | 9 | 8 | -11% | 11 | 16 | +45% |
+| Input tokens | 155,314 | 132,422 | -15% | 142,667 | 205,146 | +44% |
+| Input tokens per turn | 17,257 | 14,577 | -16% | 14,252 | 13,377 | -6% |
+| Cost | $0.024 | $0.021 | -13% | $0.022 | $0.031 | +41% |
+
+- Time per browser call fell in both tasks: most calls no longer wait for the decider.
+- Tokens per turn fell by 6-16%. Most of each turn is the fixed prompt (about 11,000 tokens), which did not change.
+- Total tokens follow the number of turns, which the model chooses. The Wikipedia after runs took more turns: the model left out `profile_id` and retried, and searched in more steps. Both versions show such retries.
+- 3 runs per task is a small sample; a single run varied from 66 s to 125 s.
+
 Not changed yet: finding 3, and the decider call on each `click`, `fill`, `press`, `eval` and `close` (3 to 7 s each).
