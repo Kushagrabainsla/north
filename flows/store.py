@@ -156,6 +156,16 @@ class FlowRunStore:
             ).fetchall()
         return [_from_row(row) for row in rows]
 
+    def flow_of(self, task_id: str) -> str:
+        """The flow a step's task id runs for, or "" when it is not a flow step.
+
+        A step runs as its run's task, or as `flow:<run id>` when the run has none (flow_runner.py).
+        """
+        if task_id.startswith("flow:"):
+            run = self.get(task_id.removeprefix("flow:"))
+            return run.flow_name if run is not None else ""
+        return self.flow_names_for_tasks([task_id]).get(task_id, "") if task_id else ""
+
     def flow_names_for_tasks(self, task_ids: list[str]) -> dict[str, str]:
         """The flow each of *task_ids* ran for, where one did."""
         if not task_ids:

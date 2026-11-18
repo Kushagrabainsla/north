@@ -145,6 +145,10 @@ class Action:
     # Code changes there go to coding_agent, which works in an isolated copy and
     # runs the tests; north's own tools do not make them (CODING_STYLE §7).
     edits_repository: str = ""
+    # When an earlier run of this task's flow already did this exact action that reaches someone
+    # or spends money ("" for never). Set by the approval layer from its own record, so it is a
+    # fact north established, shown on the card and to the memory decider. Not part of the identity.
+    done_before: str = ""
 
     def named_paths(self) -> tuple[Path, ...]:
         """What a "no" to this action covers: the paths it names, else the one it acts on."""

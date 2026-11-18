@@ -10,6 +10,12 @@ time is refused with a reason, not repeated.
 "Identical" is the action's identity (`Action.describe()`): the same button on
 the same page, the same command. What counts as reaching someone or spending is
 `forbidden_reason`, the same test that keeps these actions off the safe list.
+
+Each run of a scheduled flow is a new task, so the same action is also recorded
+for the flow (`flow:<name>`). A later run that is about to repeat it is not
+refused - a flow may repeat an action on purpose - but the approval layer states
+the earlier date as a fact, to you on the card and to the memory decider (issue
+#82, item 4). The site had stopped a second LinkedIn invitation; another site may not.
 """
 
 from __future__ import annotations
@@ -50,11 +56,16 @@ class EffectLog:
             conn.execute(_SCHEMA)
 
     def done(self, task_id: str, action_key: str) -> bool:
+        return self.done_at(task_id, action_key) is not None
+
+    def done_at(self, scope: str, action_key: str) -> str | None:
+        """When the action was done in *scope* (a task id, or `flow:<name>`), as UTC ISO text, or None."""
         with open_db_connection(self._db_path) as conn:
             row = conn.execute(
-                "SELECT 1 FROM completed_effects WHERE task_id = ? AND action_key = ?", (task_id, _digest(action_key))
+                "SELECT done_at FROM completed_effects WHERE task_id = ? AND action_key = ?",
+                (scope, _digest(action_key)),
             ).fetchone()
-        return row is not None
+        return row[0] if row is not None else None
 
     def record(self, task_id: str, action_key: str, summary: str = "") -> None:
         try:

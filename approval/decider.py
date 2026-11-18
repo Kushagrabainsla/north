@@ -255,6 +255,8 @@ def _action_facts(action: Action) -> str:
     }
     lines = [f"- kind: {action.kind.value}"]
     lines += [f"- {name}" for name, present in flags.items() if present]
+    if action.done_before:
+        lines.append(f"- an earlier run of this flow already did this exact action, on {action.done_before}")
     return "\n".join(lines)
 
 

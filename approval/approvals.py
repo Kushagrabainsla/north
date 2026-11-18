@@ -11,8 +11,10 @@ The split is unchanged: the caller describes the action as facts (`Request`),
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, UserInteraction
@@ -20,13 +22,16 @@ from approval.models import ApprovalDecision, Card, CardType, DecidedBy
 from approval.policy import Action, Answer, ApprovalPolicy, Ruling, Verdict, may_replay_yes
 from approval.unattended import forbidden_reason
 from config.approval_mode import approve_option
+from utils.time import format_local
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
     from pathlib import Path
 
     from approval.effects import EffectLog
     from approval.rejections import RejectionLog
+
+logger = logging.getLogger(__name__)
 
 # Why an irreversible action is refused the second time in one task (see approval/effects.py).
 _ALREADY_DONE = "already done earlier in this task, and it reaches someone else or spends money, so it is not repeated"
@@ -84,11 +89,15 @@ class Approvals:
         interaction: UserInteraction | None,
         effects: EffectLog | None = None,
         rejections: RejectionLog | None = None,
+        flow_of: Callable[[str], str] | None = None,
     ) -> None:
         self._policy = policy
         self._interaction = interaction
         self._effects = effects
         self._rejections = rejections
+        # The flow a task is a step of ("" for none), so a send is also checked against the flow's
+        # earlier runs: each scheduled run is a new task (issue #82, item 4).
+        self._flow_of = flow_of
         # The exact actions a person approved in each task, so the task does not ask again when it retries one:
         # an approved `kasa off` that failed was asked about a second time by the agent that took over (#76, W4).
         # Kept in memory: after a restart north asks again, the safe way to forget.
@@ -122,11 +131,13 @@ class Approvals:
             ruling = Ruling(Verdict.ALLOW, f"you approved {covered} earlier in this task", DecidedBy.REPLAY)
             self._record(request, ruling, task_id)
             return Decision(ruling.verdict, ruling.rule)
+        request = self._with_flow_history(request, task_id)
         ruling = await self._policy.rule(request.action, task_id)
+        note = _joined(ruling.note, _repeat_note(request.action))
         if request.requires_confirmation and ruling.verdict is not Verdict.REFUSE:
-            return await self._ask(request, task_id, ruling.note)
+            return await self._ask(request, task_id, note)
         if ruling.verdict is Verdict.ASK:
-            return await self._ask(request, task_id, ruling.note)
+            return await self._ask(request, task_id, note)
         if _worth_recording(request.action):
             self._record(request, ruling, task_id)
         return Decision(ruling.verdict, ruling.rule)
@@ -148,6 +159,7 @@ class Approvals:
                 return Decision(Verdict.REFUSE, _ALREADY_DONE)
             if (said_no := self.refused_paths(request.action.named_paths(), task_id)) is not None:
                 return Decision(Verdict.REFUSE, said_no)
+        requests = [self._with_flow_history(request, task_id) for request in requests]
         rulings = [await self._policy.rule(request.action, task_id) for request in requests]
         if refused := next((ruling for ruling in rulings if ruling.verdict is Verdict.REFUSE), None):
             return Decision(Verdict.REFUSE, refused.rule)
@@ -157,7 +169,7 @@ class Approvals:
             if r.requires_confirmation or ruling.verdict is Verdict.ASK
         ]
         if asking:
-            notes = "\n".join(dict.fromkeys(ruling.note for ruling in rulings if ruling.note))
+            notes = _joined(*(ruling.note for ruling in rulings), *(_repeat_note(r.action) for r in requests))
             decision = await self._ask_together(asking, task_id, title, _with_note(message, notes))
             if not decision.allowed:
                 return decision
@@ -232,10 +244,41 @@ class Approvals:
         return f"this: {request.action.scope}" if request.action.scope in approved else ""
 
     def completed(self, request: Request, task_id: str | None) -> None:
-        """Note that *request* ran successfully, so an irreversible one is never repeated in this task."""
+        """Note that *request* ran successfully, so an irreversible one is never repeated in this task.
+
+        It is noted for the task's flow too, so a later run of the flow is told it was done before.
+        """
         if self._effects is None or not task_id or not forbidden_reason(request.action):
             return
         self._effects.record(task_id, request.action.describe(), request.action.summary)
+        if flow_scope := self._flow_scope(task_id):
+            self._effects.record(flow_scope, request.action.describe(), request.action.summary)
+
+    def _flow_scope(self, task_id: str | None) -> str:
+        """`flow:<name>` for a task that is a flow step, else ""."""
+        if self._flow_of is None or not task_id:
+            return ""
+        try:
+            name = self._flow_of(task_id)
+        except Exception:
+            logger.warning("Approvals: could not tell which flow task %s belongs to", task_id, exc_info=True)
+            return ""
+        return f"flow:{name}" if name else ""
+
+    def _with_flow_history(self, request: Request, task_id: str | None) -> Request:
+        """*request* with the date an earlier run of its flow did this exact action, when one did.
+
+        Not a refusal: a flow may repeat an action on purpose. It is a fact north states, on the card
+        and to the memory decider, which then decides as the approval mode says.
+        """
+        if self._effects is None or not forbidden_reason(request.action):
+            return request
+        if not (flow_scope := self._flow_scope(task_id)):
+            return request
+        if (done_at := self._effects.done_at(flow_scope, request.action.describe())) is None:
+            return request
+        when = format_local(datetime.fromisoformat(done_at))
+        return replace(request, action=replace(request.action, done_before=when))
 
     def _already_done(self, action: Action, task_id: str | None) -> bool:
         if self._effects is None or not task_id or not forbidden_reason(action):
@@ -290,6 +333,18 @@ class Approvals:
 def _with_note(message: str, note: str) -> str:
     """*message* with why north asks after it, when the policy said why."""
     return f"{message}\n\n{note}" if note else message
+
+
+def _joined(*notes: str) -> str:
+    """The notes that say something, each once, one to a line."""
+    return "\n".join(dict.fromkeys(note for note in notes if note))
+
+
+def _repeat_note(action: Action) -> str:
+    """What a card says when an earlier run of the flow already did this action, else ""."""
+    if not action.done_before:
+        return ""
+    return f"An earlier run of this flow already did this exact action, on {action.done_before}."
 
 
 def _worth_recording(action: Action) -> bool:

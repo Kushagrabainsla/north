@@ -1060,6 +1060,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         effects=EffectLog(settings.north_home / "approval_memory.db"),
         # What you said no to, per task, so the "no" holds for the rest of it.
         rejections=RejectionLog(settings.north_home / "approval_memory.db"),
+        # Which flow a task is a step of, so a send is checked against the flow's earlier runs (#82, item 4).
+        flow_of=FlowRunStore(settings.north_home / "flow_runs.db").flow_of,
     )
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)
