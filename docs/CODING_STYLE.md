@@ -307,9 +307,7 @@ ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
 inference/base.py      InferenceRouter   <- ModelDispatcher (multi-provider)
 approval/base.py       Notifier          <- TerminalNotifier (default), MacOSNotifier (optional)
 tools/base.py          Tool              <- WebSearchTool, WriteFileTool, BashTool, GhTool, etc.
-agents/base.py         Agent             <- LLMAgent / AgenticLLMAgent (subclassed per domain:
-                                            ArchitectAgent, CoderAgent, TesterAgent, ResearcherAgent,
-                                            HealthAgent, JobAgent, FinanceAgent, UniversityAgent, …)
+agents/base.py         Agent             <- LLMAgent / AgenticLLMAgent <- NorthAgent (the one agent, §15)
 jobs/base.py           JobProcessor      <- SQLiteJobProcessor
 ```
 
@@ -572,20 +570,17 @@ agents/
   __init__.py
   base.py              <- Agent (ABC)
   models.py            <- AgentPayload, AgentResult, AgentConfig
-  exceptions.py        <- AgentNotFoundError, AgentExecutionError
+  exceptions.py        <- AgentNotFoundError, AgentConfigError, AgentOutputParseError
   constants.py         <- agent tuning constants (iteration caps, tool-result limits)
   schemas.py           <- ASK_USER_SCHEMA, REQUEST_APPROVAL_SCHEMA, FIND_TOOLS_SCHEMA
   registry.py          <- AgentRegistry (folder discovery)
   llm_agent.py         <- LLMAgent (single-call base)
   agentic_llm_agent.py <- AgenticLLMAgent (ReAct loop, native function calling)
   context_compaction.py <- token-aware history compaction
-  workspace_lock.py    <- per-workspace mutation lock
-  coder/               <- one folder per domain agent
-    agent.py           <- CoderAgent
+  north/               <- the one agent (§15); a specialism is a skill, not a folder here
+    agent.py           <- NorthAgent
     config.yaml
     prompts/
-  architect/  reviewer/  researcher/  general/  home/
-  health/  job/  finance/  university/
 
 tools/
   __init__.py
@@ -1305,23 +1300,9 @@ class Agent(ABC):
         return AgentResult(**raw)
 ```
 
-### 15.2 Agents Never Import From Each Other
+### 15.2 (Removed)
 
-```python
-# wrong
-from agents.finance.agent import FinanceAgent
-budget = await FinanceAgent().get_budget(task_id)
-
-# correct: read through the Task Context Object
-from orchestrator.task_context import TaskContextStore
-
-budget = await self._task_context.read(
-    task_id=payload.task_id,
-    requesting_agent=self.name,
-    key="finance.budget",
-    required=True,
-)
-```
+North has one agent, so no agent imports another. The number is kept so other references stay correct.
 
 ### 15.3 Agent Output Is Always AgentResult
 
@@ -1657,21 +1638,12 @@ async def test_ledger_builds_correct_insert_sql():
 ### 18.4 Agents Are Testable Without the Orchestrator
 
 ```python
-@pytest.mark.asyncio
-async def test_job_agent_produces_prep_plan(deps, tmp_path):
-    agent = JobAgent(
-        context_store=deps.context_store,
-        task_context=TaskContextStore(tmp_path / "task_001.db"),
-    )
-    payload = AgentPayload(
-        task_id="task_001",
-        prompt="Help me prep for my first week at LinkedIn.",
-        context="User starts LinkedIn internship June 2nd, distributed systems team.",
-    )
-    result = await agent.run(payload)
+async def test_an_answer_is_ready(tmp_path):
+    deps = _make_deps(tmp_path, _Scripted(_says("17 x 23 = 391")))  # a scripted model, no network
+    agent = NorthAgent(AgentConfig.from_yaml(AGENTS_DIR / "north" / "config.yaml"), deps)
+    result = await agent.run(AgentPayload(task_id="t1", prompt="What is 17 x 23?"))
     assert isinstance(result, AgentResult)
-    assert result.summary
-    assert "checklist" in result.data or "output" in result.data
+    assert result.data["outcome_status"] == "response_ready"
 ```
 
 ### 18.5 Mock External Dependencies
@@ -1761,16 +1733,9 @@ Every module file starts with a one-line docstring explaining what the module do
 """OpenRouter-backed implementation of the InferenceRouter interface."""
 ```
 
-### 19.3 README in Every Agent Folder
+### 19.3 (Removed)
 
-Every agent folder has a `README.md` that explains what the agent does, what tools it uses, and how to test it locally.
-
-```
-agents/job/README.md
-agents/health/README.md
-agents/university/README.md
-agents/finance/README.md
-```
+The per-agent READMEs went with the agents. North's one agent is described in §15.
 
 ### 19.4 Experiments Live in `experiments/`
 
