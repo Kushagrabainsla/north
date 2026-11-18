@@ -488,6 +488,10 @@ def _firing_id(name: str, slot: datetime) -> str:
 # Anything tied to one person's routine that north does NOT seed is theirs to add
 # with `schedule_task`.
 
+# A fixed start for north's hourly flows, so a restart does not move them: they run at 22 and 52
+# minutes past each hour, away from the full hour, where people schedule their own flows.
+_HOURLY_ANCHOR = 1_700_000_520.0  # 2023-11-14 22:22:00 UTC
+
 SYSTEM_CRON_ENTRIES: list[CronEntry] = [
     CronEntry(
         name="task_context_cleanup",
@@ -516,6 +520,58 @@ SYSTEM_CRON_ENTRIES: list[CronEntry] = [
         flow="waiting-cards-reminder",
         hour=9,
         minute=0,
+    ),
+    # North's own work on a clock is a flow, like any other (one mechanism): it was four loops, each
+    # with its own timer, that no page showed and no card reported when they failed.
+    CronEntry(
+        name="fact_upkeep",
+        label="Fact upkeep",
+        description=(
+            "Stops recalling facts whose last day has passed and rewrites your profile from the facts, "
+            "so it never says what has stopped being true."
+        ),
+        agent="system",
+        task="Fact upkeep",
+        flow="fact-upkeep",
+        hour=0,
+        minute=5,
+    ),
+    CronEntry(
+        name="rules_to_confirm",
+        label="Rules to confirm",
+        description=(
+            "Asks you about what north's approval model decided for you more than once, so your answer "
+            "becomes a rule for all of north."
+        ),
+        agent="system",
+        task="Rules to confirm",
+        flow="rules-to-confirm",
+        hour=8,
+        minute=0,
+    ),
+    CronEntry(
+        name="episode_memory",
+        label="Episode memory",
+        description="Writes a short note about each finished task, which north recalls in later tasks.",
+        agent="system",
+        task="Episode memory",
+        flow="episode-memory",
+        hour=0,
+        minute=0,
+        interval_minutes=60,
+        anchor_epoch=_HOURLY_ANCHOR,
+    ),
+    CronEntry(
+        name="skill_learning",
+        label="Skill learning",
+        description="Turns tasks that worked into learned skills north can use again.",
+        agent="system",
+        task="Skill learning",
+        flow="skill-learning",
+        hour=0,
+        minute=0,
+        interval_minutes=60,
+        anchor_epoch=_HOURLY_ANCHOR + 30 * 60,
     ),
 ]
 

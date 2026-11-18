@@ -355,9 +355,6 @@ def _build_tool_index(deps) -> ToolIndex | None:
     )
 
 
-_FACT_DAY_CHECK_SECONDS = 3600
-
-
 async def _refresh_fact_store(fact_store, context_store=None) -> None:
     """Bring the fact store into the current embedding space, then merge duplicates.
 
@@ -381,25 +378,6 @@ async def _refresh_fact_store(fact_store, context_store=None) -> None:
             dated,
         )
     await _rebuild_profile(fact_store, context_store)
-
-
-async def _maintain_fact_store(fact_store, context_store=None) -> None:
-    """Refresh the fact store at startup, then on each new day.
-
-    A fact whose last day has passed stops being recalled at once, but the profile
-    is a document written from the facts, so it is rewritten each day as well:
-    otherwise an ended internship stays in it until North restarts. The day is
-    checked hourly against the wall clock, which keeps counting while the Mac
-    sleeps, unlike a timer set for midnight.
-    """
-    await _refresh_fact_store(fact_store, context_store)
-    day = localnow().date()
-    while True:
-        await asyncio.sleep(_FACT_DAY_CHECK_SECONDS)
-        if localnow().date() != day:
-            day = localnow().date()
-            await fact_store.date_facts()
-            await _rebuild_profile(fact_store, context_store)
 
 
 async def _rebuild_profile(fact_store, context_store) -> None:
@@ -786,6 +764,7 @@ def _launch_background_tasks(
     flow_runner: FlowRunner | None = None,
     approvals: Approvals | None = None,
     loops: BackgroundLoops | None = None,
+    approval_memory: ApprovalMemory | None = None,
 ) -> list[asyncio.Task]:
     loops = loops or BackgroundLoops()
 
@@ -842,10 +821,43 @@ def _launch_background_tasks(
         )
         return summary
 
-    # north's built-in flow actions: deterministic code, no model.
+    episode_consolidator = EpisodeConsolidator(
+        ledger=deps.ledger,
+        episodic_store=deps.episodic_store,
+        inference_router=deps.cost_tracker,
+        north_home=settings.north_home,
+    )
+
+    async def _fact_upkeep() -> str:
+        """The fact-upkeep flow's step: facts whose last day passed stop being recalled; the profile follows."""
+        if deps.fact_store is None:
+            return "No fact store to keep."
+        dated = await deps.fact_store.date_facts()
+        await _rebuild_profile(deps.fact_store, deps.context_store)
+        return f"Dated {dated} fact(s) and rewrote your profile."
+
+    async def _episode_memory() -> str:
+        return f"Wrote {await episode_consolidator.run_once()} note(s) about finished tasks."
+
+    async def _skill_learning() -> str:
+        return f"Learned {await skill_distiller.run_once()} new skill(s)."
+
+    async def _rules_to_confirm() -> str:
+        if approvals is None or approvals.interaction is None or approval_memory is None:
+            return "Nothing to ask: the approval layer is not set up."
+        card = await standing_rules.offer_morning_digest(
+            deps.approval_store, approval_memory, approvals.interaction, localnow()
+        )
+        return f"Asked you about {len(card.fields)} kind(s) of action." if card else "Nothing to ask today."
+
+    # north's built-in flow actions: deterministic code, no model of their own.
     if flow_runner is not None:
         flow_runner.register_action("task_context_cleanup", _nightly_cleanup)
         flow_runner.register_action("nightly_check", nightly_check)
+        flow_runner.register_action("fact_upkeep", _fact_upkeep)
+        flow_runner.register_action("consolidate_episodes", _episode_memory)
+        flow_runner.register_action("distill_skills", _skill_learning)
+        flow_runner.register_action("rules_to_confirm", _rules_to_confirm)
         if approvals is not None and approvals.interaction is not None:
             flow_runner.register_action("remind_waiting_cards", approvals.interaction.remind_waiting)
 
@@ -883,13 +895,6 @@ def _launch_background_tasks(
         cron_store=deps.cron_store,
     )
 
-    episode_consolidator = EpisodeConsolidator(
-        ledger=deps.ledger,
-        episodic_store=deps.episodic_store,
-        inference_router=deps.cost_tracker,
-        north_home=settings.north_home,
-    )
-
     # The forever-loops are kept running: one that fails starts again, and /health shows it.
     tasks = [
         loops.start(
@@ -899,8 +904,6 @@ def _launch_background_tasks(
             ),
         ),
         loops.start("cron_scheduler", cron_scheduler.run),
-        loops.start("episode_consolidator", episode_consolidator.run),
-        loops.start("skill_distiller", skill_distiller.run),
         asyncio.create_task(_guarded(callback_server.serve(), "callback_server"), name="callback_server"),
         loops.start(
             "pool_refresh",
@@ -1272,6 +1275,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             flow_runner=flow_runner,
             approvals=approvals,
             loops=background_loops,
+            approval_memory=approval_memory,
         )
         if tool_index is not None:
             background_tasks.append(
@@ -1281,21 +1285,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 )
             )
         if deps.fact_store is not None:
+            # Once at startup; each night after that is the fact-upkeep flow's.
             background_tasks.append(
                 asyncio.create_task(
-                    _guarded(_maintain_fact_store(deps.fact_store, deps.context_store), "fact_maintenance"),
+                    _guarded(_refresh_fact_store(deps.fact_store, deps.context_store), "fact_maintenance"),
                     name="fact_maintenance",
-                )
-            )
-        if approvals.interaction is not None:
-            # Each morning, the kinds of action the memory decider ruled on, for you to make your rules.
-            background_tasks.append(
-                asyncio.create_task(
-                    _guarded(
-                        standing_rules.morning_digest(deps.approval_store, approval_memory, approvals.interaction),
-                        "rules_digest",
-                    ),
-                    name="rules_digest",
                 )
             )
     else:

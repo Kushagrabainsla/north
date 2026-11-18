@@ -1,0 +1,8 @@
+name: fact-upkeep
+description: Keeps what north knows about you current. Each night it stops recalling facts whose last
+  day has passed and rewrites your profile from the facts, so an ended internship does not stay in it.
+domains:
+- general
+steps:
+- name: upkeep
+  action: fact_upkeep

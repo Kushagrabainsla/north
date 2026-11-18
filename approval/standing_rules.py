@@ -6,9 +6,9 @@ covers a step, and your answer used to teach north only that exact action: on
 cards now turn answers into rules:
 
 - After you answer a card yourself, north offers once to make your answer a rule.
-- Each morning, one card in your attention panel lists the kinds of action the memory
-  decider ruled on at least twice in the last day and that have no rule, and asks for
-  each whether its ruling should become yours. A decider's yes is not your yes: only
+- Each morning (the built-in rules-to-confirm flow), one card in your attention panel
+  lists the kinds of action the memory decider ruled on at least twice in the last day
+  and that have no rule, and asks for each whether its ruling should become yours. A decider's yes is not your yes: only
   your answer makes the rule.
 
 A rule names the kind of action and where, in the words of the tool (`Action.rule_scope`),
@@ -22,16 +22,14 @@ to north's own settings (`approval.policy.may_replay_yes`).
 
 from __future__ import annotations
 
-import asyncio
 import datetime
 import logging
 from collections import defaultdict
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from approval.models import ApprovalDecision, Card, CardField, CardType, DecidedBy
 from approval.policy import standing_rule_key
-from utils.time import local_timezone, localnow
+from utils.time import local_timezone
 
 if TYPE_CHECKING:
     from approval.approval_memory import ApprovalMemory
@@ -47,11 +45,10 @@ NEVER = "Yes, never allow it"
 EACH_TIME = "No, ask me each time"
 # What "ask me each time" is kept as: a decision that never replays, and settles the scope.
 DECLINED = "declined"
-# The morning card: from this local hour, once a day; a kind of action ruled on at least this often.
-DIGEST_HOUR = 8
+# The morning card (the built-in rules-to-confirm flow, 08:00 by default): a kind of action ruled on at
+# least this often.
 _MIN_RULINGS = 2
 _MAX_DIGEST_QUESTIONS = 5
-_DIGEST_CHECK_SECONDS = 3600
 _CARD_TEXT_CHARS = 300
 _ANSWERS = {ALWAYS: ApprovalDecision.APPROVED, NEVER: ApprovalDecision.REJECTED, EACH_TIME: DECLINED}
 
@@ -166,33 +163,16 @@ def keep(agent: str, scope: str, decision: str, memory: ApprovalMemory, card: Ca
     memory.record(agent, standing_rule_key(scope), decision, card=labelled)
 
 
-async def morning_digest(
-    store: ApprovalStore,
-    memory: ApprovalMemory,
-    interaction: UserInteraction,
-    now: Callable[[], datetime.datetime] = localnow,
-) -> None:
-    """Put the morning card in your attention panel once a day, from DIGEST_HOUR in your time zone.
-
-    Checked hourly against the wall clock, which keeps counting while the Mac sleeps. A day that
-    already has a morning card gets no other, after a restart too.
-    """
-    while True:
-        try:
-            await offer_morning_digest(store, memory, interaction, now())
-        except Exception:
-            logger.warning("Could not make this morning's rules card", exc_info=True)
-        await asyncio.sleep(_DIGEST_CHECK_SECONDS)
-
-
 async def offer_morning_digest(
     store: ApprovalStore, memory: ApprovalMemory, interaction: UserInteraction, now: datetime.datetime
 ) -> Card | None:
-    """This morning's card, put in your attention panel, or None when it is too early, made, or empty."""
+    """Today's card, put in your attention panel, or None when today already has one or nothing is unsettled.
+
+    The step of the built-in rules-to-confirm flow, whose schedule says when; a run caught up after the Mac
+    slept makes no second card the same day.
+    """
     from approval.interaction import CardEvent
 
-    if now.hour < DIGEST_HOUR:
-        return None
     today = now.date()
     zone = local_timezone()
     if any(card.source == DIGEST_SOURCE and card.created_at.astimezone(zone).date() == today for card in store.all()):

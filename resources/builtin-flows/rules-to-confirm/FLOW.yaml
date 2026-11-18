@@ -1,0 +1,9 @@
+name: rules-to-confirm
+description: Each morning, asks you about the kinds of action north's approval model decided for you more
+  than once, the same way, with no rule yet. Your answer makes the rule for all of north, or stops the
+  asking.
+domains:
+- general
+steps:
+- name: ask
+  action: rules_to_confirm

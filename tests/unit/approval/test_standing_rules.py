@@ -170,14 +170,14 @@ async def test_your_answers_to_the_morning_card_become_rules_or_stop_the_asking(
     assert standing_rules.digest(store.decided_since(datetime.now(UTC) - timedelta(days=1)), memory) is None
 
 
-async def test_the_morning_card_comes_once_a_day_from_eight(tmp_path: Path) -> None:
+async def test_the_morning_card_comes_once_a_day(tmp_path: Path) -> None:
+    """The rules-to-confirm flow says when; a run caught up after the Mac slept makes no second card."""
     store, memory = ApprovalStore(), ApprovalMemory(tmp_path / "memory.db")
     interaction = UserInteraction(store)
     for _ in range(2):
         _ruled(store, SCOPE, "approved")
-    morning = datetime.now(UTC).astimezone().replace(hour=7, minute=30)
+    morning = datetime.now(UTC).astimezone().replace(hour=8, minute=0)
 
-    assert await standing_rules.offer_morning_digest(store, memory, interaction, morning) is None
-    made = await standing_rules.offer_morning_digest(store, memory, interaction, morning.replace(hour=8))
+    made = await standing_rules.offer_morning_digest(store, memory, interaction, morning)
     assert made is not None and made in store.pending()
     assert await standing_rules.offer_morning_digest(store, memory, interaction, morning.replace(hour=11)) is None

@@ -1,0 +1,8 @@
+name: skill-learning
+description: Turns tasks that worked into learned skills north can use again, from the notes about finished
+  tasks.
+domains:
+- general
+steps:
+- name: learn
+  action: distill_skills

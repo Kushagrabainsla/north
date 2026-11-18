@@ -1,0 +1,8 @@
+name: episode-memory
+description: 'Writes a short note about each finished task: what was asked, what north did, the result,
+  and what to do next time. North recalls these notes in later tasks.'
+domains:
+- general
+steps:
+- name: record
+  action: consolidate_episodes
