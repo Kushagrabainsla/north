@@ -23,7 +23,7 @@ from inference.exceptions import (
     PaymentRequiredError,
     ProviderUnavailableError,
 )
-from inference.models import CompletionRequest, CompletionResponse
+from inference.models import CompletionRequest, CompletionResponse, TranscriptionRequest, TranscriptionResponse
 from tests.unit.inference._catalog import publish_catalog
 
 _KEY = ("m", "p")
@@ -170,3 +170,62 @@ async def test_a_tiny_wait_named_each_time_cannot_become_dozens_of_requests(tmp_
         await _dispatcher(provider, tmp_path).complete(CompletionRequest(prompt="hi", component="north"))
 
     assert provider.calls == 8
+
+
+# ---- embeddings and transcription: the same rule ----
+
+
+class _FlakyTranscriber:
+    """One transcription model that fails *failures* times with *error*, then answers."""
+
+    name = "codex"
+
+    def __init__(self, error, failures: int) -> None:
+        self.error = error
+        self.failures = failures
+        self.calls = 0
+
+    def get_models(self) -> dict[str, ModelInfo]:
+        return {
+            "whisper": ModelInfo(
+                model_id="whisper",
+                provider_name=self.name,
+                capabilities=frozenset(["transcription"]),
+                context_window=0,
+                cost_per_token=0.0,
+                base_quality=0.8,
+            )
+        }
+
+    async def transcribe(self, model_id: str, request: TranscriptionRequest) -> TranscriptionResponse:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.error(model_id)
+        return TranscriptionResponse(text="heard", model_used=model_id)
+
+
+@pytest.fixture
+def quick_dispatcher_waits(monkeypatch):
+    monkeypatch.setattr("inference.cooldowns._FIRST_COOLDOWN_SECS", 0.005)
+    monkeypatch.setattr("inference.dispatcher._WAIT_GRACE_SECONDS", 0.005)
+
+
+@pytest.mark.parametrize("error", [_outage, _server_error], ids=["502", "500"])
+async def test_transcription_waits_out_server_errors(tmp_path, quick_dispatcher_waits, error) -> None:
+    provider = _FlakyTranscriber(error, failures=3)
+    dispatcher = ModelDispatcher([provider], cooldowns_path=tmp_path / "c.json", models_db_path=tmp_path / "m.db")
+
+    response = await dispatcher.transcribe(TranscriptionRequest(audio=b"x"))
+
+    assert response.text == "heard"
+    assert provider.calls == 4
+
+
+async def test_two_server_errors_do_not_close_the_provider_for_every_call(tmp_path, quick_dispatcher_waits) -> None:
+    """The breaker is shared with chat routing; it used to open after two 502s on one transcription model."""
+    provider = _FlakyTranscriber(_outage, failures=2)
+    dispatcher = ModelDispatcher([provider], cooldowns_path=tmp_path / "c.json", models_db_path=tmp_path / "m.db")
+
+    await dispatcher.transcribe(TranscriptionRequest(audio=b"x"))
+
+    assert dispatcher._provider_health.is_available("codex")

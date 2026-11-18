@@ -22,7 +22,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -160,6 +160,8 @@ _NO_RESULT = object()
 _DEGENERATE_COOLDOWN_SECS = 120
 _MAX_INLINE_WAIT_SECONDS = 40.0
 _WAIT_GRACE_SECONDS = 0.5
+# At most this many passes over the candidates for one call, as in the chain router.
+_MAX_WALKS = 8
 _ERROR_REASON_CHARS = 160
 
 
@@ -169,7 +171,6 @@ class _DispatchPlan:
 
     call_fn: Callable[[Provider, str], Awaitable]
     is_valid: Callable[[Any], bool] | None = None
-    allow_wait: bool = True
     capability: ModelCapability | str | None = None
 
 
@@ -919,18 +920,35 @@ class ModelDispatcher(InferenceRouter):
     # ---- Dispatch ----
 
     async def _dispatch(self, candidates: list[_Candidate], plan: _DispatchPlan) -> Any:
-        """Try each candidate in turn. Used by embeddings and transcription only."""
+        """Try each candidate in turn, and wait out short cooldowns. Used by embeddings and transcription only.
+
+        The same rule as the chain router (issue #82, item 5): while the soonest cooldown fits in
+        `_MAX_INLINE_WAIT_SECONDS`, and for at most `_MAX_WALKS` passes, wait for it and try again.
+        """
         if not candidates:
             raise AllModelsRateLimitedError("No models available for this request")
 
-        for info, provider in candidates:
-            if self._is_unusable(info, plan.capability):
-                continue
-            result = await self._call_candidate(info, provider, plan)
-            if result is not _NO_RESULT:
-                return result
+        waited = 0.0
+        for walked in range(1, _MAX_WALKS + 1):
+            for info, provider in candidates:
+                if self._is_unusable(info, plan.capability):
+                    continue
+                result = await self._call_candidate(info, provider, plan)
+                if result is not _NO_RESULT:
+                    return result
+            wait = self._shortest_transient_wait(candidates)
+            pause = wait + _WAIT_GRACE_SECONDS
+            if wait <= 0 or walked == _MAX_WALKS or waited + pause > _MAX_INLINE_WAIT_SECONDS:
+                break
+            logger.info("All candidates are cooling down - waiting %.1fs and trying again", wait)
+            await asyncio.sleep(pause)
+            waited += pause
 
-        return await self._all_candidates_failed(candidates, plan)
+        wait = self._shortest_transient_wait(candidates)
+        raise AllModelsRateLimitedError(
+            f"All {len(candidates)} candidate(s) exhausted - every model is rate-limited or has insufficient credits",
+            retry_after=wait if wait > 0 else None,
+        )
 
     def _is_unusable(self, info: ModelInfo, capability: ModelCapability | str | None) -> bool:
         """True when this model is cooling down, or its provider is down."""
@@ -993,6 +1011,7 @@ class ModelDispatcher(InferenceRouter):
         self._record_model_outcome(key, True)
         self._persist_model_score(key)
         self._provider_health.record_success(info.provider_name)
+        self._cooldowns.forget_failures(key)
 
     def _penalise_degenerate(
         self,
@@ -1038,7 +1057,7 @@ class ModelDispatcher(InferenceRouter):
             "Rate limited: %s/%s - skipping for %s",
             info.provider_name,
             info.model_id,
-            f"{error.retry_after:.0f}s (Retry-After)" if error.retry_after else "60 s",
+            f"{error.retry_after:.0f}s (Retry-After)" if error.retry_after else "a short cooldown that doubles",
         )
 
     def _note_payment_required(self, info: ModelInfo) -> None:
@@ -1063,11 +1082,18 @@ class ModelDispatcher(InferenceRouter):
         )
 
     def _note_provider_unavailable(self, info: ModelInfo, error: ProviderUnavailableError) -> None:
-        self._record_failure((info.model_id, info.provider_name))
+        """A 502/503/504 or a failed connection cools this model briefly; it does not close the provider.
+
+        Two in a row here used to open the provider's breaker for two minutes - the breaker the chain
+        router shares - so two embedding errors could stop chat on that provider too. The router counts
+        such a failure as one vote and closes a provider only when three models agree (inference/failure.py).
+        """
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        self._record_failure(key)
+        self._cooldowns.set_rate_limit(key)
         outage = str(error) or "server outage"
-        state = self._provider_health.mark_degraded(info.provider_name, outage)
-        self._rate_limit_status.record_provider_down(info.provider_name, outage)
-        logger.warning("Provider degraded: %s - circuit %s (%s)", info.provider_name, state, error)
+        self._rate_limit_status.record_error(info.provider_name, info.model_id, reason=outage, is_free=info.is_free)
+        logger.warning("Server error from %s/%s - cooling it briefly (%s)", info.provider_name, info.model_id, error)
 
     def _note_model_not_found(self, info: ModelInfo) -> None:
         key: _CooldownKey = (info.model_id, info.provider_name)
@@ -1082,7 +1108,10 @@ class ModelDispatcher(InferenceRouter):
         logger.info("Model not found: %s/%s - skipping for 24 h", info.provider_name, info.model_id)
 
     def _note_inference_error(self, info: ModelInfo, error: InferenceError) -> None:
+        # Cooled briefly, doubling for each failure in a row: with no cooldown, a 500 left nothing to
+        # wait for, and a call with one model failed at once (issue #82, item 5).
         self._record_failure((info.model_id, info.provider_name))
+        self._cooldowns.set_rate_limit((info.model_id, info.provider_name))
         self._rate_limit_status.record_error(
             info.provider_name,
             info.model_id,
@@ -1094,22 +1123,6 @@ class ModelDispatcher(InferenceRouter):
             info.provider_name,
             info.model_id,
             error,
-        )
-
-    async def _all_candidates_failed(self, candidates: list[_Candidate], plan: _DispatchPlan) -> Any:
-        """Every candidate is out: wait out a short cooldown, or report exhaustion."""
-        wait = self._shortest_transient_wait(candidates)
-        if plan.allow_wait and 0 < wait <= _MAX_INLINE_WAIT_SECONDS:
-            logger.info(
-                "All candidates transiently rate-limited - pausing in-flight for %.1fs before retrying",
-                wait,
-            )
-            await asyncio.sleep(wait + _WAIT_GRACE_SECONDS)
-            return await self._dispatch(candidates, replace(plan, allow_wait=False))
-
-        raise AllModelsRateLimitedError(
-            f"All {len(candidates)} candidate(s) exhausted - every model is rate-limited or has insufficient credits",
-            retry_after=wait if wait > 0 else None,
         )
 
     def _shortest_transient_wait(self, candidates: list[_Candidate]) -> float:
