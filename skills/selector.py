@@ -11,6 +11,7 @@ selects nothing, and ``use_skill`` remains the fallback.
 from __future__ import annotations
 
 import logging
+import re
 
 from inference.models import EmbedFn
 from skills.models import Skill, SkillIntent
@@ -28,6 +29,8 @@ DEFAULT_MIN_SIMILARITY = 0.35  # below this, no skill is relevant enough to be w
 # same capability. This is deliberately only a diversity filter; task-to-skill
 # intent matching remains the selector's separate retrieval concern.
 MAX_SECONDARY_SIMILARITY = 0.82
+# North's own name says nothing about which procedure a request wants (see _retrieval_key).
+_NORTH = re.compile(r"\bnorth(?:'s)?\b", re.IGNORECASE)
 
 
 class SkillSelector:
@@ -141,8 +144,14 @@ class SkillSelector:
 
 
 def _retrieval_key(skill: Skill) -> str:
-    """The text a skill is matched on: its name plus its trigger-oriented description."""
-    return f"{skill.name}: {skill.description}"
+    """The text a skill is matched on: its name plus its trigger-oriented description, without north's own name.
+
+    Every skill for building north's parts is named `...-a-north-...`, and the user says "north"
+    whenever they mean their project. "Create an issue for this in north's repo" scored 0.73 against
+    adding-a-north-tool and was offered it and the flow skill; "What is north's version?" scored 0.72.
+    Without the name they score 0.65 and 0.54, and requests that want those skills score higher.
+    """
+    return _NORTH.sub("", f"{skill.name.replace('-', ' ')}: {skill.description}")
 
 
 def _intent_compatible(task_text: str, skills: list[Skill]) -> list[Skill]:
