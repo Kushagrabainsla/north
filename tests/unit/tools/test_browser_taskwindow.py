@@ -198,6 +198,7 @@ def test_page_scripts_parse():
         bridge._TABLES_SCRIPT % {"limit": 5, "query": json.dumps("")},
         bridge._ASSERT_SCRIPT % {"kind": '"text"', "condition": '"contains"', "expected": '"x"', "selector": '""'},
         bridge._WAIT_SCRIPT % {"condition": '"text"', "pattern": '"x"'},
+        bridge._PAGE_STATE_SCRIPT % {"names": '["Ada Lovelace"]'},
     ]
     for script in scripts:
         subprocess.run(["node", "-e", "new Function(process.argv[1])", script], check=True)

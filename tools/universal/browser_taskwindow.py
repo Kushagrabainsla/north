@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from tools.models import ToolOutput
+from tools.universal.browser_accounts import chrome_identity
 from utils.desktop import activate, frontmost_app
 from utils.runtime_resources import resource_path
 from utils.spans import span
@@ -200,6 +201,18 @@ JSON.stringify(condition === "selector" ? !!document.querySelector(pattern)
   : condition === "text" ? !!document.body && document.body.innerText.includes(pattern)
   : condition === "loaded" ? location.href !== "about:blank" && document.readyState === "complete"
   : document.readyState === "complete")
+"""
+
+
+# What a page says about signing in, read after each page opens: whether it asks to sign in (a password
+# field, or a sign-in path), and which of the profile's own names (its Google account) it shows.
+_PAGE_STATE_SCRIPT = """
+const names = %(names)s;
+const text = (document.body && document.body.innerText) || "";
+const asks = !!document.querySelector('input[type="password"]')
+  || /(^|\\/)(login|log-in|signin|sign-in|sign_in|auth|session)(\\/|$)/i.test(location.pathname);
+JSON.stringify({url: location.href, title: document.title, signin_page: asks,
+  account: names.find(name => name && text.includes(name)) || ""})
 """
 
 
@@ -555,11 +568,11 @@ class TaskWindowBrowser:
         if action == "read" and params.get("urls"):
             return {"pages": await self._read_many(profile, task_id, list(params["urls"]))}
         if action == "read":
-            if params.get("url"):
-                await self._open(profile, session, params)
+            opened = await self._open(profile, session, params) if params.get("url") else {}
             text = self._text(await self._tool(profile, "get_page_text", {"sessionToken": session}))
             page = await self._script(profile, session, "JSON.stringify({title: document.title, url: location.href})")
-            return {"article": {"title": page["title"], "content": text}, "url": page["url"]}
+            state = {key: opened[key] for key in ("signin_page", "account") if key in opened}
+            return {"article": {"title": page["title"], "content": text}, "url": page["url"], **state}
         if action == "inspect":
             return await self._inspect(profile, task_id, session, params)
         if action == "extract":
@@ -639,7 +652,8 @@ class TaskWindowBrowser:
                 await self._wait(profile, session, {"condition": "loaded", "timeout_seconds": 15})
         else:
             await self._tool(profile, "navigate", {"url": url, "sessionToken": session})
-        return await self._script(profile, session, "JSON.stringify({url: location.href, title: document.title})")
+        names = json.dumps(chrome_identity(profile))
+        return await self._script(profile, session, _PAGE_STATE_SCRIPT % {"names": names})
 
     async def _read_many(self, profile: BrowserProfile, task_id: str, urls: list[str]) -> list[dict]:
         """Read *urls*, PARALLEL_READS at a time, each in a tab of its own that is closed after; in order.
@@ -657,7 +671,14 @@ class TaskWindowBrowser:
                     page = await self._open(profile, session, {"url": url})
                     result = await self._tool(profile, "get_page_text", {"sessionToken": session, "maxLength": chars})
                     text = self._text(result)
-                    return {"url": page["url"], "title": page["title"], "content": text, "cut": len(text) >= chars}
+                    state = {key: page[key] for key in ("signin_page", "account") if key in page}
+                    return {
+                        "url": page["url"],
+                        "title": page["title"],
+                        "content": text,
+                        "cut": len(text) >= chars,
+                        **state,
+                    }
                 except (BridgeInputError, _ToolError, KeyError, ValueError) as exc:
                     return {"url": url, "error": str(exc)}
                 finally:

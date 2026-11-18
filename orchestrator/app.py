@@ -101,6 +101,7 @@ from tools.specialized.coding_agent import CodingAgentTool
 from tools.specialized.coding_shell import BashShell
 from tools.specialized.kasa_devices import move_logins_to_secrets as move_kasa_logins_to_secrets
 from tools.tool_index import ToolIndex
+from tools.universal.browser_accounts import BrowserAccounts
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_skill import CreateSkillTool
@@ -250,7 +251,11 @@ def _build_tool_registry(
     from tools.universal.browser_taskwindow import TaskWindowBrowser
 
     tool_registry.register(
-        BrowserTool(north_settings=deps.north_settings, existing_browser=TaskWindowBrowser(settings.north_home))
+        BrowserTool(
+            north_settings=deps.north_settings,
+            existing_browser=TaskWindowBrowser(settings.north_home),
+            accounts=BrowserAccounts(settings.north_home / "browser" / "accounts.db"),
+        )
     )
     mutation_root = settings.north_home / "mutations"
     source_edit_policy = SelfEditPolicy(learned_tools_dir, mutation_root)

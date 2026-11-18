@@ -35,6 +35,7 @@ from config.browser_connection import active_cdp_endpoint
 from config.browser_connection import cdp_http_base as _cdp_http_base
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.universal.browser_accounts import BrowserAccounts, Pick, site_of
 from tools.universal.browser_describe import describe_browser_call
 from tools.universal.browser_taskwindow import TaskWindowBrowser, page_chars
 from utils.net import HostNotFoundError, UnsafeUrlError, validate_public_url
@@ -674,8 +675,11 @@ class BrowserTool(Tool):
         "For an ordinary article, documentation page or any URL you only need to READ, use "
         "fetch_url instead - it is one request against this tool's whole browser, so reach "
         "for a browser only after text has failed or the task needs hands. "
-        "Call list_profiles to see saved names and purposes. Select profile_id for each tool call from "
-        "the current task context and configured purposes; profiles belong to tool calls, not flows. "
+        "Call list_profiles to see saved names, purposes and the sites each profile is signed in on. Select "
+        "profile_id for each tool call from the current task context and configured purposes; profiles belong "
+        "to tool calls, not flows. If you leave profile_id out, North picks the profile it saw signed in on the "
+        "site (or the one you browse it in, or the one the task's page is open in) and says which in "
+        "'picked_profile'; when no profile stands out, the call is refused and you ask. "
         "If the choice is missing or ambiguous, ask which browser profile to use (for example Personal, "
         "University, Work, or an isolated North browser), unless the user already explicitly chose for "
         "this task. Choosing 'existing browser' alone does not identify a profile. Explain that "
@@ -862,10 +866,15 @@ class BrowserTool(Tool):
         binary_cmd: list[str] | None = None,
         north_settings: NorthSettings | None = None,
         existing_browser: TaskWindowBrowser | None = None,
+        accounts: BrowserAccounts | None = None,
     ) -> None:
         self._binary_cmd = binary_cmd
         self._north_settings = north_settings
         self._existing_browser = existing_browser
+        # Where each profile is signed in, and where you browse (browser_accounts): what picks a profile.
+        self._accounts = accounts
+        # The profile north picked for a task's call that named none, and why, said once in the call's result.
+        self._picked: dict[str, tuple[str, str]] = {}
         # Browsers chrome-agent started for north (isolated profiles, plain sessions), closed by aclose,
         # and the task pages open in them, each closed when its task ends.
         self._started_browsers: set[str] = set()
@@ -1208,6 +1217,67 @@ class BrowserTool(Tool):
             )
         return await self._existing_browser.call(profile, params)
 
+    def _catalog_entry(self, profile: BrowserProfile) -> dict[str, Any]:
+        """A profile as list_profiles shows it, with the sites north saw it signed in on."""
+        entry = profile.catalog_entry()
+        if self._accounts is not None and (sites := self._accounts.signed_in_sites(profile.id)):
+            entry["signed_in_on"] = sites
+        return entry
+
+    async def prepare(self, input: ToolInput) -> tuple[ToolInput, str, ApprovalRequest | None]:
+        """The call as it runs, with the profile north picks when it names none, decided before any card."""
+        return await super().prepare(await self._with_picked_profile(input))
+
+    async def _with_picked_profile(self, input: ToolInput) -> ToolInput:
+        """*input* with a profile_id when the call names none and one profile stands out (browser_accounts).
+
+        A page opened on a site: the one profile seen signed in there, else the one you browse it in.
+        Any other call: the profile the task's page is open in. With no answer, the call goes on
+        without one and is refused with "Select profile_id", so the agent asks you.
+        """
+        params = input.params or {}
+        profiles = self._profiles()
+        action = str(params.get("action") or ("goto" if params.get("url") else ""))
+        if params.get("profile_id") or not profiles or action in {"", "list_profiles"}:
+            return input
+        task = str(params.get("task_id") or "default")
+        urls = [str(url) for url in params.get("urls") or []] or ([str(params["url"])] if params.get("url") else [])
+        pick: Pick | None = None
+        if action in _NAVIGATING_ACTIONS and urls and self._accounts is not None:
+            if len({site_of(url) for url in urls}) == 1:
+                await asyncio.to_thread(self._accounts.refresh_history, [p for p in profiles if p.enabled])
+                pick = await asyncio.to_thread(self._accounts.pick, urls[0], profiles)
+        elif not urls:
+            open_in = {profile_id for task_id, profile_id in self._open_sites if task_id == task}
+            if len(open_in) == 1:
+                pick = Pick(open_in.pop(), "the profile this task's page is open in")
+        if pick is None:
+            return input
+        self._picked[task] = (pick.profile_id, pick.why)
+        return input.model_copy(update={"params": {**params, "profile_id": pick.profile_id}})
+
+    def _say_picked(self, task: str, profile: BrowserProfile, output: ToolOutput) -> None:
+        """Tell the agent, once, which profile north picked for it and why."""
+        picked = self._picked.get(task)
+        if picked and picked[0] == profile.id:
+            del self._picked[task]
+            output.data["picked_profile"] = f"{profile.name} ({profile.id}): {picked[1]}"
+
+    def _learn_page(self, profile: BrowserProfile, data: dict[str, Any]) -> None:
+        """Keep what the pages showed about signing in, for picking a profile next time."""
+        if self._accounts is None:
+            return
+        listed = data.get("pages")
+        pages: list[Any] = listed if isinstance(listed, list) else [data]
+        for page in pages:
+            if isinstance(page, dict) and "signin_page" in page and page.get("url"):
+                self._accounts.record(
+                    str(page["url"]),
+                    profile.id,
+                    signed_in=not page["signin_page"],
+                    account=str(page.get("account") or ""),
+                )
+
     async def _native_action(self, profile, params: dict, input: ToolInput) -> ToolOutput:
         if params.get("action") == "upload":
             from tools._path import resolve_path
@@ -1226,6 +1296,9 @@ class BrowserTool(Tool):
             params = {**params, "filename": str(path)}
         output = await self._native_call(profile, params)
         output.data.update(profile_id=profile.id, profile_name=profile.name)
+        if output.success:
+            self._learn_page(profile, output.data)
+            self._say_picked(str(params.get("task_id") or "default"), profile, output)
         key = (str(params.get("task_id") or "default"), profile.id)
         if output.success and output.data.get("profile_verified") is True:
             self._verified_bindings[key] = (profile.model_dump_json(), output.data["connection_id"])
@@ -1319,7 +1392,7 @@ class BrowserTool(Tool):
         params = input.params or {}
         action = params.get("action", "") or ("goto" if params.get("url") else "")
         if action == "list_profiles":
-            return ToolOutput(success=True, data={"profiles": [p.catalog_entry() for p in self._profiles()]})
+            return ToolOutput(success=True, data={"profiles": [self._catalog_entry(p) for p in self._profiles()]})
         if not action:
             return ToolOutput(success=False, error="Parameter 'action' is required.")
         if any(key in params for key in _RAW_ATTACH_KEYS):
