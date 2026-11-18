@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { Dashboard, dialsLine } from "./Dashboard";
+import { Dashboard, dialsLine, systemRows } from "./Dashboard";
 
 // What each endpoint returns in the render tests; a path left out is still loading.
 const served = vi.hoisted(() => ({ data: {} as Record<string, unknown> }));
@@ -19,6 +19,20 @@ describe("the dashboard's tiles say what is so", () => {
   it("names the approval mode only: models and power are on the Settings page (#80)", () => {
     expect(dialsLine({ status: "online", autonomy: "ask" })).toBe("Autonomy ask");
   });
+
+  it("lists each model, each wait and each browser profile, with its state", () => {
+    const rows = systemRows({
+      status: "online", autonomy: "autonomous", version: "1.21.0",
+      models: [{ name: "Mistral", state: "ready", detail: "" }, { name: "Groq", state: "failing", detail: "key rejected" }],
+      waiting: [{ model: "mistral:flash", until: 2e9, reason: "rate limited" }],
+      browser: [{ name: "sjsu.edu", connected: true }, { name: "Personal", connected: false }],
+    });
+    expect(rows.map(row => [row.title, row.state, row.tone])).toEqual([
+      ["Mistral", "ready", "good"], ["Groq", "failing", "bad"], ["mistral:flash", "waiting", "warn"],
+      ["Browser: sjsu.edu", "connected", "good"], ["Browser: Personal", "not connected", "neutral"],
+    ]);
+    expect(rows[2].detail).toMatch(/^until .* · rate limited$/);
+  });
 });
 
 describe("the dashboard page", () => {
@@ -33,16 +47,16 @@ describe("the dashboard page", () => {
   it("gives Attention and Sessions the whole width, and has no Active now, Memory or Artifacts tile", () => {
     served.data = { "/web/api/dashboard": {
       system: { status: "online", autonomy: "ask" },
-      attention: [], notices: [], cron: [], jobs: [], metrics: {},
+      attention: [], notices: [], metrics: {},
       conversations: [{ id: "c1", title: "Trip planning", source: "web", updated_at: "" }],
       artifacts: [{ id: "a1", name: "2026-11-10.md", kind: "news", media_type: "text/markdown", is_today: true }],
     } };
     const html = render();
-    expect(html.match(/full-panel/g)).toHaveLength(2);
+    expect(html.match(/full-panel/g)).toHaveLength(3);
     expect(html.indexOf(">Attention<")).toBeLessThan(html.indexOf(">Sessions<"));
     expect(html).toMatch(/<a class="kit-card-head" href="\/sessions\/c1"[^>]*>.*<b>Trip planning<\/b>/);
     expect(html).toMatch(/<a class="kit-button kit-button-primary kit-button-sm" href="\/artifacts"[^>]*><span>Open artifact<\/span>/);
-    for (const gone of [">Active now<", ">Memory<", ">Artifacts<"]) expect(html).not.toContain(gone);
+    for (const gone of [">Active now<", ">Memory<", ">Artifacts<", ">Flows<"]) expect(html).not.toContain(gone);
     // Issue #81: eight rows of north's own "inference call · memory · completed" said nothing.
     expect(html).not.toContain("Latest events");
   });

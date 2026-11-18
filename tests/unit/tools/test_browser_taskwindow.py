@@ -258,3 +258,15 @@ async def test_a_key_press_goes_to_the_element_the_call_names(adapter, profile):
     (focus, focus_args), (press, press_args) = [call.args[1:3] for call in adapter._tool.call_args_list]
     assert focus == "javascript_execute" and '"#q"' in focus_args["code"] and ".focus()" in focus_args["code"]
     assert press == "computer" and press_args["key"] == "Enter"
+
+
+@pytest.mark.asyncio
+async def test_connected_asks_the_running_bridge_and_starts_none(tmp_path, profile):
+    browser = TaskWindowBrowser(tmp_path / "north")
+    assert await browser.connected(profile) is False  # no bridge has run for it: nothing is started
+    port = browser.state_dir(profile) / "port"
+    port.parent.mkdir(parents=True)
+    port.write_text("4321")
+    browser._health = AsyncMock(return_value={"ok": True, "extensionConnected": True})
+    assert await browser.connected(profile) is True
+    browser._health.assert_awaited_once_with(4321)

@@ -587,16 +587,21 @@ class FlowRunner:
 
                 contract_output = _contract_output(result, output_schema)
                 output_errors = schema_errors(contract_output, output_schema, path="output")
+                if output_errors and check_round == 0:
+                    # The work is often done and only the closing JSON is missing: the research briefing
+                    # saved its file, ended in prose, and the run stopped (2026-11-18). One more try, told so.
+                    failed_checks = "\n".join(
+                        [f"- your final answer did not give the step's output: {error}" for error in output_errors]
+                        + ["- if the work is done, do not redo it: end with only the JSON object the output names"]
+                    )
+                    continue
                 if output_errors:
                     return self._store.update(
                         run.run_id,
                         status="paused",
                         current_step=index,
                         outputs=outputs,
-                        error=(
-                            f"Skill step '{step.name}' returned data outside skill "
-                            f"'{step.skill or 'inline instructions'}'s output contract: {'; '.join(output_errors)}"
-                        ),
+                        error=_unreported(step.name, output_errors, folder),
                     )
 
                 # A skill can promise files in its structured output. Verify that
@@ -781,6 +786,19 @@ def _final_json(result) -> dict[str, Any] | None:
     except (json.JSONDecodeError, TypeError):
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _unreported(step_name: str, errors: list[str], folder: str) -> str:
+    """Why a step stopped when it twice did not report its result in the form the flow needs, in plain words.
+
+    The card said "returned data outside skill 'research-paper-briefing's output contract: output.file is
+    required", which tells you nothing, while the briefing was saved and only its closing line was missing.
+    """
+    return (
+        f"Step '{step_name}' ran, but twice did not report its result in the form the flow needs "
+        f"({'; '.join(errors)}). Its work may be saved already: look in {folder}. "
+        "Resume runs the step again."
+    )
 
 
 def _contract_output(result, schema: dict[str, Any]) -> dict[str, Any]:

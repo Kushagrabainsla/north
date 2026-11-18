@@ -7,7 +7,7 @@ import contextlib
 import logging
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -30,8 +30,6 @@ from config.security import (
 )
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
-from jobs.models import display_job_status, late_note
-from jobs.scheduler import V1_CRON_ENTRIES, merge_entries
 from ledger.base import LedgerFilters
 from ledger.models import INFERENCE_CALL, LedgerSource
 from memory.extraction import learning_status
@@ -41,6 +39,7 @@ from tools.home import Home
 from tools.universal.browser import browser_availability
 from utils.secrets import redact
 from utils.time import epoch_to_local, localnow
+from utils.version import NORTH_VERSION
 from web.artifacts import (
     allowed_output_roots,
     artifact_media_type,
@@ -1463,21 +1462,52 @@ async def get_artifact_file(artifact_id: str) -> FileResponse:
     return FileResponse(path, media_type=artifact_media_type(path))
 
 
-def _scheduled_count(user_rows: list[Mapping[str, Any]]) -> int:
-    """The schedules that run, built-ins included, as the Flows page lists them."""
-    return sum(1 for entry in merge_entries(list(V1_CRON_ENTRIES), user_rows) if entry.enabled)
+async def _system_facts() -> dict[str, Any]:
+    """What the dashboard's System tile says: what you would otherwise go and look up.
+
+    It said only "online" and the approval mode. Now: each configured model provider, ready or
+    failing; each model waiting out a limit, until when and why; whether each existing browser
+    profile is connected now (asked without starting its bridge); and north's version.
+    """
+    services = current_services()
+    settings = services.require("north_settings")
+    providers = []
+    for definition in PROVIDER_DEFINITIONS:
+        if definition.auth_kind is AuthKind.LOCAL or not definition.is_configured(settings):
+            continue
+        state, detail = _provider_state(definition.id)
+        providers.append({"name": definition.display_name, "state": state, "detail": detail})
+    router_ = services.inference_router
+    waiting = [
+        {"model": f"{record['provider']}:{record['model']}", "until": record["available_at_epoch"],
+         "reason": record.get("reason") or record.get("kind") or ""}
+        for record in getattr(router_, "rate_limit_status", list)()
+    ]  # fmt: skip
+    tool = services.tool_registry.get("browser") if services.tool_registry is not None else None
+    bridge = getattr(tool, "existing_browser", None)
+    browser = [
+        {"name": profile.name, "connected": await bridge.connected(profile)}
+        for profile in settings.browser_profiles
+        if bridge is not None and profile.enabled and profile.context == "existing"
+    ]
+    return {
+        "status": "online",
+        "autonomy": settings.autonomy.value,
+        "models": providers,
+        "waiting": waiting,
+        "browser": browser,
+        "version": NORTH_VERSION,
+    }
 
 
 @router.get("/dashboard")
 async def dashboard() -> dict[str, Any]:
-    jobs, cron, metrics, conversations, artifacts = await asyncio.gather(
-        current_services().require("job_processor").list_jobs(limit=8),
-        current_services().require("cron_store").list(),
+    system, metrics, conversations, artifacts = await asyncio.gather(
+        _system_facts(),
         current_services().require("ledger").get_metrics(days=7),
         current_services().require("conversation_store").list(limit=6),
         asyncio.to_thread(_list_artifacts_sync, 100),
     )
-    settings = current_services().require("north_settings")
     today = localnow().date()
     # Only the latest briefing: the dashboard's Artifacts tile is gone, and the Artifacts page lists the rest.
     latest_briefing = next((artifact for artifact in artifacts if artifact["kind"] == "news"), None)
@@ -1486,29 +1516,11 @@ async def dashboard() -> dict[str, Any]:
         for artifact in ([latest_briefing] if latest_briefing else [])
     ]
     return {
-        "system": {
-            "status": "online",
-            # Models and power are on the Settings page only (#80).
-            "autonomy": settings.autonomy.value,
-        },
-        # The schedules that run, built-ins included, as the Flows page counts them: the tile counted only
-        # yours and read "0 scheduled" beside two built-ins under Next up.
-        "scheduled": _scheduled_count(cron),
+        "system": system,
+        # No Flows tile: a run that needs you is a card under Attention, and the Flows page lists the rest.
         "attention": [card.model_dump(mode="json") for card in current_services().require("approval_store").pending()],
         "notices": _notices(),
         "conversations": [_conversation_payload(item) for item in conversations],
-        "jobs": [
-            {
-                "job_id": job.job_id,
-                "agent": job.agent,
-                "task": job.task,
-                "status": display_job_status(job),
-                "scheduled_at": job.scheduled_at.isoformat(),
-                "late_note": late_note(job),
-            }
-            for job in jobs
-        ],
-        "cron": cron,
         "metrics": metrics,
         # No latest events: north's own background calls filled them, and they said nothing (issue #81).
         "artifacts": dashboard_artifacts,

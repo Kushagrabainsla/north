@@ -334,6 +334,14 @@ class TaskWindowBrowser:
     def _token(self, profile: BrowserProfile) -> str:
         return (self.state_dir(profile) / "daemon" / "token").read_text(encoding="utf-8").strip()
 
+    async def connected(self, profile: BrowserProfile) -> bool:
+        """Whether *profile*'s bridge runs and its Chrome extension is connected now. Starts nothing."""
+        try:
+            port = int((self.state_dir(profile) / "port").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return (await self._health(port)).get("extensionConnected") is True
+
     async def _health(self, port: int) -> dict:
         try:
             async with httpx.AsyncClient(timeout=2, trust_env=False) as client:

@@ -1,6 +1,6 @@
 import { MessageSquare } from "lucide-react";
 import { formatDateTime, HealthIndicator, NoticeList, PageHeader, Panel, timeAgo, unpricedNote, YoloBadge } from "../components";
-import { Button, CardGrid, Empty, EntityCard, ListRow, Loading, Notice, Stat, StatGrid, Status } from "../kit";
+import { Button, CardGrid, Empty, EntityCard, ListRow, Loading, Notice, Stat, StatGrid, Status, type Tone } from "../kit";
 import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
 import { SetupReminder } from "./Setup";
@@ -8,6 +8,23 @@ import { SetupReminder } from "./Setup";
 /** The approval mode. Models and power are on the Settings page only (#80): a copy here disagreed with it. */
 export function dialsLine(system: DashboardData["system"]): string {
   return `Autonomy ${system.autonomy}`;
+}
+
+/** The System tile's facts, one row each: what you would otherwise go and look up. */
+export function systemRows(system: DashboardData["system"]): { key: string; title: string; detail: string; state: string; tone: Tone }[] {
+  const models = (system.models ?? []).map(model => ({
+    key: `model:${model.name}`, title: model.name, detail: model.detail, state: model.state,
+    tone: (model.state === "ready" ? "good" : model.state === "failing" ? "bad" : "neutral") as Tone,
+  }));
+  const waiting = (system.waiting ?? []).map(wait => ({
+    key: `wait:${wait.model}`, title: wait.model, detail: `until ${formatDateTime(wait.until)}${wait.reason ? ` · ${wait.reason}` : ""}`,
+    state: "waiting", tone: "warn" as Tone,
+  }));
+  const browser = (system.browser ?? []).map(profile => ({
+    key: `browser:${profile.name}`, title: `Browser: ${profile.name}`, detail: "",
+    state: profile.connected ? "connected" : "not connected", tone: (profile.connected ? "good" : "neutral") as Tone,
+  }));
+  return [...models, ...waiting, ...browser];
 }
 
 export function Dashboard() {
@@ -36,20 +53,19 @@ export function Dashboard() {
       <Panel title="Sessions" label="Recent" to="/sessions" className="full-panel">
         {data.conversations.length ? <CardGrid>{data.conversations.map(session => <EntityCard key={session.id} to={`/sessions/${session.id}`} icon={<MessageSquare size={16}/>} title={session.title} meta={`${session.source === "cli" ? "CLI · " : ""}${timeAgo(session.updated_at)}`}/>)}</CardGrid> : <Empty>Start your first session.</Empty>}
       </Panel>
-      <Panel title="System" label="Status" to="/system" className="system-panel">
+      <Panel title="System" label={data.system.version ? `North ${data.system.version}` : "Status"} to="/system" className="wide-panel system-panel">
         <div className="hero-status"><HealthIndicator variant="panel"/><div><p>{dialsLine(data.system)}<YoloBadge mode={data.system.autonomy}/></p></div></div>
-      </Panel>
-      <Panel title={todaysBriefing ? "Today's briefing" : "Latest briefing"} label="Daily intelligence" to="/artifacts" className="wide-panel briefing-panel">
-        {briefing ? <ListRow title={briefing.name}
-          description={todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}
-          actions={<Button variant="primary" size="sm" to="/artifacts">Open artifact</Button>}/> : <Empty>No briefing has been generated yet.</Empty>}
-      </Panel>
-      <Panel title="Flows" label={`${data.scheduled ?? data.cron.length} scheduled`} to="/flows" className="wide-panel">
-        {data.jobs.length ? data.jobs.slice(0, 3).map(job => <ListRow key={job.job_id} title={job.task} meta={[formatDateTime(job.scheduled_at), job.late_note]} status={<Status value={job.status}/>}/>) : <Empty>No flow has run yet.</Empty>}
+        {systemRows(data.system).map(row => <ListRow key={row.key} title={row.title} meta={row.detail ? [row.detail] : []} status={<Status value={row.state} tone={row.tone}/>}/>)}
       </Panel>
       <Panel title="Usage" label="Last 7 days" to="/insights">
         <StatGrid><Stat label="Tasks" value={String(data.metrics.total_tasks || 0)}/><Stat label="Model cost" value={<>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</>}/></StatGrid>
       </Panel>
+      <Panel title={todaysBriefing ? "Today's briefing" : "Latest briefing"} label="Daily intelligence" to="/artifacts" className="full-panel briefing-panel">
+        {briefing ? <ListRow title={briefing.name}
+          description={todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}
+          actions={<Button variant="primary" size="sm" to="/artifacts">Open artifact</Button>}/> : <Empty>No briefing has been generated yet.</Empty>}
+      </Panel>
+      {/* No Flows tile: a run that needs you is a card under Attention, and the Flows page lists the rest. */}
       {/* No "Latest events" panel: north's own background calls filled it, eight rows of "inference call ·
         memory · completed" that said nothing (issue #81). Every event is on the Tasks page. */}
     </div>

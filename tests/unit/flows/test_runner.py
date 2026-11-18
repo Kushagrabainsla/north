@@ -1283,6 +1283,63 @@ async def test_a_step_that_fails_its_checks_twice_stops_with_the_reason(tmp_path
     )
 
 
+class ProseAgent(FakeAgent):
+    """Saves the file and ends in prose, without the JSON the output names; from attempt *reports_on*, with it."""
+
+    def __init__(self, path, reports_on: int | None) -> None:
+        super().__init__()
+        self.path = path
+        self.reports_on = reports_on
+
+    async def run(self, payload):
+        self.payloads.append(payload)
+        self.path.write_text("# Briefing\n", encoding="utf-8")
+        if self.reports_on is not None and len(self.payloads) >= self.reports_on:
+            return AgentResult(output=json.dumps({"file": str(self.path)}), summary="saved", tools_used=["write_file"])
+        return AgentResult(output="Here is today's briefing.", summary="briefing", tools_used=["write_file"])
+
+
+def _file_contract(skills: SkillRegistry) -> SkillRegistry:
+    skill = skills.get("review-item")
+    outputs = {"type": "object", "properties": {"file": {"type": "string"}}, "required": ["file"]}
+    skills._skills[skill.name] = replace(skill, execution=replace(skill.execution, outputs=outputs))
+    return skills
+
+
+async def test_a_step_that_ends_without_its_output_is_asked_once_more(tmp_path):
+    """The research briefing saved its file, ended in prose, and the run stopped (2026-11-18)."""
+    agent = ProseAgent(tmp_path / "2026-11-18.md", reports_on=2)
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(agent),
+        _file_contract(_skills(tmp_path)),
+        FlowRunStore(tmp_path / "r.db"),
+    )
+
+    run = await runner.run("demo")
+
+    assert run.status == "completed"
+    assert len(agent.payloads) == 2
+    assert "your final answer did not give the step's output: output.file is required" in agent.payloads[1].prompt
+    assert "do not redo it" in agent.payloads[1].prompt
+
+
+async def test_a_step_that_twice_ends_without_its_output_says_so_in_plain_words(tmp_path):
+    agent = ProseAgent(tmp_path / "2026-11-18.md", reports_on=None)
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(agent),
+        _file_contract(_skills(tmp_path)),
+        FlowRunStore(tmp_path / "r.db"),
+    )
+
+    run = await runner.run("demo")
+
+    assert run.status == "paused" and len(agent.payloads) == 2
+    assert run.error.startswith("Step 'brief' ran, but twice did not report its result in the form the flow needs")
+    assert "output contract" not in run.error and "Its work may be saved already: look in" in run.error
+
+
 async def test_a_run_stopped_while_it_ran_is_recorded_as_cancelled(tmp_path):
     """Cancelling a scheduled job stops its run's step; the run then reads cancelled, not running."""
     registry = _flow(

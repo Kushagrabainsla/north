@@ -211,13 +211,17 @@ export interface Notice {
 }
 
 export interface DashboardData {
-  system: { status: string; autonomy: string };
-  scheduled?: number;
+  system: {
+    status: string;
+    autonomy: string;
+    version?: string;
+    models?: { name: string; state: string; detail: string }[];
+    waiting?: { model: string; until: number; reason: string }[];
+    browser?: { name: string; connected: boolean }[];
+  };
   attention: Approval[];
   notices: Notice[];
   conversations: Conversation[];
-  jobs: { job_id: string; agent: string; task: string; status: string; scheduled_at: string; late_note?: string }[];
-  cron: { name: string; agent: string; task: string; hour: number; minute: number; weekday?: number }[];
   metrics: Record<string, unknown>;
   artifacts: Artifact[];
 }
