@@ -40,6 +40,7 @@ from orchestrator.api_context import bind_request_services, current_services, me
 from orchestrator.models import Prompt, TaskRequest
 from tools.home import Home
 from tools.universal.browser import browser_availability
+from utils.secrets import redact
 from utils.time import epoch_to_local, localnow
 from web.artifacts import (
     allowed_output_roots,
@@ -460,6 +461,41 @@ def _task_answer(entries: list[Any]) -> tuple[str, str]:
     return "", "working"
 
 
+# What a new chat turn is told of the earlier ones (see create_turn): the last _ANSWERED_TURNS with
+# north's answers, and up to _CONTEXT_TURNS in all, each with what north did.
+_CONTEXT_TURNS = 20
+_ANSWERED_TURNS = 5
+_OLDER_PROMPT_CHARS = 300
+_ACTIONS_SHOWN = 4
+_ACTION_CHARS = 120
+# The loop's own controls say nothing about what north did in a turn.
+_UNSHOWN_TOOLS = frozenset({"update_plan", "use_skill", "find_tools", "ask_user", "request_approval"})
+# The input that says what a call acted on, in the order looked for.
+_ACTION_INPUTS = ("path", "url", "command", "query", "what", "fact", "action", "mode")
+
+
+async def _turn_actions(task_id: str | None) -> list[str]:
+    """What north did in a turn's task: each tool with what it acted on, a few, secrets hidden."""
+    store = current_services().agent_run_store
+    if store is None or not task_id:
+        return []
+    shown: list[str] = []
+    for run in await store.list_for_task(task_id):
+        for event in await store.list_events(run.run_id):
+            data = event.get("data") or {}
+            tool = str(data.get("tool") or "")
+            if event.get("event") != "tool_called" or not tool or tool in _UNSHOWN_TOOLS:
+                continue
+            params = data.get("params") or {}
+            target = next((str(params[key]) for key in _ACTION_INPUTS if params.get(key)), "")
+            line = f"{tool} {redact(target)}".strip()[:_ACTION_CHARS]
+            if line not in shown:
+                shown.append(line)
+            if len(shown) >= _ACTIONS_SHOWN:
+                return shown
+    return shown
+
+
 async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
     if not task_id:
         return None
@@ -616,8 +652,19 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
     if latest_task and await orchestrator.send_message(latest_task, body.prompt):
         await store.attach_task(turn.id, latest_task)
         return {**asdict(turn), "task_id": latest_task, "joined": True}
+    # Each turn is a new task that sees only this text. It used to hold the last five turns' words alone:
+    # nine turns into a chat about a study guide, north said it had not opened the guide, which it had
+    # read in the first turn (issue #82, a small item). Now every turn says what north did, and older
+    # turns are kept short, without north's answers.
+    earlier = previous[-(_CONTEXT_TURNS + 1) : -1]
+    older_parts: list[str] = []
     context_parts: list[str] = []
-    for item in previous[-6:-1]:
+    for index, item in enumerate(earlier):
+        did = await _turn_actions(item.task_id)
+        did_line = f"\nNorth used: {'; '.join(did)}" if did else ""
+        if index < len(earlier) - _ANSWERED_TURNS:
+            older_parts.append(f"User: {redact(item.prompt)[:_OLDER_PROMPT_CHARS]}{did_line}")
+            continue
         detail = await _task_detail(item.task_id)
         # A pending/paused turn has no authoritative final answer yet. Injecting
         # its partial output makes the next task look like a continuation of the
@@ -626,7 +673,7 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
             continue
         answer = detail.get("output", "")
         if answer:
-            context_parts.append(f"User: {item.prompt}\nNorth: {answer[:4000]}")
+            context_parts.append(f"User: {item.prompt}\nNorth: {answer[:4000]}{did_line}")
     context_sections: list[str] = []
     if conversation.goal:
         context_sections.append(
@@ -635,6 +682,10 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
             f"Status before this turn: {conversation.goal_status}\n"
             "A finished response is not proof that this goal is achieved. Continue advancing it, "
             "and report clearly when you are waiting for the user or blocked."
+        )
+    if older_parts:
+        context_sections.append(
+            "## Earlier in this chat (older turns, without north's answers)\n" + "\n\n".join(older_parts)
         )
     if context_parts:
         context_sections.append("## Recent conversation\n" + "\n\n".join(context_parts))
