@@ -30,10 +30,13 @@ from gateways.telegram import TelegramGateway
 from gateways.telegram_api import is_option_choice, parse_approval_callback
 from inference.models import CompletionRequest, CompletionResponse, ToolCall, ToolCallRequest, ToolCallResponse
 from tests.conftest import MockInferenceRouter
+from tests.live.servers import until_started
 
 CHAT = 4242
 TASK = "In src/calc.py add a function subtract(a, b) that returns a - b, and add a test for it to test_calc.py."
-RUN_TIMEOUT_S = 600
+# Below the live tests' 600 s limit (tests/live/conftest.py), so a stuck run fails here and prints what
+# the chat saw. At 600 s the limit fired first, and the run's own output was lost (issue #82, item 6).
+RUN_TIMEOUT_S = 480
 
 
 def _enabled(flag: str, binary: str) -> bool:
@@ -93,15 +96,24 @@ class RecordedTelegram(TelegramGateway):
             yes = "approved" if "approved" in labels else approve_option(labels)
             button = choices[labels.index(yes)]
             self.cards.append(text)
-            asyncio.get_running_loop().create_task(self._tap(chat_id, self._message_ids, text, button))
+            message = {
+                "chat": {"id": chat_id},
+                "message_id": self._message_ids,
+                "text": text,
+                "reply_markup": reply_markup,
+            }
+            asyncio.get_running_loop().create_task(self._tap(chat_id, message, button))
         return {"message_id": self._message_ids}
 
-    async def _tap(self, chat_id: int, message_id: int, text: str, button: dict) -> None:
+    async def _tap(self, chat_id: int, message: dict, button: dict) -> None:
+        # The tapped message as Telegram sends it, buttons included: an option button holds only its place
+        # ("#0"), and the gateway reads the option from the button's label. Sent without them, every tap on an
+        # option card failed and the card waited out the test (issue #82, item 6).
         await self._process_callback_query(
             {
-                "id": f"cb-{message_id}",
+                "id": f"cb-{message['message_id']}",
                 "from": {"id": chat_id},
-                "message": {"chat": {"id": chat_id}, "message_id": message_id, "text": text},
+                "message": message,
                 "data": button["callback_data"],
             }
         )
@@ -154,10 +166,7 @@ async def server(monkeypatch, project: Path, request):
 
     uv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="on"))
     serving = asyncio.create_task(uv.serve())
-    while not uv.started:
-        if serving.done():
-            serving.result()
-        await asyncio.sleep(0.1)
+    await until_started(uv, serving)
     yield telegram
     await telegram.stop()
     uv.should_exit = True

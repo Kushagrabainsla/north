@@ -20,6 +20,7 @@ from orchestrator.coding_ask import ApprovalsAsker
 from orchestrator.coding_fetch import ApprovalsFetcher
 from orchestrator.coding_gate import ApprovalJudge
 from tests.conftest import approval_policy, approvals
+from tests.live.servers import until_started
 
 
 class _Statuses:
@@ -108,8 +109,7 @@ async def start_gate(mode: ApprovalMode, answer: ApprovalDecision | None = None,
         port = sock.getsockname()[1]
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
     serving = asyncio.create_task(server.serve())
-    while not server.started:
-        await asyncio.sleep(0.01)
+    await until_started(server, serving)
     base = f"http://127.0.0.1:{port}/orchestrator/coding"
     gate = LiveGate(sessions, store, judge, f"{base}/gate", f"{base}/ask", ask_log, approvals=layer)
     gate._server, gate._serving = server, serving

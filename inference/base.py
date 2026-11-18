@@ -86,6 +86,16 @@ class InferenceRouter(ABC):
         del name
         return "unknown", ""
 
+    def set_model_sink(self, sink: Callable[[str, str], Awaitable[None]] | None) -> None:
+        """Set who is told (task_id, model_id) as each tool-call completion starts.
+
+        A router that cannot tell ignores it. Startup calls this on whatever router it builds.
+        Only `ModelDispatcher` had it, so a scripted router failed startup with AttributeError,
+        and the live Telegram test waited out its ten minutes every night from 2026-10-29
+        (issue #82, item 6).
+        """
+        del sink
+
     def get_context_window(self, model_id: str) -> int:
         """Return the published context window (in tokens) for model_id from the live registry."""
         return 128_000

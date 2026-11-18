@@ -26,6 +26,7 @@ import httpx
 import pytest
 
 from tests.live.jobs.fake_world import SECRET_TOKEN, Board, board_app, inbox_json, write_resume
+from tests.live.servers import until_started
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("NORTH_LIVE_JOBS") != "1" or shutil.which("chrome-agent") is None,
@@ -49,10 +50,7 @@ async def _serve(app, port: int):
 
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="on"))
     task = asyncio.create_task(server.serve())
-    while not server.started:
-        if task.done():
-            task.result()
-        await asyncio.sleep(0.1)
+    await until_started(server, task)
     return server, task
 
 
