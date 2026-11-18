@@ -34,6 +34,9 @@ class SkillIntent(StrEnum):
     CREATE_SKILL = "create-skill"
     CREATE_AGENT = "create-agent"
     CREATE_SCHEDULE = "create-schedule"
+    # A page on north's dashboard. Without it the built-in `authoring-a-north-view` skill,
+    # which declares it, was skipped at every start as "unknown intents".
+    CREATE_VIEW = "create-view"
     REVIEW = "review"
     RESEARCH = "research"
     SUMMARIZE = "summarize"

@@ -203,6 +203,20 @@ def _task_intents(task_text: str) -> frozenset[str]:
         )
     ):
         detected.add(SkillIntent.CREATE_SCHEDULE.value)
+    if any(
+        phrase in text
+        for phrase in (
+            "add a view",
+            "create a view",
+            "make a view",
+            "new view",
+            "dashboard page",
+            "page on the dashboard",
+            "page on north's dashboard",
+            "create-view",
+        )
+    ):
+        detected.add(SkillIntent.CREATE_VIEW.value)
     if ("overview" in text and ("repository" in text or "codebase" in text)) or any(
         phrase in text
         for phrase in (

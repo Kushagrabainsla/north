@@ -23,6 +23,23 @@ def test_library_has_the_full_set():
     assert len(_SKILLS) >= 25
 
 
+def test_every_shipped_skill_folder_loads():
+    """A skill the registry cannot parse is skipped with only a warning, so it must fail here.
+
+    `authoring-a-north-view` declared the intent `create-view`, which north did not know, and was
+    skipped at every start from 2026-11-10 while this file passed.
+    """
+    shipped = {path.parent.name for path in BUILTIN_DIR.glob("*/SKILL.md")}
+    assert shipped - {skill.name for skill in _SKILLS} == set()
+
+
+def test_a_request_for_a_dashboard_page_reaches_the_view_skill():
+    from skills.selector import _task_intents
+
+    assert "create-view" in _task_intents("Make a dashboard page for my outreach flow's runs")
+    assert "authoring-a-north-view" in {skill.name for skill in _SKILLS}
+
+
 def test_every_skill_is_well_formed():
     for skill in _SKILLS:
         assert skill.description.startswith("Use "), f"{skill.name}: description must be a trigger ('Use when ...')"
