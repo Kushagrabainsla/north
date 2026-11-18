@@ -160,16 +160,15 @@ def _format_jobs_table(jobs: list[dict]) -> Table:
     return t
 
 
-def _format_plan_table(plan_steps: list[dict], dod_evals: list[dict] | None = None) -> Table:
-    """Render an interactive execution plan and Definition of Done evaluation table."""
-    t = Table(title="Execution Plan & Step Status", box=ROUNDED, header_style="bold green")
+def _format_plan_table(plan_steps: list[dict]) -> Table:
+    """Render the task's plan: one row for each step, with its status."""
+    t = Table(title="Plan", box=ROUNDED, header_style="bold green")
     t.add_column("Step", style="dim", width=6)
-    t.add_column("Agent / Phase", style="cyan", width=18)
-    t.add_column("Description / Task", style="white", max_width=40)
+    t.add_column("Task", style="white", max_width=60)
     t.add_column("Status", style="green", width=14)
 
     if not plan_steps:
-        t.add_row("-", "none", "No plan steps registered for current task", "pending")
+        t.add_row("-", "This task has no plan", "pending")
     else:
         for s in plan_steps:
             st = s.get("status", "pending")
@@ -193,20 +192,9 @@ def _format_plan_table(plan_steps: list[dict], dod_evals: list[dict] | None = No
             )
             t.add_row(
                 str(s.get("step_id", s.get("id", ""))),
-                str(s.get("agent", s.get("phase", ""))),
                 str(s.get("task", s.get("description", ""))),
                 Text(icon + st, style=st_style),
             )
-
-    if dod_evals:
-        t.add_section()
-        for d in dod_evals:
-            passed = d.get("passed", False)
-            reasons = d.get("reasons") or []
-            summary = ", ".join(reasons) if reasons else ("criteria met" if passed else "criteria unmet")
-            icon = "✓ " if passed else "✗ "
-            style = "green" if passed else "yellow"
-            t.add_row("DoD", "Definition of Done", summary, Text(icon + ("PASS" if passed else "UNMET"), style=style))
 
     return t
 

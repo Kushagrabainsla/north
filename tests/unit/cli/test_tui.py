@@ -278,24 +278,31 @@ async def test_copy_last_response_action(monkeypatch):
     assert copied == ["Here is the response code"]
 
 
-async def test_lifecycle_extended_events_render():
+def test_the_plan_table_shows_only_the_steps_and_their_status():
+    """The coder's Definition-of-Done rows and agent column are gone (#66); a step is its text and status."""
+    from rich.console import Console
+
+    from cli.formatting import _format_plan_table
+
+    table = _format_plan_table([{"step_id": 1, "task": "Read the issue", "status": "done"}])
+    assert [column.header for column in table.columns] == ["Step", "Task", "Status"]
+    console = Console(width=100, record=True)
+    console.print(table)
+    shown = console.export_text()
+    assert "Read the issue" in shown
+    assert "DoD" not in shown
+    assert "Definition of Done" not in shown
+
+
+async def test_the_plan_window_opens_with_the_turn_plan():
     app = NorthApp(base_url=_DEAD, headers=_HEADERS)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        tid = "t_life"
-        app._user_task_ids.add(tid)
-        events = [
-            ("design_phase", {"step": "research"}),
-            ("plan_seeded", {"tasks": 4}),
-            ("conductor_fix_round", {"round": 1}),
-            ("auto_verify_started", {"command": "pytest -q"}),
-            ("auto_verify", {"command": "pytest -q", "passed": True}),
-            ("dod_evaluated", {"passed": True, "reasons": ["Tests passed"]}),
-            ("stream_reset", {}),
-        ]
-        for ev, extra in events:
-            await app._handle_event(ev, {"task_id": tid, **extra})
-            await pilot.pause()
+        app._turns.append({"prompt": "p", "plan_steps": [{"step_id": 1, "task": "Read the issue", "status": "done"}]})
+        app.action_inspect_plan()
+        await pilot.pause()
+        assert isinstance(app.screen, cli.tui.PlanModal)
+        assert app.screen._plan_steps[0]["task"] == "Read the issue"
 
 
 async def test_a_message_that_joins_the_running_task_opens_no_new_turn():

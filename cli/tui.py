@@ -215,8 +215,8 @@ class ToolInspectorModal(ModalScreen[None]):
         detail.update("\n".join(lines))
 
 
-class PlanCockpitModal(ModalScreen[None]):
-    """Interactive modal to inspect the task execution plan, subtasks, and DoD criteria."""
+class PlanModal(ModalScreen[None]):
+    """Modal that shows the task's plan steps and their status."""
 
     BINDINGS = [
         Binding("escape", "dismiss", "Close", priority=True),
@@ -224,7 +224,7 @@ class PlanCockpitModal(ModalScreen[None]):
     ]
 
     CSS = """
-    PlanCockpitModal {
+    PlanModal {
         align: center middle;
         background: rgba(0, 0, 0, 0.7);
     }
@@ -261,17 +261,14 @@ class PlanCockpitModal(ModalScreen[None]):
     }
     """
 
-    def __init__(self, plan_steps: list[dict], dod_results: list[dict], active_phase: str = "") -> None:
+    def __init__(self, plan_steps: list[dict]) -> None:
         super().__init__()
         self._plan_steps = plan_steps
-        self._dod_results = dod_results
-        self._active_phase = active_phase
 
     def compose(self) -> ComposeResult:
         with Vertical(id="plan-modal-box"):
             yield Static(
-                "  [bold #3fb950]📋 Execution Plan & DoD Cockpit[/bold #3fb950] "
-                "[bright_black](Esc/q to close)[/bright_black]",
+                "  [bold #3fb950]📋 Plan[/bold #3fb950] [bright_black](Esc/q to close)[/bright_black]",
                 id="plan-modal-title",
             )
             with VerticalScroll(id="plan-modal-body"):
@@ -280,7 +277,7 @@ class PlanCockpitModal(ModalScreen[None]):
 
     def on_mount(self) -> None:
         content = self.query_one("#plan-modal-content", Static)
-        table = _format_plan_table(self._plan_steps, self._dod_results)
+        table = _format_plan_table(self._plan_steps)
         content.update(table)
 
 
@@ -657,8 +654,6 @@ class NorthApp(App[None]):
         self._recent_thoughts: deque[dict] = deque(maxlen=20)
         self._tool_history: deque[dict] = deque(maxlen=50)
         self._plan_steps: list[dict] = []
-        self._dod_results: list[dict] = []
-        self._active_phase: str = ""
         self._streaming_active: set[str] = set()
         self._last_assistant_response: str = ""
         self._stream_start_times: dict[str, float] = {}
@@ -1572,7 +1567,6 @@ class NorthApp(App[None]):
             steps.append(
                 {
                     "step_id": index,
-                    "agent": "",
                     "task": stripped[len(mark) :].strip(),
                     "status": marks[mark],
                 }
@@ -1953,8 +1947,6 @@ class NorthApp(App[None]):
             "details_expanded": self._details_expanded,
             "thoughts_expanded": self._reasoning_visible,
             "plan_steps": [],
-            "dod_results": [],
-            "active_phase": "",
             "interaction": None,
         }
 
@@ -2258,9 +2250,7 @@ class NorthApp(App[None]):
         """Open the plan belonging to the active/latest message."""
         turn = self._focused_turn()
         steps = list(turn.get("plan_steps") or []) if turn is not None else list(self._plan_steps)
-        dod = list(turn.get("dod_results") or []) if turn is not None else list(self._dod_results)
-        phase = str(turn.get("active_phase") or "") if turn is not None else self._active_phase
-        self.push_screen(PlanCockpitModal(steps, dod, phase))
+        self.push_screen(PlanModal(steps))
 
     def action_action_menu(self) -> None:
         """Open in-flight action and steer menu when tasks are active."""

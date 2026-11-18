@@ -153,7 +153,7 @@ _SLASH_COMMANDS: dict[str, str] = {
     "/thoughts": "toggle thoughts inside the current message (Ctrl+T)",
     "/tools": "inspect recent tool calls, arguments, and diffs (Ctrl+I)",
     "/inspect": "alias for /tools (Ctrl+I)",
-    "/plan": "inspect execution plan and DoD criteria (Ctrl+P)",
+    "/plan": "show the task's plan (Ctrl+P)",
     "/steer": "steer active agent with guidance, e.g. '/steer use asyncpg'",
     "/models": "list discovered models across capability pools",
     "/limits": "inspect active rate limits and cooldowns",
