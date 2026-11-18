@@ -142,6 +142,10 @@ class Action:
     # action with the same scope in that task is not asked about again. Not part of
     # the identity; "" covers only the exact action.
     scope: str = ""
+    # What a standing rule for this action names, as the tool words it: the kind of action and where,
+    # "browser eval on linkedin.com in profile p1 (3f2a…)". Your answer to its card can become a rule
+    # for all of north (approval.standing_rules). Not part of the identity; "" when no rule can stand for it.
+    rule_scope: str = ""
     # The git repository a file edit by north's own tools lands in ("" for none).
     # Code changes there go to coding_agent, which works in an isolated copy and
     # runs the tests; north's own tools do not make them (CODING_STYLE §7).
@@ -177,6 +181,11 @@ class Action:
             if value:
                 parts.append(f"{name}={value}")
         return " ".join(parts)
+
+
+def standing_rule_key(rule_scope: str) -> str:
+    """The key a standing rule is recorded and recalled under, beside your answers to single actions."""
+    return f"standing rule: {rule_scope}"
 
 
 def may_replay_yes(action: Action) -> bool:
@@ -456,10 +465,16 @@ class ApprovalPolicy:
         if self.approval_memory is None:
             return None
         recalled = self.approval_memory.recall(action.agent, action.describe())
+        why = "you approved this action before" if recalled == "approved" else "you rejected this action before"
+        if recalled is None and action.rule_scope:
+            # Your standing rule for this kind of action, made from an answer of yours (approval.standing_rules).
+            recalled = self.approval_memory.recall(action.agent, standing_rule_key(action.rule_scope))
+            verb = "allow" if recalled == "approved" else "refuse"
+            why = f"your standing rule: {verb} {action.rule_scope}"
         if recalled == "approved" and not may_replay_yes(action):
             return None
         if recalled == "approved":
-            return Ruling(Verdict.ALLOW, "you approved this action before", DecidedBy.REPLAY)
+            return Ruling(Verdict.ALLOW, why, DecidedBy.REPLAY)
         if recalled == "rejected":
-            return Ruling(Verdict.REFUSE, "you rejected this action before", DecidedBy.REPLAY)
+            return Ruling(Verdict.REFUSE, why, DecidedBy.REPLAY)
         return None

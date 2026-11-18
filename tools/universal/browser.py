@@ -1039,6 +1039,20 @@ class BrowserTool(Tool):
             site = sites.pop() if len(sites) == 1 else ""  # pages on several sites: the yes covers only them
         return f"reading pages on {site} in profile {profile_id} ({config_id[:12]})" if site else ""
 
+    def _rule_scope(self, params: dict[str, Any], profile_id: str, config_id: str) -> str:
+        """What a standing rule for this call names: reading its site in this profile, or one kind of change there.
+
+        A change is named with the site of the page it lands on, so "browser eval on linkedin.com" never
+        covers a script on another site. The profile's settings are part of it: an edited profile has no rules.
+        """
+        action = str(params.get("action") or "")
+        if action in {"preflight", "close", "status", "list_profiles"}:
+            return ""
+        if action not in self._MUTATING_ACTIONS:
+            return self._read_scope(params, profile_id, config_id)
+        site = self._open_sites.get((str(params.get("task_id") or "default"), profile_id), "")
+        return f"browser {action} on {site} in profile {profile_id} ({config_id[:12]})" if site else ""
+
     async def describe(self, input: ToolInput) -> ApprovalRequest:
         """Look at the page first, so the card says what the action lands on (`browser_describe`)."""
         with span("browser.describe"):
@@ -1058,6 +1072,7 @@ class BrowserTool(Tool):
             label = profile.name if profile else str(params["profile_id"])
             action = str(params.get("action") or "")
             scope = self._read_scope(params, str(params["profile_id"]), config_id)
+            rule_scope = self._rule_scope(params, str(params["profile_id"]), config_id)
             binding = self._verified_bindings.get((str(params.get("task_id") or "default"), str(params["profile_id"])))
             if (
                 profile
@@ -1097,6 +1112,7 @@ class BrowserTool(Tool):
                                 summary=f"{label}: {request.action.summary}",
                                 args=f"profile={profile.id}:{config_id}; {request.action.args}",
                                 scope=scope,
+                                rule_scope=rule_scope,
                             ),
                         )
                 except (ValueError, OSError, RuntimeError, httpx.HTTPError):
@@ -1113,6 +1129,7 @@ class BrowserTool(Tool):
                     ),
                     reaches_third_party=action in {"click", "dblclick", "press", "eval"},
                     scope=scope,
+                    rule_scope=rule_scope,
                 ),
                 title=f"Browser: {label}",
                 prepared=binding_config,

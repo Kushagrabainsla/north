@@ -340,6 +340,8 @@ class Approvals:
             options=list(request.options),
             rejecting=request.rejecting,
             action_key=request.action.describe(),
+            # A rule is offered only for a yes that may stand for the next one: no send, spend or north setting.
+            rule_scope=request.action.rule_scope if may_replay_yes(request.action) else "",
         )
 
 

@@ -245,3 +245,22 @@ async def test_a_call_naming_no_saved_profile_is_refused_before_any_card(setting
     output = await tool.execute(ToolInput(params={"profile_id": "university]", "task_id": TASK, "action": "inspect"}))
     assert not output.success and "missing or disabled" in output.error
     assert not store.pending() and not store.all(10)
+
+
+@pytest.mark.asyncio
+async def test_a_card_names_the_rule_its_answer_could_become(settings) -> None:
+    """A standing rule names the kind of action and the site of the page, in this profile (approval.standing_rules)."""
+    store = ApprovalStore()
+    tool = _tool(settings, store)
+    await _open(tool, store)
+
+    running = asyncio.create_task(
+        tool.execute(ToolInput(params={"profile_id": "university", "task_id": TASK, "action": "fill", "uid": "n1"}))
+    )
+    while not store.pending():
+        await asyncio.sleep(0.01)
+    [card] = store.pending()
+    store.resolve(card.id, ApprovalDecision.REJECTED, decided_by="you")
+    await running
+
+    assert card.rule_scope.startswith("browser fill on linkedin.com in profile university (")

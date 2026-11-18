@@ -246,6 +246,11 @@ class UserInteraction:
         await self._surface(card, event)
         return await self._await(card)
 
+    async def offer(self, card: Card, *, event: CardEvent) -> Card:
+        """Show *card* without waiting, and let no rule or model answer it: it asks what only you decide."""
+        await self._surface(card, event)
+        return card
+
     def record_resolved(self, card: Card, answer: Answer) -> None:
         """Store *card* already decided - an action north took, or answered, without asking - and why."""
         self._store.add(card.model_copy(update={"reason": answer.reason, "memory_used": list(answer.memory_used)}))

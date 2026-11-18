@@ -53,8 +53,10 @@ def _fake_orchestrator(store: ApprovalStore, memory: ApprovalMemory) -> SimpleNa
         _approval_store=store,
         _approval_memory=memory,
         _journal=SimpleNamespace(record=AsyncMock()),
+        _interaction=UserInteraction(store),
     )
     fake._learn_your_decision = MethodType(Orchestrator._learn_your_decision, fake)
+    fake._make_it_a_rule = MethodType(Orchestrator._make_it_a_rule, fake)
     return fake
 
 

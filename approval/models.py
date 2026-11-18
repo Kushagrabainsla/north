@@ -193,6 +193,8 @@ class Card(BaseModel):
     # keeps a redacted `action_label`: the raw text can hold the very key the command sends.
     action_key: str = ""
     action_label: str = ""
+    # What a standing rule made from this card's answer would name (`Action.rule_scope`); "" when none can.
+    rule_scope: str = ""
     # Which of `options` mean no. Declared when the card is made: read from the
     # words, "Discard" and "Don't send" were recorded as approvals.
     rejecting: list[str] = Field(default_factory=list)
@@ -238,6 +240,7 @@ class Card(BaseModel):
         source: str = "",
         action_key: str = "",
         rejecting: Sequence[str] | None = None,
+        rule_scope: str = "",
     ) -> Card:
         """Build a card with a fresh id and the defaults every caller wants.
 
@@ -263,6 +266,7 @@ class Card(BaseModel):
             requires_user_action=requires_user_action,
             source=source,
             action_key=action_key,
+            rule_scope=rule_scope,
         )
 
     @property

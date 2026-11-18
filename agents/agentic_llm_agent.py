@@ -1391,13 +1391,20 @@ class AgenticLLMAgent(LLMAgent):
     async def _emit_tool_timing(
         self, payload: AgentPayload, tool_name: str, params: dict[str, Any], ms: float, spans: list[tuple[str, float]]
     ) -> None:
-        """Save where one tool call's time went: preparing, deciding, running, and the steps inside (issue #83)."""
-        if not (self._deps.stream_manager and payload.task_id):
+        """Save where one tool call's time went: preparing, deciding, running, and the steps inside (issue #83).
+
+        Never raises: a record that could not be saved must not turn a call that worked into a failed one.
+        """
+        stream = getattr(self._deps, "stream_manager", None)
+        if not (stream and payload.task_id):
             return
         timing: dict[str, Any] = {"tool": tool_name, "ms": round(ms, 1), "spans": totals(spans)}
         if isinstance(action := params.get("action"), str):
             timing["action"] = action
-        await self._deps.stream_manager.emit(payload.task_id, "tool_timing", timing)
+        try:
+            await stream.emit(payload.task_id, "tool_timing", timing)
+        except Exception:
+            logger.warning("Could not save the timing of a %s call", tool_name, exc_info=True)
 
 
 _EMPTY: tuple[Any, ...] = (None, "", [], {})

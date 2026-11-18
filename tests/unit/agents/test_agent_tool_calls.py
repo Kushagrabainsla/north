@@ -229,3 +229,25 @@ async def test_the_browser_sends_one_copy_without_the_profile_check(tmp_path: Pa
 
     checked, _ = await agent._call_tool(tools, "browser", {"action": "preflight"}, _payload())
     assert "connection_id" in checked
+
+
+async def test_a_timing_record_that_cannot_be_saved_does_not_fail_the_call(tmp_path: Path) -> None:
+    """The call worked; only its timing record failed, and the agent must not be told the call failed."""
+    from tools.base import Tool
+    from tools.models import ToolInput, ToolOutput
+
+    class _Broken:
+        async def emit(self, task_id: str, event: str, data: dict) -> None:
+            if event == "tool_timing":
+                raise RuntimeError("the event store is gone")
+
+    class _Works(Tool):
+        name = "works"
+        description = "always works"
+
+        async def run(self, inp: ToolInput) -> ToolOutput:
+            return ToolOutput(success=True, data={"done": True})
+
+    agent = _make_agent(tmp_path, stream_manager=_Broken())
+    sent, _ = await agent._call_tool({"works": _Works()}, "works", {}, _payload())
+    assert json.loads(sent)["success"] is True

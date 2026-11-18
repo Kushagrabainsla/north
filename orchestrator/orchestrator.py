@@ -18,9 +18,9 @@ from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
 from agents.inbox import TaskInbox
-from approval import ApprovalDecision, Card, CardType, UserInteraction
+from approval import ApprovalDecision, Card, CardType, UserInteraction, standing_rules
 from approval.approval_memory import ApprovalMemory
-from approval.interaction import APPROVAL_DEFAULT_OPTIONS
+from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent
 from approval.models import DecidedBy
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
@@ -551,6 +551,22 @@ class Orchestrator:
         await self._learn_your_decision(card, decision, chosen_option, reason=reason, overruled=True)
         return overruled
 
+    async def _make_it_a_rule(self, card: Card, decision: str, chosen_option: str) -> None:
+        """Keep the rule your answer to an offer made, or offer to make your answer to *card* a rule.
+
+        Your answer taught north only that exact action, so the next LinkedIn profile asked again
+        (approval.standing_rules). Never raises: the answer is recorded whatever happens here.
+        """
+        if self._approval_memory is None:
+            return
+        try:
+            if (rule := standing_rules.made(card, chosen_option)) is not None:
+                standing_rules.record(card, rule, chosen_option, self._approval_memory)
+            elif (offer := standing_rules.offer(card, decision, self._approval_memory)) is not None:
+                await self._interaction.offer(offer, event=CardEvent.QUESTION)
+        except Exception:
+            logger.warning("Could not offer or keep a standing rule for card %s", card.id, exc_info=True)
+
     async def _learn_your_decision(
         self,
         card: Card,
@@ -577,6 +593,7 @@ class Orchestrator:
                 reason=reason,
                 edited_fields=edited,
             )
+            await self._make_it_a_rule(card, decision, chosen_option)
 
         # An answered question is a durable preference in the user's own words  -
         # record it from a *learnable* source (the extraction pipeline reads it),
