@@ -1158,6 +1158,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             flow_runner.decide_stopped_run,
             describes=f"{RESUME_OPTION} runs the step the run stopped on again; {DISCARD_OPTION} ends the run.",
         )
+    # Every paused run has its Resume/Discard card, the ones the last shutdown cut off included.
+    try:
+        if asked := await flow_runner.ask_about_unasked_stops():
+            logger.info("Left a Resume/Discard card for %d paused flow run(s) that had none", asked)
+    except Exception:
+        logger.warning("Could not leave cards for paused flow runs", exc_info=True)
     tool_registry.register(RunFlowTool(flow_runner))
     # A view checks the tools it reads and the flows its buttons run against these live registries.
     tool_registry.register(CreateViewTool(tool_registry=tool_registry, flow_registry=flow_registry))

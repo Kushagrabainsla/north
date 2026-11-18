@@ -199,6 +199,26 @@ class FlowRunner:
         finally:
             self._resuming.discard(run.run_id)
 
+    async def ask_about_unasked_stops(self) -> int:
+        """Leave the Resume/Discard card for each paused run that has none; return how many.
+
+        A run a shutdown cut off was paused with no card, so the Flows page said it needed you and
+        the attention panel, which shows only cards, had nothing (2026-11-18). Run at startup, after
+        cut-off runs are paused: every paused run then has its card, whatever paused it. A waiting
+        run resumes by itself and gets none.
+        """
+        if self._interaction is None:
+            return 0
+        asked = 0
+        for run in self._store.list_runs(limit=None):
+            if run.status != "paused" or run.test_mode or not run.task_id:
+                continue
+            if self._interaction.is_waiting(run.task_id, STOPPED_RUN_SOURCE):
+                continue
+            await self._deliver(run)
+            asked += 1
+        return asked
+
     async def decide_stopped_run(self, outcome: CardOutcome) -> None:
         """Carry out the option you chose on the card a stopped scheduled run left."""
         run = self._store.latest_for_task(outcome.card.task_id)

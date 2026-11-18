@@ -921,6 +921,34 @@ async def test_old_stopped_runs_are_cleared_and_you_are_told(tmp_path):
     assert "demo" in runner._interaction.deliver.await_args.kwargs["message"]
 
 
+async def test_every_paused_run_has_its_card_the_ones_a_shutdown_cut_off_too(tmp_path):
+    """The Flows page said the outreach run needed you, and no card was in the attention panel (2026-11-18).
+
+    A run cut off by a restart was paused with no card; only a run that stopped on an error got one.
+    """
+    from approval.interaction import UserInteraction
+    from approval.store import ApprovalStore
+    from tools.universal.flow_runner import STOPPED_RUN_SOURCE
+
+    runner, store, _ = _waiting_runner(tmp_path)
+    cards = ApprovalStore()
+    runner._interaction = UserInteraction(cards)
+    store.create(run_id="cut", flow_name="demo", task_id="task-cut", trigger="schedule")
+    store.update("cut", status="running", current_step=0, outputs=[], error="")
+    _stopped_by_schedule(store, "asked")
+    await runner._interaction.report(
+        task_id="task-asked", agent="flow", source=STOPPED_RUN_SOURCE, title="demo stopped", message="stopped",
+        options=["Resume", "Discard"], rejecting=["Discard"],
+    )  # fmt: skip
+    store.pause_interrupted()
+
+    assert await runner.ask_about_unasked_stops() == 1
+    assert await runner.ask_about_unasked_stops() == 0  # each run is asked about once
+    [cut] = [card for card in cards.pending() if card.task_id == "task-cut"]
+    assert cut.source == STOPPED_RUN_SOURCE and cut.options == ["Resume", "Discard"]
+    assert "North stopped during this step" in cut.message
+
+
 class GatedAgent(OutOfModelsAgent):
     """Once models are back, each call waits at ``gate``, so a test can act while a step runs."""
 
