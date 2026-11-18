@@ -213,10 +213,8 @@ export interface Notice {
 export interface DashboardData {
   system: { status: string; autonomy: string };
   scheduled?: number;
-  memory?: { facts: number; documents: number; of_documents: number };
   attention: Approval[];
   notices: Notice[];
-  active_tasks: { task_id: string; status: string; created_at: string }[];
   conversations: Conversation[];
   jobs: { job_id: string; agent: string; task: string; status: string; scheduled_at: string; late_note?: string }[];
   cron: { name: string; agent: string; task: string; hour: number; minute: number; weekday?: number }[];

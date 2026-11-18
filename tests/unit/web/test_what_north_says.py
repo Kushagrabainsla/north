@@ -1,10 +1,9 @@
-"""What north says about a file, a schedule, its memory, a model call or its dials is what is so.
+"""What north says about a file, a schedule, a model call or its dials is what is so.
 
 Issue #76: read_file ended every slice, a one-line read of line 2500 included, with
 "(truncated at 10000 lines)", and on the direct path that note was the whole reply
 (A19). write_file said "Created" for writes that replaced a file's content (A20).
-The dashboard's Memory tile said "4 context documents" over an empty memory, and
-its Flows tile "0 scheduled" beside two built-ins under the Flows page's Next up
+The dashboard's Flows tile said "0 scheduled" beside two built-ins under the Flows page's Next up
 (P12). Every routing record of a call answered first time read "0 endpoints · 0
 called" (P13). `north status` said "power cruise" while a pinned model decided
 (P14).
@@ -21,8 +20,6 @@ from cli import main
 from inference.decisions import SUCCESS, RoutingDecision
 from inference.routing.router import _finish
 from jobs.cron_store import UserCronStore
-from memory import ContextDocument, FileContextStore
-from memory.facts import FactStore
 from orchestrator.api.cron import list_cron_entries
 from orchestrator.api_context import ApiServices, bind_services
 from tools.models import ToolInput
@@ -49,21 +46,6 @@ async def test_the_dashboard_counts_the_schedules_the_flows_page_lists(tmp_path:
         listed = [entry for entry in await list_cron_entries() if entry.enabled]
 
     assert _scheduled_count(await cron.list()) == len(listed) > 0
-
-
-async def test_the_dashboard_counts_what_memory_holds(tmp_path: Path) -> None:
-    from web.api import _memory_counts
-
-    async def embed(texts: list[str]) -> list[list[float]]:
-        return [[1.0, 0.0] for _ in texts]
-
-    facts = FactStore(db_path=tmp_path / "facts.db", embed_fn=embed)
-    documents = FileContextStore(tmp_path / "context")
-    with bind_services(ApiServices(fact_store=facts, context_store=documents)):
-        assert await _memory_counts() == {"facts": 0, "documents": 0, "of_documents": 2}
-        await facts.add_fact("User drinks tea", category="preferences")
-        await documents.write(ContextDocument.NORTH_STARS, "Ship north by December.")
-        assert await _memory_counts() == {"facts": 1, "documents": 1, "of_documents": 2}
 
 
 def test_a_call_answered_first_time_counts_the_endpoint_that_answered() -> None:

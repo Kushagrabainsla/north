@@ -34,7 +34,6 @@ from jobs.models import display_job_status, late_note
 from jobs.scheduler import V1_CRON_ENTRIES, merge_entries
 from ledger.base import LedgerFilters
 from ledger.models import INFERENCE_CALL, LedgerSource
-from memory import ContextDocument
 from memory.extraction import learning_status
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import Prompt, TaskRequest
@@ -1464,34 +1463,14 @@ async def get_artifact_file(artifact_id: str) -> FileResponse:
     return FileResponse(path, media_type=artifact_media_type(path))
 
 
-# The documents you write yourself; your profile is rebuilt from your facts and soul is north's own.
-_YOUR_DOCUMENTS = (ContextDocument.NORTH_STARS, ContextDocument.JUDGEMENT_RULES)
-
-
 def _scheduled_count(user_rows: list[Mapping[str, Any]]) -> int:
     """The schedules that run, built-ins included, as the Flows page lists them."""
     return sum(1 for entry in merge_entries(list(V1_CRON_ENTRIES), user_rows) if entry.enabled)
 
 
-async def _memory_counts() -> dict[str, int]:
-    """What memory holds, for the dashboard tile: it showed a fixed "4 context documents" over an empty folder."""
-    services = current_services()
-    facts = await services.fact_store.all_facts() if services.fact_store is not None else []
-    documents = 0
-    if services.context_store is not None:
-        for document in _YOUR_DOCUMENTS:
-            documents += 1 if (await services.context_store.read(document)).strip() else 0
-    return {
-        "facts": sum(1 for fact in facts if fact.get("status", "active") == "active"),
-        "documents": documents,
-        "of_documents": len(_YOUR_DOCUMENTS),
-    }
-
-
 @router.get("/dashboard")
 async def dashboard() -> dict[str, Any]:
-    active, jobs, cron, metrics, conversations, artifacts = await asyncio.gather(
-        current_services().require("orchestrator").list_active_tasks(),
+    jobs, cron, metrics, conversations, artifacts = await asyncio.gather(
         current_services().require("job_processor").list_jobs(limit=8),
         current_services().require("cron_store").list(),
         current_services().require("ledger").get_metrics(days=7),
@@ -1500,13 +1479,11 @@ async def dashboard() -> dict[str, Any]:
     )
     settings = current_services().require("north_settings")
     today = localnow().date()
-    recent_artifacts = artifacts[:6]
+    # Only the latest briefing: the dashboard's Artifacts tile is gone, and the Artifacts page lists the rest.
     latest_briefing = next((artifact for artifact in artifacts if artifact["kind"] == "news"), None)
-    if latest_briefing and latest_briefing not in recent_artifacts:
-        recent_artifacts.append(latest_briefing)
     dashboard_artifacts = [
         {**artifact, "is_today": epoch_to_local(artifact["updated_at"]).date() == today}
-        for artifact in recent_artifacts
+        for artifact in ([latest_briefing] if latest_briefing else [])
     ]
     return {
         "system": {
@@ -1517,10 +1494,8 @@ async def dashboard() -> dict[str, Any]:
         # The schedules that run, built-ins included, as the Flows page counts them: the tile counted only
         # yours and read "0 scheduled" beside two built-ins under Next up.
         "scheduled": _scheduled_count(cron),
-        "memory": await _memory_counts(),
         "attention": [card.model_dump(mode="json") for card in current_services().require("approval_store").pending()],
         "notices": _notices(),
-        "active_tasks": [task.model_dump(mode="json") for task in active],
         "conversations": [_conversation_payload(item) for item in conversations],
         "jobs": [
             {

@@ -1,4 +1,4 @@
-import { MessageSquare, File } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { formatDateTime, HealthIndicator, NoticeList, PageHeader, Panel, timeAgo, unpricedNote, YoloBadge } from "../components";
 import { Button, CardGrid, Empty, EntityCard, ListRow, Loading, Notice, Stat, StatGrid, Status } from "../kit";
 import { useResource } from "../hooks";
@@ -8,19 +8,6 @@ import { SetupReminder } from "./Setup";
 /** The approval mode. Models and power are on the Settings page only (#80): a copy here disagreed with it. */
 export function dialsLine(system: DashboardData["system"]): string {
   return `Autonomy ${system.autonomy}`;
-}
-
-/** What memory holds, counted. The tile said "4 context documents" over an empty memory. */
-export function memoryLine(memory: DashboardData["memory"]): { count: number; label: string; note: string } {
-  const facts = memory?.facts ?? 0;
-  const documents = memory?.documents ?? 0;
-  return {
-    count: facts,
-    label: facts === 1 ? "fact about you" : "facts about you",
-    note: documents
-      ? `${documents} of ${memory?.of_documents ?? 2} documents written: north stars and judgement rules.`
-      : "No north stars or judgement rules written yet.",
-  };
 }
 
 export function Dashboard() {
@@ -39,33 +26,26 @@ export function Dashboard() {
     {header}
     {error && <Notice tone="error">{error}</Notice>}
     <SetupReminder/>
+    {/* Attention and Sessions take the whole width; the Active now, Memory and Artifacts tiles are gone:
+      each repeats its own page, and Attention is what needs you. */}
     <div className="cockpit-grid">
-      <Panel title="System" label="Status" to="/system" className="system-panel">
-        <div className="hero-status"><HealthIndicator variant="panel"/><div><p>{dialsLine(data.system)}<YoloBadge mode={data.system.autonomy}/></p></div></div>
-      </Panel>
-      <Panel title="Attention" label={`${data.attention.length + data.notices.length} items`} to="/approvals" className={data.attention.length + data.notices.length ? "attention-panel" : ""}>
+      <Panel title="Attention" label={`${data.attention.length + data.notices.length} items`} to="/approvals" className={`full-panel${data.attention.length + data.notices.length ? " attention-panel" : ""}`}>
         <NoticeList compact notices={data.notices.slice(0, 3)} onDismissed={() => void reload()}/>
         {data.attention.length ? data.attention.slice(0, 3).map(item => <ListRow key={item.id} to="/approvals" title={item.title} meta={[`${item.agent} needs a decision`]}/>) : !data.notices.length && <Empty>Nothing needs you right now.</Empty>}
       </Panel>
-      <Panel title="Active now" label={`${data.active_tasks.length} tasks`} to="/tasks">
-        {data.active_tasks.length ? data.active_tasks.map(task => <ListRow key={task.task_id} title={task.task_id.slice(0, 12)} meta={[timeAgo(task.created_at)]} status={<Status value={task.status}/>}/>) : <Empty>North is ready.</Empty>}
-      </Panel>
-      <Panel title="Sessions" label="Recent" to="/sessions" className="wide-panel">
+      <Panel title="Sessions" label="Recent" to="/sessions" className="full-panel">
         {data.conversations.length ? <CardGrid>{data.conversations.map(session => <EntityCard key={session.id} to={`/sessions/${session.id}`} icon={<MessageSquare size={16}/>} title={session.title} meta={`${session.source === "cli" ? "CLI · " : ""}${timeAgo(session.updated_at)}`}/>)}</CardGrid> : <Empty>Start your first session.</Empty>}
+      </Panel>
+      <Panel title="System" label="Status" to="/system" className="system-panel">
+        <div className="hero-status"><HealthIndicator variant="panel"/><div><p>{dialsLine(data.system)}<YoloBadge mode={data.system.autonomy}/></p></div></div>
       </Panel>
       <Panel title={todaysBriefing ? "Today's briefing" : "Latest briefing"} label="Daily intelligence" to="/artifacts" className="wide-panel briefing-panel">
         {briefing ? <ListRow title={briefing.name}
           description={todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}
           actions={<Button variant="primary" size="sm" to="/artifacts">Open artifact</Button>}/> : <Empty>No briefing has been generated yet.</Empty>}
       </Panel>
-      <Panel title="Flows" label={`${data.scheduled ?? data.cron.length} scheduled`} to="/flows">
+      <Panel title="Flows" label={`${data.scheduled ?? data.cron.length} scheduled`} to="/flows" className="wide-panel">
         {data.jobs.length ? data.jobs.slice(0, 3).map(job => <ListRow key={job.job_id} title={job.task} meta={[formatDateTime(job.scheduled_at), job.late_note]} status={<Status value={job.status}/>}/>) : <Empty>No flow has run yet.</Empty>}
-      </Panel>
-      <Panel title="Artifacts" label={`${data.artifacts.length} recent`} to="/artifacts">
-        {data.artifacts.length ? data.artifacts.slice(0, 4).map(file => <ListRow key={file.id} title={file.name} meta={[file.kind, timeAgo(file.updated_at)]} status={<File size={14} aria-hidden="true"/>}/>) : <Empty>No generated outputs.</Empty>}
-      </Panel>
-      <Panel title="Memory" label="Context" to="/memory">
-        {(() => { const memory = memoryLine(data.memory); return <StatGrid><Stat label={memory.label} value={memory.count} detail={memory.note}/></StatGrid>; })()}
       </Panel>
       <Panel title="Usage" label="Last 7 days" to="/insights">
         <StatGrid><Stat label="Tasks" value={String(data.metrics.total_tasks || 0)}/><Stat label="Model cost" value={<>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</>}/></StatGrid>
