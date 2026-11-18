@@ -264,6 +264,24 @@ def _secret_dirs() -> list[str]:
     return paths
 
 
+def _parents_in_north_home(folders: list[str]) -> list[str]:
+    """North's home and every folder between it and each of *folders*, as real paths, once each."""
+    from config.settings import settings
+
+    home = Path(os.path.realpath(settings.north_home))
+    parents: list[str] = []
+    for folder in folders:
+        path = Path(os.path.realpath(folder))
+        if not path.is_relative_to(home):
+            continue
+        for parent in (path, *path.parents):
+            if parent == home.parent:
+                break
+            if parent != path and str(parent) not in parents:
+                parents.append(str(parent))
+    return parents
+
+
 def _closed_files() -> str:
     """North's databases inside its home, and secret files anywhere, as Seatbelt filters."""
     from config.settings import settings
@@ -324,6 +342,13 @@ def profile(
     if workspace and is_north_scratch(Path(workspace)):
         operations = "file-read* file-write*" if writable else "file-read*"
         rules.append(f"(allow {operations} (subpath {_quote(workspace)}))")
+    # The folders between north's home and those opened above may be looked up, not listed.
+    # `cd` in /bin/sh (bash in POSIX mode) checks every parent of the path, and with
+    # ~/.north closed, `cd ~/.north/tasks/<id>` failed "Not a directory" while `ls` of the
+    # same folder worked (issue #82, a small item).
+    opened = [*north_readable_dirs(), *([workspace] if workspace and is_north_scratch(Path(workspace)) else [])]
+    if parents := _parents_in_north_home(opened):
+        rules.append("(allow file-read-metadata " + " ".join(f"(literal {_quote(p)})" for p in parents) + ")")
     # Whatever was opened above, north's databases and secret files stay closed.
     rules.append(f"(deny file-read* file-write* {_closed_files()})")
     if writable:
