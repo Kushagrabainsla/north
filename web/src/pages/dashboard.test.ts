@@ -57,8 +57,13 @@ describe("the dashboard page", () => {
       ],
     } };
     const html = render();
-    expect(html.match(/full-panel/g)).toHaveLength(3);
-    expect(html.indexOf(">Attention<")).toBeLessThan(html.indexOf(">Sessions<"));
+    // One column: Attention, Sessions, one System panel (usage inside it), then Background.
+    expect(html.match(/full-panel/g)).toHaveLength(4);
+    const order = [">Attention<", ">Sessions<", ">System<", ">Background<"].map(title => html.indexOf(title));
+    expect(order.every(at => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(html).not.toContain(">Usage<");
+    expect(html).toContain("Model cost, last 7 days");
     expect(html).toMatch(/<a class="kit-card-head" href="\/sessions\/c1"[^>]*>.*<b>Trip planning<\/b>/);
     // What north did while you were away, in place of a tile for one person's briefing flows.
     expect(html).toContain(">Background<");
@@ -68,5 +73,17 @@ describe("the dashboard page", () => {
     for (const gone of [">Active now<", ">Memory<", ">Artifacts<", ">Flows<"]) expect(html).not.toContain(gone);
     // Issue #81: eight rows of north's own "inference call · memory · completed" said nothing.
     expect(html).not.toContain("Latest events");
+  });
+
+  it("puts Set up North first, inside the grid, until setup is done", () => {
+    served.data = {
+      "/web/api/setup": { status: "in_progress" },
+      "/web/api/dashboard": { system: { status: "online", autonomy: "ask" }, attention: [], notices: [], metrics: {}, conversations: [] },
+    };
+    const html = render();
+    const grid = html.indexOf("cockpit-grid");
+    expect(grid).toBeGreaterThan(-1);
+    expect(html.indexOf("Set up North")).toBeGreaterThan(grid);
+    expect(html.indexOf("Set up North")).toBeLessThan(html.indexOf(">Attention<"));
   });
 });

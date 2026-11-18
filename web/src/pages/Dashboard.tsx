@@ -41,10 +41,11 @@ export function Dashboard() {
   return <div className="page dashboard-page">
     {header}
     {error && <Notice tone="error">{error}</Notice>}
-    <SetupReminder/>
-    {/* Attention and Sessions take the whole width; the Active now, Memory and Artifacts tiles are gone:
-      each repeats its own page, and Attention is what needs you. */}
+    {/* One column, in this order: setting north up (until it is done), what needs you, your sessions, north's
+      state with its usage, and what ran in the background. The Active now, Memory and Artifacts tiles are gone:
+      each repeated its own page. */}
     <div className="cockpit-grid">
+      <SetupReminder/>
       <Panel title="Attention" label={`${data.attention.length + data.notices.length} items`} to="/approvals" className={`full-panel${data.attention.length + data.notices.length ? " attention-panel" : ""}`}>
         <NoticeList compact notices={data.notices.slice(0, 3)} onDismissed={() => void reload()}/>
         {data.attention.length ? data.attention.slice(0, 3).map(item => <ListRow key={item.id} to="/approvals" title={item.title} meta={[`${item.agent} needs a decision`]}/>) : !data.notices.length && <Empty>Nothing needs you right now.</Empty>}
@@ -52,12 +53,14 @@ export function Dashboard() {
       <Panel title="Sessions" label="Recent" to="/sessions" className="full-panel">
         {data.conversations.length ? <CardGrid>{data.conversations.map(session => <EntityCard key={session.id} to={`/sessions/${session.id}`} icon={<MessageSquare size={16}/>} title={session.title} meta={`${session.source === "cli" ? "CLI · " : ""}${timeAgo(session.updated_at)}`}/>)}</CardGrid> : <Empty>Start your first session.</Empty>}
       </Panel>
-      <Panel title="System" label={data.system.version ? `North ${data.system.version}` : "Status"} to="/system" className="wide-panel system-panel">
+      {/* One System panel: north's state and, beside it, what it used in the last 7 days (was a Usage tile). */}
+      <Panel title="System" label={data.system.version ? `North ${data.system.version}` : "Status"} to="/system" className="full-panel system-panel">
         <div className="hero-status"><HealthIndicator variant="panel"/><div><p>{dialsLine(data.system)}<YoloBadge mode={data.system.autonomy}/></p></div></div>
         {systemRows(data.system).map(row => <ListRow key={row.key} title={row.title} meta={row.detail ? [row.detail] : []} status={<Status value={row.state} tone={row.tone}/>}/>)}
-      </Panel>
-      <Panel title="Usage" label="Last 7 days" to="/insights">
-        <StatGrid><Stat label="Tasks" value={String(data.metrics.total_tasks || 0)}/><Stat label="Model cost" value={<>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</>}/></StatGrid>
+        <StatGrid>
+          <Stat label="Tasks, last 7 days" value={String(data.metrics.total_tasks || 0)}/>
+          <Stat label="Model cost, last 7 days" value={<>${totalCost.toFixed(3)}{unpricedNote(data.metrics.unpriced_calls)}</>}/>
+        </StatGrid>
       </Panel>
       {/* What north did while you were away: the last day's flow runs, your own and north's when they matter.
         It replaced a tile for one person's briefing flows, which vanilla north does not have. */}

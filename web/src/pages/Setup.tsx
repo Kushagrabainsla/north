@@ -28,7 +28,8 @@ export const setupNeedsAttention = (status: SetupData["status"]) => status === "
 export function SetupReminder() {
   const { data } = useResource<SetupData>("/web/api/setup", 10000);
   if (!data || !setupNeedsAttention(data.status)) return null;
-  return <Panel title="Set up North" label="Your connections" className="setup-reminder">
+  // A dashboard panel, the first one, at the cockpit's full width.
+  return <Panel title="Set up North" label="Your connections" className="setup-reminder full-panel">
     <Note>Connect an AI provider, your coding agents, browser profiles and Telegram, and choose whether North reads your files. Skip any step and come back later.</Note>
     <Button variant="primary" to="/setup">{data.status === "in_progress" ? "Continue setup" : "Start setup"}</Button>
   </Panel>;
