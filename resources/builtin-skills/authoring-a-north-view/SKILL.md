@@ -10,14 +10,14 @@ domains: [general, engineering]
 
 ## Decide first
 1. Say what the page is for and what the user will look at it to learn or do. One page, one purpose.
-2. Find the data: a tool that changes nothing and returns what the page shows (`list_schedules`, `query_metrics`, `create_flow` with `action='list'`). Call it once yourself to see the shape of its result; the view reads that same result at `/<name>`. No tool returns it? Make the tool first (`adding-a-north-tool`), as read-only.
+2. Find the data: a tool that changes nothing and returns what the page shows (`query_metrics`, `create_flow` with `action='list'`). Call it once yourself to see the shape of its result; the view reads that same result at `/<name>`. No tool returns it? Make the tool first (`adding-a-north-tool`), as read-only.
 3. Find the actions: each button starts a flow that exists (`create_flow` with `action='list'`). No flow does it? Make the flow first (`authoring-a-north-flow`). A view has no other way to act.
 4. `create_view` with `action='parts'` lists the parts a view may use. Use only those.
 
 ## The format: A2UI v0.9 on north's kit
 - `components` is a flat list. Each has an `id`, a `component` (a part from `parts`), and its properties. One has the id `root`; the page starts there.
 - Containers (`Column`, `Row`, `Panel`, `StatGrid`) name their `children` by id: `["title", "runs"]`.
-- To repeat one part for each item of a list in the data, `children` is `{"path": "/schedules/recurring", "componentId": "schedule_row"}`. Inside that part, a path without the leading slash reads from the item: `{"path": "name"}`.
+- To repeat one part for each item of a list in the data, `children` is `{"path": "/flows/flows", "componentId": "flow_row"}`. Inside that part, a path without the leading slash reads from the item: `{"path": "name"}`.
 - A property that shows data is `{"path": "/metrics/metrics/total_tasks"}`. Text that does not change is a plain string.
 - A `Table` lists one row per item of `rows` (a path to a list), with `columns` naming each item's keys.
 - A `Button` has `"action": {"event": {"name": "run_now"}}`, and `run_now` is in the view's `actions`: `{"run_now": {"flow": "nightly-cleanup", "label": "Runs the cleanup now"}}`.
@@ -29,15 +29,15 @@ domains: [general, engineering]
 {
   "action": "draft",
   "view": {
-    "id": "schedules-board",
-    "title": "What runs when",
-    "description": "Every schedule north keeps, soonest first.",
-    "data": [{"name": "schedules", "tool": "list_schedules", "args": {}}],
+    "id": "flows-board",
+    "title": "What north runs",
+    "description": "Every flow north keeps, with its status.",
+    "data": [{"name": "flows", "tool": "create_flow", "args": {"action": "list"}}],
     "components": [
       {"id": "root", "component": "Column", "children": ["intro", "list"]},
-      {"id": "intro", "component": "Note", "text": "Times are in north's time zone."},
-      {"id": "list", "component": "Panel", "title": "Schedules", "children": {"path": "/schedules/recurring", "componentId": "schedule_row"}},
-      {"id": "schedule_row", "component": "ListItem", "title": {"path": "name"}, "description": {"path": "task"}, "meta": [{"path": "schedule"}, {"path": "next_run"}]}
+      {"id": "intro", "component": "Note", "text": "Each flow and whether it is live."},
+      {"id": "list", "component": "Panel", "title": "Flows", "children": {"path": "/flows/flows", "componentId": "flow_row"}},
+      {"id": "flow_row", "component": "ListItem", "title": {"path": "name"}, "description": {"path": "description"}, "meta": [{"path": "status"}]}
     ]
   }
 }

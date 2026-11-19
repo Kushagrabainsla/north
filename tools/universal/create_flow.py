@@ -24,6 +24,7 @@ from policies.self_edit import SelfEditPolicy
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal._procedure_edit import begin_edit, describe_user_edit
+from tools.universal.flow_schedules import FlowSchedules, describe_result, describe_schedule
 
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
 
@@ -45,7 +46,7 @@ class CreateFlowTool(Tool):
     is_mutating = True
     starts_runs = True  # its runs' steps take the workspace lock; see `Tool.starts_runs`
     description = (
-        "Create, update, inspect or activate a reusable declarative flow. Before creating one, use the "
+        "Create, update, inspect, activate or schedule a reusable declarative flow. Before creating one, use the "
         "authoring-a-north-flow skill, resolve missing setup choices with ask_user in one question, including "
         "explicit manual-only, "
         "one-time, or recurring timing (never assume), reuse capabilities, take the timezone only from North "
@@ -53,17 +54,50 @@ class CreateFlowTool(Tool):
         "inputs, and approval mode for every step. create, update and activate are each asked about once; the flow "
         "is then run once as a test (pass test_inputs for the smallest safe case) and is live if the test completes. "
         "A failing new flow stays a draft; a failing edit goes back to the live version. Agents and tools belong to "
-        "skill contracts. Schedules are separate: collecting timing does not install a schedule or authorize "
-        "activation; use schedule_task only after the flow is live and the user confirmed."
+        "skill contracts. A schedule is a property of a flow: list and read show each flow's schedules and next "
+        "runs; collecting timing does not install a schedule or authorize activation, so schedule a flow only "
+        "after it is live and the user confirmed. 'schedule' runs flow 'name' later. A reminder is a schedule of the "
+        "built-in 'reminder' flow: pass 'message', the text north delivers at that time as it is, with no test; "
+        "the result says where it will appear - tell the user exactly that. Give a short title in 'label'. Times "
+        "are the USER'S LOCAL TIME - pass the hour they said, never convert it, never pass a timezone. Pass "
+        "exactly one of: run_at 'YYYY-MM-DDTHH:MM' for one run; interval_minutes for every N minutes; or hour "
+        "(0-23) with optional minute and days (day names, numbers 0=Mon..6=Sun, or 'weekdays' / 'weekends' / "
+        "'daily'), so \"every weekday at 9:30\" is hour 9, minute 30, days 'weekdays'. 'reschedule' changes "
+        "the schedule named in 'schedule' (its time, days, label, or enabled false to pause and true to "
+        "resume); pass only what changes. 'unschedule' removes the schedule named in 'schedule', or the "
+        "one-shot 'job_id', for good; a built-in one goes back to its shipped settings. What a schedule does "
+        "lives in its flow, so change the flow, not the schedule. List first when the user asks what is "
+        "scheduled or to change or stop something."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "update", "activate", "list", "read"],
+                "enum": ["create", "update", "activate", "list", "read", "schedule", "reschedule", "unschedule"],
                 "description": "activate = test a draft flow as it is now and switch it on.",
             },
+            "message": {
+                "type": "string",
+                "description": "schedule only, for a reminder: the text to deliver ('Take the laundry out.').",
+            },
+            "label": {"type": "string", "description": "A schedule's short title, 2-4 words, shown in lists."},
+            "run_at": {"type": "string", "description": "Local 'YYYY-MM-DDTHH:MM' for a single run."},
+            "hour": {"type": "integer", "description": "Hour (0-23), local, for a repeating schedule."},
+            "minute": {"type": "integer", "description": "Minute (0-59, default 0)."},
+            "interval_minutes": {"type": "integer", "description": "Run every N minutes (minimum 1)."},
+            "days": {
+                "description": (
+                    "Which days: a list of day names or numbers (0=Mon..6=Sun), or 'weekdays' / 'weekends' / "
+                    "'daily'. Omit for every day; on reschedule, 'daily' clears a day restriction."
+                ),
+            },
+            "enabled": {"type": "boolean", "description": "reschedule only: false pauses, true resumes."},
+            "schedule": {
+                "type": "string",
+                "description": "reschedule / unschedule: the schedule's name, as list or read shows it.",
+            },
+            "job_id": {"type": "string", "description": "unschedule only: a one-shot run's job id."},
             "name": {"type": "string", "description": "Lowercase flow name, e.g. job-application-review."},
             "description": {"type": "string", "description": "Outcome the flow achieves."},
             "steps": {
@@ -100,8 +134,10 @@ class CreateFlowTool(Tool):
         agent_registry=None,
         flow_store: FlowRunStore | None = None,
         runner=None,
+        schedules: FlowSchedules | None = None,
     ) -> None:
         self._registry = registry
+        self._schedules = schedules
         from config.settings import settings
 
         self._learned_dir = learned_dir or (settings.north_home / "flows")
@@ -114,7 +150,9 @@ class CreateFlowTool(Tool):
         self._runner = runner
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
-        return str((params or {}).get("action") or "").strip().lower() in {"create", "update", "activate"}
+        # Adding a schedule asks nobody, as before: the flow it runs was approved when it went live.
+        action = str((params or {}).get("action") or "").strip().lower()
+        return action in {"create", "update", "activate", "reschedule", "unschedule"}
 
     async def describe(self, input: ToolInput):
         request = await super().describe(input)
@@ -144,22 +182,51 @@ class CreateFlowTool(Tool):
     async def run(self, input: ToolInput) -> ToolOutput:
         action = str(input.params.get("action") or "").strip().lower()
         if action == "list":
-            return ToolOutput(success=True, data={"flows": [_view(flow) for flow in self._registry.all()]})
+            schedules = await self._schedules_by_flow()
+            return ToolOutput(
+                success=True,
+                data={
+                    "flows": [_view(flow, schedules=schedules) for flow in self._registry.all()],
+                    "timezone": FlowSchedules.timezone(),
+                },
+            )
         if action == "read":
             name = str(input.params.get("name") or "").strip()
             if not name:
                 return ToolOutput(success=False, error="Parameter 'name' is required for read.")
             try:
-                return ToolOutput(success=True, data=_view(self._registry.get(name), include_steps=True))
+                flow = self._registry.get(name)
             except Exception as exc:
                 return ToolOutput(success=False, error=str(exc))
+            return ToolOutput(
+                success=True, data=_view(flow, include_steps=True, schedules=await self._schedules_by_flow())
+            )
+        if action in {"schedule", "reschedule", "unschedule"}:
+            return await self._schedule(action, input.params)
         if action == "activate":
             return await self._activate(input)
         if action not in {"create", "update"}:
             return ToolOutput(
-                success=False, error="Parameter 'action' must be create, update, activate, list, or read."
+                success=False,
+                error=(
+                    "Parameter 'action' must be create, update, activate, list, read, schedule, reschedule, "
+                    "or unschedule."
+                ),
             )
         return await self._write_and_prove(input, action)
+
+    async def _schedules_by_flow(self) -> dict[str, list[dict[str, Any]]] | None:
+        return await self._schedules.by_flow() if self._schedules is not None else None
+
+    async def _schedule(self, action: str, params: dict[str, Any]) -> ToolOutput:
+        """A flow's schedules: add one, change one, or remove one."""
+        if self._schedules is None:
+            return ToolOutput(success=False, error="Scheduling is unavailable here.")
+        if action == "schedule":
+            return await self._schedules.add({**params, "flow": str(params.get("name") or "").strip()})
+        if action == "reschedule":
+            return await self._schedules.change(params)
+        return await self._schedules.remove(params)
 
     async def _write_and_prove(self, input: ToolInput, action: str) -> ToolOutput:
         """Write the flow, test it once, and switch it on; on failure keep what was live."""
@@ -332,14 +399,16 @@ class CreateFlowTool(Tool):
         if data.get("status") == "active" and data.get("test_run_id"):
             state = "updated and live" if data.get("updated") else "live"
             return f"Flow '{data.get('name')}' is {state}: test run {data.get('test_run_id')} completed."
+        if {"cancelled", "changed", "runs_at"} & data.keys() or data.get("type") == "recurring":
+            return describe_result(data)
         if "flows" in data:
-            return (
-                "\n".join(
-                    f"{flow['name']} - {flow['description']} ({flow['steps']} steps; {flow['status']})"
-                    for flow in data["flows"]
-                )
-                or "No flows registered."
-            )
+            lines = []
+            for flow in data["flows"]:
+                lines.append(f"{flow['name']} - {flow['description']} ({flow['steps']} steps; {flow['status']})")
+                lines += [f"    {describe_schedule(view)}" for view in flow.get("schedules", [])]
+            if data.get("timezone") and any(flow.get("schedules") for flow in data["flows"]):
+                lines.append(f"(times in {data['timezone']})")
+            return "\n".join(lines) or "No flows registered."
         if isinstance(data.get("steps"), list):
             return f"Flow '{data['name']}' ({data['status']}; {len(data['steps'])} steps):\n" + yaml.safe_dump(
                 data, sort_keys=False, allow_unicode=True
@@ -347,8 +416,10 @@ class CreateFlowTool(Tool):
         return str(data)
 
 
-def _view(flow, *, include_steps: bool = False) -> dict[str, Any]:
-    data = {
+def _view(
+    flow, *, include_steps: bool = False, schedules: dict[str, list[dict[str, Any]]] | None = None
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
         "name": flow.name,
         "description": flow.description,
         "source": flow.source.value,
@@ -356,6 +427,8 @@ def _view(flow, *, include_steps: bool = False) -> dict[str, Any]:
         "domains": sorted(flow.domains),
         "steps": len(flow.steps),
     }
+    if schedules is not None:
+        data["schedules"] = schedules.get(flow.name, [])
     if include_steps:
         data["steps"] = [
             {

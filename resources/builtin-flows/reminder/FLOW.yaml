@@ -1,0 +1,12 @@
+name: reminder
+description: Delivers a reminder's text to you at its time, as it is, on the dashboard and every channel set up. Each
+  reminder is a schedule of this flow.
+domains:
+- general
+steps:
+- name: deliver
+  action: deliver_reminder
+  inputs:
+    message: ${inputs.message}
+    label: ${inputs.label}
+    late: ${inputs.late}

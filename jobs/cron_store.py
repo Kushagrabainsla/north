@@ -16,6 +16,7 @@ from itertools import count
 from pathlib import Path
 from typing import Any
 
+from jobs.models import REMINDER_FLOW
 from utils.db import open_db_connection
 from utils.time import now_epoch
 
@@ -151,6 +152,11 @@ class UserCronStore:
                 conn.execute("UPDATE user_cron_entries SET tz = NULL")
             # The one agent was called "general"; it is north, and runs every schedule.
             conn.execute("UPDATE user_cron_entries SET agent = 'north' WHERE agent = 'general'")
+            # A reminder is a schedule of the built-in reminder flow; one stored before named no flow.
+            conn.execute(
+                "UPDATE user_cron_entries SET flow = ? WHERE COALESCE(flow, '') = '' AND COALESCE(message, '') != ''",
+                (REMINDER_FLOW,),
+            )
 
     async def add(
         self,

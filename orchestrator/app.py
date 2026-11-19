@@ -15,6 +15,7 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -102,24 +103,21 @@ from tools.specialized.coding_shell import BashShell
 from tools.specialized.kasa_devices import move_logins_to_secrets as move_kasa_logins_to_secrets
 from tools.tool_index import ToolIndex
 from tools.universal.browser_accounts import BrowserAccounts
-from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.create_view import CreateViewTool
 from tools.universal.fetch_url import FetchUrlTool
 from tools.universal.flow_runner import DISCARD_OPTION, RESUME_OPTION, STOPPED_RUN_SOURCE, FlowRunner
+from tools.universal.flow_schedules import FlowSchedules
 from tools.universal.forget import ForgetTool
 from tools.universal.get_active_sessions import GetActiveSessionsTool
 from tools.universal.get_task_status import GetTaskStatusTool
-from tools.universal.list_schedules import ListSchedulesTool
 from tools.universal.offered_before import OfferedBeforeTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.remember import RememberTool
 from tools.universal.run_flow import RunFlowTool
-from tools.universal.schedule_task import ScheduleTaskTool
 from tools.universal.update_plan import UpdatePlanTool
-from tools.universal.update_schedule import UpdateScheduleTool
 from tools.universal.use_flow import UseFlowTool
 from tools.universal.use_skill import UseSkillTool
 from utils.logging import LOG_TO_HOME_ENV, configure_structured_logging
@@ -259,25 +257,6 @@ def _build_tool_registry(
     )
     mutation_root = settings.north_home / "mutations"
     source_edit_policy = SelfEditPolicy(learned_tools_dir, mutation_root)
-    # The four schedule verbs travel together: an agent that can create a
-    # schedule must also be able to show, change and remove one, or the user can
-    # only ever add.
-    tool_registry.register(
-        ScheduleTaskTool(
-            job_processor=deps.job_processor,
-            cron_store=deps.cron_store,
-            skill_registry=skill_registry,
-            reaches=_where_reminders_appear,
-        )
-    )
-    tool_registry.register(
-        UpdateScheduleTool(
-            cron_store=deps.cron_store,
-            skill_registry=skill_registry,
-        )
-    )
-    tool_registry.register(ListSchedulesTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
-    tool_registry.register(CancelScheduleTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     tool_registry.register(
         CreateToolTool(
             tool_registry=tool_registry,
@@ -684,21 +663,25 @@ def _where_reminders_appear() -> list[str]:
     return ["the dashboard", *(["Telegram"] if settings.telegram_ready else [])]
 
 
-async def _deliver_reminder(job: Job, message: str, approvals: Approvals | None) -> None:
-    """A reminder is its text, delivered as it is: no flow, no model, nothing to test or keep.
+async def _deliver_reminder(inputs: dict[str, Any], approvals: Approvals | None) -> str:
+    """The reminder flow's one step: the schedule's text, delivered as it is, with no model.
 
-    Each one used to become a permanent flow that ran once as a "test" when it
-    was approved - announcing the reminder early - and whose result reached no
-    one. One that ran late, after north was off at its time, said nothing of it.
+    Every reminder is a schedule of the one built-in reminder flow, so it runs,
+    shows and stops like any other scheduled flow. It used to become a flow of
+    its own, run once as a "test" when it was approved - announcing the reminder
+    early. One that ran late, after north was off at its time, says so.
     """
+    message = str(inputs.get("message") or "").strip()
+    if not message:
+        raise ValueError("a reminder needs the text to deliver")
     if approvals is None or approvals.interaction is None:
         raise JobNeedsAttention("there is no way to deliver a reminder")
-    late = late_note(job)
+    title = str(inputs.get("label") or "Reminder")
+    late = str(inputs.get("late") or "")
     await approvals.interaction.deliver(
-        title=str((job.payload or {}).get("label") or "Reminder"),
-        message=f"{message}\n\n({late})" if late else message,
-        source="reminder",
+        title=title, message=f"{message}\n\n({late})" if late else message, source="reminder"
     )
+    return f"Delivered the reminder '{title}'."
 
 
 async def _run_scheduled_task(
@@ -768,7 +751,7 @@ def _launch_background_tasks(
 ) -> list[asyncio.Task]:
     loops = loops or BackgroundLoops()
 
-    async def _nightly_cleanup() -> str:
+    async def _nightly_cleanup(_inputs: dict[str, Any]) -> str:
         """north's own housekeeping: the one step of the built-in nightly-cleanup flow."""
         now = utcnow()
         completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)
@@ -828,7 +811,7 @@ def _launch_background_tasks(
         north_home=settings.north_home,
     )
 
-    async def _fact_upkeep() -> str:
+    async def _fact_upkeep(_inputs: dict[str, Any]) -> str:
         """The fact-upkeep flow's step: facts whose last day passed stop being recalled; the profile follows."""
         if deps.fact_store is None:
             return "No fact store to keep."
@@ -836,13 +819,13 @@ def _launch_background_tasks(
         await _rebuild_profile(deps.fact_store, deps.context_store)
         return f"Dated {dated} fact(s) and rewrote your profile."
 
-    async def _episode_memory() -> str:
+    async def _episode_memory(_inputs: dict[str, Any]) -> str:
         return f"Wrote {await episode_consolidator.run_once()} note(s) about finished tasks."
 
-    async def _skill_learning() -> str:
+    async def _skill_learning(_inputs: dict[str, Any]) -> str:
         return f"Learned {await skill_distiller.run_once()} new skill(s)."
 
-    async def _rules_to_confirm() -> str:
+    async def _rules_to_confirm(_inputs: dict[str, Any]) -> str:
         if approvals is None or approvals.interaction is None or approval_memory is None:
             return "Nothing to ask: the approval layer is not set up."
         card = await standing_rules.offer_morning_digest(
@@ -853,13 +836,15 @@ def _launch_background_tasks(
     # north's built-in flow actions: deterministic code, no model of their own.
     if flow_runner is not None:
         flow_runner.register_action("task_context_cleanup", _nightly_cleanup)
-        flow_runner.register_action("nightly_check", nightly_check)
+        flow_runner.register_action("nightly_check", lambda _inputs: nightly_check())
         flow_runner.register_action("fact_upkeep", _fact_upkeep)
         flow_runner.register_action("consolidate_episodes", _episode_memory)
         flow_runner.register_action("distill_skills", _skill_learning)
         flow_runner.register_action("rules_to_confirm", _rules_to_confirm)
+        flow_runner.register_action("deliver_reminder", lambda inputs: _deliver_reminder(inputs, approvals))
         if approvals is not None and approvals.interaction is not None:
-            flow_runner.register_action("remind_waiting_cards", approvals.interaction.remind_waiting)
+            interaction = approvals.interaction
+            flow_runner.register_action("remind_waiting_cards", lambda _inputs: interaction.remind_waiting())
 
     async def _dispatch_job(job: Job) -> None:
         async def cancelled_by_you() -> bool:
@@ -867,13 +852,18 @@ def _launch_background_tasks(
             stored = await deps.job_processor.get(job.job_id)
             return stored is not None and stored.status is JobStatus.CANCELLED
 
-        if message := str((job.payload or {}).get("message") or "").strip():
-            await _deliver_reminder(job, message, approvals)
-            return
-        flow = str((job.payload or {}).get("flow") or "").strip()
+        payload = job.payload or {}
+        flow = str(payload.get("flow") or "").strip()
         if flow:
+            # A schedule's message is its flow's input: the text the reminder flow delivers.
+            message = str(payload.get("message") or "").strip()
+            inputs = (
+                {"message": message, "label": str(payload.get("label") or "Reminder"), "late": late_note(job)}
+                if message
+                else None
+            )
             try:
-                result = await tool_registry.get("run_flow").run_scheduled(flow, job.job_id)
+                result = await tool_registry.get("run_flow").run_scheduled(flow, job.job_id, inputs)
             except asyncio.CancelledError:
                 if flow_runner is not None and await cancelled_by_you():
                     flow_runner.cancel_running(job.job_id)
@@ -1081,24 +1071,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     flow_registry = _build_flows()
     deps.approval_policy = approval_policy
     tool_registry = _build_tool_registry(deps, approvals, skill_registry, skill_selector)
-    # Rebind the schedule tool after flows are loaded so scheduled flow names
-    # are validated at creation time just like named skills.
-    tool_registry.register(
-        ScheduleTaskTool(
-            job_processor=deps.job_processor,
-            cron_store=deps.cron_store,
-            skill_registry=skill_registry,
-            flow_registry=flow_registry,
-            reaches=_where_reminders_appear,
-        )
-    )
-    tool_registry.register(
-        UpdateScheduleTool(
-            cron_store=deps.cron_store,
-            skill_registry=skill_registry,
-            flow_registry=flow_registry,
-        )
-    )
 
     tool_registry.register(UseSkillTool(skill_registry))
     create_skill_tool = CreateSkillTool(
@@ -1158,6 +1130,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             tool_registry=tool_registry,
             flow_store=flow_store,
             runner=flow_runner,
+            # A schedule is a property of a flow, so the flow tool adds, shows, changes and removes them.
+            schedules=FlowSchedules(
+                deps.job_processor,
+                deps.cron_store,
+                skill_registry=skill_registry,
+                flow_registry=flow_registry,
+                agent_registry=agent_registry,
+                tool_registry=tool_registry,
+                reaches=_where_reminders_appear,
+            ),
         )
     )
     if deps.card_continuations is not None:
@@ -1175,28 +1157,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     tool_registry.register(RunFlowTool(flow_runner))
     # A view checks the tools it reads and the flows its buttons run against these live registries.
     tool_registry.register(CreateViewTool(tool_registry=tool_registry, flow_registry=flow_registry))
-    # Replace the bootstrap instances now that the final live dependency exists.
-    # This closes the construction cycle while still rejecting schedules that
-    # name an agent the runtime cannot dispatch to.
-    tool_registry.register(
-        ScheduleTaskTool(
-            job_processor=deps.job_processor,
-            cron_store=deps.cron_store,
-            skill_registry=skill_registry,
-            flow_registry=flow_registry,
-            agent_registry=agent_registry,
-            tool_registry=tool_registry,
-        )
-    )
-    tool_registry.register(
-        UpdateScheduleTool(
-            cron_store=deps.cron_store,
-            skill_registry=skill_registry,
-            flow_registry=flow_registry,
-            agent_registry=agent_registry,
-            tool_registry=tool_registry,
-        )
-    )
 
     _step("seeding confidence defaults")
     global_tools = sorted(tool_registry.all_tool_names())

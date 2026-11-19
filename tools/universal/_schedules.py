@@ -1,8 +1,8 @@
-"""Shared vocabulary for the schedule tools (create / list / update / cancel).
+"""Shared vocabulary for flow schedules (add / show / change / remove).
 
 One place decides what a schedule is called, how it is described back to the
-user, and how a time given in words becomes a stored one - so the four tools
-cannot drift from each other or from `north cron`.
+user, and how a time given in words becomes a stored one - so the chat and
+the dashboard cannot drift from each other or from `north cron`.
 """
 
 from __future__ import annotations
@@ -101,6 +101,7 @@ def job_view(job: Job) -> dict[str, Any]:
         "job_id": job.job_id,
         "task": job.task,
         "agent": job.agent,
+        "flow": str((job.payload or {}).get("flow") or ""),
         "schedule": "once",
         "next_run": format_local(job.scheduled_at),
         "next_run_epoch": job.scheduled_at.timestamp(),

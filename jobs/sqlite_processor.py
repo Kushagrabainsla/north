@@ -14,7 +14,7 @@ from typing import Any
 
 from jobs.base import JobProcessor
 from jobs.exceptions import JobCancelled, JobNeedsAttention, JobNeverStarted, JobProcessingError
-from jobs.models import Job, JobPriority, JobStatus, JobType
+from jobs.models import REMINDER_FLOW, Job, JobPriority, JobStatus, JobType
 from utils.db import open_db_connection
 from utils.time import from_epoch, now_epoch, to_epoch
 
@@ -116,6 +116,13 @@ class SQLiteJobProcessor(JobProcessor):
                 "CREATE INDEX IF NOT EXISTS idx_job_queue_pending ON job_queue (status, priority, scheduled_epoch)"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_job_queue_agent_task ON job_queue (agent, task, status)")
+            # A reminder runs the built-in reminder flow; one queued before named no flow.
+            conn.execute(
+                "UPDATE job_queue SET payload = json_set(payload, '$.flow', ?) "
+                "WHERE COALESCE(json_extract(payload, '$.message'), '') != '' "
+                "AND COALESCE(json_extract(payload, '$.flow'), '') = ''",
+                (REMINDER_FLOW,),
+            )
 
     async def enqueue(self, job: Job) -> str:
         try:

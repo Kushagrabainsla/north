@@ -67,9 +67,9 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
     )
     lines.append(
         "- **create_flow**: Compose active skills into a candidate process, then validate and test it "
-        "before activation."
+        "before activation; schedule a live flow (or a reminder) once, on a routine or at a fixed interval, "
+        "and list, change or remove its schedules."
     )
-    lines.append("- **schedule_task**: Run an active flow later, once or on a routine or fixed interval.")
     lines.append("- **use_skill**: Access a reusable procedure that may call several atomic tools.")
     lines.append("- **run_flow**: Test or execute a validated declarative flow with persisted checkpoints.")
 

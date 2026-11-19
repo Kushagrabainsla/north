@@ -31,7 +31,6 @@ from skills.registry import parse_execution_contract, rejection_reason
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.registry import is_learned_tool
-from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_tool import (
     _candidate_root,
@@ -42,8 +41,7 @@ from tools.universal.create_tool import (
     _render_stub,
 )
 from tools.universal.flow_runner import STOPPED, step_approval_title
-from tools.universal.schedule_task import ScheduleTaskTool
-from tools.universal.update_schedule import UpdateScheduleTool
+from tools.universal.flow_schedules import FlowSchedules
 from utils.ids import generate_id
 from utils.tasks import spawn
 
@@ -717,19 +715,16 @@ async def _flow_schedule_row(name: str) -> dict[str, Any]:
     return row
 
 
-def _schedule_tools() -> tuple[ScheduleTaskTool, UpdateScheduleTool, CancelScheduleTool]:
+def _schedules() -> FlowSchedules:
+    """The same schedules the chat changes through create_flow, so both doors obey one set of rules."""
     services = current_services()
-    common = {
-        "skill_registry": services.skill_registry,
-        "flow_registry": services.flow_registry,
-        "agent_registry": services.agent_registry,
-        "tool_registry": services.tool_registry,
-    }
-    cron_store = services.require("cron_store")
-    return (
-        ScheduleTaskTool(job_processor=services.require("job_processor"), cron_store=cron_store, **common),
-        UpdateScheduleTool(cron_store=cron_store, **common),
-        CancelScheduleTool(job_processor=services.require("job_processor"), cron_store=cron_store),
+    return FlowSchedules(
+        services.require("job_processor"),
+        services.require("cron_store"),
+        skill_registry=services.skill_registry,
+        flow_registry=services.flow_registry,
+        agent_registry=services.agent_registry,
+        tool_registry=services.tool_registry,
     )
 
 
@@ -737,15 +732,13 @@ def _schedule_tools() -> tuple[ScheduleTaskTool, UpdateScheduleTool, CancelSched
 async def create_flow_schedule(name: str, body: FlowScheduleCreate) -> dict[str, Any]:
     """Put a flow on a schedule: a repeating one, or a single run at a set time.
 
-    Goes through the same tool the chat uses, so a schedule made here obeys the
-    same rules: the flow must be active, unchanged since it was tested, and
+    Goes through the same schedules the chat uses, so a schedule made here obeys
+    the same rules: the flow must be active, unchanged since it was tested, and
     still executable.
     """
     flow = _known_flow(name)
-    scheduler, _, _ = _schedule_tools()
-    result = await _as_user(
-        scheduler,
-        {"task": flow.description or f"Run the {name} flow.", "agent": NORTH_AGENT, "flow": name, **_set_fields(body)},
+    result = await _schedules().add(
+        {"task": flow.description or f"Run the {name} flow.", "flow": name, **_set_fields(body)}
     )
     if not result.success:
         raise HTTPException(status_code=422, detail=result.error or "Could not schedule this flow")
@@ -756,8 +749,7 @@ async def create_flow_schedule(name: str, body: FlowScheduleCreate) -> dict[str,
 async def update_flow_schedule(schedule: str, body: FlowScheduleUpdate) -> dict[str, Any]:
     """Retime, rename, pause or resume one of a flow's schedules."""
     await _flow_schedule_row(schedule)
-    _, updater, _ = _schedule_tools()
-    result = await _as_user(updater, {"name": schedule, **_set_fields(body)})
+    result = await _schedules().change({"schedule": schedule, **_set_fields(body)})
     if not result.success:
         raise HTTPException(status_code=422, detail=result.error or "Could not change this schedule")
     return result.data
@@ -766,8 +758,7 @@ async def update_flow_schedule(schedule: str, body: FlowScheduleUpdate) -> dict[
 @router.delete("/flow-schedules/{schedule}", status_code=204)
 async def delete_flow_schedule(schedule: str) -> None:
     await _flow_schedule_row(schedule)
-    _, _, canceller = _schedule_tools()
-    result = await _as_user(canceller, {"name": schedule})
+    result = await _schedules().remove({"schedule": schedule})
     if not result.success:
         raise HTTPException(status_code=409, detail=result.error or "Could not delete this schedule")
 

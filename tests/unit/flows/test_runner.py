@@ -653,7 +653,7 @@ async def test_a_system_action_step_runs_the_registered_job_with_no_agent(tmp_pa
     runner = FlowRunner(_builtin_flow(tmp_path, _CLEANUP_FLOW), FakeAgents(agent), _skills(tmp_path), store)
     calls = []
 
-    async def cleanup() -> str:
+    async def cleanup(_inputs: dict) -> str:
         calls.append("ran")
         return "removed 3 stale rows"
 
@@ -685,7 +685,7 @@ async def test_a_system_action_that_raises_pauses_the_run_with_its_message(tmp_p
     store = FlowRunStore(tmp_path / "runs.db")
     runner = FlowRunner(_builtin_flow(tmp_path, _CLEANUP_FLOW), FakeAgents(FakeAgent()), _skills(tmp_path), store)
 
-    async def broken() -> str:
+    async def broken(_inputs: dict) -> str:
         raise RuntimeError("database is locked")
 
     runner.register_action("task_context_cleanup", broken)

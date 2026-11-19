@@ -95,7 +95,7 @@ class FlowRunner:
         tool_registry=None,
         workspace: str = "",
     ) -> None:
-        self._actions: dict[str, Callable[[], Awaitable[str]]] = {}
+        self._actions: dict[str, Callable[[dict[str, Any]], Awaitable[str]]] = {}
         self._flows = flow_registry
         self._agents = agent_registry
         self._skills = skill_registry
@@ -287,12 +287,14 @@ class FlowRunner:
         if task_id and self._interaction is not None:
             self._interaction.withdraw(task_id=task_id, source=STOPPED_RUN_SOURCE)
 
-    def register_action(self, name: str, handler: Callable[[], Awaitable[str]]) -> None:
+    def register_action(self, name: str, handler: Callable[[dict[str, Any]], Awaitable[str]]) -> None:
         """Make a maintenance job runnable as a built-in flow's step.
 
         The handler is deterministic server code that returns a one-line account
-        of what it did. It is registered by whoever owns the state it touches,
-        after that state exists, so the runner is built without it.
+        of what it did. It gets the step's inputs, resolved the way a skill
+        step's are (a reminder's text, for one). It is registered by whoever owns
+        the state it touches, after that state exists, so the runner is built
+        without it.
         """
         self._actions[name] = handler
 
@@ -464,7 +466,7 @@ class FlowRunner:
                         error=f"Step '{step.name}': system action '{step.action}' is not available.",
                     )
                 try:
-                    summary = await handler()
+                    summary = await handler(_resolve_inputs(step.inputs, run.inputs, outputs))
                 except Exception as exc:
                     return self._store.update(
                         run.run_id,

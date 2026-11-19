@@ -486,7 +486,7 @@ def _firing_id(name: str, slot: datetime) -> str:
 #       deleted and a north update simply picks the stored row up.
 #
 # Anything tied to one person's routine that north does NOT seed is theirs to add
-# with `schedule_task`.
+# with `create_flow` action `schedule`.
 
 # A fixed start for north's hourly flows, so a restart does not move them: they run at 22 and 52
 # minutes past each hour, away from the full hour, where people schedule their own flows.

@@ -1,6 +1,7 @@
 """Tools north removed, and the tool that does their work now.
 
-Issue #78 removed the file tools: the shell reads, lists and searches files.
+Issue #78 removed the file tools: the shell reads, lists and searches files. The four
+schedule tools went into create_flow, because a schedule is a property of a flow.
 A skill saved before then still names them, and a flow that runs it was tested
 and activated with those names in its fingerprint. Editing the saved skill
 would change that fingerprint and stop the flow until it is tested again, and
@@ -30,6 +31,11 @@ RETIRED_TOOLS: dict[str, str] = dict.fromkeys(
         "git",
     ),
     "bash",
+) | dict.fromkeys(
+    # A schedule is a property of a flow: create_flow adds (schedule), shows (list, read), changes
+    # (reschedule) and removes (unschedule) them, and a reminder is a schedule of the reminder flow.
+    ("schedule_task", "list_schedules", "update_schedule", "cancel_schedule"),
+    "create_flow",
 )
 
 

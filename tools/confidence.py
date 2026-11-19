@@ -25,7 +25,6 @@ RELIABLE_TOOLS = frozenset(
         "write_file",
         "bash",
         "web_search",
-        "schedule_task",
         "fetch_url",
     }
 )

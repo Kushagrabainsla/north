@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 
 from utils.time import format_local
 
+# The built-in flow every reminder is a schedule of: its one step delivers the schedule's message.
+REMINDER_FLOW = "reminder"
+
 
 class JobType(StrEnum):
     """How a job entered the queue. See README 11.1."""

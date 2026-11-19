@@ -38,7 +38,7 @@ class _Registry:
         return self._items[name]
 
 
-TOOLS = _Registry({"list_schedules": _Tool(False), "write_file": _Tool(True)})
+TOOLS = _Registry({"list_schedules": _Tool(False), "create_flow": _Tool(False), "write_file": _Tool(True)})
 FLOWS = _Registry({"nightly-cleanup": object()})
 
 VIEW = {

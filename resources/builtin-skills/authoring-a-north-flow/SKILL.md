@@ -10,7 +10,7 @@ domains: [general, engineering]
 
 ## Decide first
 1. Restate what each run should achieve and how the user will know it worked.
-2. Look before building: `create_flow` and `create_skill` with `action='list'`, and `list_schedules`. Reuse or improve what exists. Steps run skills; a skill uses tools. A missing procedure is a skill to write first (`authoring-a-north-skill`); a missing action is a tool (`adding-a-north-tool`).
+2. Look before building: `create_flow` and `create_skill` with `action='list'` (a flow's list entry shows its schedules). Reuse or improve what exists. Steps run skills; a skill uses tools. A missing procedure is a skill to write first (`authoring-a-north-skill`); a missing action is a tool (`adding-a-north-tool`).
 
 ## Settle the setup, then ask once
 Complete the setup checklist below before calling `create_flow:create`. Find out technical facts yourself; the user should only decide what is theirs to decide. Then ask every unresolved choice in **one** `ask_user` call, each as an item of `questions` with its options, so setup takes one exchange, not five. Keep earlier answers and do not ask again for details already supplied. If the user answers with a question, answer it and ask the still-open choices again in the same run: a clarification is not completion.
@@ -57,8 +57,8 @@ test_inputs:
 ## Test, switch on, schedule
 1. Call `create_flow` (or `update` when a flow already owns the process) with `test_inputs` for the smallest safe case. The user is asked once; the flow then runs once as a real test (each step still asks as its approval says) and is live if it completes. A failing new flow stays a draft; a failing edit goes back to the live version. Read the error, fix it, call again. A draft that already exists goes live with `action='activate'`.
 2. Check the test run's record, not just the call's return: the expected output exists, nothing prohibited happened.
-3. Only when the flow is live and the user confirmed installation, create the schedule with `schedule_task`, read it back, and check its next run. Manual-only flows need none. If installation was deferred, report the timing as pending, not installed.
-4. When updating a flow, read its definition and `list_schedules` first, and preserve existing timing (cadence and local clock time) unless the user asks to change it.
+3. Only when the flow is live and the user confirmed installation, create the schedule with `create_flow` action `schedule`, read it back, and check its next run. Manual-only flows need none. If installation was deferred, report the timing as pending, not installed.
+4. When updating a flow, read its definition and its schedules (`create_flow` action `read`) first, and preserve existing timing (cadence and local clock time) unless the user asks to change it.
 
 ## Report each part separately
 Live or still a draft (and why), environment checked, schedule installed (with its next run) or pending, and the first successful run. `create_flow:list` or `read` proves only that you looked; only a successful `create`, `update` or `activate` makes a flow live.

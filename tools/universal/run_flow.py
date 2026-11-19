@@ -57,8 +57,8 @@ class RunFlowTool(Tool):
             test_mode=mode == "test",
         )
 
-    async def run_scheduled(self, name: str, job_id: str) -> ToolOutput:
-        """Run *name* because a schedule fired.
+    async def run_scheduled(self, name: str, job_id: str, inputs: dict[str, Any] | None = None) -> ToolOutput:
+        """Run *name* because a schedule fired, with the schedule's *inputs* (a reminder's text).
 
         Separate from ``run`` so a run is recorded as scheduled only when the
         scheduler started it: the trigger is not a parameter an agent could
@@ -78,7 +78,9 @@ class RunFlowTool(Tool):
         if own is not None and own.status == "completed":
             return ToolOutput(success=True, data=_view(own))
         self._runner.replace_waiting(name, keeping=own.run_id if own else "")
-        return await self._start(name, run_id=own.run_id if own else None, task_id=job_id, trigger=_SCHEDULED)
+        return await self._start(
+            name, run_id=own.run_id if own else None, task_id=job_id, inputs=inputs, trigger=_SCHEDULED
+        )
 
     async def _start(
         self,

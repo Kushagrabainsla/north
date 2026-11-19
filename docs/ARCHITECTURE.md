@@ -118,7 +118,7 @@ The execution hierarchy is **flow -> skill -> tool**. A flow stores no executor 
 
 User-defined workflows are authored from prompts through `create_skill` and `create_flow` as learned runtime documents, not new built-ins or repository code. Creating, updating or activating a skill, flow or tool is one approval that covers its test and switching it on: a skill is tested with positive and negative requests before anything is written, a tool is called once with `test_params` through the approval layer (so what that call does still asks), and a flow is run once in test mode with each step asking as usual. Only a version that passes goes live; a failing new one stays a draft and a failing edit leaves the live version in place. Draft skills may be invoked by exact name in test-mode flows under their usual approval and tool boundaries; they remain excluded from ordinary skill selection, execution-mode flows, and schedules. A live flow still needs live dependencies and evidence for the exact definition. Missing or wrongly typed resolved inputs pause before step approval or agent work. The dashboard run API also accepts runtime `inputs`.
 
-Prompt-based authoring gathers missing outcome, input/preferences, output/delivery, workload, safety, and timing choices before creating the candidate. Timing must be explicitly manual-only, one-time, or recurring, with complete date/time or interval details. Timezone is never an intake question or flow input: it comes only from the user's North settings via trusted runtime context. Schedule tools and creation/update APIs do not accept timezone overrides. Recurring schedules use the current settings timezone for display and firing calculations, including after a settings change, and a change does not count the slots before it as missed. One-time local date/time is resolved to an absolute instant when scheduled, using settings, and is not moved by a later timezone change. Deferring activation does not imply manual-only use. Existing cadence and local clock time are preserved on updates unless the user changes them. This is conversational intake through `ask_user`, not a new scheduling engine or a `FLOW.yaml` schedule field: schedules remain separate records installed through `schedule_task` only after testing and confirmation. Setup summaries distinguish chosen timing pending installation from an installed schedule verified by read-back.
+Prompt-based authoring gathers missing outcome, input/preferences, output/delivery, workload, safety, and timing choices before creating the candidate. Timing must be explicitly manual-only, one-time, or recurring, with complete date/time or interval details. Timezone is never an intake question or flow input: it comes only from the user's North settings via trusted runtime context. Schedule tools and creation/update APIs do not accept timezone overrides. Recurring schedules use the current settings timezone for display and firing calculations, including after a settings change, and a change does not count the slots before it as missed. One-time local date/time is resolved to an absolute instant when scheduled, using settings, and is not moved by a later timezone change. Deferring activation does not imply manual-only use. Existing cadence and local clock time are preserved on updates unless the user changes them. This is conversational intake through `ask_user`, not a new scheduling engine or a `FLOW.yaml` schedule field: schedules remain separate records installed through `create_flow` action `schedule` only after testing and confirmation. Setup summaries distinguish chosen timing pending installation from an installed schedule verified by read-back.
 
 Updating an existing user-authored `SKILL.md` or `FLOW.yaml` requires fresh human approval bound to the proposed parameters, resolved path, and previous content hash. North snapshots the previous version, and the update goes live only if it passes its test. This journal entry grants no ownership or future autonomous rewrite authority. Source-edit policies do not opt into this exception; protected paths and root/symlink checks remain enforced.
 
@@ -1469,17 +1469,19 @@ Full CRUD, in three interchangeable surfaces:
 
 | | conversation | CLI | API |
 |---|---|---|---|
-| create | `schedule_task` | `north cron add <flow> --hour 7` | `POST /orchestrator/cron` |
-| read | `list_schedules` | `north cron` | `GET /orchestrator/cron` |
-| update | `update_schedule` | `north cron set <name> --hour 8` | `PATCH /orchestrator/cron/{name}` |
-| delete | `cancel_schedule` | `north cron rm <name>` | `DELETE /orchestrator/cron/{name}` |
+| create | `create_flow` action `schedule` | `north cron add <flow> --hour 7` | `POST /orchestrator/cron` |
+| read | `create_flow` action `list` / `read` | `north cron` | `GET /orchestrator/cron` |
+| update | `create_flow` action `reschedule` | `north cron set <name> --hour 8` | `PATCH /orchestrator/cron/{name}` |
+| delete | `create_flow` action `unschedule` | `north cron rm <name>` | `DELETE /orchestrator/cron/{name}` |
 
-Every schedule runs a flow, so a request is a flow first and a timer second: "Remind me every
-Monday at 9am to review my goals" becomes a one-step flow of instructions, tested and activated,
-which `schedule_task` then triggers with `flow`, `hour`, `minute` and `days`. The Flows page shows
-each flow's schedule, next run and run history, and manages them; it calls the same tools. "what have I got scheduled?" and "move it to 8" reach the read and
-update tools. All four verbs live in the global catalog, so any agent can retrieve the
-complete scheduling lifecycle when the task calls for it.
+A schedule is a property of a flow, so every schedule runs one, and the flow tool owns them
+(`tools/universal/flow_schedules.py`, shared by the chat and the Flows page). Work to do at a
+time is a flow first and a timer second: a check or a briefing becomes a flow, tested and
+activated, which `create_flow` action `schedule` then triggers with `hour`, `minute` and
+`days`. A reminder is a schedule of the built-in `reminder` flow: the schedule's `message` is
+the flow's input, and the flow's one step (`deliver_reminder`) delivers it as it is, with no
+model and no test. The Flows page shows each flow's schedules, next run and run history, and
+manages them. "what have I got scheduled?" lists the flows with their schedules.
 
 Reads return the built-in schedules too, marked `source: "builtin"`, so "what is scheduled?"
 is answered completely; update and delete refuse them with a 409 (or a tool error naming the
@@ -1494,7 +1496,7 @@ and displayed in local time (`utils/time.py`, CODING_STYLE 5.2.1).
 
 A job enqueued with a future `scheduled_at` will sit as `pending` until the job processor clock catches up. Created two ways:
 1. Natural language: "remind me tomorrow at 5pm to call the doctor"
-   → agent calls `schedule_task` tool with `run_at` param (ISO 8601 UTC)
+   → agent calls `create_flow` action `schedule` with `message` and `run_at` (local time)
 2. API: `POST /orchestrator/jobs` with `scheduled_at` field
 
 ### 11.5 Event-Driven Jobs
@@ -1511,7 +1513,7 @@ curl -X POST http://localhost:8000/orchestrator/webhooks/gmail \
   -d '{"prompt": "Recruiter from Stripe replied to your application", "context": "sender: recruiter@stripe.com"}'
 ```
 
-**Internal threshold events** - agents can schedule immediate threshold-triggered jobs via the `schedule_task` tool with `run_at: now`.  Infrastructure examples:
+**Internal threshold events** - agents can schedule immediate threshold-triggered jobs via `create_flow` action `schedule` with `run_at: now`.  Infrastructure examples:
 
 ```
 expense logged above monthly threshold -> finance agent budget check
@@ -1611,7 +1613,7 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
    Ledger write (async): source=system, action="routed", agents=["job","university"]
 
 5. Job agent spins up (reasoning pool, high priority):
-   Selects relevant tools from the global catalog: web_search [0.9], bash [0.7], schedule_task [0.6]
+   Selects relevant tools from the global catalog: web_search [0.9], bash [0.7], create_flow [0.6]
    Loads those tool definitions into context (wire order is stable by name).
    Reads user.md: LinkedIn internship, distributed systems team, June 2nd start.
    Reads judgement_rules.md: prefers mornings for deep work.

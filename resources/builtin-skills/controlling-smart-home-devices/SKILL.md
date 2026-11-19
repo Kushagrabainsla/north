@@ -8,10 +8,7 @@ execution:
   tools:
     - kasa
     - screen_brightness
-    - schedule_task
-    - list_schedules
-    - update_schedule
-    - cancel_schedule
+    - create_flow
     - web_search
     - fetch_url
     - bash
@@ -44,7 +41,7 @@ execution:
 
 - `kasa` - TP-Link Kasa devices on the local network: plugs, switches, bulbs, light strips.
 - `screen_brightness` - the brightness of this computer's screens, 0-100: the laptop's own and external monitors. Not for lamps or bulbs.
-- `schedule_task`, `list_schedules`, `update_schedule`, `cancel_schedule` - automations ("turn off all lights at 11pm"): make it a flow first (`create_flow`), test it, then schedule it, in the user's local time.
+- `create_flow` (`schedule`, `list`, `reschedule`, `unschedule`) - automations ("turn off all lights at 11pm"): make it a flow first (`create_flow`), test it, then schedule it, in the user's local time.
 - `web_search`, `fetch_url`, `bash`, `create_tool` - for a platform north has no tool for yet (below).
 
 Lights, plugs and switches of another brand that north has a tool for (one added on the Devices page) are changed with that tool: `action='list'` for the devices and their ids, then `action='set'` with `ids` and any of `on`, `brightness`, `hue` + `saturation`, `kelvin`, or a `scene`.

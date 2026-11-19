@@ -15,6 +15,7 @@ from agents.constants import NORTH_AGENT
 from flows.exceptions import FlowNotFoundError
 from flows.validation import schedulable_flow_error
 from jobs.cron_store import UNSET
+from jobs.models import REMINDER_FLOW
 from jobs.scheduler import (
     V1_CRON_ENTRIES,
     CronEntry,
@@ -88,7 +89,7 @@ class CronEntryCreate(BaseModel):
     minute: int = 0
     interval_minutes: int | None = None
     # Accepts day numbers, day names, or "weekdays" / "weekends" / "daily",
-    # matching what the schedule_task tool takes - one vocabulary, two doors.
+    # matching what create_flow's schedule action takes - one vocabulary, two doors.
     days: Any = None
     enabled: bool = True
 
@@ -175,6 +176,9 @@ def _schedulable_flow(name: str):
     tested, still executable - so a schedule made here obeys the rules of one
     made in chat or on the Flows page.
     """
+    if name == REMINDER_FLOW:
+        # Its one step delivers the schedule's message, and this route takes none.
+        raise HTTPException(status_code=422, detail="A reminder needs its message; add it from the chat.")
     services = current_services()
     try:
         flow = services.require("flow_registry").get(name)
