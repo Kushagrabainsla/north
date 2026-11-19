@@ -1,11 +1,11 @@
-import { useState } from "react";
-import { api, post } from "../api";
+import { useEffect, useState } from "react";
+import { api, del, post } from "../api";
 import { HealthIndicator, PageHeader, Panel, unpricedNote, YoloBadge } from "../components";
 import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
 import { Button, EntityTable, ListRow, Notice, ResourceView, Stat, StatGrid, Status } from "../kit";
 
-type LastUpdate = { state: "running" | "updated" | "failed" | "cancelled"; detail: string; at: string };
+type LastUpdate = { state: "waiting" | "running" | "updated" | "failed" | "cancelled"; detail: string; at: string };
 export type UpdateStatus = { version: string; commit: string | null; last: LastUpdate | null };
 
 // How the last update went, in a few words. The update restarts north, so this is
@@ -13,6 +13,7 @@ export type UpdateStatus = { version: string; commit: string | null; last: LastU
 export function lastUpdateText(last: LastUpdate | null): string {
   if (!last) return "never updated from here";
   return {
+    waiting: `waiting for north to be idle, since ${last.at}`,
     running: `updating since ${last.at}`,
     updated: `updated ${last.at}`,
     failed: `failed ${last.at}`,
@@ -23,29 +24,19 @@ export function lastUpdateText(last: LastUpdate | null): string {
 // An install can take a few minutes on a cold cache; past this, something is wrong.
 const UPDATE_WAIT_MS = 10 * 60_000;
 const UPDATE_POLL_MS = 3000;
+// While an update waits for north to be idle, the reason it still waits is read this often.
+const STATUS_POLL_MS = 10_000;
 
 function UpdatePanel() {
-  const status = useResource<UpdateStatus>("/web/api/update");
+  const status = useResource<UpdateStatus>("/web/api/update", STATUS_POLL_MS);
   const { confirm } = useDialog();
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState("");
   const last = status.data?.last ?? null;
 
-  const update = async () => {
-    const yes = await confirm(
-      "North installs the latest version from GitHub and restarts. Anything running now is interrupted. This page reloads by itself when north is back, usually within a few minutes.",
-      { title: "Update north?", confirmLabel: "Update and restart" },
-    );
-    if (!yes) return;
-    setError("");
-    try {
-      await post("/web/api/update", {});
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return;
-    }
+  // North goes away while it installs, so a failed request here means "not back yet".
+  const waitForReturn = async () => {
     setWaiting(true);
-    // North goes away while it installs, so a failed request here means "not back yet".
     const deadline = Date.now() + UPDATE_WAIT_MS;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, UPDATE_POLL_MS));
@@ -63,14 +54,63 @@ function UpdatePanel() {
     );
   };
 
+  // An update that waited for north to be idle starts on its own: follow it like one started here.
+  useEffect(() => {
+    if (last?.state === "running" && !waiting) void waitForReturn();
+  }, [last?.state]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const request = async (when: "now" | "idle") => {
+    setError("");
+    try {
+      await post("/web/api/update", { when });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+    return true;
+  };
+
+  const updateNow = async () => {
+    const yes = await confirm(
+      "North installs the latest version from GitHub and restarts now. Anything running now is interrupted. This page reloads by itself when north is back, usually within a few minutes.",
+      { title: "Update north now?", confirmLabel: "Update and restart" },
+    );
+    if (yes && (await request("now"))) await waitForReturn();
+  };
+
+  const updateWhenIdle = async () => {
+    if (await request("idle")) await status.reload();
+  };
+
+  const cancel = async () => {
+    setError("");
+    try {
+      await del("/web/api/update");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    await status.reload();
+  };
+
+  const busy = waiting || last?.state === "running";
+  const queued = last?.state === "waiting";
   return (
     <Panel
       title="Version"
       label="Updates"
       actions={
-        <Button variant="primary" busy={waiting || last?.state === "running"} busyLabel="Updating…" onClick={update}>
-          Update north
-        </Button>
+        queued ? (
+          <Button onClick={() => void cancel()}>Cancel update</Button>
+        ) : (
+          <>
+            <Button disabled={busy} onClick={() => void updateNow()}>
+              Update now
+            </Button>
+            <Button variant="primary" busy={busy} busyLabel="Updating…" onClick={() => void updateWhenIdle()}>
+              Update when idle
+            </Button>
+          </>
+        )
       }
     >
       <ListRow
@@ -78,6 +118,12 @@ function UpdatePanel() {
         description={`${status.data?.version || "–"}${status.data?.commit ? ` · ${status.data.commit}` : ""}`}
       />
       <ListRow title="Last update" description={lastUpdateText(last)} />
+      {queued && (
+        <Notice>
+          {last?.detail || "Waiting for north to be idle for 10 minutes."} North updates when no task, flow or
+          scheduled job has run for 10 minutes and none is due in the next 10, so nothing is cut off.
+        </Notice>
+      )}
       {waiting && (
         <Notice>
           Updating. North stops, installs the new version and starts again. This page reloads when it is back.

@@ -13,6 +13,9 @@ describe("how the last update went", () => {
     expect(lastUpdateText({ state: "failed", detail: "Install failed", at })).toBe("failed Nov 9, 8:17 PM");
     expect(lastUpdateText({ state: "running", detail: "", at })).toBe("updating since Nov 9, 8:17 PM");
     expect(lastUpdateText({ state: "cancelled", detail: "", at })).toBe("cancelled Nov 9, 8:17 PM");
+    expect(lastUpdateText({ state: "waiting", detail: "", at })).toBe(
+      "waiting for north to be idle, since Nov 9, 8:17 PM",
+    );
   });
 });
 

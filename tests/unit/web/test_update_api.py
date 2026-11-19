@@ -93,3 +93,29 @@ async def test_the_update_runs_from_norths_code_not_its_home(home, monkeypatch) 
 
 class _Stub:
     pid = os.getpid()
+
+
+async def test_update_when_idle_waits_and_starts_nothing(home) -> None:
+    """Issue #84: the update waits for north to be idle; orchestrator.idle_update starts it."""
+    north_home, started = home
+
+    assert await updates.start_update(updates.UpdateRequest(when="idle")) == {"state": "waiting"}
+
+    assert started == []
+    assert last_update(north_home)["state"] == "waiting"
+    # "Update now" still works while one waits, and replaces it.
+    assert await updates.start_update(updates.UpdateRequest(when="now")) == {"state": "running"}
+    assert len(started) == 1
+
+
+async def test_a_waiting_update_can_be_cancelled_and_nothing_else_can(home) -> None:
+    north_home, started = home
+    with pytest.raises(HTTPException) as nothing:
+        await updates.cancel_waiting_update()
+    assert nothing.value.status_code == 409
+
+    await updates.start_update(updates.UpdateRequest(when="idle"))
+    assert await updates.cancel_waiting_update() == {"state": "cancelled"}
+
+    assert last_update(north_home)["state"] == "cancelled"
+    assert started == []

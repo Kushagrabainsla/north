@@ -20,7 +20,10 @@ RECORD_NAME = "update.json"
 # What an update the dashboard started printed. A terminal update prints to the terminal.
 LOG_NAME = "update.log"
 
-State = Literal["running", "updated", "failed", "cancelled"]
+# "waiting": an update asked for when north is idle, not started yet (orchestrator.idle_update).
+State = Literal["waiting", "running", "updated", "failed", "cancelled"]
+STATES = frozenset({"waiting", "running", "updated", "failed", "cancelled"})
+WAITING = "Waiting for north to be idle for 10 minutes."
 
 
 def record_update(home: Path, state: State, detail: str = "", *, pid: int | None = None) -> None:
@@ -41,7 +44,7 @@ def last_update(home: Path) -> dict[str, Any] | None:
     record: dict[str, Any] | None = None
     with contextlib.suppress(OSError, ValueError):
         record = json.loads((home / RECORD_NAME).read_text(encoding="utf-8"))
-    if not isinstance(record, dict) or record.get("state") not in {"running", "updated", "failed", "cancelled"}:
+    if not isinstance(record, dict) or record.get("state") not in STATES:
         return None
     if record["state"] == "running" and not _alive(record.get("pid")):
         record = {**record, "state": "failed", "detail": "The update stopped before it finished."}

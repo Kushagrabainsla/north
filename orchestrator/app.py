@@ -54,7 +54,7 @@ from gateways.telegram_api import bot_username as telegram_bot_username
 from gateways.telegram_outbox import TelegramOutbox
 from jobs.exceptions import JobCancelled, JobNeedsAttention, JobNeverStarted
 from jobs.models import Job, JobStatus, late_note
-from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
+from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, merge_entries, next_firing, provision_default_schedules
 from jobs.seen import SeenStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from mcp.manager import McpManager
@@ -81,6 +81,7 @@ from orchestrator.coding_workspaces import GitWorkspaces
 from orchestrator.constants import WATCHDOG_POLL_INTERVAL_SECONDS
 from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler
+from orchestrator.idle_update import IdleUpdate
 from orchestrator.models import TaskRequest
 from orchestrator.nightly_check import nightly_check, registered_checkout
 from orchestrator.north_star import NorthStarChecker
@@ -124,12 +125,13 @@ from tools.universal.use_skill import UseSkillTool
 from utils.logging import LOG_TO_HOME_ENV, configure_structured_logging
 from utils.runtime_resources import builtin_skills_dir, web_dist_dir
 from utils.tasks import drain
-from utils.time import localnow, utcnow
+from utils.time import format_local, localnow, utcnow
 from utils.version import NORTH_VERSION
 from web.api import configure as configure_web
 from web.api import router as web_api_router
 from web.api import session_router as web_session_router
 from web.conversations import ConversationStore
+from web.updates import begin_update
 
 logger = logging.getLogger(__name__)
 
@@ -736,6 +738,46 @@ async def _watch_scheduled_task(
     raise JobNeedsAttention(f"scheduled task {task_id} is still in progress after {timeout_seconds:.0f}s")
 
 
+# A task in these states is working, or about to; a paused one is safe across a restart.
+_WORKING = frozenset({"pending", "queued", "retrying"})
+
+
+def _idle_update(deps, orchestrator: Orchestrator, flow_store: FlowRunStore | None) -> IdleUpdate:
+    """The watcher that starts an "update when idle" once nothing runs or is due (issue #84)."""
+
+    async def busy() -> str:
+        working = [task for task in await orchestrator.list_active_tasks() if task.status in _WORKING]
+        if working:
+            return f"{len(working)} task(s) running"
+        if flow_store is not None:
+            runs = await asyncio.to_thread(flow_store.list_runs, None, 200)
+            if running := next((run for run in runs if run.status == "running"), None):
+                return f"the {running.flow_name} flow is running"
+        if await deps.job_processor.list_jobs(status=JobStatus.RUNNING, limit=1):
+            return "a scheduled job is running"
+        return ""
+
+    async def due_soon(within: float) -> str:
+        now = utcnow()
+        horizon = now + datetime.timedelta(seconds=within)
+        stored = await deps.cron_store.list() if deps.cron_store is not None else []
+        for entry in merge_entries(V1_CRON_ENTRIES, stored):
+            if entry.enabled and (at := next_firing(entry, now)) <= horizon:
+                return f"the {entry.title} schedule runs at {format_local(at)}"
+        for job in await deps.job_processor.list_jobs(status=JobStatus.PENDING, limit=200):
+            if job.scheduled_at is not None and job.scheduled_at <= horizon:
+                return f"'{job.task[:60]}' is due at {format_local(job.scheduled_at)}"
+        return ""
+
+    return IdleUpdate(
+        settings.north_home,
+        busy=busy,
+        due_soon=due_soon,
+        last_started=lambda: orchestrator.last_task_started,
+        start=lambda: begin_update(settings.north_home),
+    )
+
+
 def _launch_background_tasks(
     deps,
     orchestrator: Orchestrator,
@@ -919,6 +961,8 @@ def _launch_background_tasks(
                 max_age_seconds=settings.stuck_task_max_age_seconds,
             ),
         ),
+        # "Update when idle" (issue #84): a watcher, every 30 s, so it stays a loop.
+        loops.start("idle_update", _idle_update(deps, orchestrator, flow_store).run),
     ]
 
     # Telegram gateway: it waits until a bot is set up, so the dashboard can add one live

@@ -119,6 +119,9 @@ class Orchestrator:
         self._inbox = task_inbox or TaskInbox()
         # The request each task in flight was started with, to answer a message that arrives after north did.
         self._requests: dict[str, TaskRequest] = {}
+        # When the last task began (time.monotonic), so an update waiting for north to be idle
+        # sees a task that started and finished between two of its looks.
+        self.last_task_started: float | None = None
         # Everything that reports on a task writes through one journal: durable
         # ledger entry plus the live event, never one without the other.
         self._journal = TaskJournal(ledger=ledger, stream_manager=stream_manager)
@@ -817,6 +820,7 @@ class Orchestrator:
         # pipeline that starts by *reading* found nothing and stopped the task.
         await asyncio.to_thread(ensure_handoff_dir, task_id)
         task_start = time.monotonic()
+        self.last_task_started = task_start
         self._requests[task_id] = request
         await self._open_inbox(task_id)
         # Running again after a pause: its stream was closed, and what it streamed before is replaced.
