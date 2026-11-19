@@ -14,6 +14,7 @@ from jobs.models import Job, JobStatus
 from jobs.scheduler import (
     V1_CRON_ENTRIES,
     CronEntry,
+    apply_shipped_defaults,
     next_firing_epoch,
 )
 from utils.time import format_local
@@ -58,8 +59,9 @@ def entry_view(row: dict[str, Any], source: str | None = None) -> dict[str, Any]
     a schedule of the user's own, and says so - otherwise editing the daily
     briefing would report it as something the user had created.
     """
+    # An edit of a built-in runs the shipped flow (see `merge_entries`), so it is shown as that.
     return _view(
-        CronEntry.from_row(row),
+        apply_shipped_defaults(CronEntry.from_row(row)),
         source or ("builtin" if row["name"] in BUILTIN_NAMES else "user"),
     )
 

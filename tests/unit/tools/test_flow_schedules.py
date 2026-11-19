@@ -496,6 +496,10 @@ async def test_an_edited_builtin_is_listed_once(tmp_path, queue, store) -> None:
 
     names = [view.get("name") for views in grouped.values() for view in views]
     assert names.count("task_context_cleanup") == 1
+    # A row edited before built-ins ran flows stored none; it still runs, and shows under, the shipped flow.
+    await store.update("task_context_cleanup", flow="")
+    grouped = await FlowSchedules(queue, store).by_flow()
+    assert [view["hour"] for view in grouped["nightly-cleanup"] if view["name"] == "task_context_cleanup"] == [7]
 
 
 async def test_changing_something_that_does_not_exist_says_so(tool) -> None:
