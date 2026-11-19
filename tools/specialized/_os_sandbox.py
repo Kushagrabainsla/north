@@ -30,6 +30,7 @@ class OsSandbox(Protocol):
         also_writable: tuple[str, ...] = (),
         scratch: str | None = None,
         repository: RepositoryLimit | None = None,
+        contained: bool = False,
     ) -> list[str]:
         """The argv that runs *command* read-only, or writing only inside *workspace* and *also_writable*.
 
@@ -37,7 +38,8 @@ class OsSandbox(Protocol):
         *proxy_port* - the egress proxy on loopback, which the command is pointed at.
         Credential folders are neither readable nor writable, whatever the folders.
         *scratch*, a throwaway folder, is writable even read-only and is the command's temp folder.
-        *repository* keeps a git repository's own files unwritable, whatever else may be written."""
+        *repository* keeps a git repository's own files unwritable, whatever else may be written.
+        *contained* (with *writable*): writes only there and in temp, no caches, never the network."""
         ...
 
     @staticmethod

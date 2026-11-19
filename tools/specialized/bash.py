@@ -21,7 +21,15 @@ from typing import Any
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from coding_agents.constants import VERIFY_TIMEOUT_SECONDS
-from tools._path import deletes_a_root, edited_paths, git_repository, is_sensitive_path, named_paths, simple_commands
+from tools._path import (
+    deletes_a_root,
+    edited_paths,
+    git_repository,
+    is_sensitive_path,
+    named_paths,
+    personal_dir,
+    simple_commands,
+)
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import _os_sandbox
@@ -33,6 +41,7 @@ from tools.specialized._sandbox import (
     docker_available,
 )
 from utils.edit_scope import narrow_workspace
+from utils.handoff import task_of_handoff_dir
 from utils.processes import stop_process_group
 
 _TIMEOUT = 30
@@ -74,6 +83,17 @@ def _boundary(input: ToolInput) -> str | None:
     granted there is no boundary, and nothing but temp and caches is writable.
     """
     return narrow_workspace(input.granted_workspace or "", str(input.params.get("workspace") or "")) or None
+
+
+def _task_notes(boundary: str | None) -> str | None:
+    """The notes folder of the task whose own folder *boundary* is, or None when it is not a task's folder.
+
+    A task has two folders of its own: `tasks/<id>` and `notes/<id>`, where its prompt tells
+    it to keep notes. A command in the contained box may write to both, and to no other
+    task's: it may read another task's folders, not change them.
+    """
+    task_id = task_of_handoff_dir(boundary) if boundary else None
+    return f"{personal_dir('notes')}/{task_id}" if task_id else None
 
 
 def _cwd(input: ToolInput, boundary: str | None) -> str | None:
@@ -220,7 +240,8 @@ class BashTool(Tool):
         " `cat -n file` (with line numbers), `sed -n '120,180p' file` (a range of lines),"
         " `ls -la dir`, `find dir -name '*.md'`, `rg -n 'pattern' dir` or `grep -rn 'pattern' dir`,"
         " and `north text file.pdf` for the text of a PDF."
-        " Commands that only read run at once; anything that writes or uses the network needs approval."
+        " Commands that only read run at once, and so do commands that write only to this task's own folders"
+        " (its task folder and its notes folder) and temp, with no network; anything else needs approval."
         " To create or replace a file, use write_file: its card shows the change."
         " Default timeout 30 s, pass timeout= (max 300) for longer commands."
         " A long output is kept whole: you see part of it and can read the rest with read_tool_output."
@@ -273,6 +294,7 @@ class BashTool(Tool):
         boundary: str | None = None,
         outside: tuple[str, ...] = (),
         cwd: str | None = None,
+        ran_contained: bool = False,
     ) -> Action:
         """What this command is, as facts. What that *means* is the policy's call."""
         return Action(
@@ -290,6 +312,7 @@ class BashTool(Tool):
             edits_repository=_edited_repository(command, cwd or boundary),
             read_only=read_only,
             mutating=not read_only,
+            ran_contained=ran_contained,
             leaves_sandbox=bool(outside),
             obviously_destructive=deletes_a_root(command)
             or any(hint in command for hint in _OBVIOUS_DESTRUCTIVE_HINTS),
@@ -307,25 +330,42 @@ class BashTool(Tool):
             return None
         boundary = _boundary(input)
         cwd = _cwd(input, boundary)
-        proved = await self._prove_read_only(command, boundary, cwd, _timeout(input))
+        proved, wrote = await self._prove_read_only(command, boundary, cwd, _timeout(input))
+        contained, ran_once = None, False
+        if proved is None and wrote and not outside and not _edited_repository(command, cwd or boundary):
+            contained, ran_once = await self._run_contained(command, boundary, cwd, _timeout(input))
         also = "\n\nAlso writes to:\n" + "\n".join(f"- `{folder}`" for folder in outside) if outside else ""
+        again = (
+            "\n\nNorth already ran it once, writing only to this task's own folders and with no network, "
+            "and it did not finish there. Approving runs it again in full."
+            if ran_once and contained is None
+            else ""
+        )
         return Request(
-            action=self._action(command, read_only=proved is not None, boundary=boundary, outside=outside, cwd=cwd),
+            action=self._action(
+                command,
+                read_only=proved is not None,
+                boundary=boundary,
+                outside=outside,
+                cwd=cwd,
+                ran_contained=contained is not None,
+            ),
             title="Shell Command - Approval Required",
-            message=f"```\n{command}\n```{also}",
+            message=f"```\n{command}\n```{also}{again}",
             declined="Command cancelled by user.",
-            prepared=proved,
+            prepared=proved or contained,
         )
 
     async def _prove_read_only(
         self, command: str, boundary: str | None, cwd: str | None, timeout: int
-    ) -> ToolOutput | None:
+    ) -> tuple[ToolOutput | None, bool]:
         """Run *command* where the kernel refuses every write and the network.
 
         Returns its output when it finished successfully without being refused
         anything, which proves it changed nothing - the output is then what `run`
         returns, so the command runs once. Returns None when it was refused, failed
-        or took too long: it goes to approval, and runs again if approved.
+        or took too long: it goes to approval, and runs again if approved. The second
+        value says whether the sandbox refused it something - it tried to write.
 
         A command that merely *failed* proves nothing. The sandbox's refusal does
         not always say so: pytest, refused its scratch file, reports "No usable
@@ -334,16 +374,38 @@ class BashTool(Tool):
         ever running where it could write.
         """
         if not self._os_sandbox:
-            return None
+            return None, False
         # A throwaway temp folder: programs need one to start, and what lands in it is deleted here.
         with tempfile.TemporaryDirectory(prefix="north-probe-") as scratch:
             argv = self._os_sandbox.wrap(command, boundary, writable=False, scratch=scratch)
             output = await self._spawn(argv, cwd, timeout, command=command)
-        if output.data is None or output.data.get("returncode") != 0:
-            return None
-        if self._os_sandbox.denied(f"{output.data.get('stderr', '')}\n{output.data.get('stdout', '')}"):
-            return None
-        return output
+        refused = output.data is not None and self._os_sandbox.denied(_all_output(output))
+        if output.data is None or output.data.get("returncode") != 0 or refused:
+            return None, refused
+        return output, False
+
+    async def _run_contained(
+        self, command: str, boundary: str | None, cwd: str | None, timeout: int
+    ) -> tuple[ToolOutput | None, bool]:
+        """Run *command* where it may write only to its task's own folders and temp, with no network.
+
+        For a command the read-only run refused a write: north saving its own notes for this task,
+        a script it writes and runs, an image it crops. On a clean finish, nothing outside those
+        folders changed, so it needs no approval, as a write_file there needs none; its output is
+        what `run` returns, so it runs once. The first value is that output, or None. The second
+        says whether it ran at all: a run that was refused or failed goes to approval, and the card
+        says it already ran once in the box.
+
+        Only when the command runs in a task's own folder: one in a folder of yours asks, as before.
+        """
+        notes = _task_notes(boundary)
+        if not self._os_sandbox or notes is None:
+            return None, False
+        argv = self._os_sandbox.wrap(command, boundary, writable=True, also_writable=(notes,), contained=True)
+        output = await self._spawn(argv, cwd, timeout, command=command)
+        if output.data is None or output.data.get("returncode") != 0 or self._os_sandbox.denied(_all_output(output)):
+            return None, True
+        return output, True
 
     async def _resolve_execution(
         self,

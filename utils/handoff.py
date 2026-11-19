@@ -49,6 +49,18 @@ def handoff_dir_for(task_id: str) -> str:
     return f"{_handoff_root()}/{task_id}"
 
 
+def task_of_handoff_dir(path: str) -> str | None:
+    """The task id whose handoff directory *path* is, or None when it is not one.
+
+    Only the directory itself, `<NORTH_HOME>/tasks/<task_id>`: a folder inside it, or
+    the handoff root, is not a task's own folder.
+    """
+    resolved = Path(path).resolve()
+    if resolved.parent != Path(_handoff_root()).resolve() or resolved.name in {"", ".", ".."}:
+        return None
+    return resolved.name
+
+
 def ensure_handoff_dir(task_id: str) -> str:
     """Create this task's handoff directory and return its path.
 

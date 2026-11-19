@@ -37,6 +37,7 @@ from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal.browser_accounts import BrowserAccounts, Pick, site_of
 from tools.universal.browser_describe import describe_browser_call
+from tools.universal.browser_query import query_script
 from tools.universal.browser_taskwindow import TaskWindowBrowser, page_chars
 from utils.net import HostNotFoundError, UnsafeUrlError, validate_public_url
 from utils.processes import stop_process_group
@@ -327,6 +328,41 @@ def _eval_args(params: dict[str, Any]) -> list[str]:
     return ["eval", js]
 
 
+def _query_args(params: dict[str, Any]) -> list[str]:
+    """`query` is north's own fixed page read (browser_query), run as a script with the call's values as data."""
+    return ["eval", query_script(params)]
+
+
+def _query_output(output: ToolOutput) -> ToolOutput:
+    """The query's elements as data: the script hands them back as one JSON string."""
+    if not output.success or output.data is None:
+        return output
+    raw = output.data.pop("result", None)
+    try:
+        found = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        found = None
+    if not isinstance(found, dict):
+        return ToolOutput(success=False, data=output.data, error="The page did not return the query's result.")
+    if found.get("error"):
+        return ToolOutput(success=False, data=output.data, error=str(found["error"]))
+    output.data.update(found, action="query")
+    return output
+
+
+def _format_query(data: dict[str, Any]) -> str:
+    """One line per element: its text, then the attributes asked for."""
+    items = data.get("items") or []
+    lines = [f"{data.get('count', len(items))} element(s) match; {len(items)} shown."]
+    for number, item in enumerate(items, start=1):
+        extra = "; ".join(f"{key}={value}" for key, value in item.items() if key not in {"tag", "text", "visible"})
+        hidden = "" if item.get("visible", True) else " (hidden)"
+        lines.append(
+            f"{number}. <{item.get('tag', '')}>{hidden} {item.get('text', '')}" + (f" [{extra}]" if extra else "")
+        )
+    return _on_page(data, "\n".join(lines))
+
+
 def _assert_args(params: dict[str, Any]) -> list[str]:
     args = ["assert", params.get("assert_type", "text"), *_element_args(params)]
     condition = params.get("assert_condition", "contains")
@@ -429,6 +465,7 @@ _ACTION_ARGUMENT_BUILDERS: dict[str, Callable[[dict[str, Any]], list[str]]] = {
     "screenshot": _screenshot_args,
     "pdf": _pdf_args,
     "eval": _eval_args,
+    "query": _query_args,
     "assert": _assert_args,
     "wait": _wait_args,
     "close": _close_args,
@@ -718,11 +755,15 @@ class BrowserTool(Tool):
         "  - 'read': Reader-mode text of a page (url), or of up to 10 pages at once (urls), which load in "
         "parallel: when you need several pages, read them all in one call.\n"
         "  - 'inspect': Accessibility Tree (AXTree) with stable numeric UIDs (e.g. n12), or diff=True.\n"
+        "  - 'query': Read elements by CSS selector: their text and the attributes you name (e.g. "
+        "selector='main button', attributes=['aria-label'], contains='Connect', visible_only=true). It only "
+        "reads, so it needs no approval once the site may be read. Use it, not eval, to read a page.\n"
         "  - 'click', 'dblclick': Click element by UID (e.g. uid='n12'), selector, or coordinates.\n"
         "  - 'fill', 'type', 'press': Enter text into input fields or send key presses.\n"
         "  - 'select', 'check', 'uncheck': Manipulate dropdowns and checkboxes.\n"
         "  - 'screenshot', 'pdf': Capture viewport or full page to a file.\n"
-        "  - 'eval': Execute JavaScript in the page context. In existing profiles use top-level await; "
+        "  - 'eval': Execute JavaScript in the page context, for what no other action does. Each script is "
+        "checked before it runs, as it could change the page. In existing profiles use top-level await; "
         "a returned Promise is not awaited.\n"
         "  - 'upload': Existing profiles only. Attach the local file 'filename' to a file input (uid or selector).\n"
         "  - 'assert': Deterministically verify page text, values, element existence, or state.\n"
@@ -754,6 +795,7 @@ class BrowserTool(Tool):
                     "screenshot",
                     "pdf",
                     "eval",
+                    "query",
                     "assert",
                     "wait",
                     "close",
@@ -795,8 +837,19 @@ class BrowserTool(Tool):
             },
             "selector": {
                 "type": "string",
-                "description": "CSS selector fallback for click, fill, or assert.",
+                "description": "CSS selector: what query reads, or a fallback for click, fill, or assert.",
             },
+            "attributes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "For query: attributes to return for each element, e.g. ['href', 'aria-label'].",
+            },
+            "contains": {
+                "type": "string",
+                "description": "For query: keep only elements whose text or aria-label contains this (any case).",
+            },
+            "visible_only": {"type": "boolean", "description": "For query: keep only elements shown on the page."},
+            "chars": {"type": "integer", "description": "For query: characters of text per element (default 300)."},
             "value": {
                 "type": "string",
                 "description": "Text to fill/type, option to select, or expected value for assert.",
@@ -807,7 +860,7 @@ class BrowserTool(Tool):
             },
             "limit": {
                 "type": "integer",
-                "description": "Max items to return for extract (default: 25) or inspect (default: 100).",
+                "description": "Max items to return for extract (default: 25), query (20) or inspect (100).",
                 "default": 25,
             },
             "diff": {
@@ -1188,6 +1241,8 @@ class BrowserTool(Tool):
             return _on_page(data, f"### Accessibility Tree:\n```yaml\n{tree}\n```")
         if action == "assert":
             return _format_assertion(shown)
+        if action == "query" and "items" in data:
+            return _format_query(data)
         return json.dumps(shown)
 
     async def _read_each(self, input: ToolInput, urls: list[str]) -> ToolOutput:
@@ -1464,6 +1519,8 @@ class BrowserTool(Tool):
             return ToolOutput(success=False, error=str(exc))
 
         output = _tool_output_for(action, result)
+        if action == "query":
+            output = _query_output(output)
         if navigation is not None:
             output.data["navigation"] = navigation.data
         if profile is not None:

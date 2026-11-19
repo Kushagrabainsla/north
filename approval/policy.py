@@ -120,6 +120,10 @@ class Action:
     # A file edit inside the throwaway copy a coding run was approved to work in. Nothing
     # real changes until a person lands the result, so the start card already covered it.
     isolated: bool = False
+    # A shell command that already ran to a clean end in the contained box: writes only to its
+    # task's own folders (the task folder and its notes) and temp, no caches, no network. What
+    # it changed is north's own notes for this task, as a write_file there would be.
+    ran_contained: bool = False
     # What a person would read to judge the action - a card's filled-in fields.
     # Shown to the memory decider; not part of the action's identity.
     details: str = ""
@@ -270,6 +274,10 @@ class ApprovalPolicy:
         #     unattended run that writes a handoff or a briefing, in every mode.
         if action.kind is ActionKind.FILE_EDIT and action.in_north_scratch:
             return Ruling(Verdict.ALLOW, "north's own scratch space", DecidedBy.NORTH)
+        #     The same for a command proved to write nowhere else: it ran to a clean end in a box
+        #     that let it write only to its task's folders and temp, with no network.
+        if action.kind is ActionKind.SHELL_COMMAND and action.ran_contained and not action.leaves_sandbox:
+            return Ruling(Verdict.ALLOW, "wrote only to its task's own folders, with no network", DecidedBy.NORTH)
 
         # 1c. An edit inside the isolated copy a coding run was approved to work in, in every mode.
         if action.kind is ActionKind.FILE_EDIT and action.isolated:

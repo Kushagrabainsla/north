@@ -229,6 +229,7 @@ class Seatbelt:
         also_writable: tuple[str, ...] = (),
         scratch: str | None = None,
         repository: RepositoryLimit | None = None,
+        contained: bool = False,
     ) -> list[str]:
         return wrap(
             command,
@@ -238,6 +239,7 @@ class Seatbelt:
             also_writable=also_writable,
             scratch=scratch,
             repository=repository,
+            contained=contained,
         )
 
     @staticmethod
@@ -247,6 +249,11 @@ class Seatbelt:
     @staticmethod
     def explain(output: str, workspace: str | None, *, also_writable: tuple[str, ...] = ()) -> str:
         return explain(output, workspace, also_writable=also_writable)
+
+
+def _north_own(folder: str) -> bool:
+    """Whether *folder* is one of north's own areas, judged by its real path: `/tmp` and `/var` are links."""
+    return is_north_scratch(Path(os.path.realpath(folder)))
 
 
 def _quote(path: str | Path) -> str:
@@ -300,6 +307,7 @@ def profile(
     also_writable: tuple[str, ...] = (),
     scratch: str | None = None,
     repository: RepositoryLimit | None = None,
+    contained: bool = False,
 ) -> str:
     """The Seatbelt profile for a command run in *workspace*.
 
@@ -309,12 +317,18 @@ def profile(
     workspace you approved this command writing to. *scratch* is a throwaway
     folder, writable even read-only: what lands there is deleted afterwards, so
     it changes nothing. *repository* closes a git repository to the command.
+
+    *contained* (with *writable*) is the box a command runs in before anyone is
+    asked: it writes only to *workspace*, *also_writable* and the temp folders -
+    not the shared caches, which a later command would trust - and never reaches
+    the network. What finishes there changed nothing outside those folders.
     """
     rules = ["(version 1)", "(allow default)", "(deny file-write*)"]
     allowed = [_quote(p) for p in _TEMP_DIRS]
     if writable:
         home = Path.home()
-        allowed += [_quote(home / name) for name in _CACHE_DIRS]
+        if not contained:
+            allowed += [_quote(home / name) for name in _CACHE_DIRS]
         allowed += [_quote(folder) for folder in (workspace, *also_writable) if folder]
     devices = " ".join(f"(literal {_quote(d)})" for d in _WRITABLE_DEVICES)
     rules.append(f'(allow file-write* {devices} (regex #"^/dev/ttys[0-9]+$"))')
@@ -339,21 +353,24 @@ def profile(
     # file policy: with no read tool left, the shell is how earlier notes are read back.
     readable = " ".join(f"(subpath {_quote(p)})" for p in north_readable_dirs())
     rules.append(f"(allow file-read* {readable})")
-    if workspace and is_north_scratch(Path(workspace)):
+    # North's home is closed above, and later rules win: a folder of north's own that this command may
+    # write - its task folder, or its notes folder in the contained box - is opened again here.
+    own = [folder for folder in (workspace, *(also_writable if writable else ())) if folder and _north_own(folder)]
+    for folder in own:
         operations = "file-read* file-write*" if writable else "file-read*"
-        rules.append(f"(allow {operations} (subpath {_quote(workspace)}))")
+        rules.append(f"(allow {operations} (subpath {_quote(folder)}))")
     # The folders between north's home and those opened above may be looked up, not listed.
     # `cd` in /bin/sh (bash in POSIX mode) checks every parent of the path, and with
     # ~/.north closed, `cd ~/.north/tasks/<id>` failed "Not a directory" while `ls` of the
     # same folder worked (issue #82, a small item).
-    opened = [*north_readable_dirs(), *([workspace] if workspace and is_north_scratch(Path(workspace)) else [])]
+    opened = [*north_readable_dirs(), *own]
     if parents := _parents_in_north_home(opened):
         rules.append("(allow file-read-metadata " + " ".join(f"(literal {_quote(p)})" for p in parents) + ")")
     # Whatever was opened above, north's databases and secret files stay closed.
     rules.append(f"(deny file-read* file-write* {_closed_files()})")
     if writable:
         rules.append("(deny file-write* " + " ".join(f'(regex #"{pattern}")' for pattern in _PROTECTED) + ")")
-    if not writable:
+    if not writable or contained:
         rules.append("(deny network*)")
     elif proxy_port is not None:
         # No unix sockets: the DNS resolver and the Docker socket are both one.
@@ -382,6 +399,7 @@ def wrap(
     also_writable: tuple[str, ...] = (),
     scratch: str | None = None,
     repository: RepositoryLimit | None = None,
+    contained: bool = False,
 ) -> list[str]:
     """The argv that runs *command* under the chosen profile."""
     argv = [
@@ -394,9 +412,10 @@ def wrap(
             also_writable=also_writable,
             scratch=scratch,
             repository=repository,
+            contained=contained,
         ),
     ]
-    env = _proxy_env(proxy_port) if writable and proxy_port is not None else []
+    env = _proxy_env(proxy_port) if writable and proxy_port is not None and not contained else []
     if scratch:
         env.append(f"TMPDIR={scratch}")
     if env:

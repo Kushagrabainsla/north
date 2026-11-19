@@ -98,6 +98,7 @@ async def test_opening_a_site_asks_once_then_reading_it_does_not(settings) -> No
 
     assert not await _asks(tool, store, action="inspect")
     assert not await _asks(tool, store, action="extract")
+    assert not await _asks(tool, store, action="query", selector="main button", attributes=["aria-label"])
     assert not await _asks(tool, store, action="goto", url="https://linkedin.com/jobs/")
     assert not await _asks(tool, store, action="read", url="https://www.linkedin.com/in/someone/")
 

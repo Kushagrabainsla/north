@@ -29,6 +29,7 @@ import httpx
 
 from tools.models import ToolOutput
 from tools.universal.browser_accounts import chrome_identity
+from tools.universal.browser_query import query_script
 from utils.desktop import activate, frontmost_app
 from utils.runtime_resources import resource_path
 from utils.spans import span
@@ -621,6 +622,12 @@ class TaskWindowBrowser:
             return {}
         if action == "upload":
             return await self._upload(profile, session, params)
+        if action == "query":
+            # North's own fixed read, so it is retried like the others and changes nothing.
+            found = await self._script(profile, session, query_script(params))
+            if not isinstance(found, dict) or found.get("error"):
+                raise BridgeInputError(str((found or {}).get("error") or "The page did not return the query's result."))
+            return found
         if action == "eval":
             js = str(params.get("js") or "").strip()
             if not js:
