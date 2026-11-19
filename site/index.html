@@ -155,6 +155,34 @@
       .actions { flex-direction: column; }
       .button { justify-content: center; }
     }
+
+    /* What's new: the latest changes, one line each */
+    .news { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .news a { display: block; text-decoration: none; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+    .news a:hover { border-color: var(--accent); }
+    .news time { color: var(--accent); font-size: 12px; font-weight: 600; letter-spacing: .1em; }
+    .news b { display: block; font-size: 14.5px; letter-spacing: -.03em; margin: 8px 0 6px; }
+    .news span { color: var(--muted); font-size: 13px; }
+    section.slim { padding: 48px 0; }
+
+    /* How it works: one task, five steps, and the loop back */
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; position: relative; }
+    .flow li { list-style: none; position: relative; padding: 0 18px 0 0; }
+    .flow li::after { content: ""; position: absolute; top: 15px; left: 34px; right: 0; height: 1px; background: var(--line-strong); }
+    .flow li:last-child::after { display: none; }
+    .flow .dot { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--surface); color: var(--accent); font-size: 12px; font-weight: 700; position: relative; z-index: 1; }
+    .flow li:last-child .dot { background: var(--accent); color: #10150d; border-color: var(--accent); }
+    .flow h3 { font-size: 15px; letter-spacing: -.03em; margin: 14px 0 6px; }
+    .flow p { color: var(--muted); font-size: 13px; margin: 0; }
+    ol.flow { padding: 0; margin: 0; }
+    .loop { margin-top: 26px; display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; border: 1px dashed var(--line-strong); border-radius: 10px; padding: 12px 16px; }
+    .loop b { color: var(--accent); }
+    @media (max-width: 860px) {
+      .news { grid-template-columns: repeat(2, 1fr); }
+      .flow { grid-template-columns: 1fr; gap: 22px; }
+      .flow li::after { display: none; }
+    }
+    @media (max-width: 560px) { .news { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -163,6 +191,7 @@
       <a class="wordmark" href="#top" aria-label="north, back to the top">north<span>.</span></a>
       <nav aria-label="Sections">
         <a href="#what">What it does</a>
+        <a href="#how">How it works</a>
         <a href="#control">You decide</a>
         <a href="#start">Get started</a>
         <a href="#commands">Commands</a>
@@ -194,17 +223,33 @@
       <div class="wrap">
         <p class="eyebrow">What it does</p>
         <h2>One assistant for your work, on your machine.</h2>
-        <p class="intro">Tell north what you want in plain words, from the dashboard, the terminal or Telegram. It plans the steps, picks the tools and models, and shows you what it is thinking as it goes, with every step one click away.</p>
+        <p class="intro">Tell north what you want in plain words, from the dashboard, the terminal or Telegram. It plans the steps, picks the tools, and shows you what it is thinking as it goes, with every step one click away.</p>
         <div class="grid">
-          <article class="card"><span class="n">01</span><h3>Works on your tasks</h3><p>Research, writing, files and the web, with your own browser profile when a site needs you signed in. You see what it is thinking as it works, and each step when you want it.</p></article>
+          <article class="card"><span class="n">01</span><h3>Works on your tasks</h3><p>Research, writing, files and the web. It picks the browser profile you are signed in with, and reads several pages at once. You see what it is thinking as it works, and each step when you want it.</p></article>
           <article class="card"><span class="n">02</span><h3>Asks before it changes anything</h3><p>Every change comes to you as a card that shows exactly what will happen: the command, the diff, the file. Approve it, reject it, or answer its question.</p></article>
-          <article class="card"><span class="n">03</span><h3>Learns how you decide</h3><p>It keeps what it learns about you as facts, and remembers your answers, so it can answer the next card the way you would.</p></article>
+          <article class="card"><span class="n">03</span><h3>Learns how you decide</h3><p>It keeps what it learns about you as facts. When you answer a card, it can make your answer a rule for all of north, and each morning it asks you to confirm what it decided for you.</p></article>
           <article class="card"><span class="n">04</span><h3>Codes in a copy of your repo</h3><p>Coding goes to Claude Code or Codex, in an isolated git copy. north runs your tests and offers you the change; nothing reaches your work until you say yes.</p></article>
-          <article class="card"><span class="n">05</span><h3>Runs on a schedule</h3><p>Flows run by themselves, in your time zone: a morning briefing, a nightly check, a reminder about the cards that are waiting for you.</p></article>
+          <article class="card"><span class="n">05</span><h3>Runs on a schedule</h3><p>Flows run by themselves, in your time zone: a morning briefing, a nightly check, a reminder. The dashboard tells you what north did while you were away.</p></article>
           <article class="card"><span class="n">06</span><h3>Writes its own tools</h3><p>Ask for something it cannot do yet and north writes a tool for it, tests it, and asks you before switching it on.</p></article>
           <article class="card"><span class="n">07</span><h3>Your home, too</h3><p>Kasa lights work out of the box; for any other brand, north writes the tool. Switch, dim and colour them, set scenes, or let them follow the music.</p></article>
-          <article class="card"><span class="n">08</span><h3>Many models, costs you can see</h3><p>Each step goes to the model that fits it, across OpenRouter, Groq, Gemini, Anthropic, Mistral and OpenAI Codex, and every run's cost is written down.</p></article>
+          <article class="card"><span class="n">08</span><h3>Many models, costs you can see</h3><p>Pick a model for each kind of work, or let north choose: OpenRouter, Groq, Gemini, Anthropic, Mistral, OpenCode Zen and OpenAI Codex. Every run's cost is written down.</p></article>
         </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="wrap">
+        <p class="eyebrow">How it works</p>
+        <h2>Each answer you give is one less question.</h2>
+        <p class="intro">This is how north earns autonomy: it asks first, and it learns from your answer.</p>
+        <ol class="flow">
+          <li><span class="dot">01</span><h3>You ask</h3><p>In plain words, from the dashboard, the terminal or Telegram.</p></li>
+          <li><span class="dot">02</span><h3>north plans</h3><p>It picks the tools, a skill or a flow, and the model.</p></li>
+          <li><span class="dot">03</span><h3>It asks first</h3><p>A card shows exactly what will change: the command, the file, the message.</p></li>
+          <li><span class="dot">04</span><h3>It acts</h3><p>In a closed box, with every step written to a log you can search.</p></li>
+          <li><span class="dot">05</span><h3>It learns</h3><p>Your answer can become a rule. Next time, it does not need to ask.</p></li>
+        </ol>
+        <div class="loop"><b>&#8634;</b><span>Steps 03 to 05 repeat. With each rule, north asks less, and you can move it from <code>ask</code> toward <code>autonomous</code>.</span></div>
       </div>
     </section>
 
@@ -216,7 +261,7 @@
         <div class="modes">
           <div class="mode"><b>ask</b><p>Read-only work runs; every change asks you.</p></div>
           <div class="mode"><b>safe</b><p>Read-only work, safe changes and your exact past answers run; everything else asks.</p></div>
-          <div class="mode"><b>autonomous</b><p>Decides for you from what north knows about you. Asks only when that cannot decide.</p></div>
+          <div class="mode"><b>autonomous</b><p>Decides for you from what north knows about you and the rules you made. Asks only when that cannot decide.</p></div>
           <div class="mode"><b>yolo</b><p>Never asks you: every approval is yes, until you set another mode.</p></div>
         </div>
         <div class="scale" aria-hidden="true"><span>you decide</span><span>north decides</span></div>
@@ -232,6 +277,7 @@
             <li><strong>Your data is yours.</strong> Everything north keeps lives in one folder on your computer, <code>~/.north</code>.</li>
             <li><strong>Only this computer can reach it.</strong> north listens on your own machine, never on your network.</li>
             <li><strong>Keys stay out of the AI.</strong> Your API keys and passwords are secrets its models know by name only.</li>
+            <li><strong>Commands run in a closed box.</strong> A shell command can save only in its task's own folders, and never reads your keychain.</li>
             <li><strong>Everything is on the record.</strong> Every action is written to an audit log you can read and search.</li>
             <li><strong>Open source.</strong> MIT licensed, so you can read every line of it.</li>
           </ul>
@@ -272,7 +318,7 @@
             <dt><code>north stop</code></dt><dd>Stop the server (<code>--all</code> stops every north process, <code>--docker</code>)</dd>
             <dt><code>north status</code></dt><dd>Server health, approval mode, models, providers, browser and agents</dd>
             <dt><code>north setup</code></dt><dd>Enter OpenRouter, Groq and Gemini keys and Telegram in the terminal</dd>
-            <dt><code>north update</code></dt><dd>Install the latest north from GitHub main and restart it (<code>--source local --path &lt;dir&gt;</code> for a checkout, <code>--no-restart</code>)</dd>
+            <dt><code>north update</code></dt><dd>Install the latest north from GitHub main and restart it (<code>--source local --path &lt;dir&gt;</code> for a checkout, <code>--no-restart</code>). The dashboard can also wait until north is idle.</dd>
             <dt><code>north reset</code></dt><dd>Wipe north&#x27;s data, keeping keys and logins (<code>--all</code> removes those too)</dd>
             </dl>
           </div>
