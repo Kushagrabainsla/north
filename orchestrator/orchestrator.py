@@ -357,6 +357,10 @@ class Orchestrator:
         """Call *callback* with a task's id when you cancel it, to end what the task started."""
         self._on_cancelled.append(callback)
 
+    def when_task_ends(self, callback: Callable[[str], object]) -> None:
+        """Call *callback* with a task's id once its ending row is written, however it ended."""
+        self._journal.when_ended(callback)
+
     async def cancel_task(self, task_id: str) -> bool:
         """Cancel a running task: stop its pipeline and write a terminal ledger entry.
 

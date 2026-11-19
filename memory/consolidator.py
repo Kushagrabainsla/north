@@ -102,6 +102,22 @@ class EpisodeConsolidator:
         async with self._lock:
             return await self._process_batch()
 
+    async def catch_up(self, max_batches: int = 50) -> int:
+        """Process batches until the watermark stops moving; return the episodes recorded.
+
+        Called when a task ends, so its note is written then, not at the next
+        hourly run. One batch holds only 200 rows, and a long task writes more,
+        so a single batch could stop short of the ending row that called it.
+        """
+        recorded = 0
+        async with self._lock:
+            for _ in range(max_batches):
+                before = self._load_watermark()
+                recorded += await self._process_batch()
+                if self._load_watermark() == before:
+                    break
+        return recorded
+
     async def _process_batch(self) -> int:
         since = self._load_watermark()
         # Query oldest-first from the watermark so the watermark advances without skipping backlog entries.

@@ -63,6 +63,7 @@ from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
 from memory.injection import ContextInjector
 from memory.profile import move_rule_and_goal_facts, rebuild_profile
+from memory.task_end_learning import TaskEndLearning
 from orchestrator.agent_runs import AgentRunStore
 from orchestrator.api import coding_ask_router, coding_gate_router, health_router, webhook_router
 from orchestrator.api import configure as configure_api
@@ -810,6 +811,8 @@ def _launch_background_tasks(
         inference_router=deps.cost_tracker,
         north_home=settings.north_home,
     )
+    # A task's note, and skills from the notes, when the task ends; the hourly flows catch what this misses.
+    orchestrator.when_task_ends(TaskEndLearning(episode_consolidator, skill_distiller).task_ended)
 
     async def _fact_upkeep(_inputs: dict[str, Any]) -> str:
         """The fact-upkeep flow's step: facts whose last day passed stop being recalled; the profile follows."""

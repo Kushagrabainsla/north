@@ -13,10 +13,11 @@ ledger *and* a stream manager - one direct dependency instead of two
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from ledger.base import LedgerWriter
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from ledger.models import TASK_ENDINGS, LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.stream import EventStreamManager
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,16 @@ class TaskJournal:
     def __init__(self, *, ledger: LedgerWriter, stream_manager: EventStreamManager) -> None:
         self._ledger = ledger
         self._stream_manager = stream_manager
+        self._on_ended: list[Callable[[str], object]] = []
+
+    def when_ended(self, callback: Callable[[str], object]) -> None:
+        """Call *callback* with a task's id once its ending row is in the ledger.
+
+        Every ending the orchestrator writes - completed, failed, cancelled,
+        stuck, needs attention - goes through `write`, so this is the one place
+        that sees them all, and only after the row is stored.
+        """
+        self._on_ended.append(callback)
 
     async def emit(self, task_id: str, event: str, payload: dict[str, Any] | None = None) -> None:
         """Send a live event to whoever is watching this task."""
@@ -49,6 +60,13 @@ class TaskJournal:
             await self._ledger.write(entry)
         except Exception as exc:
             logger.error("Ledger write failed task=%s action=%s: %s", entry.task_id, entry.action, exc)
+            return
+        if entry.task_id and entry.source is LedgerSource.SYSTEM and entry.action in TASK_ENDINGS:
+            for callback in self._on_ended:
+                try:
+                    callback(entry.task_id)
+                except Exception:
+                    logger.exception("A task-ended listener failed for task %s", entry.task_id)
 
     async def record(
         self,
