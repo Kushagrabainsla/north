@@ -2,7 +2,7 @@
 
 Only the loop controls were always loaded; the rest came from a similarity search.
 In chat tasks, calls to bash, fetch_url, web_search, gh and take_screenshot failed
-"Tool 'X' not found", and north then told the user it had no shell. Now the four
+"Tool 'X' not found", and north then told the user it had no shell. Now the
 most-used tools are always loaded, and a call to any other registered tool loads
 it and runs it, with the same gates. A flow step keeps to its tool list.
 """
@@ -26,7 +26,7 @@ from tools.models import ToolInput, ToolOutput
 from tools.registry import ToolRegistry
 
 AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
-CORE_TOOLS = {"bash", "write_file", "fetch_url", "web_search"}
+CORE_TOOLS = {"bash", "write_file", "fetch_url", "web_search", "browser"}
 
 
 def _agent(tmp_path: Path, registry=None):
@@ -70,7 +70,7 @@ def _call(name: str) -> ToolCall:
     return ToolCall(name=name, call_id=f"{name}-1", params={})
 
 
-async def test_the_four_most_used_tools_are_loaded_when_the_search_misses_them(tmp_path: Path) -> None:
+async def test_the_most_used_tools_are_loaded_for_every_task(tmp_path: Path) -> None:
     def _tool(name: str):
         tool = MagicMock()
         tool.name = name
@@ -83,14 +83,10 @@ async def test_the_four_most_used_tools_are_loaded_when_the_search_misses_them(t
     agent._deps.tool_registry.available_tools.return_value = [_tool(name) for name in names]
     agent._deps.confidence_tracker = MagicMock()
     agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=[])
-    index = MagicMock()
-    index.update_tools = AsyncMock(return_value=0)
-    index.search_tools = AsyncMock(return_value=["take_photo"])
-    agent._deps.tool_index = index
 
     loaded = {tool.name for tool, _ in await agent._load_tools(AgentPayload(task_id="t", prompt="can you record?"))}
 
-    assert loaded == CORE_TOOLS | {"update_plan", "take_photo"}
+    assert loaded == CORE_TOOLS | {"update_plan"}
 
 
 async def test_a_flow_step_does_not_get_the_four_tools_it_does_not_list(tmp_path: Path) -> None:

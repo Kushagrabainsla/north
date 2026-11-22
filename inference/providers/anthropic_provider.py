@@ -65,6 +65,12 @@ _DEFAULT_MAX_TOKENS_TOOLS = 64_000
 # A 5-minute cache entry: an agent's steps start well within 5 minutes of each
 # other, and each read renews it. Writing costs 1.25x input, reading 0.1x or less.
 _CACHED: dict[str, str] = {"type": "ephemeral"}
+# A 1-hour entry for the tools and system prompt, which every task shares. Chat
+# turns come 5 to 60 minutes apart as often as under 5 (28 and 57 of the first
+# calls, 2026-11-12 to 11-22), and each of those wrote the whole prefix again.
+# Writing costs 2x input. A longer entry must come before a shorter one, so the
+# conversation's 5-minute marker stays after it.
+_CACHED_LONG: dict[str, str] = {"type": "ephemeral", "ttl": "1h"}
 
 # Asked for on every agent step of a model that takes it. Without `display`, current
 # models return thinking blocks with empty text, and there is nothing to show.
@@ -98,8 +104,13 @@ class _Rates:
 
     @property
     def cache_write(self) -> float:
-        # A 5-minute cache entry, the only kind north writes, costs 1.25x input.
+        """A 5-minute cache entry costs 1.25x input."""
         return self.input * 1.25
+
+    @property
+    def cache_write_long(self) -> float:
+        """A 1-hour cache entry costs 2x input."""
+        return self.input * 2
 
 
 _PRICES: dict[str, _Rates] = {
@@ -307,6 +318,7 @@ class _Usage:
     tokens_out: int
     cached_tokens: int
     cache_write_tokens: int
+    long_write_tokens: int = 0  # the part of cache_write_tokens written for an hour
 
     @property
     def uncached_tokens(self) -> int:
@@ -316,11 +328,14 @@ class _Usage:
 def _usage_fields(usage: Any) -> _Usage:
     cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
     written = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    by_ttl = getattr(usage, "cache_creation", None)
+    long_written = int(getattr(by_ttl, "ephemeral_1h_input_tokens", 0) or 0) if by_ttl is not None else 0
     return _Usage(
         tokens_in=int(getattr(usage, "input_tokens", 0) or 0) + cached + written,
         tokens_out=int(getattr(usage, "output_tokens", 0) or 0),
         cached_tokens=cached,
         cache_write_tokens=written,
+        long_write_tokens=min(long_written, written),
     )
 
 
@@ -336,7 +351,8 @@ def _cost_usd(usage: _Usage, model_id: str) -> float | None:
     per_million = (
         usage.uncached_tokens * rates.input
         + usage.cached_tokens * rates.cache_read
-        + usage.cache_write_tokens * rates.cache_write
+        + (usage.cache_write_tokens - usage.long_write_tokens) * rates.cache_write
+        + usage.long_write_tokens * rates.cache_write_long
         + usage.tokens_out * rates.output
     )
     return per_million / 1_000_000
@@ -537,11 +553,12 @@ class AnthropicProvider:
         # history so far. Sent without a cache marker, none of it was ever read
         # from cache: 851 calls in the issue #76 test, 0 cached tokens, and a
         # "17 x 23" cost 27.6k input tokens a step. The marker on the system
-        # prompt caches tools and system for every step; the top-level marker
-        # caches the conversation up to its last message, and moves with it.
+        # prompt caches tools and system for an hour, for every step and every
+        # task; the top-level marker caches the conversation up to its last
+        # message for 5 minutes, and moves with it.
         kwargs: dict[str, Any] = {"cache_control": _CACHED}
         if system:
-            kwargs["system"] = [{"type": "text", "text": system, "cache_control": _CACHED}]
+            kwargs["system"] = [{"type": "text", "text": system, "cache_control": _CACHED_LONG}]
         if request.tools:
             kwargs["tools"] = _to_anthropic_tools(request.tools)
         if model_id in self._adaptive_models:

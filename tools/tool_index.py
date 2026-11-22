@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS tool_embeddings (
 """
 
 SEMANTIC_TOP_K: int = 8  # benchmarked default: leanest high-recall candidate set
-SEMANTIC_FILTER_MIN: int = 8  # only activate semantic filter when more tools exist than this
 
 
 class ToolIndex:

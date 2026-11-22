@@ -17,22 +17,20 @@ from inference.exceptions import is_model_unavailable_error
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
-from tools.retrieval import tool_index_documents
-from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 from utils.execution_context import ExecutionIdentity, bind_execution
 from utils.tools import named_tools
 
 logger = logging.getLogger(__name__)
 
-# Registry tools that are always loaded, whatever retrieval picks: the loop's own
-# controls, and the four tools north uses most. With only the controls, retrieval
-# missed bash, fetch_url and web_search in chat tasks: the calls failed "not found",
-# and north told the user it had no shell (issue #82, item 3). Anthropic's tool
-# search guidance keeps the 3-5 most-used tools loaded. A flow step's tool list
-# replaces this set. Internal tools such as ask_user, request_approval and
-# find_tools are injected by the loop and do not appear here.
+# The tools every run starts with: the loop's own controls and the tools north uses
+# most. With only the controls, bash, fetch_url and web_search were missing in chat
+# tasks: the calls failed "not found", and north told the user it had no shell (issue
+# #82, item 3). browser was in 12 of 107 chat runs and 227 calls (2026-11-10 to 11-22);
+# create_skill and create_flow, next, in 6 and 5. The set is fixed so the cached prompt
+# stays the same across tasks. A flow step's tool list replaces it. Internal tools
+# such as ask_user, request_approval and find_tools are injected by the loop.
 _ESSENTIAL_TOOL_NAMES: frozenset[str] = frozenset(
-    {"update_plan", "use_skill", "bash", "write_file", "fetch_url", "web_search"}
+    {"update_plan", "use_skill", "bash", "write_file", "fetch_url", "web_search", "browser"}
 )
 
 # Cap on how many non-selected skill names are listed as "available via use_skill".
@@ -420,81 +418,40 @@ class Agent(ABC):
         payload: AgentPayload | None = None,
         selected_skills: list[Any] | None = None,
     ) -> list[tuple[Tool, float]]:
-        """Select a lean task-relevant subset from the global tool catalog.
+        """The tools a run starts with: the same set for every task, plus any the task names.
 
-        Every registered tool is eligible. Semantic retrieval limits prompt
-        size, while loop controls, skill-named tools, and explicitly named tools
-        cannot be dropped. If indexing is unavailable,
-        all tools are exposed so selection failure never removes a capability.
+        Tool definitions come first in a cached prompt, so a different set on each task
+        wrote the whole prefix again and never read it. A similarity search picked the
+        set per task: of 77 first calls within 5 minutes of another, 73 had a different
+        set and read 5.4% of their prompt from cache (2026-11-12 to 11-22). A run reaches
+        any other tool by calling it by name, or through find_tools. A flow step's tool
+        list is a contract and replaces this set.
         """
         registry_tools = self._deps.tool_registry.available_tools()
         by_name = {tool.name: tool for tool in registry_tools}
         all_names = set(by_name)
         prompt = payload.prompt if payload is not None else ""
+        scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
 
         if payload is not None and payload.allowed_tools is not None:
             # Executable skill contracts are a hard boundary, not retrieval
             # hints. Unknown names are rejected during flow validation; keeping
             # the intersection here makes the runtime fail closed as well.
             allowed = set(payload.allowed_tools) & all_names
-            scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
             return sorted(
                 ((by_name[name], scores.get(name, 0.5)) for name in allowed),
                 key=lambda pair: (-pair[1], pair[0].name),
             )
 
-        mandatory = set(_ESSENTIAL_TOOL_NAMES) & all_names
-        mandatory.update(_mentioned_tool_names(selected_skills or [], all_names))
-        mandatory.update(_tool_names_in_text(prompt, all_names))
+        names = set(_ESSENTIAL_TOOL_NAMES) & all_names
+        names.update(_mentioned_tool_names(selected_skills or [], all_names))
+        names.update(_tool_names_in_text(prompt, all_names))
         if payload is not None and payload.workspace:
-            mandatory.update(t.name for t in registry_tools if t.task_note(payload.workspace))
-
-        selected_names = set(all_names)
-        index = self._deps.tool_index
-        if index is not None and len(registry_tools) > SEMANTIC_FILTER_MIN:
-            query = self._tool_selection_query(payload, selected_skills or [])
-            try:
-                # Keeps tools hot-loaded after startup in the same searchable
-                # catalog without making registration depend on the index.
-                await index.update_tools(tool_index_documents(registry_tools))
-                semantic_names = await index.search_tools(query, top_k=SEMANTIC_TOP_K)
-            except Exception:
-                logger.debug("Tool selection failed for agent %s", self.name, exc_info=True)
-                semantic_names = []
-            semantic_matches = set(semantic_names) & all_names
-            if semantic_matches:
-                selected_names = semantic_matches | mandatory
-
-        scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
-
-        scored: list[tuple[Tool, float]] = []
-        for name in selected_names:
-            t = by_name[name]
-            base_score = scores.get(t.name, 0.5)
-            if t.name in mandatory:
-                base_score = max(base_score, 0.9)
-            scored.append((t, base_score))
-
-        scored.sort(key=lambda pair: (-pair[1], pair[0].name))
-        return scored
-
-    def _tool_selection_query(self, payload: AgentPayload | None, selected_skills: list[Any]) -> str:
-        """Build retrieval text from dynamic task context, never static ownership."""
-        parts = [f"Agent role: {self.name}. Domain: {self.domain}."]
-        if payload is not None:
-            parts.append(f"Task: {payload.prompt}")
-            plan_store = getattr(self._deps, "plan_store", None)
-            if plan_store is not None and payload.task_id:
-                try:
-                    if plan := plan_store.render(payload.task_id):
-                        parts.append(f"Current plan: {plan}")
-                except Exception:
-                    logger.debug("Plan unavailable during tool selection for %s", payload.task_id, exc_info=True)
-        if selected_skills:
-            parts.append(
-                "Selected skills: " + " ".join(f"{skill.name}: {skill.description}" for skill in selected_skills)
-            )
-        return "\n".join(parts)
+            names.update(t.name for t in registry_tools if t.task_note(payload.workspace))
+        return sorted(
+            ((by_name[name], max(scores.get(name, 0.5), 0.9)) for name in names),
+            key=lambda pair: (-pair[1], pair[0].name),
+        )
 
     def _format_result(self, raw: dict[str, Any]) -> AgentResult:
         """Default: wrap the dict in an `AgentResult`. Override for custom shape."""

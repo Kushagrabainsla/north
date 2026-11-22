@@ -220,6 +220,16 @@ def test_each_token_class_has_its_own_rate():
     assert _cost_usd(usage, "claude-sonnet-5-5") == pytest.approx((2_000 + 2_000 + 7_500 + 5_000) / 1e6)
 
 
+def test_an_hour_long_cache_write_is_charged_twice_the_input_rate():
+    # Sonnet 5.5: a 1-hour entry costs $4 (2x input), a 5-minute one $2.50 (1.25x).
+    raw = _usage(input_tokens=0, output_tokens=0, cache_write=13_000)
+    raw.cache_creation = SimpleNamespace(ephemeral_1h_input_tokens=12_000, ephemeral_5m_input_tokens=1_000)
+    usage = _usage_fields(raw)
+
+    assert usage.cache_write_tokens == 13_000 and usage.long_write_tokens == 12_000
+    assert _cost_usd(usage, "claude-sonnet-5-5") == pytest.approx((12_000 * 4.00 + 1_000 * 2.50) / 1e6)
+
+
 def test_a_long_haiku_5_5_prompt_is_charged_the_long_prompt_rate():
     # Above 100K prompt tokens Haiku 5.5 is $0.50/$2.50, cache included in the count.
     assert _cost_usd(_billed(30_000, 1_000, cache_read=120_000), "claude-haiku-5-5") == pytest.approx(

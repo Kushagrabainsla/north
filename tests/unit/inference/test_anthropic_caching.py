@@ -84,8 +84,9 @@ async def test_a_tool_call_marks_the_system_prompt_and_the_conversation_for_cach
     await _step(provider, [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": "17 x 23?"}])
 
     request = sent.sent[0]
-    assert request["cache_control"] == {"type": "ephemeral"}
-    assert request["system"] == [{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}]
+    assert request["cache_control"] == {"type": "ephemeral"}, "the conversation: 5 minutes"
+    # The tools and system prompt every task shares: an hour, before the shorter entry as the API requires.
+    assert request["system"] == [{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
 
 
 async def test_the_next_step_starts_with_the_previous_steps_prompt() -> None:
