@@ -76,9 +76,7 @@
     .install code::-webkit-scrollbar { display: none; }
     .install code::before { content: "$ "; color: var(--faint); }
     button.copy { flex: none; font: inherit; font-size: 12px; font-weight: 600; color: #10150d; background: var(--accent); border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-    button.copy:focus-visible, nav a:focus-visible, .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .button { display: inline-flex; align-items: center; text-decoration: none; font-size: 13px; font-weight: 600; border: 1px solid var(--line-strong); border-radius: 9px; padding: 0 18px; min-height: 46px; }
-    .button:hover { border-color: var(--accent); }
+    button.copy:focus-visible, nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     /* Screenshots */
     .window { margin: 56px 0 0; border: 1px solid var(--line-strong); border-radius: 14px; overflow: hidden; background: var(--surface); box-shadow: 0 40px 90px -30px rgba(0, 0, 0, .8), 0 0 0 1px rgba(184, 239, 114, .04); }
@@ -153,7 +151,6 @@
       .modes { grid-template-columns: 1fr; }
       .mode + .mode { border-left: 0; border-top: 1px solid var(--line); }
       .actions { flex-direction: column; }
-      .button { justify-content: center; }
     }
 
     /* What's new: the latest changes, one line each */
@@ -210,7 +207,6 @@
           <code id="install">curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash</code>
           <button class="copy" type="button" data-copy="install">Copy</button>
         </div>
-        <a class="button" href="https://github.com/Kushagrabainsla/north">View on GitHub</a>
       </div>
       <figure class="window" style="margin-bottom:0">
         <div class="chrome" aria-hidden="true"><i></i><i></i><i></i></div>
