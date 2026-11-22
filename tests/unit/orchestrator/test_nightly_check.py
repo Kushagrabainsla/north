@@ -25,10 +25,10 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _agents(monkeypatch: pytest.MonkeyPatch, *agents: Readiness) -> None:
-    async def check_agents() -> list[Readiness]:
+    async def try_agents() -> list[Readiness]:
         return list(agents)
 
-    monkeypatch.setattr(nightly, "check_agents", check_agents)
+    monkeypatch.setattr(nightly, "try_agents", try_agents)
 
 
 def _project(tmp_path: Path, home: Path, script: str) -> Path:
@@ -150,11 +150,15 @@ async def test_a_pass_says_so_with_the_report(tmp_path: Path, home: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_a_failure_names_the_part_that_failed(tmp_path: Path, home: Path) -> None:
+async def test_a_failure_without_results_says_so_and_points_at_the_report(tmp_path: Path, home: Path) -> None:
     _project(tmp_path, home, 'echo "smoke failed: live coding agents - /r.log"\nexit 1\n')
 
-    with pytest.raises(RuntimeError, match=r"^The nightly check failed: live coding agents - /r.log$"):
+    with pytest.raises(nightly.NightlyCheckFailed) as failure:
         await nightly.nightly_check()
+
+    [problem] = failure.value.problems
+    assert problem.issue == "The nightly check failed: live coding agents - /r.log."
+    assert "report" in problem.fix
 
 
 _LOGGED_OUT = "BackendUnavailableError: claude: Claude Code is not logged in; run `claude auth login`"
@@ -187,46 +191,98 @@ exit 1
 
 
 @pytest.mark.asyncio
-async def test_a_failure_names_its_causes_most_common_first(tmp_path: Path, home: Path) -> None:
+async def test_a_failure_lists_each_cause_with_its_fix_most_common_first(tmp_path: Path, home: Path) -> None:
     """The run said only which stage failed; all its failures were one logged-out agent."""
-    _project(tmp_path, home, _FAILED_LIVE_RUN)
+    folder = _project(tmp_path, home, _FAILED_LIVE_RUN)
 
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(nightly.NightlyCheckFailed) as failure:
         await nightly.nightly_check()
 
-    lines = str(failure.value).splitlines()
-    assert lines[0].startswith("The nightly check failed: live coding agents - ")
-    assert lines[1:] == [
-        "live coding agents: 3 of 4 tests failed",
-        f"- 2 × {_LOGGED_OUT} (e.g. tests.live.test_claude_live::test_a_plan_run)",
-        "- 1 × AssertionError: the change did not land. (e.g. tests.live.test_telegram_live::test_a_task_lands)",
-    ]
+    first, second = failure.value.problems
+    assert first.issue == (
+        f"2 tests in live coding agents failed: {_LOGGED_OUT} "
+        "(for example tests/live/test_claude_live.py::test_a_plan_run)."
+    )
+    assert first.fix == (
+        "A change in north broke it (no passing check is on record yet). In "
+        f"{folder}, run `NORTH_LIVE_CLAUDE=1 NORTH_LIVE_CODEX=1 .venv/bin/python -m pytest "
+        "tests/live/test_claude_live.py::test_a_plan_run`."
+    )
+    assert second.issue.startswith("1 test in live coding agents failed: AssertionError: the change did not land.")
+    text = str(failure.value)
+    assert text.startswith("The nightly check found 2 problems.\n\n1. Problem: ")
+    assert "\n   Fix: " in text and text.endswith(".log")
     assert not list((home / "smoke").glob("*.xml")), "the results are read once; the report is what stays"
 
 
 @pytest.mark.asyncio
-async def test_a_failure_says_what_each_installed_coding_agent_needs(
+async def test_an_agent_that_cannot_take_a_run_is_not_tested_and_its_fix_is_named(
     tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every installed agent is checked; one that cannot take a run says what it needs."""
-    _project(tmp_path, home, _FAILED_LIVE_RUN)
+    """Nov 21: 28 of 50 live tests failed, all because Claude Code was logged out; the card showed them all."""
+    _project(tmp_path, home, 'echo "live claude=$NORTH_LIVE_CLAUDE codex=$NORTH_LIVE_CODEX"\necho "smoke passed: x"\n')
     _agents(
         monkeypatch,
-        Readiness("codex", installed=True, ready=True, version="0.130.0"),
+        Readiness("codex", installed=True, ready=True, version="0.165.0"),
         Readiness("claude", installed=True, detail="Claude Code is not logged in; run `claude auth login`"),
         Readiness("gemini", installed=False, detail="`gemini` is not installed"),
     )
 
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(nightly.NightlyCheckFailed) as failure:
         await nightly.nightly_check()
 
-    lines = str(failure.value).splitlines()
-    assert lines[1:4] == [
-        "Coding agents:",
-        "- codex: ready, 0.130.0",
-        "- claude: not ready. Claude Code is not logged in; run `claude auth login`",
-    ]
-    assert lines[4] == "live coding agents: 3 of 4 tests failed"
+    [problem] = failure.value.problems
+    assert problem.issue == "claude cannot take a coding run, so north did not test it tonight."
+    assert problem.fix == "Claude Code is not logged in; run `claude auth login`."
+    assert not (home / "smoke" / "last_pass.json").exists(), "a check that skipped an agent is not a pass"
+
+
+@pytest.mark.asyncio
+async def test_the_agents_it_cannot_run_are_switched_off_for_the_live_tests(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _project(tmp_path, home, 'echo "$NORTH_LIVE_CLAUDE$NORTH_LIVE_CODEX" >"$NORTH_HOME/live"\necho "smoke passed"\n')
+    out_of_credit = Readiness(
+        "codex",
+        installed=True,
+        detail="codex could not answer a one-line request: Your workspace is out of credits",
+        fix="Wait for codex's usage limit to reset, or add credit to its account.",
+    )
+    _agents(monkeypatch, Readiness("claude", installed=True, ready=True), out_of_credit)
+
+    with pytest.raises(nightly.NightlyCheckFailed) as failure:
+        await nightly.nightly_check()
+
+    assert (home / "live").read_text().strip() == "10"
+    [problem] = failure.value.problems
+    assert problem.issue.endswith(
+        "tonight. codex could not answer a one-line request: Your workspace is out of credits."
+    )
+    assert problem.fix == out_of_credit.fix
+
+
+def _git_project(tmp_path: Path, home: Path, script: str) -> Path:
+    folder = _project(tmp_path, home, script)
+    for arguments in (["init", "-q"], ["config", "user.name", "t"], ["config", "user.email", "t@t"]):
+        subprocess.run(["git", *arguments], cwd=folder, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=folder, check=True)
+    subprocess.run(["git", "commit", "-qm", "one"], cwd=folder, check=True)
+    return folder
+
+
+@pytest.mark.asyncio
+async def test_a_failure_names_the_commits_since_the_last_pass(tmp_path: Path, home: Path) -> None:
+    """A code failure's fix says where to look: the commits made since the check last passed."""
+    folder = _git_project(tmp_path, home, 'echo "smoke passed: x"\n')
+    assert "passed" in await nightly.nightly_check()
+    passed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=folder, capture_output=True, text=True).stdout.strip()
+    (folder / "scripts" / "smoke.sh").write_text("#!/usr/bin/env bash\n" + _FAILED_LIVE_RUN, encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "two"], cwd=folder, check=True)
+
+    with pytest.raises(nightly.NightlyCheckFailed) as failure:
+        await nightly.nightly_check()
+
+    assert f"in the one commit since the last pass ({passed[:7]}, " in failure.value.problems[0].fix
 
 
 @pytest.mark.asyncio
@@ -254,7 +310,7 @@ async def test_a_stage_without_test_results_shows_the_start_of_its_output(tmp_pa
     with pytest.raises(RuntimeError) as failure:
         await nightly.nightly_check()
 
-    assert str(failure.value).splitlines()[1:] == ["lint:", "F401 unused import os", "  --> a.py:1:8"]
+    assert "Problem: lint failed: F401 unused import os / --> a.py:1:8" in str(failure.value)
 
 
 @pytest.mark.asyncio

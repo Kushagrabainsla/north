@@ -47,7 +47,8 @@ git status --short >>"$report"
 stage "lint" "$repo/.venv/bin/ruff" check .
 stage "suite" "$python" -m pytest -q --tb=short -m "not integration" -p no:cacheprovider --junitxml "$(junit suite)"
 if [ "${SMOKE_LIVE:-0}" = "1" ]; then
-    stage "live coding agents" env NORTH_LIVE_CLAUDE=1 NORTH_LIVE_CODEX=1 \
+    # The nightly check sets an agent's variable to 0 when the agent cannot take a run tonight.
+    stage "live coding agents" env NORTH_LIVE_CLAUDE="${NORTH_LIVE_CLAUDE:-1}" NORTH_LIVE_CODEX="${NORTH_LIVE_CODEX:-1}" \
         "$python" -m pytest tests/live -q --tb=short -p no:cacheprovider --junitxml "$(junit "live coding agents")"
 fi
 

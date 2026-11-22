@@ -29,7 +29,7 @@ from inference.exceptions import missing_resource
 from skills.checks import run_checks
 from utils.handoff import ensure_handoff_dir, missing_artifact_paths
 from utils.tasks import spawn
-from utils.time import localnow
+from utils.time import format_local, localnow
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,9 @@ WAITING_RETRY_SECONDS = 60.0
 STOPPED_RUN_SOURCE = "flow-run-stopped"
 RESUME_OPTION = "Resume"
 DISCARD_OPTION = "Discard"
+# Why a stopped run was ended without finishing: a newer scheduled run took its place, or you discarded it.
+REPLACED_REASON = "Replaced by a newer run while it waited"
+DISCARDED_REASON = "Discarded while paused"
 
 
 def step_approval_title(flow_name: str) -> str:
@@ -137,26 +140,43 @@ class FlowRunner:
 
         A waiting run would do the newer run's work for a time that has passed:
         the Oct 23 briefings waited 23 hours for a model and arrived on Oct 24,
-        and kept that day's from running at all. A scheduled run paused with no card
-        is the same: nothing waits on it, and it was only piling up. One with a card
-        stays, because you have been asked about it. A test run is evidence for
-        activation, not the same work, so it stays, and so does a run being
-        tried again right now, which is running, and the firing's own run (*keeping*).
+        and kept that day's from running at all. A scheduled run that paused is the
+        same, and its card goes with it: from Nov 18 to Nov 21 each night's failed
+        check left its own card, and five waited at once. The newer run leaves one
+        card if it stops too, and says how many runs in a row stopped. A test run is
+        evidence for activation, not the same work, so it stays, and so does a run
+        being tried again right now, which is running, and the firing's own run (*keeping*).
         """
         return [
-            self._store.discard(run.run_id, reason="Replaced by a newer run while it waited")
+            self.discard(run.run_id, reason=REPLACED_REASON)
             for run in self._store.list_runs(flow_name, limit=None)
             if run.run_id != keeping
             and not run.test_mode
             and run.run_id not in self._resuming
-            and (run.status == "waiting" or (run.status == "paused" and self._unasked_scheduled(run)))
+            and (run.status == "waiting" or (run.status == "paused" and run.trigger == "schedule"))
         ]
 
-    def _unasked_scheduled(self, run: FlowRun) -> bool:
-        """Whether *run* came from a schedule and has no card waiting on you."""
-        if run.trigger != "schedule":
-            return False
-        return self._interaction is None or not self._interaction.is_waiting(run.task_id, STOPPED_RUN_SOURCE)
+    def _stopped_in_a_row(self, run: FlowRun) -> list[FlowRun]:
+        """The scheduled runs of *run*'s flow just before it that also stopped, newest first."""
+        earlier: list[FlowRun] = []
+        for other in self._store.list_runs(run.flow_name, limit=None):
+            if other.run_id == run.run_id or other.test_mode or other.trigger != "schedule":
+                continue
+            ended_unfinished = other.status == "cancelled" and other.error.startswith(
+                (REPLACED_REASON, DISCARDED_REASON)
+            )
+            if other.status not in STOPPED and not ended_unfinished:
+                break
+            earlier.append(other)
+        return earlier
+
+    def _repeat_note(self, run: FlowRun) -> str:
+        """ "Stopped N scheduled runs in a row, since <day>." before the error, when this is not the first."""
+        earlier = self._stopped_in_a_row(run)
+        if not earlier:
+            return ""
+        since = format_local(datetime.fromisoformat(earlier[-1].created_at or earlier[-1].updated_at), "%b %d")
+        return f"This flow stopped {len(earlier) + 1} scheduled runs in a row, since {since}.\n\n"
 
     async def discard_old_stopped(self, before: datetime) -> int:
         """End scheduled runs stopped since before *before*, and their cards; say so, and return how many.
@@ -259,9 +279,9 @@ class FlowRunner:
         elif outcome.chosen_option == DISCARD_OPTION:
             self.discard(run.run_id)
 
-    def discard(self, run_id: str) -> FlowRun:
+    def discard(self, run_id: str, *, reason: str = DISCARDED_REASON) -> FlowRun:
         """End a stopped run without finishing it, and close the card its stop left."""
-        run = self._store.discard(run_id)
+        run = self._store.discard(run_id, reason=reason)
         self._withdraw_stop_card(run.task_id)
         return run
 
@@ -352,7 +372,7 @@ class FlowRunner:
                     agent="flow",
                     source=STOPPED_RUN_SOURCE,
                     title=f"{run.flow_name} stopped",
-                    message=f"{run.error or 'It did not finish.'}\n\n"
+                    message=f"{self._repeat_note(run)}{run.error or 'It did not finish.'}\n\n"
                     f"{RESUME_OPTION} runs the step it stopped on again. {DISCARD_OPTION} ends the run.",
                     options=[RESUME_OPTION, DISCARD_OPTION],
                     rejecting=[DISCARD_OPTION],

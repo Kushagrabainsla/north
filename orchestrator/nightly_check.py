@@ -12,26 +12,33 @@ or output breaks north's coding where no test with a fake can see it.
 
 It tests the commit north is installed from, in a clean copy of its own. On
 Nov 9 it was testing a project folder 123 commits behind what was running.
+
+A failed check says each problem and its fix (CODING_STYLE 13.5). From Oct 27 to
+Nov 21 every check failed, mostly because Claude Code was logged out or Codex was
+out of credit; each card held a page of test output, and Resume fixed nothing.
 """
 
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import os
 import re
 import shutil
+import subprocess
 import xml.etree.ElementTree as ElementTree
+from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
 
-from coding_agents.discovery import check_agents
+from coding_agents.discovery import Readiness, try_agents
 from config.settings import settings
 from inference.exceptions import WaitingFor
 from utils.power import fully_awake
 from utils.processes import stop_process_group
-from utils.time import localnow
+from utils.time import format_local, localnow
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +61,27 @@ _SETUP_TIME_LIMIT_S = 15 * 60
 _INCONCLUSIVE_PREFIX = "inconclusive:"
 _INCONCLUSIVE_RUNS_ALLOWED = 3
 _INCONCLUSIVE_FILE_NAME = "inconclusive.json"
+# The commit of the last check that passed, so a failure can say which commits could have broken it.
+_LAST_PASS_FILE_NAME = "last_pass.json"
+# The live tests run an agent only when its variable is "1" (tests/live).
+_LIVE_VARIABLE = "NORTH_LIVE_{name}"
+_LIVE_TESTS = "tests/live/"
+
+
+@dataclass(frozen=True)
+class Problem:
+    """One thing the check found: what is wrong, and what to do about it."""
+
+    issue: str
+    fix: str
+
+
+class NightlyCheckFailed(RuntimeError):
+    """The check found problems; its message lists each one with its fix."""
+
+    def __init__(self, problems: list[Problem], report: Path) -> None:
+        self.problems = problems
+        super().__init__(_card_text(problems, report))
 
 
 def checkout_file() -> Path:
@@ -125,7 +153,7 @@ def registered_checkout() -> Path | None:
 
 
 async def nightly_check() -> str:
-    """Run scripts/smoke.sh with the live tests; the summary on a pass, an error naming what failed otherwise."""
+    """Run scripts/smoke.sh with the live tests; the summary on a pass, each problem with its fix otherwise."""
     # A closed laptop wakes for seconds at a time; the check takes minutes and
     # would be cut off. It waits for a real wake instead, and runs then.
     if not fully_awake():
@@ -137,6 +165,10 @@ async def nightly_check() -> str:
             "No north project folder is registered for the nightly check. "
             "Run scripts/install_smoke_schedule.sh from the project folder."
         )
+    # An agent that cannot take a run would fail every one of its tests for that one reason,
+    # and hide a real failure among them. It is named with its fix, and its tests do not run.
+    agents = [agent for agent in await try_agents() if agent.installed]
+    live = {_LIVE_VARIABLE.format(name=agent.name.upper()): "1" if agent.ready else "0" for agent in agents}
     report = settings.north_home / "smoke" / f"{localnow():%Y-%m-%d_%H%M}.log"
     # The lowest CPU priority: after a night asleep it can run while you work.
     process = await asyncio.create_subprocess_exec(
@@ -145,7 +177,13 @@ async def nightly_check() -> str:
         "19",
         str(folder / "scripts" / "smoke.sh"),
         cwd=folder,
-        env={**os.environ, "SMOKE_LIVE": "1", "NORTH_HOME": str(settings.north_home), "SMOKE_REPORT": str(report)},
+        env={
+            **os.environ,
+            **live,
+            "SMOKE_LIVE": "1",
+            "NORTH_HOME": str(settings.north_home),
+            "SMOKE_REPORT": str(report),
+        },
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -161,54 +199,116 @@ async def nightly_check() -> str:
     # Killed before its verdict - north stopped mid-check on Oct 20 - is no result,
     # not a failure: the run waits, and runs again once north is back.
     cut_off = process.returncode is not None and process.returncode < 0
-    causes, silent = await asyncio.to_thread(_take_results, report, process.returncode != 0 and not cut_off, cut_off)
+    failed = process.returncode != 0 and not cut_off
+    broken, silent = await asyncio.to_thread(_take_results, report, failed, cut_off)
     if cut_off:
         raise WaitingFor(
             "an uninterrupted check",
             f"The nightly check was stopped by signal {-process.returncode} before it finished, so it has no "
             "result. It runs again by itself.",
         )
-    if process.returncode != 0:
-        headline = f"The nightly check {last.removeprefix('smoke ') or 'failed'}"
-        raise RuntimeError("\n".join([headline, *await _coding_agent_lines(), *causes]))
+    problems = [_agent_problem(agent) for agent in agents if not agent.ready]
+    if broken:
+        since = await asyncio.to_thread(_since_last_pass, folder)
+        problems += [_code_problem(failure, folder, since) for failure in broken]
+    elif failed:
+        problems.append(Problem(f"The nightly check {last.removeprefix('smoke ') or 'failed'}.", _READ_REPORT))
     if silent:
-        named = ", ".join(silent)
-        raise RuntimeError(
-            f"The nightly check could not tell for {_INCONCLUSIVE_RUNS_ALLOWED} runs in a row: {named}. "
-            "Each time the agent declined to run the check."
-        )
+        problems.append(_silent_problem(silent))
+    if problems:
+        raise NightlyCheckFailed(problems, report)
+    await asyncio.to_thread(_record_pass, folder)
     tested = f" at {installed[1][:7]}" if installed else ""
     return f"The nightly check{tested} {last.removeprefix('smoke ') or 'passed'}"
 
 
-async def _coding_agent_lines() -> list[str]:
-    """Each coding agent north can hand work to, and what one that cannot take a run needs.
-
-    The live stage runs every installed agent; when one is not ready, all of
-    its tests fail for that one reason. Its own probe says what it needs, such
-    as "Claude Code is not logged in; run `claude auth login`".
-    """
-    agents = [agent for agent in await check_agents() if agent.installed]
-    lines = [
-        f"- {agent.name}: ready{f', {agent.version}' if agent.version else ''}"
-        if agent.ready
-        else f"- {agent.name}: not ready. {agent.detail}"
-        for agent in agents
-    ]
-    return ["Coding agents:", *lines] if lines else []
+_READ_REPORT = "Read the report named below to see what failed."
 
 
-def _take_results(report: Path, failed: bool, cut_off: bool = False) -> tuple[list[str], list[str]]:
-    """The failure causes, and the tests that said nothing too many runs in a row.
+def _agent_problem(agent: Readiness) -> Problem:
+    """A coding agent that cannot take a run: its tests did not run, and what it needs."""
+    skipped = f"{agent.name} cannot take a coding run, so north did not test it tonight"
+    if agent.fix:
+        return Problem(f"{skipped}. {agent.detail}.", agent.fix)
+    return Problem(f"{skipped}.", f"{agent.detail}.")
+
+
+def _code_problem(failure: Failure, folder: Path, since: str) -> Problem:
+    """Tests that failed for one cause: north's own code broke, and how to see it."""
+    broke = f"A change in north broke it{since}."
+    if not failure.tests:
+        return Problem(f"{failure.stage} failed: {failure.cause}", f"{broke} {_READ_REPORT}")
+    count = len(failure.tests)
+    test = failure.tests[0]
+    live = "NORTH_LIVE_CLAUDE=1 NORTH_LIVE_CODEX=1 " if test.startswith(_LIVE_TESTS) else ""
+    issue = f"{'1 test' if count == 1 else f'{count} tests'} in {failure.stage} failed: {failure.cause}"
+    return Problem(
+        f"{issue} (for example {test}).",
+        f"{broke} In {folder}, run `{live}.venv/bin/python -m pytest {test}`.",
+    )
+
+
+def _silent_problem(silent: list[str]) -> Problem:
+    named = ", ".join(silent)
+    return Problem(
+        f"{len(silent)} live test(s) could not tell for {_INCONCLUSIVE_RUNS_ALLOWED} runs in a row, because the "
+        f"agent declined to run the check: {named}.",
+        "Read the request each test sends; if the agent keeps declining, make the request plainer.",
+    )
+
+
+def _card_text(problems: list[Problem], report: Path) -> str:
+    """Each problem and its fix, numbered; the report's path, never the report."""
+    count = len(problems)
+    lines = [f"The nightly check found {count} problem{'' if count == 1 else 's'}."]
+    for number, problem in enumerate(problems, start=1):
+        lines += ["", f"{number}. Problem: {problem.issue}", f"   Fix: {problem.fix}"]
+    return "\n".join([*lines, "", f"Report: {report}"])
+
+
+def _git(folder: Path, *arguments: str) -> str:
+    """git's output in *folder*, or "" when it fails."""
+    done = subprocess.run(["git", "-C", str(folder), *arguments], capture_output=True, text=True, check=False)
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def _last_pass_file() -> Path:
+    return settings.north_home / "smoke" / _LAST_PASS_FILE_NAME
+
+
+def _record_pass(folder: Path) -> None:
+    commit = _git(folder, "rev-parse", "HEAD")
+    if commit:
+        record = {"commit": commit, "at": localnow().isoformat()}
+        _last_pass_file().write_text(json.dumps(record), encoding="utf-8")
+
+
+def _since_last_pass(folder: Path) -> str:
+    """Which commits could have broken the check, as words to follow "broke it"."""
+    try:
+        record = json.loads(_last_pass_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return " (no passing check is on record yet)"
+    commit, at = str(record.get("commit", "")), str(record.get("at", ""))
+    when = format_local(datetime.datetime.fromisoformat(at), "%b %d") if at else "an earlier night"
+    count = _git(folder, "rev-list", "--count", f"{commit}..HEAD")
+    if not count:
+        return f" after the last pass ({commit[:7]}, {when})"
+    commits = "the one commit" if count == "1" else f"one of the {count} commits"
+    return f" in {commits} since the last pass ({commit[:7]}, {when})"
+
+
+def _take_results(report: Path, failed: bool, cut_off: bool = False) -> tuple[list[Failure], list[str]]:
+    """The failures by cause, and the tests that said nothing too many runs in a row.
 
     The JUnit files are read once, here; the report is what stays. A run cut off before
     its verdict counts for nothing, so it leaves the inconclusive counts alone.
     """
-    causes = failure_causes(report) if failed else []
+    broken = failures(report) if failed else []
     silent = [] if cut_off else _still_inconclusive(report)
     for junit in report.parent.glob(f"{report.stem}.*.xml"):
         junit.unlink(missing_ok=True)
-    return causes, silent
+    return broken, silent
 
 
 def _inconclusive_tests(report: Path) -> list[str]:
@@ -239,12 +339,21 @@ def _still_inconclusive(report: Path) -> list[str]:
     return sorted(name for name, runs in counts.items() if runs >= _INCONCLUSIVE_RUNS_ALLOWED)
 
 
-def failure_causes(report: Path) -> list[str]:
-    """What each failed stage of a smoke report failed on, in a few lines.
+@dataclass(frozen=True)
+class Failure:
+    """Failures of one stage for one cause; *tests* as pytest ids, empty for a stage that is not pytest."""
+
+    stage: str
+    cause: str
+    tests: tuple[str, ...] = ()
+
+
+def failures(report: Path) -> list[Failure]:
+    """What each failed stage of a smoke report failed on, grouped by cause, most common first.
 
     A pytest stage writes JUnit XML beside the report, and its failures are
     grouped by their error, so 16 tests failing for one reason read as one
-    line. Another stage shows the first lines of its output. The 11:45 check
+    problem. Another stage gives the first lines of its output. The 11:45 check
     on 2026-10-22 said only "failed: suite live coding agents" and a report
     path, though all 18 failures were one cause: Claude Code was logged out.
     """
@@ -252,39 +361,44 @@ def failure_causes(report: Path) -> list[str]:
         text = report.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    lines: list[str] = []
+    found: list[Failure] = []
     for stage in _FAILED_STAGE_RE.findall(text):
         junit = report.with_name(f"{report.stem}.{stage.replace(' ', '-')}.xml")
         try:
-            lines += _pytest_causes(stage, junit) if junit.is_file() else _stage_output(stage, text)
+            found += _pytest_failures(stage, junit) if junit.is_file() else _stage_failure(stage, text)
         except (OSError, ElementTree.ParseError):
             logger.debug("nightly check: could not read the %s results", stage, exc_info=True)
-    return lines
+    return found
 
 
-def _pytest_causes(stage: str, junit: Path) -> list[str]:
-    root = ElementTree.parse(junit).getroot()
-    suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
-    total = sum(int(suite.get("tests", 0)) for suite in suites)
+def _pytest_failures(stage: str, junit: Path) -> list[Failure]:
     tests_by_cause: dict[str, list[str]] = {}
-    for case in root.iter("testcase"):
+    for case in ElementTree.parse(junit).getroot().iter("testcase"):
         problem = next((child for child in case if child.tag in {"failure", "error"}), None)
         if problem is None:
             continue
         message = (problem.get("message") or problem.text or "no message").strip()
         cause = message.splitlines()[0][:_CAUSE_CHARS] if message else "no message"
-        tests_by_cause.setdefault(cause, []).append(f"{case.get('classname', '')}::{case.get('name', '')}")
-    failed = sum(len(tests) for tests in tests_by_cause.values())
+        tests_by_cause.setdefault(cause, []).append(_pytest_id(case))
     ranked = sorted(tests_by_cause.items(), key=lambda item: -len(item[1]))
-    shown = [f"- {len(tests)} × {cause} (e.g. {tests[0]})" for cause, tests in ranked[:_CAUSES_SHOWN]]
-    more = len(ranked) - _CAUSES_SHOWN
-    return [f"{stage}: {failed} of {total} tests failed", *shown, *([f"- and {more} other causes"] if more > 0 else [])]
+    shown = [Failure(stage, cause, tuple(tests)) for cause, tests in ranked[:_CAUSES_SHOWN]]
+    rest = ranked[_CAUSES_SHOWN:]
+    if rest:
+        count = sum(len(tests) for _, tests in rest)
+        shown.append(Failure(stage, f"{count} more test(s), for {len(rest)} other causes; see the report"))
+    return shown
 
 
-def _stage_output(stage: str, text: str) -> list[str]:
+def _pytest_id(case: ElementTree.Element) -> str:
+    """The id pytest runs one test by: tests.live.test_x + test_y -> tests/live/test_x.py::test_y."""
+    module = case.get("classname", "")
+    return f"{module.replace('.', '/')}.py::{case.get('name', '')}"
+
+
+def _stage_failure(stage: str, text: str) -> list[Failure]:
     start = text.find(f"=== {stage} (")
     end = text.find(f"--- {stage}: FAILED")
     if start < 0 or end < 0:
-        return []
-    output = [line for line in text[start:end].splitlines()[1:] if line.strip()]
-    return [f"{stage}:", *output[:_STAGE_LINES_SHOWN]]
+        return [Failure(stage, "it printed nothing")]
+    output = [line.strip() for line in text[start:end].splitlines()[1:] if line.strip()]
+    return [Failure(stage, " / ".join(output[:_STAGE_LINES_SHOWN])[:_CAUSE_CHARS] or "it printed nothing")]

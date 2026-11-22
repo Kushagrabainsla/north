@@ -1206,6 +1206,9 @@ except InferenceError as e:
 - **Missing resources freeze work; they do not fail it.** No model, network or credit means pause, then resume by itself when they return.
   **Why:** a rate limit is not a failure of the task.
   **How to apply:** classify resource errors apart from real failures; they never use up retries, resume attempts or the watchdog's stuck limit.
+- **A failure card states the issue and its fix.** It says what broke and what to do, in that order: the exact command when the fix is on your side, the failing tests and the commits since the last pass when it is north's code. One card per cause; a repeat updates it, never adds one.
+  **Why:** the nightly check exists so north finds its own errors and says how to fix them. Its cards held a wall of test output, one card a night, and offered only Resume or Discard, which fix nothing when Claude Code is logged out.
+  **How to apply:** diagnose in code from facts north already has (agent probes, failure kinds); show the log path, never the log.
 
 ---
 

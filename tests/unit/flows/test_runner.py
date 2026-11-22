@@ -893,16 +893,49 @@ def _stopped_by_schedule(store: FlowRunStore, run_id: str) -> None:
     store.update(run_id, status="paused", current_step=0, outputs=[], error="stopped")
 
 
-async def test_a_stopped_scheduled_run_nobody_was_asked_about_does_not_pile_up(tmp_path):
+async def test_stopped_scheduled_runs_and_their_cards_do_not_pile_up(tmp_path):
+    """Nov 18 to 21: each night's failed check left its own card, and five waited at once."""
     runner, store, _ = _waiting_runner(tmp_path)
     _stopped_by_schedule(store, "unasked")
     _stopped_by_schedule(store, "asked")
-    runner._interaction = SimpleNamespace(is_waiting=lambda task_id, source: task_id == "task-asked")
+    withdrawn: list[str] = []
+    runner._interaction = SimpleNamespace(withdraw=lambda task_id, source: withdrawn.append(task_id))
 
     replaced = runner.replace_waiting("demo")
 
-    assert [run.run_id for run in replaced] == ["unasked"]
-    assert store.get("asked").status == "paused", "you have been asked about this one"
+    assert sorted(run.run_id for run in replaced) == ["asked", "unasked"]
+    assert sorted(withdrawn) == ["task-asked", "task-unasked"], "their cards go with them"
+    assert store.get("asked").error.startswith("Replaced by a newer run")
+
+
+async def test_a_run_that_stops_again_says_how_many_runs_in_a_row_stopped(tmp_path):
+    """The newer run's card stands for the ones it replaced, so it says how long this has gone on."""
+    from approval.interaction import UserInteraction
+    from approval.store import ApprovalStore
+
+    runner, store, _ = _waiting_runner(tmp_path)
+    runner._interaction = UserInteraction(ApprovalStore())
+    _stopped_by_schedule(store, "first")
+    runner.replace_waiting("demo")
+    _stopped_by_schedule(store, "second")
+    runner.replace_waiting("demo")
+    _stopped_by_schedule(store, "third")
+
+    await runner._deliver(store.get("third"))
+
+    [card] = runner._interaction._store.pending()
+    assert card.message.startswith("This flow stopped 3 scheduled runs in a row, since ")
+
+
+async def test_a_run_after_a_finished_one_does_not_count_older_stops(tmp_path):
+    runner, store, _ = _waiting_runner(tmp_path)
+    _stopped_by_schedule(store, "old")
+    store.update("old", status="cancelled", current_step=0, outputs=[], error="Replaced by a newer run while it waited")
+    store.create(run_id="done", flow_name="demo", task_id="task-done", trigger="schedule")
+    store.update("done", status="completed", current_step=1, outputs=[], error="")
+    _stopped_by_schedule(store, "now")
+
+    assert runner._repeat_note(store.get("now")) == ""
 
 
 async def test_old_stopped_runs_are_cleared_and_you_are_told(tmp_path):
