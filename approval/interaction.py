@@ -214,16 +214,19 @@ class UserInteraction:
             self._notices.clear(key)
 
     async def remind_waiting(self) -> str:
-        """Tell the user what is still waiting on them. Cards never expire, so they are reminded instead."""
+        """Tell the user what is still waiting on them. Cards never expire, so they are reminded instead.
+
+        The reminder goes to the channels (Telegram, TUI, macOS) only. The dashboard's Inbox
+        already lists every waiting card, oldest first, with how long it waited; a stored
+        notice was a copy of that list, and it went out of date the moment a card was decided.
+        """
         waiting = sorted(self._store.pending(), key=lambda card: card.created_at)
         if not waiting:
             return "nothing is waiting for you"
         now = datetime.now(UTC)
         lines = [f"- {card.title} ({card.agent}), waiting {_waited(now - card.created_at)}" for card in waiting]
-        await self.deliver(
-            source="north",
-            title=f"{len(waiting)} waiting for you",
-            message="\n".join(lines),
+        await self.inform(
+            task_id=None, agent="north", title=f"{len(waiting)} waiting for you", message="\n".join(lines)
         )
         return f"reminded you of {len(waiting)} waiting card(s)"
 

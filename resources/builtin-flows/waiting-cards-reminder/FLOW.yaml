@@ -1,7 +1,8 @@
 name: waiting-cards-reminder
-description: Tells you what is still waiting for your answer. Cards never expire, so
-  north reminds you of them instead, oldest first, with how long each has waited.
-  Sends nothing when nothing is waiting.
+description: Tells you on Telegram and your other channels what is still waiting for
+  your answer. Cards never expire, so north reminds you of them instead, oldest first,
+  with how long each has waited. The dashboard's Inbox shows the same list, always
+  current, so the reminder leaves no notice there. Sends nothing when nothing is waiting.
 domains:
   - general
 steps:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -103,13 +104,16 @@ def test_a_waiting_card_is_listed_however_many_are_newer(tmp_path: Path) -> None
     assert waiting.id in [card.id for card in listed] and len(listed) == 3
 
 
-async def test_a_reminder_is_kept_where_the_dashboard_shows_it(tmp_path: Path) -> None:
-    store, notices = ApprovalStore(tmp_path / "a.db"), NoticeStore()
+async def test_the_reminder_leaves_no_copy_of_the_inbox_on_the_dashboard(tmp_path: Path) -> None:
+    # The Inbox lists the waiting cards itself; a stored "N waiting for you" notice repeated it
+    # and went out of date once a card was decided. The channels still get the reminder.
+    store, notices, notifier = ApprovalStore(tmp_path / "a.db"), NoticeStore(), AsyncMock()
     store.add(_card(source="prepared", blocking=False))
 
-    await UserInteraction(store, notices=notices).remind_waiting()
+    await UserInteraction(store, notifier=notifier, notices=notices).remind_waiting()
 
-    assert [notice.title for notice in notices.waiting()] == ["1 waiting for you"]
+    assert notices.waiting() == []
+    assert notifier.notify.await_args.args[0].title == "1 waiting for you"
 
 
 async def test_a_problem_with_a_key_is_told_once_while_it_lasts(tmp_path: Path) -> None:
