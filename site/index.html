@@ -71,8 +71,8 @@
     h1 { font-size: clamp(34px, 6vw, 62px); line-height: 1.04; letter-spacing: -.055em; font-weight: 800; margin: 0; max-width: 15ch; }
     .lede { color: var(--muted); font-size: 17px; max-width: 60ch; margin: 24px 0 34px; }
     .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; }
-    .install { display: flex; align-items: center; gap: 12px; min-width: 0; max-width: 100%; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 9px; padding: 6px 6px 6px 16px; }
-    .install code { font-size: 13px; color: var(--text); white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .install { flex: 1 1 100%; display: flex; align-items: center; gap: 12px; min-width: 0; max-width: 100%; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 9px; padding: 6px 6px 6px 16px; }
+    .install code { flex: 1; min-width: 0; font-size: 13px; color: var(--text); white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
     .install code::-webkit-scrollbar { display: none; }
     .install code::before { content: "$ "; color: var(--faint); }
     button.copy { flex: none; font: inherit; font-size: 12px; font-weight: 600; color: #10150d; background: var(--accent); border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
