@@ -4,7 +4,8 @@ import { formatDay, Markdown, PageHeader, Panel, timeAgo } from "../components";
 import { ActionBar, Badge, Button, confirmDelete, EntityForm, Field, ListRow, Loading, Notice, ResourceView, Stack, Status, Tabs, Toolbar, Note, PaneLabel } from "../kit";
 import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import { ApprovalMemoryPanel, SafeActionsPanel } from "./Approvals";
 
 // Your profile (user.md) is not listed: North rebuilds it from your facts, so
 // facts are edited on their own tab.
@@ -22,13 +23,30 @@ export interface ContextDoc {
 // four different states of visibility: the documents were editable here, the
 // facts were listed below them, and the episodes and approval decisions had no
 // endpoint at all - north was learning things nobody could look at.
-export type MemoryTab = "documents" | "facts" | "episodes";
+// One row of tabs, no tabs inside tabs: each document is a tab of its own, beside the facts,
+// the episodes, and what north learned from your approvals (the decisions it repeats for you,
+// and the actions it may take without asking).
+export type MemoryTab = "north_stars.md" | "judgement_rules.md" | "soul.md" | "facts" | "episodes" | "decisions" | "rules";
 
 export const MEMORY_TABS: [MemoryTab, string][] = [
-  ["documents", "Documents"],
+  ["north_stars.md", "North stars"],
+  ["judgement_rules.md", "Judgement rules"],
+  ["soul.md", "Soul"],
   ["facts", "Facts"],
   ["episodes", "Episodes"],
+  ["decisions", "Learned decisions"],
+  ["rules", "Safe actions"],
 ];
+
+const isDocument = (tab: string) => docs.includes(tab);
+
+/** The tab an old or outside link means: ?tab=documents&doc=soul.md is the Soul tab; ?tab=approvals is Learned decisions. */
+export function memoryTabFor(tab: string | null, doc: string | null): MemoryTab | null {
+  if (doc && isDocument(doc)) return doc as MemoryTab;
+  if (tab === "documents") return docs[0] as MemoryTab;
+  if (tab === "approvals") return "decisions";
+  return MEMORY_TABS.some(([name]) => name === tab) ? (tab as MemoryTab) : null;
+}
 
 export interface Episode {
   id: string;
@@ -117,34 +135,21 @@ export function Memory() {
   const dialog = useDialog();
   const [tab, setTab] = usePersistentState<MemoryTab>(
     UI_PREFERENCE_KEYS.memoryTab,
-    "documents",
+    docs[0] as MemoryTab,
     (value) => MEMORY_TABS.some(([name]) => name === value),
   );
-  const [doc, setDoc] = usePersistentState(
-    UI_PREFERENCE_KEYS.memoryDocument,
-    docs[0],
-    (value) => typeof value === "string" && docs.includes(value),
-  );
+  // The document being edited is the tab itself; on another tab it stays the last one opened.
+  const doc = isDocument(tab) ? tab : docs[0];
   // A link from a decision opens the tab (and document) holding the memory it
   // used, and marks the row.
   const [params] = useSearchParams();
-  const navigate = useNavigate();
   const find = params.get("find") || "";
   useEffect(() => {
-    const wantedTab = params.get("tab");
-    // Approval decisions and safe actions moved to the Approvals page.
-    const moved = wantedTab === "approvals" ? "decisions" : wantedTab === "rules" ? "rules" : "";
-    if (moved) {
-      navigate(`/approvals?tab=${moved}${find ? `&find=${encodeURIComponent(find)}` : ""}`, { replace: true });
-      return;
-    }
-    if (wantedTab && MEMORY_TABS.some(([name]) => name === wantedTab))
-      setTab(wantedTab as MemoryTab);
-    const wantedDoc = params.get("doc");
-    if (wantedDoc && docs.includes(wantedDoc)) setDoc(wantedDoc);
+    const wanted = memoryTabFor(params.get("tab"), params.get("doc"));
+    if (wanted) setTab(wanted);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
-  const resource = useResource<ContextDoc>(`/orchestrator/context/${doc}`);
+  const resource = useResource<ContextDoc>(isDocument(tab) ? `/orchestrator/context/${doc}` : null);
   const facts = useResource<Fact[]>("/web/api/memory/facts", 10000);
   const [draft, setDraft] = useState<string | null>(null);
   const [factDraft, setFactDraft] = useState("");
@@ -230,12 +235,12 @@ export function Memory() {
     setFactFrom(fact.valid_from || "");
     setFactUntil(fact.valid_until || "");
   };
-  const onDocuments = tab === "documents";
+  const onDocuments = isDocument(tab);
   return (
     <div className="page">
       <PageHeader
         title="Memory"
-        subtitle="What North knows about you."
+        subtitle="What North knows about you, and what it learned from your decisions."
         actions={
           onDocuments ? (
             <ActionBar danger={<Button variant="danger" onClick={() => void removeDocument()}>Reset document</Button>}>
@@ -250,26 +255,13 @@ export function Memory() {
         label="Memory views"
         items={MEMORY_TABS.map(([value, label]) => ({ value, label }))}
         value={tab}
-        onChange={setTab}
+        onChange={(next) => { setTab(next); setDraft(null); }}
       />
-      <LearningStatus />
+      {(tab === "facts" || tab === "episodes") && <LearningStatus />}
       {error && <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice>}
 
       {onDocuments && (
         <>
-          <Toolbar
-            tabs={
-              <Tabs
-                label="Documents"
-                items={docs.map((name) => ({ value: name, label: docLabels[name] }))}
-                value={doc}
-                onChange={(name) => {
-                  setDoc(name);
-                  setDraft(null);
-                }}
-              />
-            }
-          />
           {resource.error && <Notice tone="error">{resource.error}</Notice>}
           <Panel title={docLabels[doc]}>
             <div className="memory-editor-grid">
@@ -357,11 +349,11 @@ export function Memory() {
       )}
 
       {tab === "episodes" && <EpisodesPanel />}
+      {tab === "decisions" && <ApprovalMemoryPanel find={find} />}
+      {tab === "rules" && <SafeActionsPanel />}
       {onDocuments && (
         <Note>
-          Past approval decisions and safe actions are on{" "}
-          <Link to="/approvals?tab=decisions">Approvals</Link>. Reading your
-          own files into memory is a step in <Link to="/setup">Setup</Link>.
+          Reading your own files into memory is a step in <Link to="/setup">Setup</Link>.
         </Note>
       )}
     </div>

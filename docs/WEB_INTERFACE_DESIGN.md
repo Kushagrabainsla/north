@@ -48,7 +48,8 @@ management, scripting, debugging, and recovery.
 
 | Route | Purpose | Primary objects |
 |---|---|---|
-| `/` | Complete North cockpit | every subsystem, attention, activity, health |
+| `/` | Home: what needs you, what changed, what is broken | Inbox items, changes since your last visit, problems only |
+| `/inbox` | Everything north has for you (`/approvals` redirects here) | Needs you (cards, stopped flow runs), For your info (notices), Done |
 | `/chat` | Browse previous chats or start a new one | conversations, search, drafts |
 | `/chat/:conversationId` | Full persistent chat room | turns, tasks, responses, execution details |
 | `/tasks` | Search and filter all work | tasks, statuses, agents, timestamps |
@@ -58,8 +59,7 @@ management, scripting, debugging, and recovery.
 | `/artifacts` | Browse every generated output | reports, files, images, exports |
 | `/artifacts/:artifactId` | Preview or download one output | metadata, preview, producing task |
 | `/flows` | See what North runs, when it runs next, and how it went | flows, their schedules, next runs, run history |
-| `/approvals` | Resolve items that need attention | approvals, questions, information cards |
-| `/memory` | Inspect and edit North's context | context documents, imports |
+| `/memory` | Inspect and edit what North knows and learned | one tab each: North stars, Judgement rules, Soul, Facts, Episodes, Learned decisions, Safe actions |
 | `/agents` | Understand and invoke agents | capabilities, domains, model pools |
 | `/agents/:name` | Inspect one agent | accepts, runs, tools, confidence |
 | `/activity` | Inspect complete system activity | events, failures, warnings, ledger records |
@@ -205,7 +205,7 @@ Every cockpit panel maps to a dedicated page:
 
 | Cockpit panel | Verbose page |
 |---|---|
-| Attention | `/approvals` |
+| What needs me? | `/inbox` |
 | Active work and conversations | `/chat/:conversationId` and `/tasks` |
 | Agents | `/agents` and `/agents/:name` |
 | Briefing and reports | `/briefings` and `/briefings/:date` |
@@ -215,6 +215,30 @@ Every cockpit panel maps to a dedicated page:
 | Usage, models, and cost | `/insights` |
 | System activity and warnings | `/activity` |
 | System state | `/system` |
+
+### 5.1.2 Home and navigation (2026-11-22)
+
+Each piece of information has one home; another place shows a count or a link
+to it, never a copy.
+
+- **Home** asks three questions, in this order. *What needs me?* lists the
+  Inbox's waiting items, oldest first, each with how long it waited.
+  *What changed?* gives one line per area (flows, files, notes, sessions)
+  since your last time away (30 minutes away starts a new visit; a first
+  visit looks back one day). *Is anything broken?* lists problems only: a
+  failed health check, a failing or waiting model, a coding agent that cannot
+  run, a flow whose newest run did not finish.
+- **Inbox** is where north reaches you. Telegram may copy a message; nothing
+  goes only there. Its count is the sidebar badge, amber after a day.
+- **Sidebar** in groups: Home and Inbox; Your work; What north knows and can
+  do; North. A red dot on Flows means a flow's newest run did not finish.
+- **⌘K or /** finds any page, session, flow, file, skill or setting by name;
+  `g` then a letter jumps (`g i` Inbox, `g h` Home, `g f` Flows).
+- **A link lands on its item**: `?focus=<id>` scrolls to it and lights it,
+  `/flows?open=<name>` opens that flow.
+- **Short first**: a row shows one line; long text (an error, JSON) opens on
+  demand. Counts at the top of a page are filters.
+- **One row of tabs per page**: no tabs inside tabs.
 
 The dashboard and verbose pages share the same query definitions and event
 state. A number shown in the cockpit must match the corresponding detailed

@@ -1,174 +1,162 @@
 import { useEffect, useState } from "react";
 import { del, patch, post } from "../api";
-import { Markdown, NoticeList, PageHeader, Panel, timeAgo } from "../components";
+import { Markdown, NoticeList, PageHeader, Panel, reveal, timeAgo } from "../components";
+import { useInbox, waitedLong, waitingFor, type StoppedRun } from "../inbox";
 import { ActionBar, Button, confirmDelete, Empty, EntityForm, Field, ListRow, Loading, Notice, ResourceView, SectionHeader, Stack, Status, Tabs, Note } from "../kit";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import type { Approval, MemoryRef, Notice as NoticeEntry } from "../types";
 import { ApprovalCard } from "./approvalCard";
 
-export type ApprovalTab = "waiting" | "decisions" | "rules";
+export type ApprovalTab = "waiting" | "info" | "done";
 
-// Everything about approving lives here: what is waiting, what you decided
-// before (and so what north will decide the same way), and the actions north
-// may take without asking.
+/** The first line of a long text, short enough for one row. The rest opens on demand. */
+export function firstLine(text: string, limit = 140): string {
+  const line = text.replace(/[#*`>]/g, "").split("\n").map(part => part.trim()).find(Boolean) || "";
+  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
+}
+
+// The Inbox: everything north has for you, in one place. "Needs you" holds what waits for a
+// decision (cards, and flow runs that stopped); "For your info" holds what only tells you
+// something; "Done" holds what you or north decided. What north learned from those decisions,
+// and the actions it may take without asking, are memory: they live on the Memory page.
 export const APPROVAL_TABS: [ApprovalTab, string][] = [
-  ["waiting", "Waiting"],
-  ["decisions", "Past decisions"],
-  ["rules", "Safe actions"],
+  ["waiting", "Needs you"],
+  ["info", "For your info"],
+  ["done", "Done"],
 ];
 
 export function Approvals() {
   const [params, setParams] = useSearchParams();
   const wanted = params.get("tab");
+  const movedToMemory = wanted === "decisions" || wanted === "rules";
   const tab: ApprovalTab = APPROVAL_TABS.some(([name]) => name === wanted) ? (wanted as ApprovalTab) : "waiting";
-  const find = params.get("find") || "";
+  const focus = params.get("focus") || "";
+  const inbox = useInbox(30000);
+  const { approvals: resource, reload } = inbox;
   // A slow poll as the floor, with SSE on top. The stream is what makes a new
   // card appear; the poll is what stops a dropped connection turning into a
   // queue that has silently stopped updating.
-  const resource = useResource<Approval[]>("/web/api/approvals", 30000);
-  const notices = useResource<NoticeEntry[]>("/web/api/notices", 30000);
-  const { reload } = resource;
   useEffect(() => {
     const stream = new EventSource("/orchestrator/stream");
-    for (const event of [
-      "approval_required",
-      "question_required",
-      "approval_responded",
-    ]) {
-      stream.addEventListener(event, () => {
-        void reload();
-      });
+    for (const event of ["approval_required", "question_required", "approval_responded"]) {
+      stream.addEventListener(event, () => { void reload(); });
     }
     return () => stream.close();
   }, [reload]);
 
-  const decide = async (
-    card: Approval,
-    decision: string,
-    chosen_option = "",
-    values: Record<string, unknown> = {},
-    reason = "",
-  ) => {
-    await post("/orchestrator/approval/respond", {
-      card_id: card.id,
-      decision,
-      chosen_option,
-      values,
-      reason,
-    });
-    await resource.reload();
+  const decide = async (card: Approval, decision: string, chosen_option = "", values: Record<string, unknown> = {}, reason = "") => {
+    await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option, values, reason });
+    await reload();
   };
-  const overrule = async (
-    card: Approval,
-    decision: string,
-    chosen_option: string,
-    reason: string,
-  ) => {
-    await post("/orchestrator/approval/overrule", {
-      card_id: card.id,
-      decision,
-      chosen_option,
-      reason,
-    });
-    await resource.reload();
+  const overrule = async (card: Approval, decision: string, chosen_option: string, reason: string) => {
+    await post("/orchestrator/approval/overrule", { card_id: card.id, decision, chosen_option, reason });
+    await reload();
   };
-  const pending = (resource.data || []).filter(
-    (card) => card.status === "pending",
-  );
-  const history = (resource.data || []).filter(
-    (card) => card.status !== "pending",
-  );
+  const history = (resource.data || []).filter(card => card.status !== "pending");
+  const blocking = inbox.cards.filter(card => card.blocking);
+  const prepared = inbox.cards.filter(card => !card.blocking);
 
-  // Split on whether anything is waiting, not on urgency-as-styling. An agent
-  // frozen mid-action and an application that can wait until tonight have
-  // different costs of being missed, and one undifferentiated stack hides that.
-  // Two pages was considered and rejected: two inboxes means missed items.
-  const blocking = pending.filter((card) => card.blocking);
-  const prepared = pending.filter((card) => !card.blocking);
-
-  // Deliberately no "approve all". Reject-all would be fine; a bulk approve is
-  // the fastest possible review and the worst one, and this page exists for
-  // per-item judgement.
+  // Deliberately no "approve all": this page exists for per-item judgement.
+  // Each card says how long it has waited, oldest first: that is the reminder, always current.
   const section = (cards: Approval[]) => (
     <Stack>
-      {cards.map((card) => (
-        <ApprovalCard
-          key={card.id}
-          card={card}
-          wide
-          onDecide={(d, o, v, r) => decide(card, d, o, v, r)}
-        />
+      {cards.map(card => (
+        <div key={card.id} className={`inbox-item ${focus === card.id ? "landed" : ""}`} ref={focus === card.id ? reveal : undefined}>
+          <span className={`wait-chip ${waitedLong(card.created_at) ? "wait-long" : ""}`}>{waitingFor(card.created_at)}</span>
+          <ApprovalCard card={card} wide onDecide={(d, o, v, r) => decide(card, d, o, v, r)} />
+        </div>
       ))}
     </Stack>
   );
 
+  // Old links to the two tabs that moved keep working: they open the same tab on Memory.
+  if (movedToMemory) return <Navigate to={`/memory?${params.toString()}`} replace />;
   return (
     <div className="page">
       <PageHeader
-        title="Approvals"
-        subtitle={
-          pending.length
-            ? `${pending.length} waiting · ${blocking.length} blocking something`
-            : "Questions and consequential actions waiting for your decision."
-        }
+        title="Inbox"
+        subtitle={inbox.needsYou
+          ? `${inbox.needsYou} need${inbox.needsYou === 1 ? "s" : ""} you · ${blocking.length + inbox.stopped.length} blocking something`
+          : "Everything north has for you. Nothing needs you right now."}
       />
       {resource.error && <Notice tone="error">{resource.error}</Notice>}
       <Tabs
-        label="Approval views"
-        items={APPROVAL_TABS.map(([value, label]) => ({ value, label }))}
+        label="Inbox views"
+        items={APPROVAL_TABS.map(([value, label]) => ({
+          value, label,
+          count: value === "waiting" ? inbox.needsYou : value === "info" ? inbox.info.length : undefined,
+        }))}
         value={tab}
-        onChange={(value) => setParams(value === "waiting" ? {} : { tab: value })}
+        onChange={value => setParams(value === "waiting" ? {} : { tab: value })}
       />
-      {tab === "decisions" && <ApprovalMemoryPanel find={find} />}
-      {tab === "rules" && <SafeActionsPanel />}
+      {tab === "info" && (inbox.info.length
+        ? <>
+            <SectionHeader title="For your info" description="Reminders and results. Nothing to decide; dismiss each once read." />
+            <div className="table-list"><NoticeList notices={inbox.info} focus={focus} onDismissed={() => void inbox.notices.reload()}/></div>
+          </>
+        : <Empty>Nothing new. Reminders and results from north show here.</Empty>)}
+      {tab === "done" && (
+        <Panel title="Done" label={`${history.length} decided`}>
+          {history.length
+            ? history.map(card => <DecisionRow key={card.id} card={card} onOverrule={(d, o, r) => overrule(card, d, o, r)} />)
+            : <Empty>Nothing decided yet.</Empty>}
+        </Panel>
+      )}
       {tab === "waiting" && resource.loading && <Loading />}
       {tab === "waiting" && !resource.loading && <>
-      {(notices.data || []).length > 0 && (
-        <>
-          <SectionHeader
-            title="From north"
-            description="Reminders and how scheduled runs ended. Nothing to decide; dismiss each once read."
-          />
-          <div className="table-list"><NoticeList notices={notices.data || []} onDismissed={() => void notices.reload()}/></div>
-        </>
-      )}
-      {blocking.length > 0 && (
-        <>
-          <SectionHeader title="Needs you now" description="Something is stopped until you answer." />
-          {section(blocking)}
-        </>
-      )}
-
-      {prepared.length > 0 && (
-        <>
-          <SectionHeader
-            title="When you have a minute"
-            description="Work north finished and left for you. Nothing is blocked; take the time to read it."
-          />
-          {section(prepared)}
-        </>
-      )}
-
-      {!pending.length && !(notices.data || []).length && <Empty>Nothing needs your attention.</Empty>}
-
-      <Panel title="Resolved" label={`${history.length} decided`}>
-        {history.length ? (
-          history.map((card) => (
-            <DecisionRow
-              key={card.id}
-              card={card}
-              onOverrule={(d, o, r) => overrule(card, d, o, r)}
-            />
-          ))
-        ) : (
-          <Empty>Nothing decided yet.</Empty>
+        {(blocking.length > 0 || inbox.stopped.length > 0) && (
+          <>
+            <SectionHeader title="Stopped until you answer" description="A task or a flow waits on each of these." />
+            {inbox.stopped.length > 0 && <Stack>{inbox.stopped.map(run => (
+              <div key={run.run_id} className={`inbox-item ${focus === run.run_id ? "landed" : ""}`} ref={focus === run.run_id ? reveal : undefined}>
+                <span className={`wait-chip ${waitedLong(run.updated_at || run.started_at) ? "wait-long" : ""}`}>{waitingFor(run.updated_at || run.started_at)}</span>
+                <StoppedRunCard run={run} onChanged={reload}/>
+              </div>))}</Stack>}
+            {section(blocking)}
+          </>
         )}
-      </Panel>
+        {prepared.length > 0 && (
+          <>
+            <SectionHeader title="When you have a minute" description="Work north finished and left for you. Nothing is blocked." />
+            {section(prepared)}
+          </>
+        )}
+        {!inbox.needsYou && <Empty>Nothing needs you. {inbox.info.length > 0 && <Link to="/inbox?tab=info">{inbox.info.length} for your info →</Link>}</Empty>}
       </>}
     </div>
   );
+}
+
+/** A flow run that stopped: what stopped it in one line, the full error on demand, and the two ways on. */
+function StoppedRunCard({ run, onChanged }: { run: StoppedRun; onChanged: () => Promise<void> }) {
+  const dialog = useDialog();
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const act = async (action: "resume" | "discard") => {
+    if (action === "discard" && !(await confirmDelete(dialog, {
+      verb: "Discard", noun: "run", name: run.flow,
+      consequence: `This run is ${run.status}. The steps it finished stay on record; the rest will not run.`,
+    }))) return;
+    setBusy(action); setError("");
+    try { await post(`/web/api/flow-runs/${encodeURIComponent(run.run_id)}/${action}`, {}); await onChanged(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(""); }
+  };
+  return <ListRow
+    title={`${run.flow} ${run.status === "paused" ? "paused" : "is waiting"}`}
+    meta={["flow", `at step ${Math.max(run.current_step, 1)} of ${run.total_steps || 1}`]}
+    status={<Status value={run.status}/>}
+    actions={<ActionBar>
+      <Button size="sm" variant="quiet" busy={busy === "discard"} onClick={() => void act("discard")}>Discard</Button>
+      <Button size="sm" variant="primary" busy={busy === "resume"} onClick={() => void act("resume")}>Resume</Button>
+    </ActionBar>}>
+    {run.error
+      ? <details className="row-details"><summary>{firstLine(run.error)}</summary><Markdown>{run.error}</Markdown></details>
+      : <small className="row-note">Resume runs the step it stopped on again. Discard ends the run.</small>}
+    {error && <Notice tone="error">{error}</Notice>}
+  </ListRow>;
 }
 
 export function memoryLabel(ref: MemoryRef): string {
@@ -186,7 +174,7 @@ export function memoryLink(ref: MemoryRef): string {
   if (ref.kind === "past_decision") {
     params.set("tab", "decisions");
     if (ref.ref) params.set("find", ref.ref);
-    return `/approvals?${params.toString()}`;
+    return `/memory?${params.toString()}`;
   }
   // The profile is rebuilt from your facts, so it is corrected there.
   if (ref.kind === "fact" || ref.kind === "profile") params.set("tab", "facts");
@@ -302,16 +290,20 @@ export function DecisionRow({
     >
       {/* What was decided: the command, the path, the diff. A row with only "Git Operation -
         Approval Required · Decided by the safe list" gave nothing to judge an overrule by. */}
-      {card.message && (
-        <div className="decision-what">
-          <Markdown>{card.message}</Markdown>
-        </div>
-      )}
-      <DecisionDetail
-        label={card.decided_by_label}
-        reason={card.reason}
-        memory={card.memory_used || []}
-      />
+      {/* One line first; the full text, the reason and the memory used open on demand. */}
+      <details className="row-details">
+        <summary>{firstLine(card.message || card.reason || "Details")}</summary>
+        {card.message && (
+          <div className="decision-what">
+            <Markdown>{card.message}</Markdown>
+          </div>
+        )}
+        <DecisionDetail
+          label={card.decided_by_label}
+          reason={card.reason}
+          memory={card.memory_used || []}
+        />
+      </details>
       {prior && (
         <div className="decision-overruled">
           <small>

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, del, post } from "../api";
-import { HealthIndicator, PageHeader, Panel, unpricedNote, YoloBadge } from "../components";
+import { HealthIndicator, PageHeader, Panel, unpricedNote } from "../components";
 import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
-import { Button, EntityTable, ListRow, Notice, ResourceView, Stat, StatGrid, Status } from "../kit";
+import { Button, EntityTable, ListRow, Notice, ResourceView, SectionHeader, Stat, StatGrid, Status, Tabs } from "../kit";
 
 type LastUpdate = { state: "waiting" | "running" | "updated" | "failed" | "cancelled"; detail: string; at: string };
 export type UpdateStatus = { version: string; commit: string | null; last: LastUpdate | null };
@@ -138,16 +138,15 @@ function UpdatePanel() {
 
 export function SystemPage() {
   const overview = useResource<any>("/web/api/system", 8000);
-  const metrics = useResource<any>("/orchestrator/metrics?days=30", 15000);
+  // One period for every figure on the page: the home of usage and cost.
+  const [days, setDays] = useState<"7" | "30">("7");
+  const metrics = useResource<any>(`/orchestrator/metrics?days=${days}`, 15000);
   const costs = useResource<any>(
     "/orchestrator/inference/costs?period=month",
     15000,
   );
-  const totalCost = Number(
-    costs.data?.total_cost_usd ?? metrics.data?.total_cost_usd ?? 0,
-  );
-  const unpriced = costs.data?.unpriced_calls ?? metrics.data?.unpriced_calls;
-  const settings = overview.data?.settings;
+  const totalCost = Number(metrics.data?.total_cost_usd ?? 0);
+  const unpriced = metrics.data?.unpriced_calls;
   const browser = overview.data?.browser;
   const embeddings = overview.data?.embeddings;
 
@@ -160,11 +159,15 @@ export function SystemPage() {
       <div className="system-hero">
         <HealthIndicator variant="hero" />
       </div>
+      <div className="period-row">
+        <SectionHeader title="Usage" description="Every task with activity, yours and north's own, and what the models cost." />
+        <Tabs label="Period" value={days} onChange={setDays} items={[{ value: "7", label: "7 days" }, { value: "30", label: "30 days" }]} />
+      </div>
       <StatGrid>
-        <Stat label="Tasks · 30 days" value={metrics.data?.total_tasks || 0} />
+        <Stat label="Tasks with activity" value={metrics.data?.total_tasks || 0} />
         <Stat label="Input tokens" value={Number(metrics.data?.total_tokens_in || 0).toLocaleString()} />
         <Stat label="Output tokens" value={Number(metrics.data?.total_tokens_out || 0).toLocaleString()} />
-        <Stat label="Model cost · month" value={`$${totalCost.toFixed(4)}${unpricedNote(unpriced)}`} />
+        <Stat label="Model cost" value={`$${totalCost.toFixed(2)}${unpricedNote(unpriced)}`} />
       </StatGrid>
       {/* Which models north uses, and the power, are on the Settings page only (#80). */}
       <div className="two-column">
@@ -181,12 +184,11 @@ export function SystemPage() {
           </ResourceView>
         </Panel>
         <Panel title="Runtime configuration">
-          <ListRow title="Autonomy" description={settings?.autonomy || "–"} badge={<YoloBadge mode={settings?.autonomy} />} />
-          {/* Depends on a binary north cannot install for you, so the row carries
-            what to do about it rather than only that it is missing. */}
-          <ListRow title="Browser" description={browser?.state || "–"}>
-            {browser?.state === "unavailable" && <Notice tone="warning">{browser.detail}</Notice>}
-          </ListRow>
+          {/* Autonomy is set and shown on Settings only. The browser engine shows here only when it
+            is missing: browser profiles and their connection are on Settings. */}
+          {browser?.state === "unavailable" && <ListRow title="Browser engine" description="missing">
+            <Notice tone="warning">{browser.detail}</Notice>
+          </ListRow>}
           {/* MCP servers you configured: the ones that started, and below, anything configured that is not
             working. A server whose command did not exist was only a warning in north.log. */}
           {(overview.data?.mcp_servers || []).map((server: { name: string; tools: number }) => (

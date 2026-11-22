@@ -2,10 +2,12 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { fileName, noticeBody, noticePreview, savedFile } from "./notices";
-import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
+import { UI_PREFERENCE_KEYS, useHealth, usePersistentState, useResource } from "./hooks";
 import { ActionBar, Button, Empty, Notice, Status, PaneLabel } from "./kit";
 import type { AgentRun, Conversation, InferenceCategory, Notice as NoticeEntry } from "./types";
-import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Lightbulb, Sparkles, GitBranch, Wrench, LayoutTemplate, Cpu, Settings, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, Inbox, Brain, Lightbulb, Sparkles, GitBranch, Wrench, LayoutTemplate, Cpu, Settings, Search, type LucideIcon } from "lucide-react";
+import { useInbox } from "./inbox";
+import { CommandPalette } from "./palette";
 
 let displayTimezone = "UTC";
 
@@ -48,25 +50,24 @@ export function weekdayInNorthTimezone(date = new Date()) {
   return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(short);
 }
 
-// [path, label, icon, beta?]. Capabilities stay grouped while each resource
-// keeps its own screen and editor.
-const primaryNav: [string, string, LucideIcon, boolean?][] = [
-  ["/", "Dashboard", LayoutDashboard], ["/sessions", "Sessions", MessagesSquare], ["/tasks", "Tasks", CheckSquare],
-  ["/artifacts", "Artifacts", FileText],
-  ["/approvals", "Approvals", ShieldAlert],
-  ["/memory", "Memory", Brain],
-  ["/lights", "Devices", Lightbulb],
-];
+// The sidebar in four groups, each with a label that says what is in it. Home and the Inbox
+// stand on their own at the top: they are where you start and where north reaches you.
+type NavItem = [string, string, LucideIcon];
+const workNav: NavItem[] = [["/sessions", "Sessions", MessagesSquare], ["/tasks", "Tasks", CheckSquare], ["/flows", "Flows", GitBranch], ["/artifacts", "Files", FileText]];
+const knowsNav: NavItem[] = [["/memory", "Memory", Brain], ["/skills", "Skills", Sparkles], ["/tools", "Tools", Wrench], ["/views", "Views", LayoutTemplate], ["/lights", "Devices", Lightbulb]];
+const systemNav: NavItem[] = [["/system", "System", Cpu], ["/settings", "Settings", Settings]];
 
-const systemNav: [string, string, LucideIcon][] = [
-  ["/system", "System", Cpu], ["/settings", "Settings", Settings]
-];
-
-function NavigationLink({ to, label, Icon, beta = false }: { to: string; label: string; Icon: LucideIcon; beta?: boolean }) {
+function NavigationLink({ to, label, Icon, badge, dot }: { to: string; label: string; Icon: LucideIcon; badge?: ReactNode; dot?: "bad" | "warn" }) {
   return <NavLink to={to} end={to === "/"} title={label}>
-    <span className="nav-icon"><Icon size={16}/></span>
-    <span>{label}{beta && <em className="nav-beta">beta</em>}</span>
+    <span className="nav-icon"><Icon size={16}/>{dot && <i className={`nav-dot nav-dot-${dot}`} aria-hidden="true"/>}</span>
+    <span className="nav-label"><span className="nav-text">{label}{dot && <i className={`nav-dot nav-dot-inline nav-dot-${dot}`} aria-label={dot === "bad" ? "a run did not finish" : "something new"}/>}</span>{badge}</span>
   </NavLink>;
+}
+
+/** The one number that asks for you, on every page: cards and stopped runs in the Inbox. */
+function InboxBadge({ count, longWait }: { count: number; longWait: boolean }) {
+  if (!count) return null;
+  return <em className={`nav-badge ${longWait ? "nav-badge-long" : ""}`} title={longWait ? "Something has waited more than a day" : `${count} waiting for you`}>{count}</em>;
 }
 
 export function Layout() {
@@ -84,6 +85,11 @@ export function Layout() {
     const session = await post<Conversation>("/web/api/conversations", { title: "New session" });
     navigate(`/sessions/${session.id}`);
   };
+  const inbox = useInbox(15000);
+  const settings = useResource<{ autonomy?: string }>("/orchestrator/settings", 30000);
+  const lastRuns = new Map<string, string>();
+  for (const run of inbox.runs.data || []) if (!lastRuns.has(run.flow)) lastRuns.set(run.flow, run.status);
+  const flowFailed = [...lastRuns.values()].some(status => status === "cancelled" || status === "failed");
   return <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
     <aside className="sidebar">
       <div className="brand">
@@ -93,14 +99,26 @@ export function Layout() {
         </NavLink>
       </div>
       <button className="new-chat" onClick={newSession}>+ New session</button>
+      <button type="button" className="palette-open" onClick={() => window.dispatchEvent(new Event("north:palette"))} title="Search and jump (⌘K)">
+        <Search size={14}/><span className="nav-label">Search or jump…</span><kbd>⌘K</kbd>
+      </button>
       <nav aria-label="North navigation">
-        <div className="nav-section">{primaryNav.map(([to, label, Icon, beta]) => <NavigationLink key={to} to={to} label={label} Icon={Icon} beta={beta}/>)}</div>
-        <div className="nav-group"><span className="nav-group-label"><Sparkles size={14}/> Capabilities</span><NavigationLink to="/skills" label="Skills" Icon={Sparkles}/><NavigationLink to="/flows" label="Flows" Icon={GitBranch}/><NavigationLink to="/tools" label="Tools" Icon={Wrench}/><NavigationLink to="/views" label="Views" Icon={LayoutTemplate}/></div>
-        <div className="nav-group nav-system"><span className="nav-group-label"><Cpu size={14}/> Manage</span>{systemNav.map(([to, label, Icon]) => <NavigationLink key={to} to={to} label={label} Icon={Icon}/>)}</div>
+        <div className="nav-section">
+          <NavigationLink to="/" label="Home" Icon={LayoutDashboard}/>
+          <NavigationLink to="/inbox" label="Inbox" Icon={Inbox} badge={<InboxBadge count={inbox.needsYou} longWait={inbox.longWait}/>}
+            dot={!inbox.needsYou && inbox.info.length ? "warn" : undefined}/>
+        </div>
+        <div className="nav-group"><span className="nav-group-label">Your work</span>
+          {workNav.map(([to, label, Icon]) => <NavigationLink key={to} to={to} label={label} Icon={Icon} dot={to === "/flows" && flowFailed ? "bad" : undefined}/>)}</div>
+        <div className="nav-group"><span className="nav-group-label">What north knows and can do</span>
+          {knowsNav.map(([to, label, Icon]) => <NavigationLink key={to} to={to} label={label} Icon={Icon}/>)}</div>
+        <div className="nav-group nav-system"><span className="nav-group-label">North</span>{systemNav.map(([to, label, Icon]) => <NavigationLink key={to} to={to} label={label} Icon={Icon}/>)}</div>
       </nav>
-      <div className="sidebar-footer"><HealthIndicator/><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>
+      {settings.data?.autonomy === "yolo" && <NavLink to="/settings" className="yolo-warning" title="Every approval is yes">⚠ yolo: every approval is yes</NavLink>}
+      <div className="sidebar-footer"><NavLink to="/system" className="health-link"><HealthIndicator/></NavLink><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>
     </aside>
     <main className="workspace"><Outlet /></main>
+    <CommandPalette/>
   </div>;
 }
 
@@ -146,7 +164,7 @@ export function unpricedNote(count: unknown): string {
 /** What north delivered to you, newest first, each until you dismiss it. */
 // What north delivered: a reminder, or how a scheduled run ended. `compact` is the dashboard's view, one
 // short row each with a link to the rest; without it, each notice reads in full, a long one opened on demand.
-export function NoticeList({ notices, onDismissed, compact = false }: { notices: NoticeEntry[]; onDismissed: () => void; compact?: boolean }) {
+export function NoticeList({ notices, onDismissed, compact = false, focus = "" }: { notices: NoticeEntry[]; onDismissed: () => void; compact?: boolean; focus?: string }) {
   const dismiss = async (id: string) => {
     await post(`/web/api/notices/${id}/dismiss`, {});
     onDismissed();
@@ -156,9 +174,10 @@ export function NoticeList({ notices, onDismissed, compact = false }: { notices:
     const body = noticeBody(notice.message);
     const preview = noticePreview(notice.message);
     const when = <small>{timeAgo(notice.created_at)}{file && <> · saved as <span title={file}>{fileName(file)}</span></>}</small>;
-    return <div className={`list-row notice-row ${compact ? "compact-notice" : ""}`} key={notice.id}>
+    const landed = focus === notice.id;
+    return <div className={`list-row notice-row ${compact ? "compact-notice" : ""} ${landed ? "landed" : ""}`} key={notice.id} ref={landed ? reveal : undefined}>
       {compact
-        ? <div><b>{notice.title}</b>{preview && <small className="notice-preview">{preview}</small>}{when}{body.length > preview.length && <NavLink className="notice-more" to="/approvals">Read it all →</NavLink>}</div>
+        ? <div><b>{notice.title}</b>{preview && <small className="notice-preview">{preview}</small>}{when}{body.length > preview.length && <NavLink className="notice-more" to={`/inbox?tab=info&focus=${notice.id}`}>Read it all →</NavLink>}</div>
         : <div><b>{notice.title}</b>{body && (body.length > 600
             ? <details className="notice-body"><summary>{preview}</summary><Markdown>{body}</Markdown></details>
             : <div className="notice-body"><Markdown>{body}</Markdown></div>)}{when}</div>}

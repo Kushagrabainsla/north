@@ -15,7 +15,7 @@
 // run, and dropping them would lose the only place they are visible.
 
 import { useMemo, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { post } from "../api";
 import { useResource } from "../hooks";
 import { InferenceCategories, PageHeader, Panel, PromptTelemetry, timeAgo } from "../components";
@@ -214,7 +214,7 @@ export function Tasks() {
   // rather than dropping someone on the task list and making them find it.
   const [params, setParams] = useSearchParams();
   const requested = params.get("view");
-  const tab: TaskView = ["active", "approvals", "completed", "everything"].includes(requested || "")
+  const tab: TaskView = ["active", "queued", "completed", "everything"].includes(requested || "")
     ? requested as TaskView : "all";
   const showTab = (next: TaskView) => setParams(next === "all" ? {} : { view: next }, { replace: true });
 
@@ -225,7 +225,7 @@ export function Tasks() {
   const matches = query.toLowerCase();
   const visibleByView = tasks.filter(task => {
     if (tab === "active") return ["running", "retrying", "paused"].includes(task.status);
-    if (tab === "approvals") return task.status === "needs_attention";
+    if (tab === "queued") return task.status === "queued";
     if (tab === "completed") return task.status === "completed";
     return true;
   });
@@ -236,8 +236,7 @@ export function Tasks() {
   const active = tasks.filter(task => ["running", "retrying", "paused"].includes(task.status)).length;
   const approvalsCount = tasks.filter(task => task.status === "needs_attention").length;
   const queued = tasks.filter(task => task.status === "queued").length;
-  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const completedThisWeek = tasks.filter(task => task.status === "completed" && new Date(task.latest).getTime() >= weekAgo).length;
+  const completed = tasks.filter(task => task.status === "completed").length;
   const refresh = async () => {
     setBusy("refresh"); setActionError("");
     try { await resource.reload(); }
@@ -262,12 +261,14 @@ export function Tasks() {
     {resource.error && resource.data && <Notice tone="error">{resource.error}</Notice>}
     {actionError && <Notice tone="error">{actionError}</Notice>}
 
-    <StatGrid>
-      <Stat label="Active" value={active} detail="in progress"/>
-      <Stat label="Needs approval" value={approvalsCount} detail="waiting on you"/>
-      <Stat label="Queued" value={queued} detail="waiting to start, or for a model"/>
-      <Stat label="Completed this week" value={completedThisWeek} detail="finished work"/>
-    </StatGrid>
+    {/* Counts are filters: click one to see those tasks. What waits for you is in the Inbox, and
+        usage over time is on System, so neither is repeated here. */}
+    <div className="filter-chips" role="group" aria-label="Show tasks by state">
+      <button type="button" className={tab === "active" ? "on" : ""} onClick={() => showTab(tab === "active" ? "all" : "active")}><b>{active}</b> active</button>
+      <button type="button" className={tab === "queued" ? "on" : ""} onClick={() => showTab(tab === "queued" ? "all" : "queued")}><b>{queued}</b> queued</button>
+      <button type="button" className={tab === "completed" ? "on" : ""} onClick={() => showTab(tab === "completed" ? "all" : "completed")}><b>{completed}</b> completed</button>
+      {approvalsCount > 0 && <Link className="chip-link" to="/inbox">{approvalsCount} wait for you in the Inbox →</Link>}
+    </div>
 
     {/* Most of the time you want the runs. The raw stream is still here because
         startup, cron ticks and recovery sweeps have no task to belong to. */}
@@ -285,12 +286,12 @@ export function Tasks() {
   </div>;
 }
 
-type TaskView = "all" | "active" | "approvals" | "completed" | "everything";
+type TaskView = "all" | "active" | "queued" | "completed" | "everything";
 
 const TASK_VIEWS: TabItem<TaskView>[] = [
   { value: "all", label: "All work" },
   { value: "active", label: "Active" },
-  { value: "approvals", label: "Approvals" },
+  { value: "queued", label: "Queued" },
   { value: "completed", label: "Completed" },
   { value: "everything", label: "Everything" },
 ];
@@ -304,9 +305,16 @@ const TASK_COLUMNS: Column[] = [
 ];
 
 function taskCell(task: TaskSummary, key: string) {
-  if (key === "task") return <><b>{task.prompt}</b><small>{task.id}</small></>;
+  if (key === "task") return <><b>{taskTitle(task)}</b><small>{task.id}</small></>;
   if (key === "agent") return task.agents.join(", ") || "orchestrator";
   if (key === "updated") return timeAgo(task.latest);
   if (key === "events") return task.entries.length;
   return <Status value={task.status}/>;
+}
+
+/** A task's name. A task with no prompt (north's own work) showed its id twice: as the title and under it. */
+export function taskTitle(task: { prompt: string; id: string }): string {
+  if (task.prompt && task.prompt !== task.id) return task.prompt;
+  if (task.id.startsWith("flow_")) return "Flow run";
+  return "Background task";
 }

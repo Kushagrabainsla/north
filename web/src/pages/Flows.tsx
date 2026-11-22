@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ViewsAbout } from "./Views";
 import { X } from "lucide-react";
 import { api, del, patch, post } from "../api";
@@ -859,6 +860,15 @@ export function Flows() {
       setMessage(failure(error));
     }
   };
+  // A link elsewhere (Home, ⌘K, a red dot) names the flow to open: /flows?open=nightly-check.
+  const [params, setParams] = useSearchParams();
+  const wantedFlow = params.get("open");
+  useEffect(() => {
+    if (!wantedFlow) return;
+    void open(wantedFlow);
+    setParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantedFlow]);
   const reloadSchedules = () => Promise.all([cron.reload(), jobs.reload()]);
   // A run goes on in the background and can take minutes, so this returns as
   // soon as it has started and the Runs tab shows it moving.
@@ -1184,7 +1194,10 @@ export function Flows() {
                 <>
                   {flow.steps} step{flow.steps === 1 ? "" : "s"} ·{" "}
                   {scheduleSummary(byFlow.get(flow.name) || [])}
-                  <small>{lastRunText(lastRunOf(allRuns, flow.name))}</small>
+                  {/* The schedule is this column's job. The last run shows only when it did not finish:
+                    a red dot, because Recent runs below is the home of every run. */}
+                  {["cancelled", "failed", "paused"].includes(lastRunOf(allRuns, flow.name)?.status || "") &&
+                    <small className="last-run-bad"><i className="dot-bad" aria-hidden="true"/>{lastRunText(lastRunOf(allRuns, flow.name))}</small>}
                 </>
               ) : (
                 <CapabilityStatus value={flow.status} />
@@ -1194,32 +1207,7 @@ export function Flows() {
         )}
       </ResourceView>
 
-      <Panel title="Next up" label="soonest first">
-        {flows.loading || cron.loading || jobs.loading ? (
-          <Loading />
-        ) : upcoming.length ? (
-          upcoming.slice(0, 8).map((item) => (
-            <ListRow
-              key={item.key}
-              title={item.title}
-              meta={[
-                <span title={item.absolute}>
-                  {item.epoch
-                    ? `${whenFromNow(item.epoch)} · ${item.absolute}`
-                    : item.absolute}
-                </span>,
-                item.kind,
-                item.title !== item.flow && item.flow,
-              ]}
-            />
-          ))
-        ) : (
-          <Empty>
-            Nothing is queued. Schedule a flow, or ask north to run one.
-          </Empty>
-        )}
-      </Panel>
-
+      {/* No Next up panel: the table's Schedule column says when each flow runs next. */}
       <Panel title="Recent runs" label="history">
         <ResourceView
           resource={runs}

@@ -2,20 +2,20 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { Dashboard, dialsLine, systemRows } from "./Dashboard";
+import { Dashboard, dialsLine, problems, systemRows, visitSince } from "./Dashboard";
 
 // What each endpoint returns in the render tests; a path left out is still loading.
 const served = vi.hoisted(() => ({ data: {} as Record<string, unknown> }));
 vi.mock("../hooks", async (importOriginal) => ({
   ...await importOriginal<typeof import("../hooks")>(),
-  useResource: (path: string) => ({ data: served.data[path] ?? null, loading: !(path in served.data), error: "", reload: async () => {} }),
+  useResource: (path: string | null) => ({ data: (path && served.data[path]) ?? null, loading: !(path && path in served.data), error: "", reload: async () => {} }),
 }));
 
 const render = () => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(Dashboard)));
+const HOUR = 3_600_000;
+const ago = (hours: number) => new Date(Date.now() - hours * HOUR).toISOString();
 
-// Issue #76, P14: the System tile said "Power cruise · ask" while a pinned model decided and
-// Settings said power was not in use.
-describe("the dashboard's tiles say what is so", () => {
+describe("the System facts", () => {
   it("names the approval mode only: models and power are on the Settings page (#80)", () => {
     expect(dialsLine({ status: "online", autonomy: "ask" })).toBe("Autonomy ask");
   });
@@ -31,48 +31,95 @@ describe("the dashboard's tiles say what is so", () => {
       ["Mistral", "ready", "good"], ["Groq", "failing", "bad"], ["mistral:flash", "waiting", "warn"],
       ["Browser: sjsu.edu", "connected", "good"], ["Browser: Personal", "not connected", "neutral"],
     ]);
-    expect(rows[2].detail).toMatch(/^until .* · rate limited$/);
   });
 });
 
-describe("the dashboard page", () => {
+describe("Is anything broken?", () => {
+  const system = {
+    status: "online", autonomy: "ask",
+    models: [{ name: "Groq", state: "ready", detail: "" }, { name: "Mistral", state: "failing", detail: "key rejected" }],
+    waiting: [{ model: "gpt-6.1-sol", until: 2e9, reason: "rate limited (429)" }],
+    browser: [{ name: "Personal", connected: false }],
+  };
+
+  it("lists only what is wrong: a failing model, a wait, an agent that cannot run, a flow that did not finish", () => {
+    const runs = [
+      { run_id: "2", flow: "nightly-check", status: "cancelled", started_at: ago(1) },
+      { run_id: "1", flow: "nightly-check", status: "completed", started_at: ago(30) },
+      { run_id: "3", flow: "daily-news", status: "completed", started_at: ago(2) },
+    ];
+    const list = problems(system, "online", [{ name: "codex", ready: true, detail: "" }, { name: "claude", ready: false, detail: "not logged in" }], runs);
+    expect(list.map(problem => problem.title)).toEqual(["Mistral", "gpt-6.1-sol", "Coding agent claude", "Flow nightly-check"]);
+    // A ready model and an unconnected browser profile are not problems; each lives on Settings.
+    expect(list.map(problem => problem.title)).not.toContain("Groq");
+    expect(list.find(problem => problem.key === "f:nightly-check")?.to).toBe("/flows?open=nightly-check");
+  });
+
+  it("judges a flow by its newest run only", () => {
+    const runs = [
+      { run_id: "2", flow: "nightly-check", status: "completed", started_at: ago(1) },
+      { run_id: "1", flow: "nightly-check", status: "cancelled", started_at: ago(30) },
+    ];
+    expect(problems(undefined, "online", [], runs)).toEqual([]);
+  });
+
+  it("says when north itself fails a check", () => {
+    expect(problems(undefined, "degraded", [], [])[0].to).toBe("/system");
+  });
+});
+
+describe("What changed? counts from your last time away", () => {
+  const now = 1_800_000_000_000;
+  it("looks back one day on a first visit", () => {
+    expect(visitSince(now, 0, 0)).toEqual({ since: now - 24 * HOUR, lastSeen: now });
+  });
+  it("keeps the same point while you stay, so a reload does not empty it", () => {
+    expect(visitSince(now, now - 5 * 60_000, now - 9 * HOUR).since).toBe(now - 9 * HOUR);
+  });
+  it("starts from when you left after 30 minutes away", () => {
+    expect(visitSince(now, now - 2 * HOUR, now - 9 * HOUR).since).toBe(now - 2 * HOUR);
+  });
+});
+
+describe("the Home page", () => {
   it("keeps its header and Refresh while it loads", () => {
     served.data = {};
     const html = render();
-    expect(html).toContain("<h1>Everything, at a glance</h1>");
+    expect(html).toContain("<h1>Home</h1>");
     expect(html).toContain("<span>Refresh</span>");
     expect(html).toContain("kit-loading");
   });
 
-  it("gives Attention and Sessions the whole width, and has no Active now, Memory or Artifacts tile", () => {
-    served.data = { "/web/api/dashboard": {
-      system: { status: "online", autonomy: "ask" },
-      attention: [], notices: [], metrics: {},
-      conversations: [{ id: "c1", title: "Trip planning", source: "web", updated_at: "" }],
-      background: [
-        { run_id: "r1", flow: "daily-news-briefing", status: "completed", trigger: "schedule", at: "", error: "",
-          file_name: "2026-11-18.md", file_id: "f1" },
-        { run_id: "r2", flow: "daily-research-briefing", status: "paused", trigger: "schedule", at: "",
-          error: "Step 'compile' ran, but twice did not report its result", file_name: "", file_id: "" },
+  it("asks three questions, in order, and repeats no other page", () => {
+    served.data = {
+      "/web/api/dashboard": { system: { status: "online", autonomy: "ask" }, attention: [], notices: [], metrics: {}, conversations: [] },
+      "/web/api/approvals": [
+        { id: "card-1", title: "Send 10 requests?", agent: "outreach", status: "pending", blocking: false, created_at: ago(30) },
+        { id: "card-2", title: "Old decision", agent: "north", status: "approved", blocking: false, created_at: ago(40) },
       ],
-    } };
+      "/web/api/notices": [{ id: "n1", title: "Briefing ready", message: "", created_at: ago(1) }],
+      "/web/api/flow-runs?limit=100": [
+        { run_id: "r1", flow: "daily-photography-flashcard", status: "paused", started_at: ago(11), updated_at: ago(11), error: "", current_step: 1, total_steps: 1 },
+        { run_id: "r2", flow: "daily-news", status: "completed", started_at: ago(2), updated_at: ago(2), error: "", current_step: 1, total_steps: 1 },
+      ],
+      "/web/api/conversations": [{ id: "c1", title: "Trip planning", source: "web", updated_at: ago(1) }],
+      "/web/api/artifacts": [],
+      "/web/api/setup/coding-agents": [],
+    };
     const html = render();
-    // One column: Attention, Sessions, one System panel (usage inside it), then Background.
-    expect(html.match(/full-panel/g)).toHaveLength(4);
-    const order = [">Attention<", ">Sessions<", ">System<", ">Background<"].map(title => html.indexOf(title));
+    const order = [">What needs me?<", ">What changed?<", ">Is anything broken?<"].map(title => html.indexOf(title));
     expect(order.every(at => at >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(html).not.toContain(">Usage<");
-    expect(html).toContain("Model cost, last 7 days");
-    expect(html).toMatch(/<a class="kit-card-head" href="\/sessions\/c1"[^>]*>.*<b>Trip planning<\/b>/);
-    // What north did while you were away, in place of a tile for one person's briefing flows.
-    expect(html).toContain(">Background<");
-    expect(html).toContain('href="/web/api/artifacts/f1/file"');
-    expect(html).toContain("twice did not report its result");
-    for (const old of ["Today&#x27;s briefing", "Latest briefing"]) expect(html).not.toContain(old);
-    for (const gone of [">Active now<", ">Memory<", ">Artifacts<", ">Flows<"]) expect(html).not.toContain(gone);
-    // Issue #81: eight rows of north's own "inference call · memory · completed" said nothing.
-    expect(html).not.toContain("Latest events");
+    // Waiting items, oldest first, each linking to itself in the Inbox; a decided card is not one.
+    expect(html.indexOf("Send 10 requests?")).toBeLessThan(html.indexOf("daily-photography-flashcard paused"));
+    expect(html).toContain('href="/inbox?focus=card-1"');
+    expect(html).toContain('href="/inbox?focus=r1"');
+    expect(html).not.toContain("Old decision");
+    expect(html).toContain("waiting 30 h");
+    expect(html).toContain('href="/sessions/c1"');
+    // The tiles that copied other pages are gone: health, version, autonomy, cost and each run.
+    for (const gone of [">System<", ">Background<", ">Attention<", "Model cost", "Autonomy"]) expect(html).not.toContain(gone);
+    expect(html).toContain("Nothing is broken.");
   });
 
   it("puts Set up North first, inside the grid, until setup is done", () => {
@@ -84,6 +131,6 @@ describe("the dashboard page", () => {
     const grid = html.indexOf("cockpit-grid");
     expect(grid).toBeGreaterThan(-1);
     expect(html.indexOf("Set up North")).toBeGreaterThan(grid);
-    expect(html.indexOf("Set up North")).toBeLessThan(html.indexOf(">Attention<"));
+    expect(html.indexOf("Set up North")).toBeLessThan(html.indexOf(">What needs me?<"));
   });
 });

@@ -17,7 +17,7 @@ describe("links from a decision to the memory it used", () => {
 
   it("finds a past decision by its fingerprint, not its wording", () => {
     const link = memoryLink({ kind: "past_decision", label: "Your past decision", text: "you approved 'x' (2x)", ref: "abc123" });
-    expect(link.startsWith("/approvals?")).toBe(true);
+    expect(link.startsWith("/memory?")).toBe(true);
     expect(params(link).get("tab")).toBe("decisions");
     expect(params(link).get("find")).toBe("abc123");
   });

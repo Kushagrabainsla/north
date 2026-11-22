@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes, useParams } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { Layout } from "./components";
 import { Chat, Sessions } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
@@ -22,6 +22,12 @@ function WorkRedirect() {
   return <Navigate to={`/tasks/${taskId}`} replace/>;
 }
 
+/** Approvals became the Inbox; old links keep their tab and the item they point at. */
+function ApprovalsRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/inbox${search}`} replace/>;
+}
+
 function SessionRedirect() {
   const { conversationId } = useParams();
   return <Navigate to={conversationId ? `/sessions/${conversationId}` : "/sessions"} replace/>;
@@ -37,7 +43,8 @@ export function App() {
     <Route path="/briefings" element={<Navigate to="/artifacts" replace/>}/>
     <Route path="/artifacts" element={<Artifacts/>}/>
     <Route path="/schedule" element={<Navigate to="/flows" replace/>}/>
-    <Route path="/approvals" element={<Approvals/>}/>
+    <Route path="/inbox" element={<Approvals/>}/>
+    <Route path="/approvals" element={<ApprovalsRedirect/>}/>
     <Route path="/memory" element={<Memory/>}/>
     <Route path="/skills" element={<Skills/>}/>
     <Route path="/flows" element={<Flows/>}/>

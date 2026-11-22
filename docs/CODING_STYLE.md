@@ -212,6 +212,10 @@ Every piece of logic exists in exactly one place. SQLite connection setup with W
 
 **One home per concept in the dashboard.** Each thing (a setting, a connection, a kind of record) lives on exactly one page; another page links to it or reuses the same component, never a copy. Onboarding walks through those same components. **Why:** scattered, repeated controls drift apart and confuse. **How to apply:** before adding a panel, find the concept's home; move rather than duplicate.
 
+**The dashboard shows everything; no channel replaces it.** Telegram and other channels may also tell you, but nothing goes only to them. **Why:** the dashboard is the one place you check. **How to apply:** never fix web clutter by sending an item elsewhere; give it one home on the dashboard.
+
+**One row of tabs per page.** A page never puts tabs inside tabs; each view is a tab on the same row. **Why:** nested tabs hide where a thing is. **How to apply:** if a tab needs its own tabs, make each of those a tab on the page instead.
+
 **The dashboard speaks plain words.** A label, mode or button names what it does for you in everyday words, not the technique behind it: "Beat" (the lights jump with each beat) rather than "Pulse", "Mood" rather than "Spectrum". A choice says in one short line what picking it will do. **Why:** the dashboard is for the person using north, who should not need to know how a feature works to choose it. **How to apply:** before naming a control, say what it does to someone who has never seen north, and use those words.
 
 **One UI kit: the same kind of thing looks the same everywhere.** Pages build from `web/src/kit.tsx`, styled only by `kit.css` (classes start with `kit-`); a page adds no list, row, button, tab, form, notice or status style of its own. The mapping:
