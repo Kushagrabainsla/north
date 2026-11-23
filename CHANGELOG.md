@@ -4,6 +4,10 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **North's local embedding model is never asked for a completion** (`inference/facts/sources/catalog.py`). A fresh north with no chat provider sent completions to "BAAI/bge-small-en-v1.5", and Home listed it under "Is anything broken?" as a model waiting out a limit. The model's facts came from a guess from its name, which has no "embed" in it, so the guess made it a chat model, although its provider declares it embeddings-only. The facts now come from what the provider declares; the name is the guess only when a provider declares nothing.
+- **A first start catches up nothing from before north was installed** (`jobs/scheduler.py`, `jobs/cron_store.py`, `jobs/sqlite_processor.py`). On 2026-11-22 a fresh north ran every built-in flow at its first start, each "16 h 24 min late: north was not running". A built-in ships with north, so it had no creation time, and catch-up counted it as there at every past slot. A schedule without one now exists from when this north first had it (a new `schedule_first_seen` table), or from its earliest firing in the queue, so an upgraded north still catches up what it missed.
+
 ## [1.22.0] - 2026-11-22
 
 ### Security

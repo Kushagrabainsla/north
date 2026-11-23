@@ -309,6 +309,27 @@ class CronScheduler:
         self._cron_store = cron_store
         self._clock = clock or (lambda: datetime.now(UTC))
         self._awake_clock = awake_clock
+        # name -> when this north first had it, for schedules that carry no creation time.
+        self._first_seen: dict[str, float] = {}
+
+    async def _dated(self, entry: CronEntry) -> CronEntry:
+        """*entry* with the time it began to exist here, when it carries none of its own.
+
+        A built-in ships with north, so it had no creation time and counted as there at every
+        past slot: a fresh install's first start ran each built-in flow at once, "16 h late:
+        north was not running". It exists from when this north first had it, or, if it has fired
+        here before, from its earliest firing still in the queue, so an upgraded north keeps its
+        catch-up. Without a store to record it in, it stays undated, as before.
+        """
+        if self._cron_store is None or entry.created_epoch is not None or entry.effective_epoch is not None:
+            return entry
+        if entry.name not in self._first_seen:
+            fired = await self._processor.first_firing_epoch(entry.name)
+            now = to_epoch(self._clock())
+            self._first_seen[entry.name] = await self._cron_store.first_seen(
+                entry.name, min(fired, now) if fired is not None else now
+            )
+        return dataclasses.replace(entry, created_epoch=self._first_seen[entry.name])
 
     async def _all_entries(self) -> list[CronEntry]:
         """Every entry that should fire: built-ins, plus the user's own that are not paused.
@@ -323,7 +344,12 @@ class CronScheduler:
                 entries = merge_entries(entries, await self._cron_store.list())
             except Exception:
                 logger.exception("CronScheduler: failed to load user cron entries")
-        return [entry for entry in entries if entry.enabled]
+        enabled = [entry for entry in entries if entry.enabled]
+        try:
+            return [await self._dated(entry) for entry in enabled]
+        except Exception:
+            logger.exception("CronScheduler: could not date schedules that carry no creation time")
+            return enabled
 
     def build_job(self, entry: CronEntry, scheduled_at: datetime, late_because: str = "") -> Job:
         """Construct the `Job` that will be enqueued for one firing of `entry`.

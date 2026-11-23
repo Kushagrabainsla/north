@@ -278,6 +278,17 @@ class SQLiteJobProcessor(JobProcessor):
             ).fetchone()
             return row is not None
 
+    async def first_firing_epoch(self, entry_name: str) -> float | None:
+        return await asyncio.to_thread(self._first_firing_epoch_sync, entry_name)
+
+    def _first_firing_epoch_sync(self, entry_name: str) -> float | None:
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT MIN(scheduled_epoch) FROM job_queue WHERE json_extract(payload, '$.cron_entry') = ?",
+                (entry_name,),
+            ).fetchone()
+            return float(row[0]) if row and row[0] is not None else None
+
     async def list_jobs(self, status: JobStatus | None = None, limit: int = 100) -> list[Job]:
         rows = await asyncio.to_thread(self._list_sync, status, limit)
         return [self._row_to_job(r) for r in rows]

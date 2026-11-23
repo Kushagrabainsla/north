@@ -64,7 +64,11 @@ def inferred_facts(models: dict[str, ModelInfo]) -> list[ModelFacts]:
         canonical_id = canonical(model_id)
         if not canonical_id:
             continue
-        caps = capabilities_from_model_id(model_id, info.provider_name)
+        # What the serving provider declares comes first; the name is a guess only when it declares
+        # nothing. "BAAI/bge-small-en-v1.5" has no "embed" in its name, so the guess made north's local
+        # embedding model a chat model: completions were sent to it and failed, and Home listed it as
+        # a model waiting out a limit.
+        caps = info.capabilities or capabilities_from_model_id(model_id, info.provider_name)
         modalities = frozenset({"text", "image"} if ModelCapability.VISION in caps else {"text"})
         out.append(
             ModelFacts(

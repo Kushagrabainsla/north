@@ -48,6 +48,17 @@ CREATE TABLE IF NOT EXISTS schedule_provisioning (
 )
 """
 
+# When this north first had each schedule that carries no creation time of its own: the
+# built-ins, which ship with north, and rows stored before creation times were kept. A slot
+# before it was never missed. Without it, a fresh install's first start ran every built-in flow
+# at once, as "16 h late: north was not running", for slots from before north was installed.
+_FIRST_SEEN_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schedule_first_seen (
+    name             TEXT PRIMARY KEY,
+    first_seen_epoch REAL NOT NULL
+)
+"""
+
 # Columns added after v1; existing databases get them via ALTER (CODING_STYLE 11.4).
 # `weekdays` superseded the single-day `weekday`, which is left in place because
 # SQLite cannot drop a column cheaply and a stale column costs nothing.
@@ -142,6 +153,7 @@ class UserCronStore:
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
             conn.execute(_PROVISIONING_SCHEMA)
+            conn.execute(_FIRST_SEEN_SCHEMA)
             existing = {row[1] for row in conn.execute("PRAGMA table_info(user_cron_entries)")}
             for column, decl in _ADDED_COLUMNS.items():
                 if column not in existing:
@@ -321,6 +333,18 @@ class UserCronStore:
     def _provisioned_names_sync(self) -> set[str]:
         with open_db_connection(self._db_path) as conn:
             return {row[0] for row in conn.execute("SELECT name FROM schedule_provisioning")}
+
+    async def first_seen(self, name: str, epoch: float) -> float:
+        """When this north first had schedule *name*: recorded as *epoch* the first time, kept after that."""
+        return await asyncio.to_thread(self._first_seen_sync, name, epoch)
+
+    def _first_seen_sync(self, name: str, epoch: float) -> float:
+        with open_db_connection(self._db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO schedule_first_seen (name, first_seen_epoch) VALUES (?, ?)", (name, epoch)
+            )
+            row = conn.execute("SELECT first_seen_epoch FROM schedule_first_seen WHERE name = ?", (name,)).fetchone()
+            return float(row[0])
 
     async def mark_provisioned(self, name: str) -> None:
         """Record that *name* has been provisioned once, so it never seeds again.

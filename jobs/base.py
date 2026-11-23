@@ -66,6 +66,10 @@ class JobProcessor(ABC):
         """
 
     @abstractmethod
+    async def first_firing_epoch(self, entry_name: str) -> float | None:
+        """When this schedule's earliest firing still in the queue was due, or None if it never fired here."""
+
+    @abstractmethod
     async def run(
         self,
         on_job: Callable[[Job], Awaitable[Any]] | None = None,
