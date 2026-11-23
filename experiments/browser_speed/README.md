@@ -165,3 +165,36 @@ Two rounds in between were slower, and showed two bugs that the single calls had
 2. **Enter in a search box counted as a send**, so the list stopped before every search. Fixed: a search field, or a control in a search form, sends nothing unless its own words say send.
 
 Not changed yet: `eval` with a top-level `return` still fails (`SyntaxError: Illegal return statement`), and a click on an element the last page change removed still fails with "inspect again".
+
+## Results, 2026-11-22: extension update, click wait, kept profile (`0c2511f`)
+
+### The extension update reaches Chrome
+
+The first check of the sjsu.edu profile logged "Updated sjsu.edu's browser extension files; reloading the extension", and the task went on with the pairing intact.
+The profile's copy now has `evaluate.js`.
+On the Hacker News task, `eval` scripts with a top-level `return` no longer fail:
+
+| | before (`56c71bd`, `20261122-202413`) | after (`0c2511f`, `20261122-222553`) |
+|---|---|---|
+| Runs with "Illegal return statement" | 2 of 3 | 0 of 3 |
+| `eval` calls in those runs | 3 | 2 |
+
+### Read-only LinkedIn and Gmail tasks, 3 runs each (`15bd2fc` against `0c2511f`)
+
+A scratch copy of `run.py` (not in the repository) with three tasks in the sjsu.edu profile: search LinkedIn for people at Anthropic with "research" in their title and read three profiles; list the first five LinkedIn notifications; list the five newest Gmail inbox emails.
+The scratch north asked on every change, and the harness rejected any card that would send or spend.
+Results are in `~/.cache/north/browser-heavy/20261122-222003` (before) and `20261122-222254` (after).
+
+| Median | li_search before | after | li_notes before | after | gmail before | after |
+|---|---|---|---|---|---|---|
+| Wall time | 21.5 s | 17.5 s | 12.1 s | 10.3 s | 13.2 s | 15.6 s |
+| Turns | 6 | 5 | 5 | 4 | 4 | 4 |
+| Browser calls | 5 | 5 | 4 | 3 | 3 | 3 |
+| Input tokens | 103k | 101k | 78k | 65k | 68k | 71k |
+
+- Both versions answered every run correctly, with no failed call.
+- The differences are within run-to-run noise (li_search: 14-25 s before, 16-29 s after).
+  Opus did each task with goto, read and query only: it opened search URLs directly and never clicked or typed.
+  Step lists and the click and profile fixes act on clicks, typing, scripts and profile choice, so these tasks do not exercise them.
+- The real outreach and Gmail runs (median 31 calls, 631 `eval` calls in 12 days) click, type and run scripts.
+  Their effect shows only in live runs after north restarts on the new code.
