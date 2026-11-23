@@ -189,8 +189,9 @@ def test_the_shortest_secret_is_said_as_the_store_takes_it() -> None:
     """The changelog said 8 characters after the store came to take 6, as short as a TP-Link password."""
     root = Path(__file__).parents[3]
     form = re.search(r"SECRET_MIN_LENGTH = (\d+);", (root / "web/src/connections.tsx").read_text(encoding="utf-8"))
-    unreleased = (root / "CHANGELOG.md").read_text(encoding="utf-8").split("\n## [", 2)[1]
-    said = {int(n) for n in re.findall(r"A secret is at least (\d+) characters", unreleased)}
+    # [Unreleased] and the newest release: the entry moves into the release when one is cut.
+    recent = "\n".join((root / "CHANGELOG.md").read_text(encoding="utf-8").split("\n## [", 3)[1:3])
+    said = {int(n) for n in re.findall(r"A secret is at least (\d+) characters", recent)}
 
     assert form is not None and int(form[1]) == secret_store.MIN_VALUE_LENGTH
     assert said == {secret_store.MIN_VALUE_LENGTH}
