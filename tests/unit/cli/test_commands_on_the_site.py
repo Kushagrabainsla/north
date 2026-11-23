@@ -127,12 +127,23 @@ def _in_the_guides() -> list[str]:
     return [command.strip() for command in found]
 
 
+def _resolve(text: str) -> click.Command | None:
+    """The command `text` runs, or None: its subcommands as deep as they go, then a word only as an argument."""
+    command: click.Command = get_command(app)
+    rest = text.split()[1:]
+    while rest and isinstance(command, click.Group) and rest[0] in command.commands:
+        command, rest = command.commands[rest[0]], rest[1:]
+    takes_argument = any(isinstance(param, click.Argument) for param in command.params)
+    if rest and re.fullmatch(r"[a-z][a-z-]*", rest[0]) and not takes_argument:
+        return None  # a subcommand north does not have
+    return command
+
+
 def test_every_command_in_the_guides_is_one_north_has() -> None:
-    commands = _commands()
     named = _in_the_guides()
     wrong = []
     for text in named:
-        command = commands.get(_path(text))
+        command = _resolve(text)
         if command is None:
             wrong.append(text)
             continue

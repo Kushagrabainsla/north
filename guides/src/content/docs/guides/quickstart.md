@@ -60,7 +60,8 @@ The first time, the dashboard opens Setup. Setup has six steps:
 | 6. Finish | Check the summary, then click **Finish setup**. | Yes |
 
 You can skip any optional step and come back later.
-All of the steps are also in **Settings**, under **Connections**.
+Steps 1 to 4 are also in **Settings**, under **Connections**.
+To open Setup again, go to **Settings** and click **Setup guide**.
 
 **Finish setup** stays off until you connect an AI provider.
 To leave Setup before that, click **Skip setup for now**.
