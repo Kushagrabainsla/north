@@ -129,12 +129,34 @@ async def test_a_page_north_cannot_read_still_asks_and_says_so() -> None:
 
 async def test_the_same_button_on_the_same_page_is_the_same_action_whatever_the_query() -> None:
     """So a decision you took replays - but only for that button on that page."""
-    first = await _describe({"action": "click", "uid": "n10"}, _Page("https://jobs.acme.test/apply/7?s=1"))
-    again = await _describe({"action": "click", "uid": "n10"}, _Page("https://jobs.acme.test/apply/7?s=2"))
-    other = await _describe({"action": "click", "uid": "n11"}, _Page("https://jobs.acme.test/apply/7?s=1"))
+    first = await _describe({"action": "click", "uid": "n11"}, _Page("https://jobs.acme.test/apply/7?s=1"))
+    again = await _describe({"action": "click", "uid": "n11"}, _Page("https://jobs.acme.test/apply/7?s=2"))
+    other = await _describe({"action": "click", "uid": "n20"}, _Page("https://jobs.acme.test/apply/7?s=1"))
 
     assert first.action.describe() == again.action.describe()
     assert first.action.describe() != other.action.describe()
+
+
+async def test_a_send_keeps_the_query_that_says_to_whom() -> None:
+    """LinkedIn's invite dialog names the person only in its query: one send per person, not per run.
+
+    Without the query every "Send invitation" was one action, so after the first send of a run
+    north refused each next one as a repeat (2026-11-19: 1 of 10 sent). A true retry of the same
+    send has the same address, so it is still one action.
+    """
+    target = {"role": "button", "text": "Send invitation", "inForm": True}
+
+    def invite(person: str) -> _Page:
+        return _Page(f"https://www.linkedin.com/preload/custom-invite/?vanityName={person}", target=target)
+
+    first = await _describe({"action": "click", "selector": "button.send"}, invite("andrewwdye"))
+    retry = await _describe({"action": "click", "selector": "button.send"}, invite("andrewwdye"))
+    next_person = await _describe({"action": "click", "selector": "button.send"}, invite("evan-cox"))
+
+    assert first.action.reaches_third_party
+    assert first.action.describe() == retry.action.describe()
+    assert first.action.describe() != next_person.action.describe()
+    assert "vanityName=andrewwdye" in first.action.summary
 
 
 async def test_a_selector_reaches_the_page_script_as_a_literal() -> None:

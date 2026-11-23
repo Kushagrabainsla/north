@@ -202,7 +202,10 @@ def _request(action: str, params: dict[str, Any], page: _Page, element: _Element
     at_checkout = any(part in urlparse(page.url).path.lower() for part in _SPENDING_PATH_PARTS)
     spends = presses and (bool(words & _SPENDING_WORDS) or (at_checkout and (sends or submits_form)))
     attaches = params.get("browser_context") == "existing"
-    location = _location(page.url or str(params.get("url") or ""))
+    # A send or a spend keeps the query string: it can be the only part that says to whom.
+    # LinkedIn's invite dialog is /preload/custom-invite/?vanityName=<person>, so without it
+    # every person's "Send invitation" was one action, and north sent once per run.
+    location = _location(page.url or str(params.get("url") or ""), keep_query=sends or spends)
 
     headline = _headline(action, params, label)
     message = _message(action, params, page, element, headline, sends=sends, spends=spends, attaches=attaches)
@@ -241,12 +244,16 @@ def _headline(action: str, params: dict[str, Any], label: str) -> str:
     return f"{_VERBS.get(action, action.title())} {label}".strip()
 
 
-def _location(url: str) -> str:
-    """Scheme, host and path: stable across visits, unlike a query string with a session in it."""
+def _location(url: str, *, keep_query: bool = False) -> str:
+    """Scheme, host and path: stable across visits, unlike a query string with a session in it.
+
+    With *keep_query*, the query string too, for an action whose target it may name.
+    """
     parsed = urlparse(url)
     if not parsed.scheme:
         return url
-    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    query = f"?{parsed.query}" if keep_query and parsed.query else ""
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}{query}"
 
 
 def _message(

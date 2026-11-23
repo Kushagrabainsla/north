@@ -59,6 +59,8 @@ COMPONENT = "approval_decider"
 _FACT_LIMIT = 10
 _EPISODE_LIMIT = 3
 _PAST_DECISION_LIMIT = 10
+# One past decision as the decider reads it: a whole card, a long flow question included.
+_DECISION_CHARS = 1500
 _DOCUMENT_CHARS = 3000
 _CONTENT_CHARS = 6000
 _QUERY_CHARS = 1000
@@ -220,17 +222,31 @@ class MemoryDecider:
         return items
 
     def _past_decisions(self, agent: str) -> list[MemoryRef]:
+        """Your decisions on *agent*'s cards: actions you approved or rejected, and questions you answered.
+
+        Each in its whole text. A label cut to its first and last 40 characters read
+        "Step 'outreach' is read…the user does not approve, send nothing.", and the decider
+        took your yes to that step for a no.
+        """
         if self._approval_memory is None:
             return []
-        rows = [row for row in self._approval_memory.all_decisions() if row.get("agent") == agent]
         return [
-            MemoryRef(
-                kind=MemoryKind.PAST_DECISION,
-                text=f"you {row['decision']} {row['signature']!r} ({row['count']}x)",
-                ref=str(row["fingerprint"]),
-            )
-            for row in rows[:_PAST_DECISION_LIMIT]
+            MemoryRef(kind=MemoryKind.PAST_DECISION, text=_decision_text(row), ref=str(row["fingerprint"]))
+            for row in self._approval_memory.decisions_on(agent, _PAST_DECISION_LIMIT)
         ]
+
+
+def _decision_text(row: dict[str, object]) -> str:
+    """One past decision of yours, in words the decider cannot misread."""
+    text = _clip(str(row["text"]))
+    if row["decision"] == ApprovalDecision.ANSWERED:
+        return f"you were asked {text!r} and you answered {str(row['chosen_option'])!r}"
+    return f"you {row['decision']} {text!r} ({row['count']}x)"
+
+
+def _clip(text: str) -> str:
+    """At most _DECISION_CHARS, cut at the end and marked: a cut in the middle changed what the text said."""
+    return text if len(text) <= _DECISION_CHARS else f"{text[: _DECISION_CHARS - 1]}…"
 
 
 def _said_items(session: Session) -> list[_Item]:

@@ -231,6 +231,33 @@ class ApprovalMemory:
             return []
         return [dict(row) for row in rows]
 
+    def decisions_on(self, agent: str, limit: int) -> list[dict[str, object]]:
+        """Your own decisions on *agent*'s cards, newest first: what the memory decider reads.
+
+        Two kinds: your latest approve or reject of each action (with how many times you
+        decided it), and each question you answered (with the option you chose). An answer
+        has no action fingerprint, so `all_decisions`, which lists what replays, leaves it
+        out; the decider read only that list, and so never saw that you had answered "Approve
+        all 10" to a flow's daily question. ``text`` is the whole card; a row stored before the
+        card was kept has its title, and only without one the signature, which is cut in the
+        middle and so can say the opposite of the card.
+        """
+        query = (
+            "SELECT d.fingerprint, d.decision, d.chosen_option, COALESCE(l.n, 1) AS count, "
+            "COALESCE(NULLIF(d.summary, ''), NULLIF(d.title, ''), d.signature) AS text "
+            f"FROM decisions d LEFT JOIN ({_LATEST_REPLAYABLE}) l ON d.id = l.id "
+            "WHERE d.agent = ? AND d.decided_by = 'you' "
+            "AND (l.id IS NOT NULL OR (d.decision = 'answered' AND d.chosen_option != '')) "
+            "ORDER BY d.id DESC LIMIT ?"
+        )
+        try:
+            with open_db_connection(self._db_path) as conn:
+                rows = conn.execute(query, (agent, limit)).fetchall()
+        except Exception:
+            logger.warning("ApprovalMemory: failed to read decisions on %s", agent, exc_info=True)
+            return []
+        return [dict(row) for row in rows]
+
     def forget(self, fingerprint: str) -> bool:
         """Stop replaying one action's decision. True when there was one.
 
@@ -308,7 +335,9 @@ class ApprovalMemory:
                         decided_by,
                         card.source if card else "",
                         card.title if card else "",
-                        card_summary(card) if card and card.source else "",
+                        # The whole card, for every decision: the memory decider reads what you
+                        # decided from it, and the 80-character signature is a label only.
+                        card_summary(card) if card else "",
                         json.dumps(edited_fields or []),
                         datetime.now(UTC).isoformat(),
                     ),

@@ -8,6 +8,7 @@ the card waits for you rather than being guessed.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,64 @@ async def test_it_reads_facts_rules_and_your_past_decisions_for_that_agent(tmp_p
     assert decision.kind is MemoryKind.PAST_DECISION and decision.text.startswith("you approved")
     assert decision.ref, "a past decision links to its row on the Memory page"
     assert rules.kind is MemoryKind.JUDGEMENT_RULES
+
+
+async def test_it_reads_your_answers_to_questions_and_each_decision_in_full(tmp_path: Path) -> None:
+    """2026-11-20 to 11-22 it answered a flow's daily "send?" with "Send none".
+
+    Your "Approve all 10" was stored but never shown to it: an answer has no action fingerprint,
+    and it read only decisions that replay. The one row it saw, your yes to the step, was cut to
+    "Step 'outreach' is read…the user does not approve, send nothing." and read as a no.
+    """
+    past = ApprovalMemory(tmp_path / "m.db")
+    step = Card.new(
+        type=CardType.APPROVAL,
+        agent="north",
+        title="Flow approval: outreach",
+        message="Step 'outreach' is ready to run. "
+        + "Find 10 people. " * 20
+        + "If the user does not approve, send nothing.",
+    )
+    past.record("north", "north other cmd=step outreach", "approved", card=step)
+    batch = Card.new(
+        type=CardType.QUESTION,
+        agent="north",
+        title="North - Question",
+        message="Send these 10 connection requests?",
+        options=["Send all 10", "Send none"],
+    )
+    past.record("north", "", ApprovalDecision.ANSWERED, card=batch, chosen_option="Send all 10")
+    reply = {"decision": "answer", "option": "Send all 10", "reason": "you sent them before", "used": ["D1"]}
+    decider, model = _decider(reply, approval_memory=past)
+
+    answer = await decider.answer(batch.model_copy(update={"id": "today"}))
+
+    prompt = model.requests[0].prompt
+    assert (
+        "you were asked 'North - Question \\nSend these 10 connection requests?' and you answered 'Send all 10'"
+        in prompt
+    )
+    assert "Step 'outreach' is ready to run. Find 10 people." in prompt and "read…" not in prompt
+    assert answer.chosen_option == "Send all 10"
+    assert answer.memory_used[0].kind is MemoryKind.PAST_DECISION
+
+
+async def test_an_old_decision_without_its_card_is_read_by_its_title_not_a_cut_label(tmp_path: Path) -> None:
+    past = ApprovalMemory(tmp_path / "m.db")
+    long_action = (
+        "north other cmd=Step 'outreach' is ready. " + "x " * 60 + "If the user does not approve, send nothing."
+    )
+    step = Card.new(type=CardType.APPROVAL, agent="north", title="Flow approval: outreach", message="m")
+    past.record("north", long_action, "approved", card=step)
+    with sqlite3.connect(tmp_path / "m.db") as conn:  # as stored before the whole card was kept
+        conn.execute("UPDATE decisions SET summary = ''")
+    decider, model = _decider({"decision": "approve", "reason": "r"}, approval_memory=past)
+
+    await decider.rule(Action(agent="north", kind=ActionKind.SHELL_COMMAND, summary="s", command="c"))
+
+    prompt = model.requests[0].prompt
+    assert "you approved 'Flow approval: outreach' (1x)" in prompt
+    assert "send nothing" not in prompt
 
 
 async def test_agent_text_is_fenced_as_untrusted_and_cannot_close_the_fence() -> None:
