@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from coding_agents.base import CodingBackend
 from coding_agents.claude import ClaudeBackend
 from coding_agents.codex import CodexBackend
-from coding_agents.models import FailureKind, Mode, RunEvent, RunSpec
+from coding_agents.models import FailureKind, Mode, RunEvent, RunOutcome, RunSpec
 
 # The coding agents north can delegate to; a missing one is reported, not hidden.
 CODING_AGENT_NAMES = ("codex", "claude")
@@ -119,11 +119,23 @@ async def _trial(backend: CodingBackend, found: Readiness) -> Readiness:
                 detail=f"{found.name} did not answer a one-line request in {_TRIAL_SECONDS} seconds",
                 fix=_FIX_OTHERWISE.format(name=found.name),
             )
-    if outcome.ok:
+    if outcome.ok or _reached_the_model(outcome):
         return found
     fix = _FIXES.get(outcome.failure, _FIX_OTHERWISE).format(name=found.name)
     error = (outcome.error or "no reason given").strip().rstrip(".")
     return replace(found, ready=False, detail=f"{found.name} could not answer a one-line request: {error}", fix=fix)
+
+
+def _reached_the_model(outcome: RunOutcome) -> bool:
+    """Whether a request that stopped at its own cap still proved what it asks: login and credit.
+
+    The request has a cap of _TRIAL_BUDGET_USD. Claude Code's first call sends its whole system
+    prompt, so it can cost more than that before the one word comes back, and Claude stops with
+    "Reached maximum budget". That stop means the agent was logged in, reached its model and was
+    billed. Read as a failure, it stopped the nightly check on 2026-11-22 and told the user to run
+    `claude` in a terminal, where there was nothing wrong.
+    """
+    return outcome.failure is FailureKind.LIMIT and outcome.tokens_in > 0
 
 
 async def _git_init(folder: str) -> None:

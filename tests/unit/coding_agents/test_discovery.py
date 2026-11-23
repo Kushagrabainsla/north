@@ -50,6 +50,31 @@ async def test_an_agent_that_answers_is_ready(monkeypatch: pytest.MonkeyPatch) -
     assert agent.specs[0].max_budget_usd <= 0.05, "the request spends almost nothing"
 
 
+async def test_an_agent_that_stops_at_the_request_cap_after_reaching_its_model_is_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-11-22: Claude Code's first call cost more than the $0.05 cap, and north called it not ready."""
+    capped = RunOutcome(
+        False, "", "s", failure=FailureKind.LIMIT, error="Reached maximum budget ($0.05)", tokens_in=24_000
+    )
+    _installed(monkeypatch, claude=_Agent(Availability(True, "2.1.308"), capped))
+
+    [claude] = await discovery.try_agents(["claude"])
+
+    assert claude.ready and not claude.detail
+
+
+async def test_a_stop_before_the_model_answered_is_still_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run that timed out before any model call proves nothing about the login or the credit."""
+    timed_out = RunOutcome(False, "", "s", failure=FailureKind.LIMIT, error="The run did not finish in 600 seconds.")
+    _installed(monkeypatch, claude=_Agent(Availability(True, "2.1.308"), timed_out))
+
+    [claude] = await discovery.try_agents(["claude"])
+
+    assert not claude.ready
+    assert claude.detail.startswith("claude could not answer a one-line request")
+
+
 async def test_an_agent_the_probe_rejects_is_never_asked(monkeypatch: pytest.MonkeyPatch) -> None:
     agent = _Agent(Availability(False, "2.1.308", "Claude Code is not logged in; run `claude auth login`"))
     _installed(monkeypatch, claude=agent)
