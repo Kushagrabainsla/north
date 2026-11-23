@@ -37,7 +37,7 @@ describe("browser setup evidence", () => {
   it("never calls a connection check a verified login", () => {
     expect(profileTestLabel({ status: "completed", data: { profile_verified: true } })).toContain("login not checked");
     expect(profileTestLabel({ status: "completed" })).toBe("Connection not verified");
-    expect(profileTestLabel({ status: "running" })).toContain("Approvals");
+    expect(profileTestLabel({ status: "running" })).toContain("Inbox");
     expect(profileTestLabel({ status: "failed", error: "Wrong profile" })).toBe("Wrong profile");
   });
   it("keeps onboarding optional and resumable", () => {

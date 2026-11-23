@@ -349,7 +349,7 @@ export function TelegramConnection() {
     });
   };
   return <Panel title="Telegram" label={data?.configured ? `Ready ${data.token_hint}` : "Optional"}
-    about={<>Send the bot any message or voice note to run a task. North also sends approval requests there, unless the terminal UI is already showing them. In the chat, <code>/help</code> lists the commands; <code>/workspace</code> picks the folder a task works in, which must be a git repository for coding.</>}
+    about={<>Send the bot any message or voice note to run a task. North also sends approval requests there, also while the dashboard or the terminal is open. In the chat, <code>/help</code> lists the commands; <code>/workspace</code> picks the folder a task works in, which must be a git repository for coding.</>}
     actions={data?.token_hint && <Button size="sm" variant="danger" disabled={busy} onClick={() => void removeToken()}>Remove token</Button>}>
     {message && <Notice tone="success">{message}</Notice>}
     {(error || resource.error || data?.problem) && <Notice tone="error">{error || resource.error || data!.problem}</Notice>}

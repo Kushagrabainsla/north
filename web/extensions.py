@@ -769,7 +769,7 @@ async def start_flow_run(name: str, body: FlowRunRequest) -> dict[str, Any]:
 
     ``test`` is how a candidate earns activation. ``execute`` is a real run and
     needs the flow to be schedulable: active, unchanged since it was tested.
-    Approvals the run needs appear in the Approvals page like any other.
+    Approvals the run needs appear in the Inbox like any other.
     """
     services = current_services()
     flow = _known_flow(name)

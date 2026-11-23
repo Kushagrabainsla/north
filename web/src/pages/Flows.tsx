@@ -877,7 +877,7 @@ export function Flows() {
     if (
       mode === "execute" &&
       !(await dialog.confirm(
-        `Run '${selected}' now? It does the real work, and anything that needs approval will ask you under Approvals.`,
+        `Run '${selected}' now? It does the real work, and anything that needs approval will ask you in the Inbox.`,
         { title: "Run flow?", confirmLabel: "Run now" },
       ))
     )
@@ -892,8 +892,8 @@ export function Flows() {
         tone: "success",
         text:
           mode === "test"
-            ? "Test run started. It does the real work once, on a small case. Anything that needs approval is under Approvals."
-            : "Run started. Anything that needs approval is under Approvals.",
+            ? "Test run started. It does the real work once, on a small case. Anything that needs approval is in the Inbox."
+            : "Run started. Anything that needs approval is in the Inbox.",
       });
       await Promise.all([history.reload(), runs.reload()]);
     } catch (error) {

@@ -20,7 +20,7 @@ export function newBrowserProfile(): BrowserProfile {
 
 export function profileTestLabel(test?: ProfileTest): string {
   if (!test) return "Not tested";
-  if (test.status === "running") return "Checking · may be waiting in Approvals";
+  if (test.status === "running") return "Checking · may be waiting in the Inbox";
   if (test.status === "completed" && test.data?.profile_verified) return "Profile verified · login not checked";
   return test.error || "Connection not verified";
 }
@@ -78,7 +78,7 @@ export function BrowserProfiles() {
         const result = await post<{ profiles: DiscoveredProfile[] }>("/web/api/browser/profiles/discover", {});
         setFound(result.profiles); if (!result.profiles.length) setError("No supported browser profiles found. Chrome, Chromium and Brave are supported.");
       })}>Find existing profiles</Button>
-      <Button variant="quiet" to="/approvals">Open Approvals →</Button>
+      <Button variant="quiet" to="/inbox">Open Inbox →</Button>
     </ActionBar>
     {found.length > 0 && <ActionBar align="start">{found.map(({ browser, ...profile }) =>
       <Button size="sm" key={profile.id} disabled={busy} onClick={() => { setDraft({ ...profile, purpose: "", enabled: false }); setFound([]); }}>{browser} · {profile.name}</Button>)}</ActionBar>}
