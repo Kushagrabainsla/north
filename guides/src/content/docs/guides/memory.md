@@ -32,7 +32,7 @@ The page has one row of tabs:
 | **Facts** | Short facts about you, such as your work and your preferences. | When a fact is wrong, old or missing. |
 | **Episodes** | Notes of past tasks. north uses them to recognize a situation that it was in before. | You cannot edit them. |
 | **Learned decisions** | Your approve and reject decisions, which north repeats. | When north must ask you again. |
-| **Safe actions** | The actions that north can do without asking, in safe mode. | When you want to allow or stop an action. |
+| **Safe actions** | The actions that north can do without asking, in safe and autonomous mode. | When you want to allow or stop an action. |
 
 ## Edit a document
 
@@ -129,7 +129,7 @@ The facts that north finds appear on the **Facts** tab. Correct or delete them t
 These two tabs come from your approvals:
 
 - **Learned decisions**: Each time you approve or reject an action, north records your decision. When a matching action comes up, north repeats your decision. To make north ask again, click **Forget**, then **Forget decision**.
-- **Safe actions**: These rules apply only in safe mode. To add one, choose a **Kind**, type the **Action** and click **Add rule**. Two things are never on this list: sending something to another person, and spending money.
+- **Safe actions**: These rules apply only in safe and autonomous mode. To add one, choose a **Kind**, type the **Action** and click **Add rule**. Two things are never on this list: sending something to another person, and spending money.
 
 ## Use the terminal
 

@@ -11,7 +11,7 @@
 ## What north does
 
 - **Works on your tasks:** research, writing, files, the web, your browser, and code through Claude Code or Codex.
-- **Asks before it changes anything:** each change is a card that shows exactly what will happen.
+- **Asks before it changes anything:** by default, each change is a card that shows exactly what will happen.
 - **Learns how you decide:** your answer can become a rule, so next time north does not need to ask.
 - **Runs on a schedule:** flows such as a morning briefing run by themselves.
 - **Stays on your computer:** everything north keeps is in `~/.north`.

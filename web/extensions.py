@@ -22,6 +22,7 @@ from flows.store import FlowRun
 from flows.validation import schedulable_flow_error, validate_flow_capabilities
 from inference.registry import PROVIDER_DEFINITIONS
 from jobs.models import JobStatus, late_note
+from jobs.scheduler import builtin_default
 from orchestrator.api_context import current_services
 from policies.self_edit import SelfEditPolicy
 from skills.exceptions import SkillNotFoundError, SkillParseError
@@ -707,12 +708,18 @@ def _set_fields(model: BaseModel) -> dict[str, Any]:
     return {key: value for key, value in model.model_dump().items() if value is not None}
 
 
-async def _flow_schedule_row(name: str) -> dict[str, Any]:
-    """The stored schedule *name*, if it is one that runs a flow."""
+async def _require_flow_schedule(name: str) -> None:
+    """404 unless *name* is a schedule that runs a flow: a stored one, or one north ships.
+
+    A built-in has no stored row until it is first edited, so Pause and Edit on one
+    of north's own schedules were a 404 here. FlowSchedules seeds that row on the
+    first change, and a delete only undoes the edit.
+    """
+    if builtin_default(name) is not None:
+        return
     row = await current_services().require("cron_store").get(name)
     if row is None or not row.get("flow"):
         raise HTTPException(status_code=404, detail=f"No flow schedule named {name!r}")
-    return row
 
 
 def _schedules() -> FlowSchedules:
@@ -748,7 +755,7 @@ async def create_flow_schedule(name: str, body: FlowScheduleCreate) -> dict[str,
 @router.patch("/flow-schedules/{schedule}")
 async def update_flow_schedule(schedule: str, body: FlowScheduleUpdate) -> dict[str, Any]:
     """Retime, rename, pause or resume one of a flow's schedules."""
-    await _flow_schedule_row(schedule)
+    await _require_flow_schedule(schedule)
     result = await _schedules().change({"schedule": schedule, **_set_fields(body)})
     if not result.success:
         raise HTTPException(status_code=422, detail=result.error or "Could not change this schedule")
@@ -757,7 +764,8 @@ async def update_flow_schedule(schedule: str, body: FlowScheduleUpdate) -> dict[
 
 @router.delete("/flow-schedules/{schedule}", status_code=204)
 async def delete_flow_schedule(schedule: str) -> None:
-    await _flow_schedule_row(schedule)
+    """Delete one of a flow's schedules. For one north ships, this restores its shipped timing."""
+    await _require_flow_schedule(schedule)
     result = await _schedules().remove({"schedule": schedule})
     if not result.success:
         raise HTTPException(status_code=409, detail=result.error or "Could not delete this schedule")

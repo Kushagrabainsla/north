@@ -5,9 +5,9 @@ Four modes, from most to least supervised (CODING_STYLE §7.3):
 - ``ask`` (default): read-only runs; every mutating action asks.
 - ``safe``: read-only, safe mutating actions and exact replays of your past
   answers run; everything else asks. No model decides anything.
-- ``autonomous``: decides for you from what north knows about you; asks only
-  when that cannot decide, as for a step outside the workspace that nothing you
-  said covers.
+- ``autonomous``: runs what ``safe`` runs, and decides the rest from what north
+  knows about you; asks only when that cannot decide, as for a step outside the
+  workspace that nothing you said covers.
 - ``yolo``: never asks; every approval is yes and every question gets the yes
   answer (or, when no option says yes, "proceed with your best judgement").
 
@@ -62,7 +62,8 @@ _DESCRIPTIONS: dict[ApprovalMode, str] = {
     ApprovalMode.ASK: "Read-only work runs; every change asks you.",
     ApprovalMode.SAFE: "Read-only work, safe changes and your exact past answers run; everything else asks.",
     ApprovalMode.AUTONOMOUS: (
-        "Decides for you from what north knows about you. Asks only when that cannot decide: "
+        "Runs what safe runs, and decides the rest from what north knows about you. "
+        "Asks only when that cannot decide: "
         "a step outside the workspace that nothing you said covers."
     ),
     ApprovalMode.YOLO: "Never asks you: every approval is yes and every question gets the yes answer.",

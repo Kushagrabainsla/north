@@ -235,6 +235,26 @@ async def test_a_flows_schedule_can_be_paused_retimed_and_deleted(env) -> None:
     assert await env.cron.get(name) is None
 
 
+async def test_a_schedule_north_ships_can_be_paused_retimed_and_restored(env) -> None:
+    """A built-in has no stored row until its first edit; the page's Pause and Edit were a 404."""
+    paused = await web_api.update_flow_schedule("task_context_cleanup", web_api.FlowScheduleUpdate(enabled=False))
+    assert paused["enabled"] is False and paused["flow"] == "nightly-cleanup"
+
+    retimed = await web_api.update_flow_schedule("task_context_cleanup", web_api.FlowScheduleUpdate(hour=4))
+    assert retimed["hour"] == 4 and retimed["enabled"] is False
+
+    assert await web_api.delete_flow_schedule("task_context_cleanup") is None
+    assert await env.cron.get("task_context_cleanup") is None  # back to the shipped schedule
+
+
+async def test_a_schedule_north_ships_cannot_be_deleted_only_paused(env) -> None:
+    with pytest.raises(HTTPException) as refused:
+        await web_api.delete_flow_schedule("task_context_cleanup")
+
+    assert refused.value.status_code == 409
+    assert "Pause it" in refused.value.detail
+
+
 async def test_only_schedules_that_run_a_flow_are_managed_here(env) -> None:
     await env.cron.add(name="stretch", agent="general", task="stretch", hour=9, minute=0, weekdays=None)
 

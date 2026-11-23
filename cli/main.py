@@ -90,7 +90,7 @@ from cli.startup_report import last_error_lines as _last_error_lines
 from cli.tui import run as _tui_run
 from cli.update_spec import pinned_git_spec as _pinned_git_spec
 from cli.web_build import web_build_is_stale as _web_build_is_stale
-from config.approval_mode import ApprovalMode
+from config.approval_mode import ApprovalMode, require_approval_mode, resolve_approval_mode
 from config.security import load_secret
 from config.server_url import is_this_computer
 from utils.time import configure_timezone, local_timezone, local_timezone_name, system_timezone_name
@@ -1483,13 +1483,43 @@ def tools_confidence(
 
 config_app = typer.Typer(help="System configuration.", no_args_is_help=True)
 
+# The one key whose live value is not in .env: north keeps its approval mode in
+# settings.json, which overrides NORTH_APPROVAL_MODE. Writing .env for it changed
+# nothing once Setup or any surface had saved a mode.
+_LIVE_APPROVAL_MODE = "approval_mode"
+
+
+def _set_approval_mode(value: str) -> None:
+    """Switch north's approval mode through the settings API, as `/autonomy` and `--yolo` do."""
+    try:
+        mode = require_approval_mode(value)
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    _api("POST", "/orchestrator/settings", json={"autonomy": mode.value})
+    typer.secho(f"✓ approval mode is now {mode.value}", fg=typer.colors.GREEN)
+
+
+def _config_value(key: str, field_name: str) -> object:
+    """The value north uses for *key*: settings.json for the approval mode, the environment for the rest."""
+    from config.settings import settings
+
+    if key == _LIVE_APPROVAL_MODE:
+        from config.strategy import NorthSettings
+
+        saved = NorthSettings(
+            settings.north_home / "settings.json", default_approval_mode=resolve_approval_mode(settings)
+        )
+        return saved.autonomy.value
+    return getattr(settings, field_name, None)
+
 
 @config_app.command("set")
 def config_set(
     key: str = typer.Argument(..., help=f"Config key. Valid: {', '.join(_CONFIG_KEYS)}"),
     value: str = typer.Argument(..., help="New value."),
 ) -> None:
-    """Persist a configuration value to the .env file in north_home."""
+    """Persist a configuration value to the .env file in north_home. The approval mode changes north at once."""
     from config.settings import settings
 
     if key not in _CONFIG_KEYS:
@@ -1499,6 +1529,9 @@ def config_set(
             err=True,
         )
         raise typer.Exit(1) from None
+    if key == _LIVE_APPROVAL_MODE:
+        _set_approval_mode(value)
+        return
 
     field_name, cast = _CONFIG_KEYS[key]
     try:
@@ -1530,9 +1563,7 @@ def config_set(
 def config_get(
     key: str = typer.Argument(..., help=f"Config key. Valid: {', '.join(_CONFIG_KEYS)}"),
 ) -> None:
-    """Read a configuration value from the current environment / .env."""
-    from config.settings import settings
-
+    """Read a configuration value from the current environment / .env, or the approval mode north uses."""
     if key not in _CONFIG_KEYS:
         typer.secho(
             f"Unknown key {key!r}. Valid keys: {', '.join(_CONFIG_KEYS)}",
@@ -1542,7 +1573,7 @@ def config_get(
         raise typer.Exit(1) from None
 
     field_name, _ = _CONFIG_KEYS[key]
-    val = getattr(settings, field_name, None)
+    val = _config_value(key, field_name)
     if "key" in field_name or "token" in field_name or "secret" in field_name:
         display_val = (
             f"{str(val)[:8]}...{str(val)[-4:]}" if val and len(str(val)) > 12 else ("(set)" if val else "(not set)")
@@ -1555,13 +1586,11 @@ def config_get(
 @config_app.command("list")
 def config_list() -> None:
     """List all supported configuration keys and their current values."""
-    from config.settings import settings
-
     _console.print()
     _console.print(f"  {wordmark()} [bold white]configuration[/bold white]")
     _console.print(f"  [bright_black]{'─' * 58}[/bright_black]")
     for key, (field_name, _) in sorted(_CONFIG_KEYS.items()):
-        val = getattr(settings, field_name, None)
+        val = _config_value(key, field_name)
         if "key" in field_name or "token" in field_name or "secret" in field_name:
             display_val = (
                 f"[yellow]{str(val)[:8]}...{str(val)[-4:]}[/yellow]"

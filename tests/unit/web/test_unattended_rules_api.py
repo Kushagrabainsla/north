@@ -35,25 +35,26 @@ async def test_the_list_is_visible(store) -> None:
     assert payload["active"] is True
 
 
-async def test_the_page_is_told_when_no_rule_can_fire(tmp_path) -> None:
-    """A rule only fires in `safe`. Listing inert rules with nothing saying so
-    is how someone concludes the feature is broken."""
-    rules = UnattendedRuleStore(tmp_path / "approval_memory.db")
-    with bind_services(ApiServices(unattended_rules=rules, north_settings=_Settings(ApprovalMode.ASK))):
-        payload = await web_api.unattended_rules()
-
-    assert payload["active"] is False
-    assert payload["mode"] == "ask"
-
-
-@pytest.mark.parametrize("mode", [ApprovalMode.AUTONOMOUS, ApprovalMode.YOLO])
-async def test_rules_are_inert_in_the_modes_that_never_ask(tmp_path, mode) -> None:
-    """Autonomous and yolo allow everything before the safe list is consulted."""
+@pytest.mark.parametrize("mode", [ApprovalMode.ASK, ApprovalMode.YOLO])
+async def test_the_page_is_told_when_no_rule_can_fire(tmp_path, mode) -> None:
+    """Ask never reads the list, and yolo allows everything before it would.
+    Listing inert rules with nothing saying so is how someone concludes the
+    feature is broken."""
     rules = UnattendedRuleStore(tmp_path / "approval_memory.db")
     with bind_services(ApiServices(unattended_rules=rules, north_settings=_Settings(mode))):
         payload = await web_api.unattended_rules()
 
     assert payload["active"] is False
+    assert payload["mode"] == mode.value
+
+
+async def test_rules_fire_in_autonomous_before_its_model(tmp_path) -> None:
+    """Autonomous checks the safe list first (approval/policy.py `_autonomous`), so the page must not call it inert."""
+    rules = UnattendedRuleStore(tmp_path / "approval_memory.db")
+    with bind_services(ApiServices(unattended_rules=rules, north_settings=_Settings(ApprovalMode.AUTONOMOUS))):
+        payload = await web_api.unattended_rules()
+
+    assert payload["active"] is True
 
 
 async def test_a_rule_can_be_added_disabled_and_deleted(store) -> None:

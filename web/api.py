@@ -956,19 +956,20 @@ class UnattendedRuleUpdate(BaseModel):
 
 @router.get("/unattended/rules")
 async def unattended_rules() -> dict[str, Any]:
-    """The safe-action list: what north runs in `safe` mode without asking.
+    """The safe-action list: what north runs in `safe` and `autonomous` mode without asking.
 
-    Returned with the live approval mode, because a rule only ever fires in
-    `safe` - in `ask` the whole table is inert. Showing rules that cannot
-    fire, with no indication of that, is how someone concludes the feature is
-    broken.
+    Returned with the live approval mode, because a rule fires only in `safe`
+    and `autonomous` (which checks the list before its model): in `ask` the
+    table is inert, and in `yolo` everything is allowed before it is read.
+    Showing rules that cannot fire, with no indication of that, is how someone
+    concludes the feature is broken.
     """
     store = current_services().unattended_rules
     north_settings = current_services().north_settings
     mode = north_settings.autonomy if north_settings else ApprovalMode.ASK
     return {
         "mode": mode.value,
-        "active": mode is ApprovalMode.SAFE,
+        "active": mode in {ApprovalMode.SAFE, ApprovalMode.AUTONOMOUS},
         "kinds": list(RULE_KINDS),
         "rules": [] if store is None else [rule.as_dict() for rule in store.all()],
     }

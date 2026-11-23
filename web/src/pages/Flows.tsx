@@ -412,6 +412,7 @@ interface ScheduleView extends ScheduleLike {
   weekdays: number[];
   schedule: string;
   source: string;
+  modified: boolean;
 }
 
 // A step that answered with nothing worth quoting still did something: say so
@@ -624,12 +625,18 @@ function FlowSchedules({
   };
   const path = (name: string) =>
     `/web/api/flow-schedules/${encodeURIComponent(name)}`;
+  // A schedule north ships cannot be deleted, only paused: deleting its stored
+  // row undoes your edit and brings back the shipped timing.
   const removeEntry = async (entry: ScheduleView) => {
+    const shipped = entry.source === "builtin";
     if (
       await confirmDelete(dialog, {
         noun: "schedule",
         name: entry.title,
-        consequence: "The flow stays; it just stops running on this schedule.",
+        verb: shipped ? "Restore" : "Delete",
+        consequence: shipped
+          ? "It goes back to the timing north ships with, and runs again if you paused it."
+          : "The flow stays; it just stops running on this schedule.",
       })
     )
       await act(() => del(path(entry.name)));
@@ -719,14 +726,16 @@ function FlowSchedules({
           actions={
             <ActionBar
               danger={
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void removeEntry(entry)}
-                >
-                  Delete
-                </Button>
+                entry.source === "builtin" && !entry.modified ? undefined : (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void removeEntry(entry)}
+                  >
+                    {entry.source === "builtin" ? "Restore default" : "Delete"}
+                  </Button>
+                )
               }
             >
               <Button

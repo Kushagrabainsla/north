@@ -553,17 +553,17 @@ export function SafeActionsPanel() {
     >
       {error && <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice>}
 
-      {/* A rule only ever fires in `safe`. Listing rules that cannot fire, with
-        nothing saying so, is how someone concludes the feature is broken. */}
+      {/* A rule fires only in `safe` and `autonomous`. Listing rules that cannot
+        fire, with nothing saying so, is how someone concludes the feature is broken. */}
       {data && !data.active && (
         <Notice tone="warning">
           These rules are inactive: north is in <b>{data.mode}</b> mode. They
-          apply only in <b>safe</b> mode.
+          apply only in <b>safe</b> and <b>autonomous</b> mode.
         </Notice>
       )}
 
       <Note>
-        What north may do without asking, in safe mode. Two things are never on
+        What north may do without asking, in safe and autonomous mode. Two things are never on
         this list, whatever you add: sending something to another person, and
         spending money. A sent email cannot be unsent.
       </Note>

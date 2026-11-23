@@ -81,7 +81,7 @@ The offer goes to the **Inbox**, under **When you have a minute**.
 | --- | --- | --- |
 | `ask` (default) | Runs work that only reads. | For every change. |
 | `safe` | Runs work that only reads, the actions on the **Safe actions** list, exact repeats of your past answers, and your rules. | For everything else. No model decides for you. |
-| `autonomous` | Decides for you from what north knows about you, your past answers and your rules. | When it cannot decide, for example a step outside the workspace that nothing you said covers. In a chat, also when it would say no. |
+| `autonomous` | Runs what `safe` runs. For everything else, decides for you from what north knows about you, your past answers and your rules. | When it cannot decide, for example a step outside the workspace that nothing you said covers. In a chat, also when it would say no. |
 | `yolo` | Says yes to every approval and gives the yes answer to every question. | Only for the few actions that always ask, for example a request to forget facts. |
 
 Below `yolo`, these limits apply:
@@ -90,7 +90,7 @@ Below `yolo`, these limits apply:
 - In `autonomous`, a "no" in a run that is not a chat is final. After north says no 3 times in one task, it asks you about the next refusal.
 - In `ask` and `safe`, work that north prepared for your review always asks you.
 
-To see what north may do in safe mode, open **Memory** and click the **Safe actions** tab.
+To see what north may do without asking in safe and autonomous mode, open **Memory** and click the **Safe actions** tab.
 Add an action with **Add a safe action**, or click **Disable** on a row.
 A send to another person and a spend are never on this list.
 

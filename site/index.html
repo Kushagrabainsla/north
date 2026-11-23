@@ -224,9 +224,9 @@
         <p class="intro">Tell north what you want in plain words, from the dashboard, the terminal or Telegram. It plans the steps, picks the tools, and shows you what it is thinking as it goes, with every step one click away.</p>
         <div class="grid">
           <article class="card"><span class="n">01</span><h3>Works on your tasks</h3><p>Research, writing, files and the web. It picks the browser profile you are signed in with, and reads several pages at once. You see what it is thinking as it works, and each step when you want it.</p></article>
-          <article class="card"><span class="n">02</span><h3>Asks before it changes anything</h3><p>Every change comes to you as a card that shows exactly what will happen: the command, the diff, the file. Approve it, reject it, or answer its question.</p></article>
+          <article class="card"><span class="n">02</span><h3>Asks before it changes anything</h3><p>By default, every change comes to you as a card that shows exactly what will happen: the command, the diff, the file. Approve it, reject it, or answer its question.</p></article>
           <article class="card"><span class="n">03</span><h3>Learns how you decide</h3><p>It keeps what it learns about you as facts. When you answer a card, it can make your answer a rule for all of north, and each morning it asks you to confirm what it decided for you.</p></article>
-          <article class="card"><span class="n">04</span><h3>Codes in a copy of your repo</h3><p>Coding goes to Claude Code or Codex, in an isolated git copy. north runs your tests and offers you the change; nothing reaches your work until you say yes.</p></article>
+          <article class="card"><span class="n">04</span><h3>Codes in a copy of your repo</h3><p>Coding goes to Claude Code or Codex, in an isolated git copy. north runs your tests and offers you the change; nothing reaches your work until you say yes, unless you let north decide.</p></article>
           <article class="card"><span class="n">05</span><h3>Runs on a schedule</h3><p>Flows run by themselves, in your time zone: a morning briefing, a nightly check, a reminder. The dashboard tells you what north did while you were away.</p></article>
           <article class="card"><span class="n">06</span><h3>Writes its own tools</h3><p>Ask for something it cannot do yet and north writes a tool for it, tests it, and asks you before switching it on.</p></article>
           <article class="card"><span class="n">07</span><h3>Your home, too</h3><p>Kasa lights work out of the box; for any other brand, north writes the tool. Switch, dim and colour them, set scenes, or let them follow the music.</p></article>
@@ -264,7 +264,7 @@
         <div class="modes">
           <div class="mode"><b>ask</b><p>Read-only work runs; every change asks you.</p></div>
           <div class="mode"><b>safe</b><p>Read-only work, safe changes and your exact past answers run; everything else asks.</p></div>
-          <div class="mode"><b>autonomous</b><p>Decides for you from what north knows about you and the rules you made. Asks only when that cannot decide.</p></div>
+          <div class="mode"><b>autonomous</b><p>Runs what safe runs, and decides the rest from what north knows about you and the rules you made. Asks only when that cannot decide.</p></div>
           <div class="mode"><b>yolo</b><p>Never asks you: every approval is yes, until you set another mode.</p></div>
         </div>
         <div class="scale" aria-hidden="true"><span>you decide</span><span>north decides</span></div>
@@ -374,7 +374,7 @@
             <dl>
             <dt><code>north config list</code></dt><dd>All settings and their values</dd>
             <dt><code>north config get &lt;key&gt;</code></dt><dd>Read one</dd>
-            <dt><code>north config set &lt;key&gt; &lt;value&gt;</code></dt><dd>Change one, saved to <code>~/.north/.env</code></dd>
+            <dt><code>north config set &lt;key&gt; &lt;value&gt;</code></dt><dd>Change one, saved to <code>~/.north/.env</code>; <code>approval_mode</code> changes north at once</dd>
             <dt><code>north tools confidence</code></dt><dd>Tool confidence per agent</dd>
             </dl>
           </div>

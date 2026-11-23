@@ -157,5 +157,8 @@ north comes with these flows. You can run them and see their runs, but you canno
 | `skill-learning` | Turns tasks that worked into learned skills that north can use again. | Every 60 minutes |
 | `nightly-cleanup` | Closes tasks left half-finished, deletes the data of old runs, and retires learned skills whose tasks keep failing. | Each day at 03:00 |
 
-To stop a built-in flow, pause its schedule with `north cron set <name> --pause`.
-Find the schedule's name with `north cron list`.
+To stop a built-in flow, pause its schedule. You can also change its time:
+
+- On the **Flows** page, open the flow and click the **Schedule** tab. Click **Pause** or **Edit**.
+  After you change a built-in schedule, click **Restore default** to put back its default settings.
+- In the terminal, run `north cron set <name> --pause`. Find the schedule's name with `north cron list`.
