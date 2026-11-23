@@ -32,7 +32,6 @@ from gateways.telegram_api import (
     HTTP_TIMEOUT as _HTTP_TIMEOUT,
 )
 from gateways.telegram_api import (
-    approval_keyboard,
     bot_url,
     is_option_choice,
     parse_approval_callback,
@@ -122,14 +121,6 @@ _ENDED_ACTIONS = ("task_cancelled", "task_failed", "task_needs_attention")
 
 class _TaskNotFound(Exception):
     """The orchestrator has no record of the task being polled."""
-
-
-def _unprompted_approval_card(entry: dict, already_prompted: set[str]) -> str:
-    """The card id this entry is asking about, or "" when it is not a fresh ask."""
-    if entry.get("action") != "approval_required":
-        return ""
-    card_id = entry.get("card_id") or ""
-    return "" if card_id in already_prompted else card_id
 
 
 def _finished_output(entries: list[dict], task_id: str, poll: int) -> str | None:
@@ -409,9 +400,13 @@ class TelegramGateway:
             return False
         return resp.status_code == 200
 
-    async def _get_task_result(self, task_id: str, chat_id: int | None = None) -> str | None:
-        """Poll the ledger for the completed agent's output, sending interactive approval cards if needed."""
-        prompted_cards: set[str] = set()
+    async def _get_task_result(self, task_id: str) -> str | None:
+        """Poll the ledger for the finished task's output.
+
+        The task's cards reach this chat through TelegramNotifier, as every card does. This
+        poll also sent a card for each `approval_required` ledger entry, but nothing writes
+        that entry, so it never ran; had it run, each card would have come twice.
+        """
         deadline = time.monotonic() + _TASK_WAIT_LIMIT_S
         interval = _TASK_POLL_INTERVAL
         poll = 0
@@ -420,13 +415,6 @@ class TelegramGateway:
                 entries = await self._ledger_entries(task_id)
             except _TaskNotFound:
                 return "Task not found."
-
-            if chat_id is not None:
-                for entry in entries:
-                    card_id = _unprompted_approval_card(entry, prompted_cards)
-                    if card_id:
-                        prompted_cards.add(card_id)
-                        await self._send_approval_card(chat_id, task_id, entry)
 
             output = _finished_output(entries, task_id, poll)
             if output is not None:
@@ -453,16 +441,6 @@ class TelegramGateway:
         if resp.status_code != 200:
             return []
         return resp.json()
-
-    async def _send_approval_card(self, chat_id: int, task_id: str, entry: dict) -> None:
-        card_id = entry.get("card_id") or ""
-        await self._send_message(
-            chat_id,
-            f"⚠️ **Approval Required**\n\n"
-            f"Task `{task_id}` requires your confirmation to proceed:\n"
-            f"_{entry.get('message', 'Confirm action')}_",
-            reply_markup=approval_keyboard(card_id),
-        )
 
     async def _download_file(self, file_id: str) -> bytes | None:
         """Download a file from Telegram by its file_id."""
@@ -810,7 +788,7 @@ class TelegramGateway:
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(self._typing_keepalive(chat_id, stop_typing))
         try:
-            return await self._get_task_result(task_id, chat_id=chat_id)
+            return await self._get_task_result(task_id)
         finally:
             stop_typing.set()
             typing_task.cancel()
