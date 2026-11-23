@@ -25,7 +25,14 @@ export default defineConfig({
 				ThemeProvider: './src/components/ThemeProvider.astro',
 				ThemeSelect: './src/components/ThemeSelect.astro',
 			},
-			sidebar: [{ label: 'Start here', items: [{ label: 'All guides', slug: 'guides' }, 'guides/quickstart'] }],
+			sidebar: [
+				{ label: 'Start here', items: [{ label: 'All guides', slug: 'guides' }, 'guides/quickstart'] },
+				{ label: 'Connect', items: ['guides/connect-your-browser', 'guides/telegram', 'guides/coding-tasks'] },
+				{
+					label: 'Work with north',
+					items: ['guides/approvals-and-autonomy', 'guides/memory', 'guides/flows-and-schedules', 'guides/choose-models'],
+				},
+			],
 			// A broken link inside the guides fails the build.
 			plugins: [starlightLinksValidator()],
 		}),
