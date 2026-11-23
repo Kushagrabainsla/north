@@ -887,9 +887,12 @@ class BrowserTool(Tool):
         "  - 'fill', 'type', 'press': Enter text into input fields or send key presses.\n"
         "  - 'select', 'check', 'uncheck': Manipulate dropdowns and checkboxes.\n"
         "  - 'screenshot', 'pdf': Capture viewport or full page to a file.\n"
-        "  - 'eval': Execute JavaScript in the page context, for what no other action does. Each script is "
-        "checked before it runs, as it could change the page. In existing profiles use top-level await; "
-        "a returned Promise is not awaited.\n"
+        "  - 'eval': Execute JavaScript in the page context, for what no other action does. In existing "
+        "profiles North first runs the script in a mode where Chrome stops any change: a script that only "
+        "reads the page needs no approval once the site may be read (its result says read_only). To keep a "
+        "reading script a read, use no timers, no await and no console.log, and do not click, type or "
+        "assign to the page; wait with action='wait'. A script that changes something is checked before it "
+        "runs, as before. Return the value as the last expression or with return.\n"
         "  - 'upload': Existing profiles only. Attach the local file 'filename' to a file input (uid or selector).\n"
         "  - 'assert': Deterministically verify page text, values, element existence, or state.\n"
         "  - 'preflight': Verify the selected managed or existing browser's actual profile identity before use.\n"
@@ -1090,6 +1093,8 @@ class BrowserTool(Tool):
         self._open_sites: dict[tuple[str, str], str] = {}
         # The one profile each task has used with success, or "" when it used more than one.
         self._task_profiles: dict[str, str] = {}
+        # An eval's result when its script was proved to only read, by (task, profile, script), until it runs.
+        self._proved_reads: dict[tuple[str, str, str], ToolOutput] = {}
 
     @property
     def existing_browser(self) -> TaskWindowBrowser | None:
@@ -1306,6 +1311,34 @@ class BrowserTool(Tool):
         except (ValueError, OSError, RuntimeError, httpx.HTTPError):
             return None
 
+    async def _prove_read(self, profile: BrowserProfile, params: dict[str, Any]) -> ToolOutput | None:
+        """Run an eval's script so that it can only read the page; its result when it did, else None.
+
+        Of 631 scripts from 2026-11-10 to 11-22, 431 only read the page, and each waited for an approval
+        decision as a click does. In your existing Chrome the script runs first in V8's side-effect-free
+        mode (`TaskWindowBrowser.read_only`), before any decision: a script that would change something is
+        stopped before it does, and is asked about as before. The result is kept for the call, so a read
+        runs once. Only on the connection this task already proved is the profile's own.
+        """
+        js = str(params.get("js") or "").strip()
+        if self._existing_browser is None or profile.context != "existing" or not js:
+            return None
+        task = str(params.get("task_id") or "default")
+        binding = self._verified_bindings.get((task, profile.id))
+        if not binding or binding[0] != profile.model_dump_json():
+            return None
+        try:
+            identity = await self._existing_browser.verify(profile, wait=False)
+        except (ValueError, OSError, RuntimeError, httpx.HTTPError):
+            return None
+        if identity.get("connection_id") != binding[1]:
+            return None
+        with span("browser.read_only"):
+            output = await self._existing_browser.read_only(profile, task, js)
+        if output is not None:
+            self._proved_reads[(task, profile.id, js)] = output
+        return output
+
     async def _describe_steps(self, params: dict[str, Any]) -> ApprovalRequest:
         """One card for a whole step list: each step on its own line, the sites it opens, what a yes covers.
 
@@ -1390,6 +1423,26 @@ class BrowserTool(Tool):
             scope = self._read_scope(params, str(params["profile_id"]), config_id)
             rule_scope = self._rule_scope(params, str(params["profile_id"]), config_id)
             binding = self._verified_bindings.get((str(params.get("task_id") or "default"), str(params["profile_id"])))
+            if action == "eval" and profile is not None and await self._prove_read(profile, params) is not None:
+                # A script that only read (proved, not guessed) is decided as a read of the page is.
+                read_scope = self._read_scope({**params, "action": "query"}, profile.id, config_id)
+                return Request(
+                    action=Action(
+                        agent="browser",
+                        kind=ActionKind.BROWSER,
+                        operation="eval",
+                        summary=f"read the page with a script in {label}",
+                        args=json.dumps({"js": params.get("js"), "profile_config": config_id}, sort_keys=True),
+                        scope=read_scope,
+                        rule_scope=read_scope,
+                    ),
+                    title=f"Browser: {label}",
+                    prepared=binding_config,
+                    message=(
+                        f"Read the page in {label} with a script. Chrome ran it in a mode that stops any change, "
+                        f"and it changed nothing.\n```js\n{params.get('js', '')}\n```\n{_profile_note(profile)}"
+                    ),
+                )
             if (
                 profile
                 and binding
@@ -1665,6 +1718,8 @@ class BrowserTool(Tool):
         """
         await self._finish_existing_tabs(task_id)
         self._task_profiles.pop(task_id, None)
+        for key in [key for key in self._proved_reads if key[0] == task_id]:
+            del self._proved_reads[key]  # a read whose call was refused or never ran
         page = _task_page(task_id)
         pages = sorted(opened for opened in self._opened_pages if opened[1] == page)
         self._opened_pages.difference_update(pages)
@@ -1828,6 +1883,14 @@ class BrowserTool(Tool):
             unsafe_url = _unsafe_url_reason(action, params)
             if unsafe_url:
                 return ToolOutput(success=False, error=unsafe_url)
+            task = str(params.get("task_id") or "default")
+            key = (task, profile.id, str(params.get("js") or "").strip())
+            if action == "eval" and (proved := self._proved_reads.pop(key, None)) is not None:
+                # Read once, before the decision, in a mode that cannot change the page.
+                output = proved.model_copy(deep=True)
+                output.data.update(profile_id=profile.id, profile_name=profile.name)
+                self._say_picked(task, profile, output)
+                return output
             return await self._native_action(profile, {**params, "action": action}, input)
         if action == "upload":
             return ToolOutput(success=False, error="Upload is available only in existing browser profiles.")

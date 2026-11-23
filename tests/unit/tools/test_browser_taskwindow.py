@@ -368,3 +368,39 @@ async def test_a_click_on_an_element_that_never_shows_still_fails_and_says_so(ad
 
     assert not output.success and "not found" in output.error
     adapter._tool.assert_not_awaited()  # nothing was clicked
+
+
+@pytest.mark.asyncio
+async def test_a_read_only_script_runs_marked_only_on_an_up_to_date_extension(adapter, profile):
+    """An older extension does not know the marker, so north never sends a marked script to one."""
+    adapter._tool = AsyncMock(return_value=text('{"rows": 3}'))
+    assert await adapter.read_only(profile, "t", "document.title") is None
+    adapter._tool.assert_not_awaited()
+
+    adapter._extension_current.add(profile.id)
+    output = await adapter.read_only(profile, "t", "document.title")
+
+    assert output.success and output.data == {"action": "eval", "read_only": True, "result": {"rows": 3}}
+    assert adapter._tool.call_args.args[2]["code"] == bridge.READ_ONLY_MARKER + "document.title"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "proved"),
+    [
+        ("page script threw: EvalError: Possible side-effect in debug-evaluate", None),
+        ("Error: Debugger is not attached to the tab with id: 7.", None),
+        ("page script threw: TypeError: Cannot read properties of null (reading 'innerText')", False),
+    ],
+)
+async def test_a_stopped_script_is_not_a_read_and_a_failed_read_is_still_one(adapter, profile, error, proved):
+    """Stopped before a change, or cut off by a page change: not proved, so it is asked about as before."""
+    adapter._extension_current.add(profile.id)
+    adapter._tool = AsyncMock(side_effect=_ToolError(error, uncertain=False))
+
+    output = await adapter.read_only(profile, "t", "document.querySelector('x').innerText")
+
+    if proved is None:
+        assert output is None
+    else:
+        assert not output.success and output.data["read_only"] is True and "TypeError" in output.error

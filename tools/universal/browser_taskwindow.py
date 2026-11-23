@@ -97,6 +97,10 @@ def page_chars(pages: int) -> int:
 
 
 _ENTER_KEYS = frozenset({"enter", "return"})
+# The extension's marker for a script that may only read (resources/taskwindow/extension/tools/evaluate.js),
+# and what V8 says when it stops such a script before a side effect.
+READ_ONLY_MARKER = "#north:read-only\n"
+_SIDE_EFFECT = "Possible side-effect in debug-evaluate"
 
 _PAGE_CHANGING = frozenset(
     {"goto", "navigate", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "eval", "upload"}
@@ -575,6 +579,32 @@ class TaskWindowBrowser:
                     raise
                 await asyncio.sleep(0.5)
         raise AssertionError("unreachable")
+
+    async def read_only(self, profile: BrowserProfile, task_id: str, js: str) -> ToolOutput | None:
+        """Run *js* so that it can only read the page: its result, or None when it is not proved a read.
+
+        The extension runs it in V8's side-effect-free mode (`evaluateReadOnly`): a script that would
+        click, write to the page, set a timer, wait on a promise or send a request is stopped before that
+        step. So a script that ran only read, and one that was stopped changed nothing; north then asks
+        about it as about any script. Only for a profile whose extension north has brought up to date
+        this run: an older copy does not know the marker, and fails to compile the marked script.
+        """
+        if profile.id not in self._extension_current:
+            return None
+        session = self._session(profile, task_id)
+        arguments = {"code": READ_ONLY_MARKER + js, "sessionToken": session}
+        try:
+            result = await self._tool(profile, "javascript_execute", arguments)
+        except _ToolError as exc:
+            message = str(exc)
+            if _SIDE_EFFECT in message or exc.uncertain or any(sign in message for sign in _NAVIGATION_RACES):
+                return None
+            # It failed while reading (an element it looked for is not there); it changed nothing.
+            return ToolOutput(success=False, data={"action": "eval", "read_only": True}, error=message)
+        text = self._text(result)
+        with contextlib.suppress(ValueError):
+            return ToolOutput(success=True, data={"action": "eval", "read_only": True, "result": json.loads(text)})
+        return ToolOutput(success=True, data={"action": "eval", "read_only": True, "result": text})
 
     async def call(self, profile: BrowserProfile, params: dict) -> ToolOutput:
         """Run one approved action. BrowserTool has already applied policy and the profile check."""

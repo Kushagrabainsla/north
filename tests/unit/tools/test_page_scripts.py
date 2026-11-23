@@ -51,3 +51,26 @@ def test_a_broken_script_keeps_its_own_error(results) -> None:
 
 def test_no_marker_is_left_on_the_page(results) -> None:
     assert results["markersLeft"]["value"] == 0
+
+
+@pytest.mark.parametrize(("case", "value"), [("roLastExpression", "Ada!"), ("roFunctionBody", 42)])
+def test_a_read_only_script_that_only_reads_runs_and_returns_its_value(results, case, value) -> None:
+    """Its top-level const stays inside a block, and a `return` runs it as a function body."""
+    assert results[case]["error"] is None
+    assert results[case]["value"] == value
+
+
+@pytest.mark.parametrize("case", ["roWritesGlobal", "roNewGlobal", "roTimer", "roAwait"])
+def test_a_read_only_script_is_stopped_before_it_changes_anything(results, case) -> None:
+    """A write, a new global, a timer or a promise: V8 stops the script before that step."""
+    assert results[case]["error"].startswith("EvalError: Possible side-effect in debug-evaluate")
+
+
+def test_the_stopped_scripts_changed_nothing(results) -> None:
+    assert results["roNothingChanged"]["value"] is True
+
+
+def test_an_extension_that_does_not_know_the_marker_runs_none_of_the_script(results) -> None:
+    """The marker is not valid JavaScript: an older extension copy fails to compile and changes nothing."""
+    assert results["oldExtensionRunsNothing"]["error"] == "SyntaxError"
+    assert results["oldExtensionRunsNothing"]["value"] is True

@@ -198,3 +198,26 @@ Results are in `~/.cache/north/browser-heavy/20261122-222003` (before) and `2026
   Step lists and the click and profile fixes act on clicks, typing, scripts and profile choice, so these tasks do not exercise them.
 - The real outreach and Gmail runs (median 31 calls, 631 `eval` calls in 12 days) click, type and run scripts.
   Their effect shows only in live runs after north restarts on the new code.
+
+## Results, 2026-11-22: scripts that only read need no approval
+
+Of 631 `eval` scripts from 2026-11-10 to 11-22, 431 (68%) only read the page by their text (no click, value, focus, DOM change, navigation, request or storage); 200 changed something, 174 of them by a click.
+
+### All 631 scripts in a headless Chrome, side-effect-free mode
+
+A throw-away profile and a test page; each script ran with `Runtime.evaluate(throwOnSideEffect=true)`, in a block, then as a function body, then as an async function body.
+
+- Writes: the page changed after none of the 200. 95 were stopped; the rest failed or returned early because their target was not on the test page, before they reached the write.
+- Reads: 324 ran and 48 failed only because an element they looked for was not on the test page (87% not stopped); 58 were stopped.
+  Stopped although harmless: a top-level `const` or `let` without the block, `closest()`, `new URL()`, `document.evaluate()`, `console.log()`, `structuredClone()`, timers and `await`.
+  Chrome let a script build and fill arrays and maps of its own; Node's V8 is stricter.
+
+### Live, Hacker News and the article chain, 3 runs each (`20261122-224640`)
+
+| | before (`20261122-202157`, `-202413`, `-222553`) | after |
+|---|---|---|
+| `eval` calls | 13 | 15 |
+| Ruled on by the approval model | 10 | 4 |
+| Median decision time | 1,740-2,084 ms | 2 ms |
+
+Of the 4 still ruled on, 2 named no script (a wrong parameter name) and 2 were Wikipedia reads that Chrome stopped on a harmless call; each was asked about as before.

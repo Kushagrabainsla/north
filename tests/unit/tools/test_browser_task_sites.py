@@ -323,3 +323,55 @@ async def test_the_kept_profile_ends_with_its_task(two_profiles) -> None:
 
     call = ToolInput(params={"task_id": TASK, "action": "click", "uid": "n1"})
     assert "profile_id" not in (await tool._with_picked_profile(call)).params
+
+
+def _reading_tool(settings, store: ApprovalStore, proved: ToolOutput | None) -> tuple[BrowserTool, Mock]:
+    """A tool whose bridge proves the task's connection, and proves (or not) that a script only reads."""
+    native = Mock()
+    native.call = AsyncMock(
+        return_value=ToolOutput(success=True, data={"profile_verified": True, "connection_id": "c1"})
+    )
+    native.verify = AsyncMock(return_value={"connection_id": "c1"})
+    native.read_only = AsyncMock(return_value=proved)
+    native.description_runner = Mock(side_effect=RuntimeError("no page to look at in a test"))
+    tool = bind_approvals(BrowserTool(north_settings=settings, existing_browser=native), ApprovalMode.ASK, store=store)
+    return tool, native
+
+
+@pytest.mark.asyncio
+async def test_a_script_that_only_reads_an_opened_site_needs_no_approval(settings) -> None:
+    """431 of 631 scripts only read the page, and each waited for a decision as a click does."""
+    store = ApprovalStore()
+    read = ToolOutput(success=True, data={"action": "eval", "read_only": True, "result": ["Ada", "Alan"]})
+    tool, native = _reading_tool(settings, store, read)
+    assert await _open(tool, store)
+    native.call.reset_mock()
+
+    call = ToolInput(params={"profile_id": "university", "task_id": TASK, "action": "eval", "js": "names()"})
+    output = await asyncio.wait_for(tool.execute(call), 5)
+
+    assert output.success and output.data["result"] == ["Ada", "Alan"] and output.data["read_only"] is True
+    assert not store.pending()
+    native.call.assert_not_awaited()  # read once, in the mode that cannot change the page; never run again
+    native.read_only.assert_awaited_once()
+    assert native.read_only.await_args.args[1:] == (TASK, "names()")
+
+
+@pytest.mark.asyncio
+async def test_a_script_chrome_stopped_is_asked_about_as_before(settings) -> None:
+    store = ApprovalStore()
+    tool, native = _reading_tool(settings, store, None)
+    await _open(tool, store)
+
+    assert await _asks(tool, store, action="eval", js="document.querySelector('button').click()")
+    assert native.call.await_args.args[1]["action"] == "eval"  # ran the ordinary way, after the yes
+
+
+@pytest.mark.asyncio
+async def test_a_read_is_not_tried_before_the_task_has_proved_its_connection(settings) -> None:
+    """With no proved connection there is no page of the task's to read: the script is asked about."""
+    store = ApprovalStore()
+    tool, native = _reading_tool(settings, store, ToolOutput(success=True, data={"result": 1}))
+
+    assert await _asks(tool, store, action="eval", js="document.title")
+    native.read_only.assert_not_awaited()

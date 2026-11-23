@@ -42,6 +42,34 @@ export async function evaluateScript(send, code, { awaitPromise = true } = {}) {
   return asBody.exceptionDetails?.exception?.className === "SyntaxError" ? first : asBody;
 }
 
+// A script that starts with this marker only reads the page, and is run so that it cannot do anything
+// else. North adds it; it can only make a script stricter. It is not valid JavaScript, so an older copy of
+// this extension, which does not know it, fails to compile the script and runs none of it.
+export const READ_ONLY_MARKER = "#north:read-only\n";
+
+// Run a script in V8's side-effect-free mode (`throwOnSideEffect`), the mode DevTools uses to preview a
+// value as you type. The script runs until it would change something: a click, a write to the page or
+// to a variable outside the script, a timer, a request, storage. Then V8 stops it with
+// "EvalError: Possible side-effect in debug-evaluate", before that step happens. So a script that ran
+// to its end read the page and nothing else, and one that was stopped changed nothing.
+//
+// It runs as a block first, so its top-level `const` and `let` stay inside it (declared at the top level
+// they are a write to the page's scope); then as a function body, for `return x;`; then as an async
+// function body, for `await`. Running one again is safe: the earlier try changed nothing.
+export async function evaluateReadOnly(send, code) {
+  const base = { returnByValue: true, throwOnSideEffect: true, timeout: 10_000 };
+  let reply;
+  for (const [expression, extra] of [
+    [`{\n${code}\n}`, {}],
+    [`(() => {\n${code}\n})()`, {}],
+    [`(async () => {\n${code}\n})()`, { awaitPromise: true }],
+  ]) {
+    reply = await send("Runtime.evaluate", { ...base, ...extra, expression });
+    if (reply.exceptionDetails?.exception?.className !== "SyntaxError") return reply;
+  }
+  return reply;
+}
+
 async function markerWasSet(send, marker) {
   const key = JSON.stringify(marker);
   const reply = await send("Runtime.evaluate", {
