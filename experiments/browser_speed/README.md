@@ -221,3 +221,19 @@ A throw-away profile and a test page; each script ran with `Runtime.evaluate(thr
 | Median decision time | 1,740-2,084 ms | 2 ms |
 
 Of the 4 still ruled on, 2 named no script (a wrong parameter name) and 2 were Wikipedia reads that Chrome stopped on a harmless call; each was asked about as before.
+
+## Results, 2026-11-23: a desktop screen whatever the window's size
+
+North's background Chrome window was 848 px wide and minimized (the user sizes it to fit their own work).
+Wikipedia then hid its search box, so "fill, press Enter, wait" failed in most runs.
+Each driven tab now gets a 1280 x 900 desktop screen when the extension attaches (`Emulation.setDeviceMetricsOverride`).
+
+| Median, 3 runs each | 848 px, minimized, before (`20261122-234546`) | minimized, after (`20261123-000048`) | narrow and visible, after (`20261123-000516`) |
+|---|---|---|---|
+| wiki wall time | 54.7 s | 10.1 s | 9.1 s |
+| wiki browser calls | 6 | 2 | 2 |
+| chain wall time | 72.7 s | 33.3 s | 31.3 s |
+| Failed browser calls, all 6 runs | 15 (11 waits that ran out) | 5 (no waits) | 2 |
+
+A minimized window was no slower than a visible one.
+The failures left are clicks on an element named by a selector that a page change removed, and scripts that read a missing element.

@@ -9,6 +9,9 @@
 
 export const ATTACHED = new Set();
 
+// What every driven tab renders at: a desktop screen of the agent window's own size.
+export const DESKTOP_VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 0, mobile: false };
+
 const BUFFER_CAP = 500;
 /** tabId -> { console: [], network: Map(requestId -> entry), networkOrder: [] } */
 const buffers = new Map();
@@ -158,6 +161,11 @@ export async function ensureAttached(tabId) {
     // The agent window is deliberately never focused (the user is elsewhere);
     // make the page behave as if it were, as headless-style drivers do.
     ["Emulation.setFocusEmulationEnabled", { enabled: true }],
+    // A desktop screen whatever the window's size: the user sizes and places the
+    // agent window to fit their own work. At 848px wide Wikipedia hid its search
+    // box, so every search failed (north, 2026-11-22). The size the window is
+    // created at (tabs.js), so a 1:1 screenshot stays within vision models' limits.
+    ["Emulation.setDeviceMetricsOverride", DESKTOP_VIEWPORT],
   ]) {
     try {
       await send(tabId, method, params);
