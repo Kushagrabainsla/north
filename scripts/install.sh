@@ -106,12 +106,12 @@ echo -e "${green}${bold}  north is ready.${reset}"
 echo ""
 
 if ! command -v north &>/dev/null && [[ "$PATH_CONFIGURED" == false ]]; then
-    warn "Add uv's bin directory to your PATH, then run north start:"
+    warn "Add uv's bin directory to your PATH, then run north web:"
     echo ""
     echo "    export PATH=\"\$HOME/.local/bin:\$PATH\"  # add to your shell profile"
-    echo "    north start"
+    echo "    north web"
 else
-    echo "    north start"
+    echo "    north web"
 fi
 
 echo ""

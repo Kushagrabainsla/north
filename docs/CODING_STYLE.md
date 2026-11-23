@@ -1754,6 +1754,14 @@ Probes, measurements and their results go in `experiments/`: a runnable harness,
 
 **How to apply:** even an experiment that ends in "do not ship" is committed there, with its numbers.
 
+### 19.5 A User-Facing Change Updates Its Guide
+
+The user guides live in `guides/src/content/docs/guides/` and are published at `/north/guides/`. A change to something a guide describes (a command, a page, a button, a setup step) updates that guide in the same commit.
+
+**Why:** a guide with old steps is worse than no guide.
+
+**How to apply:** search `guides/` for the command or label you changed. Write guides in ASD-STE100, one task per page.
+
 ---
 
 ## 20. Git

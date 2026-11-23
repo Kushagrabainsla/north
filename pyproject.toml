@@ -85,6 +85,7 @@ exclude = [
     "evals*",
     "experiments*",
     "scripts*",
+    "guides*",
     "web.node_modules*",
     "web.src*",
 ]

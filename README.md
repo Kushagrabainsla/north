@@ -16,7 +16,7 @@
 - **Runs on a schedule:** flows such as a morning briefing run by themselves.
 - **Stays on your computer:** everything north keeps is in `~/.north`.
 
-The tour, the four modes and every command are on [kushagrabainsla.github.io/north](https://kushagrabainsla.github.io/north/).
+The tour, the four modes and every command are on [kushagrabainsla.github.io/north](https://kushagrabainsla.github.io/north/). The [guides](https://kushagrabainsla.github.io/north/guides/) show how to use north, step by step.
 
 ## Install
 
@@ -26,7 +26,7 @@ north is built for macOS, and most of it runs on Linux too.
 curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash
 ```
 
-Then run `north web` for the dashboard, or `north` for the terminal interface. Setup in the dashboard connects an AI provider and anything else you want. You can skip each step and come back later.
+Then run `north web` for the dashboard, or `north` for the terminal interface. Setup in the dashboard connects an AI provider and anything else you want. You can skip each step and come back later. The [Quickstart](https://kushagrabainsla.github.io/north/guides/quickstart/) shows each step.
 
 ## More
 

@@ -1,0 +1,45 @@
+/* north's own font and colours, as site/index.html and web/src/styles.css have them. */
+@font-face {
+	font-family: 'JetBrains Mono';
+	font-style: normal;
+	font-weight: 100 800;
+	font-display: swap;
+	src: url('../../../web/src/fonts/jetbrains-mono-normal.woff2') format('woff2');
+}
+
+:root {
+	--sl-font: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+	--sl-font-mono: var(--sl-font);
+
+	--sl-color-white: #f0f2ef;
+	--sl-color-gray-1: #f0f2ef;
+	--sl-color-gray-2: #c9cec9;
+	--sl-color-gray-3: #9ba29c;
+	--sl-color-gray-4: #6d756e;
+	--sl-color-gray-5: #2d352e;
+	--sl-color-gray-6: #101311;
+	--sl-color-black: #0a0c0b;
+
+	--sl-color-accent-low: #1f2b14;
+	--sl-color-accent: #b8ef72;
+	--sl-color-accent-high: #b8ef72;
+	--sl-color-text-invert: #10150d;
+
+	--sl-color-hairline: #202621;
+	--sl-color-hairline-light: #2d352e;
+}
+
+::selection {
+	color: #10150d;
+	background: #b8ef72;
+}
+
+/* The site title is the wordmark: "north" and a green full stop. */
+.site-title {
+	font-weight: 800;
+	letter-spacing: -0.055em;
+}
+.site-title span::after {
+	content: '.';
+	color: var(--sl-color-accent);
+}

@@ -3,6 +3,9 @@
 The command reference moved from the README to the landing page (`site/index.html`, Commands),
 its one home. Nothing ever checked the README's list against the CLI; this checks the page's
 both ways, so a new command cannot go unlisted and a removed one cannot stay.
+
+The guides (`guides/src/content/docs/`) name commands too: each one, and each of its options,
+must be one north has, so a renamed command cannot leave a guide with old steps.
 """
 
 from __future__ import annotations
@@ -17,7 +20,23 @@ from typer.main import get_command
 
 from cli.main import app
 
-SITE = Path(__file__).parents[3] / "site" / "index.html"
+ROOT = Path(__file__).parents[3]
+SITE = ROOT / "site" / "index.html"
+GUIDES = ROOT / "guides" / "src" / "content" / "docs"
+# A command in a guide: a line of a code block, or `inline code`, that starts with "north".
+CODE_BLOCK = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
+BLOCK_COMMAND = re.compile(r"^(north(?: .*)?)$", re.MULTILINE)
+INLINE_COMMAND = re.compile(r"`(north(?: [^`]*)?)`")
+
+
+def _path(text: str) -> str:
+    """A command's path, as `cron add`: the words after `north` until an option or argument."""
+    path = []
+    for word in text.split()[1:]:
+        if not re.fullmatch(r"[a-z][a-z-]*", word):
+            break
+        path.append(word)
+    return " ".join(path)
 
 
 class _Commands(HTMLParser):
@@ -51,34 +70,32 @@ def _listed() -> set[str]:
     """Each listed command's path, as `cron add`: the words after `north` until an option or argument."""
     parser = _Commands()
     parser.feed(SITE.read_text(encoding="utf-8"))
-    paths = set()
-    for text in parser.listed:
-        words = text.split()[1:]
-        path = []
-        for word in words:
-            if not re.fullmatch(r"[a-z][a-z-]*", word):
-                break
-            path.append(word)
-        paths.add(" ".join(path))
-    return paths
+    return {_path(text) for text in parser.listed}
 
 
-def _cli() -> dict[str, object]:
-    """Every command path north has, with the function it runs; a group that runs bare counts too."""
-    found: dict[str, object] = {}
+def _commands() -> dict[str, click.Command]:
+    """Every command path north has, with its click command; a group that runs bare counts too."""
+    found: dict[str, click.Command] = {}
 
     def walk(command: click.Command, path: str) -> None:
         if isinstance(command, click.Group):
             if path and command.invoke_without_command and command.callback:
-                found[path] = inspect.unwrap(command.callback)
+                found[path] = command
             for name, sub in command.commands.items():
                 if not sub.hidden:
                     walk(sub, f"{path} {name}".strip())
         elif command.callback:
-            found[path] = inspect.unwrap(command.callback)
+            found[path] = command
 
-    walk(get_command(app), "")
+    root = get_command(app)
+    walk(root, "")
+    found.setdefault("", root)  # `north` itself
     return found
+
+
+def _cli() -> dict[str, object]:
+    """Every command path north has, with the function it runs."""
+    return {path: inspect.unwrap(command.callback) for path, command in _commands().items() if command.callback}
 
 
 def test_every_command_on_the_page_is_one_north_has() -> None:
@@ -97,3 +114,30 @@ def test_every_command_north_has_is_on_the_page() -> None:
 
     missing = sorted(min(paths) for paths in names.values() if not paths & listed)
     assert missing == []
+
+
+def _in_the_guides() -> list[str]:
+    """Each `north ...` command the guides name, as written."""
+    found = []
+    for page in sorted(GUIDES.rglob("*.md*")):
+        text = page.read_text(encoding="utf-8")
+        for block in CODE_BLOCK.findall(text):
+            found += BLOCK_COMMAND.findall(block)
+        found += INLINE_COMMAND.findall(CODE_BLOCK.sub("", text))
+    return [command.strip() for command in found]
+
+
+def test_every_command_in_the_guides_is_one_north_has() -> None:
+    commands = _commands()
+    named = _in_the_guides()
+    wrong = []
+    for text in named:
+        command = commands.get(_path(text))
+        if command is None:
+            wrong.append(text)
+            continue
+        options = {opt for param in command.params for opt in (*param.opts, *param.secondary_opts)}
+        wrong += [f"{text}: {word}" for word in text.split() if word.startswith("-") and word not in options]
+
+    assert len(named) >= 2  # the Quickstart names `north web` and `north`
+    assert wrong == []
