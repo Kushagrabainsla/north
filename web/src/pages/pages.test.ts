@@ -150,7 +150,7 @@ describe("what an approval card shows", () => {
     const page = renderToStaticMarkup(createElement(ApprovalCard, { card: card("pending"), onDecide: () => undefined, wide: true }));
     const inline = renderToStaticMarkup(createElement(ApprovalCard, { card: card("pending"), onDecide: () => undefined }));
     for (const html of [page, inline]) {
-      expect(html).toContain("<pre><code>git checkout -- draft.txt</code></pre>");
+      expect(html).toMatch(/<pre><code>git checkout -- draft\.txt\n?<\/code><\/pre>/);
       expect(html).not.toContain("```");
     }
   });

@@ -79,7 +79,7 @@ describe("notices on the dashboard and on Approvals", () => {
   it("reads each in full on Approvals, formatted, a long one opened on demand", () => {
     const html = render(false);
     expect(html).toContain("<details");
-    expect(html).toMatch(/<h2>(<span>)+Agentic Harnesses(<\/span>)+<\/h2>/);
+    expect(html).toMatch(/<h2>(<span>)*Agentic Harnesses(<\/span>)*<\/h2>/);
     expect(html).toContain("<strong>Submission date:</strong>");
   });
 });

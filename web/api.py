@@ -38,6 +38,7 @@ from orchestrator.api_context import bind_request_services, current_services, me
 from orchestrator.models import Prompt, TaskRequest
 from tools.home import Home
 from tools.universal.browser import browser_availability
+from utils.reveal import reveal
 from utils.secrets import redact
 from utils.time import localnow
 from utils.version import NORTH_VERSION
@@ -1458,9 +1459,29 @@ async def get_artifact(artifact_id: str) -> dict[str, Any]:
 
 @router.get("/artifacts/{artifact_id}/file")
 async def get_artifact_file(artifact_id: str) -> FileResponse:
-    """The artifact itself, with its media type, so the browser plays or shows it, and can seek in a video."""
+    """The artifact itself, with its media type, so the browser plays or shows it, and can seek in a video.
+
+    A document that can run scripts (HTML, XHTML, SVG) is sealed: its scripts run, but in a page with
+    no origin, so they cannot reach north's pages, its API or your session. An agent or the web wrote
+    it; served plainly from north's own address, it ran with north's rights when you opened it.
+    """
     path = _artifact_path(artifact_id)
-    return FileResponse(path, media_type=artifact_media_type(path))
+    media_type = artifact_media_type(path)
+    headers = {"Content-Security-Policy": "sandbox allow-scripts"} if media_type in _SCRIPTABLE_TYPES else None
+    return FileResponse(path, media_type=media_type, headers=headers)
+
+
+# Documents a browser runs scripts in when it shows them.
+_SCRIPTABLE_TYPES = frozenset({"text/html", "application/xhtml+xml", "image/svg+xml"})
+
+
+@router.post("/artifacts/{artifact_id}/reveal")
+async def reveal_artifact(artifact_id: str) -> dict[str, bool]:
+    """Show the artifact in this computer's file manager. North never opens a file (CODING_STYLE §5.1)."""
+    path = _artifact_path(artifact_id)
+    if not await asyncio.to_thread(reveal, path):
+        raise HTTPException(status_code=409, detail="This computer has no file manager north can open.")
+    return {"shown": True}
 
 
 def _background() -> list[dict[str, Any]]:

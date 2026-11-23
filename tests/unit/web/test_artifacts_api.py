@@ -148,3 +148,40 @@ async def test_the_file_route_cannot_serve_outside_the_library(north_home) -> No
     with pytest.raises(HTTPException) as excinfo:
         await web_api.get_artifact_file(_id_for("secret.key"))
     assert excinfo.value.status_code == 404
+
+
+async def test_a_page_an_agent_wrote_is_served_sealed(north_home) -> None:
+    """An HTML artifact ran its scripts with north's rights when opened from north's own address."""
+    (north_home / "tasks" / "task_abc123" / "deck.html").write_text("<script>fetch('/web/api/secrets')</script>")
+    (north_home / "tasks" / "task_abc123" / "chart.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    page = await web_api.get_artifact_file(_id_for("tasks/task_abc123/deck.html"))
+    picture = await web_api.get_artifact_file(_id_for("tasks/task_abc123/chart.png"))
+
+    assert page.headers["content-security-policy"] == "sandbox allow-scripts"
+    assert "content-security-policy" not in picture.headers
+
+
+async def test_show_in_the_file_manager_reveals_the_file_and_never_opens_it(north_home, monkeypatch) -> None:
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr("click.launch", lambda target, locate=False, **_: calls.append((target, locate)) or 0)
+
+    assert await web_api.reveal_artifact(_id_for("tasks/task_abc123/research/context.md")) == {"shown": True}
+
+    assert calls == [(str(north_home / "tasks" / "task_abc123" / "research" / "context.md"), True)]
+
+
+async def test_show_in_the_file_manager_cannot_reach_outside_the_library(north_home, monkeypatch) -> None:
+    monkeypatch.setattr("click.launch", lambda *_args, **_kwargs: pytest.fail("nothing outside the library is shown"))
+
+    with pytest.raises(HTTPException) as excinfo:
+        await web_api.reveal_artifact(_id_for("secret.key"))
+    assert excinfo.value.status_code == 404
+
+
+async def test_a_computer_with_no_file_manager_says_so(north_home, monkeypatch) -> None:
+    monkeypatch.setattr("click.launch", lambda *_args, **_kwargs: 1)  # xdg-open missing, as in a container
+
+    with pytest.raises(HTTPException) as excinfo:
+        await web_api.reveal_artifact(_id_for("tasks/task_abc123/research/context.md"))
+    assert excinfo.value.status_code == 409

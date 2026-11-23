@@ -19,3 +19,22 @@ describe("a link in a reply or an artifact", () => {
     expect(html("[docs](https://example.com/a) (see above)")).toContain('href="https://example.com/a"');
   });
 });
+
+describe("Markdown in a briefing, a reply or a card", () => {
+  it("shows a table as a table", () => {
+    // North's own parser showed rows of "|" characters.
+    const out = html("| Paper | Score |\n| --- | --- |\n| Q-learning | 9 |");
+    expect(out).toContain("<table>");
+    expect(out).toContain("<td>Q-learning</td>");
+  });
+
+  it("keeps a single line break, as replies and cards are written", () => {
+    expect(html("first line\nsecond line")).toContain("first line<br/>");
+  });
+
+  it("shows raw HTML in the text as text, and opens links in a new tab", () => {
+    const out = html("<script>alert(1)</script>\n\nSee [docs](https://example.com).");
+    expect(out).not.toContain("<script>");
+    expect(out).toContain('target="_blank"');
+  });
+});

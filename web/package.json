@@ -9,10 +9,14 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "highlight.js": "^11.12.0",
     "lucide-react": "^1.45.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.2",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1",
     "use-stick-to-bottom": "1.1.6"
   },
   "devDependencies": {

@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
-import { api } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import "highlight.js/styles/github-dark.css";
+import { api, post } from "../api";
 import { Link } from "react-router-dom";
 import { MarkdownPane, Modal, PageHeader, timeAgo } from "../components";
-import { CardGrid, Empty, EntityCard, Notice, ResourceView } from "../kit";
+import { Button, CardGrid, Empty, EntityCard, Notice, ResourceView } from "../kit";
 import { useResource } from "../hooks";
 import type { Artifact } from "../types";
 
@@ -26,20 +27,84 @@ export function artifactMeta(file: Artifact): string {
   return [file.kind, file.size ? `${Math.ceil(file.size / 1024)} KB` : "", timeAgo(file.updated_at)].filter(Boolean).join(" · ");
 }
 
-/** How a file is shown: as text, by the browser's own player or viewer, or not at all (only a download). */
-export type ArtifactView = "text" | "image" | "audio" | "video" | "pdf" | "file";
+/** How a file is shown: as a page, as Markdown, as colored text, by the browser's own player or viewer,
+ *  or not at all (only a download). */
+export type ArtifactView = "page" | "markdown" | "code" | "image" | "audio" | "video" | "pdf" | "file";
 
 const TEXT_APPLICATION_TYPES = new Set(["application/json", "application/xml", "application/x-yaml", "application/yaml"]);
+const PAGE_TYPES = new Set(["text/html", "application/xhtml+xml"]);
 
-/** The view for a media type. Shown as text, a 5-second recording was a screen of bytes (issue #81). */
+/** The view for a file. Every text type the viewer does not know is colored text, so a new kind of file
+ *  needs no new code: before, every text file went through the Markdown pane, and an HTML page or a JSON
+ *  file showed as raw text. Shown as text, a 5-second recording was a screen of bytes (issue #81). */
 export function artifactView(mediaType: string): ArtifactView {
-  if (mediaType.startsWith("text/") || TEXT_APPLICATION_TYPES.has(mediaType)) return "text";
+  if (PAGE_TYPES.has(mediaType)) return "page";
+  if (mediaType === "text/markdown") return "markdown";
+  if (mediaType.startsWith("text/") || TEXT_APPLICATION_TYPES.has(mediaType)) return "code";
   for (const view of ["image", "audio", "video"] as const) if (mediaType.startsWith(`${view}/`)) return view;
   return mediaType === "application/pdf" ? "pdf" : "file";
 }
 
+/** Whether the viewer needs the file's text, which only /artifacts/{id} returns. */
+const needsText = (view: ArtifactView) => view === "markdown" || view === "code";
+
+/** The file's extension, which names its language for coloring ("" when it has none). */
+export function extensionOf(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+/** JSON indented, so a one-line file reads as a structure; anything that does not parse stays as it is. */
+export function readable(text: string, extension: string): string {
+  if (extension !== "json") return text;
+  try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
+}
+
+// Larger text is shown plain: coloring two megabytes would hold the page for seconds.
+const COLOR_LIMIT_CHARS = 300_000;
+
+/** Text colored by its language, plain until the colorer loads. highlight.js names the language from the
+ *  extension when it knows it, and detects it from the text when it does not, so a new kind of file needs
+ *  nothing. It is one file loaded when a file opens: Shiki, tried first, made the built dashboard 11 MB
+ *  in 314 files, one per language and theme. */
+function CodeView({ name, text }: { name: string; text: string }) {
+  const extension = extensionOf(name);
+  const shown = readable(text, extension);
+  const [colored, setColored] = useState("");
+  useEffect(() => {
+    if (shown.length > COLOR_LIMIT_CHARS) return;
+    let current = true;
+    import("highlight.js/lib/common")
+      .then(({ default: hljs }) => {
+        const result = extension && hljs.getLanguage(extension)
+          ? hljs.highlight(shown, { language: extension, ignoreIllegals: true })
+          : hljs.highlightAuto(shown);
+        if (current) setColored(result.value);
+      })
+      .catch(() => undefined);  // plain text stays: coloring is a help, not the content
+    return () => { current = false; };
+  }, [shown, extension]);
+  // highlight.js escapes the text it colors; the file's own markup never becomes part of the page.
+  return <pre className="artifact-code hljs">{colored
+    ? <code dangerouslySetInnerHTML={{ __html: colored }}/>
+    : <code>{shown}</code>}</pre>;
+}
+
 /** Where the file itself is served, with its media type. */
 export const artifactFileUrl = (file: Artifact) => `/web/api/artifacts/${file.id}/file`;
+
+/** The file manager's name on this computer. The dashboard is served to this computer only (§12.6),
+ *  so the browser's platform is north's. */
+export function fileManagerName(platform: string): string {
+  if (/mac/i.test(platform)) return "Finder";
+  if (/win/i.test(platform)) return "Explorer";
+  return "folder";
+}
+
+const thisPlatform = () => {
+  const nav = typeof navigator === "undefined" ? undefined : navigator as Navigator & { userAgentData?: { platform?: string } };
+  return nav?.userAgentData?.platform || nav?.platform || "";
+};
 
 /** A video file, or a sound bar when the file holds only sound: north records audio into `.mov`,
  *  which showed an empty black picture box above the controls. */
@@ -54,7 +119,12 @@ export function ArtifactBody({ file }: { file: Artifact }) {
   const url = artifactFileUrl(file);
   const view = artifactView(file.media_type);
   const download = <p className="artifact-download"><a href={url} download={file.name}>Download {file.name}</a></p>;
-  if (view === "text") return <MarkdownPane>{file.content || ""}</MarkdownPane>;
+  if (view === "markdown") return <MarkdownPane>{file.content || ""}</MarkdownPane>;
+  if (view === "code") return <CodeView name={file.name} text={file.content || ""}/>;
+  // A page, sealed by the file route's own `Content-Security-Policy: sandbox`: its scripts run, with no
+  // access to north. The seal is on the file, not this frame, so it holds when the file is opened alone;
+  // a `sandbox` attribute here was refused outright by some browsers, which showed an empty frame.
+  if (view === "page") return <iframe className="artifact-media artifact-page" src={url} title={file.name}/>;
   if (view === "image") return <><img className="artifact-media" src={url} alt={file.name}/>{download}</>;
   if (view === "video") return <><Recording url={url}/>{download}</>;
   if (view === "audio") return <><audio className="artifact-media" src={url} controls preload="metadata"/>{download}</>;
@@ -66,13 +136,24 @@ export function ArtifactBody({ file }: { file: Artifact }) {
 function useArtifactViewer() {
   const [selected, setSelected] = useState<Artifact | null>(null);
   const [error, setError] = useState("");
+  const [shown, setShown] = useState("");
   const open = async (file: Artifact) => {
     setError("");
-    if (artifactView(file.media_type) !== "text") { setSelected(file); return; }
+    setShown("");
+    if (!needsText(artifactView(file.media_type))) { setSelected(file); return; }
     try {
       setSelected({ ...(await api<Artifact>(`/web/api/artifacts/${file.id}`)), owner: file.owner });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  /** North shows the file in the file manager; it never opens it (CODING_STYLE §5.1). */
+  const showInFileManager = async (file: Artifact) => {
+    try {
+      await post(`/web/api/artifacts/${file.id}/reveal`, {});
+      setShown("ok");
+    } catch (err) {
+      setShown(err instanceof Error ? err.message : String(err));
     }
   };
   const viewer = <Modal
@@ -80,7 +161,9 @@ function useArtifactViewer() {
     eyebrow={selected?.owner ? `${OWNER_KIND[selected.owner.kind]} · ${selected.owner.name}` : selected?.kind || ""}
     title={selected?.name || ""}
     onClose={() => setSelected(null)}
+    actions={selected && <Button onClick={() => void showInFileManager(selected)}>Show in {fileManagerName(thisPlatform())}</Button>}
   >
+    {shown && <Notice tone={shown === "ok" ? "success" : "error"}>{shown === "ok" ? `Shown in ${fileManagerName(thisPlatform())}.` : shown}</Notice>}
     {selected && <ArtifactBody file={selected}/>}
   </Modal>;
   return { open, error, viewer };

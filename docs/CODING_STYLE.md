@@ -214,6 +214,8 @@ Every piece of logic exists in exactly one place. SQLite connection setup with W
 
 **The dashboard shows everything; no channel replaces it.** Telegram and other channels may also tell you, but nothing goes only to them. **Why:** the dashboard is the one place you check. **How to apply:** never fix web clutter by sending an item elsewhere; give it one home on the dashboard.
 
+**North shows a file; it never opens one.** A file's button reveals it in the file manager (Finder, Explorer, the Linux file manager); north never hands a file to an app. **Why:** a file an agent or the web made can run as a program when opened; you decide what to open. **How to apply:** offer "Show in Finder" (named for the OS), never "Open".
+
 **One row of tabs per page.** A page never puts tabs inside tabs; each view is a tab on the same row. **Why:** nested tabs hide where a thing is. **How to apply:** if a tab needs its own tabs, make each of those a tab on the page instead.
 
 **The dashboard speaks plain words.** A label, mode or button names what it does for you in everyday words, not the technique behind it: "Beat" (the lights jump with each beat) rather than "Pulse", "Mood" rather than "Spectrum". A choice says in one short line what picking it will do. **Why:** the dashboard is for the person using north, who should not need to know how a feature works to choose it. **How to apply:** before naming a control, say what it does to someone who has never seen north, and use those words.

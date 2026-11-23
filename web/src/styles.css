@@ -912,3 +912,13 @@ audio.artifact-media, video.artifact-sound-only { width: 100%; height: 54px; bac
 .inbox-item, .inbox-item > *, .kit-row-body { min-width: 0; }
 .row-details { min-width: 0; max-width: 100%; }
 .row-details > summary { display: block; }
+
+/* ── File viewer: a page in its sealed frame, colored text, and Markdown tables ─────────── */
+.artifact-page { width: 100%; height: 74vh; max-height: none; border: 0; background: #fff; }
+.artifact-code { margin: 0; padding: 16px; overflow: auto; max-height: 74vh; border-radius: 8px; background: #0d1117; font: 12px/1.6 var(--mono); }
+.artifact-code pre { margin: 0; background: transparent !important; white-space: pre; }
+.artifact-code code { font: inherit; }
+.markdown table { width: 100%; margin: 0 0 14px; border-collapse: collapse; font-size: 13px; }
+.markdown th, .markdown td { padding: 6px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.markdown th { color: var(--text); background: var(--surface-2); }
+.markdown input[type="checkbox"] { margin-right: 6px; accent-color: var(--accent); }

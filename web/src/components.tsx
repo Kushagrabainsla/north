@@ -4,6 +4,9 @@ import { post } from "./api";
 import { fileName, noticeBody, noticePreview, savedFile } from "./notices";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState, useResource } from "./hooks";
 import { ActionBar, Button, Empty, Notice, Status, PaneLabel } from "./kit";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 import type { AgentRun, Conversation, InferenceCategory, Notice as NoticeEntry } from "./types";
 import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, Inbox, Brain, Lightbulb, Sparkles, GitBranch, Wrench, LayoutTemplate, Cpu, Settings, Search, type LucideIcon } from "lucide-react";
 import { useInbox } from "./inbox";
@@ -215,43 +218,22 @@ export function HealthIndicator({ variant = "compact" }: { variant?: "compact" |
   return <div className={`health-indicator health-${health.state}`} title={checkTitle} aria-label={`${label}. ${detail}`}><span className="health-dot"/><div><b>{label}</b><small>{detail}</small></div></div>;
 }
 
+/**
+ * Markdown, by react-markdown with GitHub's extensions (tables, task lists, strikethrough, autolinks).
+ * It replaced north's own parser, which knew headings, lists and code only: a table in a briefing showed
+ * as rows of "|" characters. A single line break stays a line break, as replies and cards are written,
+ * raw HTML in the text is shown as text, and links open in a new tab.
+ */
 export function Markdown({ children }: { children: string }) {
-  const lines = children.replace(/\r\n/g, "\n").split("\n");
-  const blocks: ReactNode[] = [];
-  let paragraph: string[] = [], list: string[] = [], ordered = false, code: string[] | null = null;
-  const flushParagraph = () => { if (paragraph.length) { blocks.push(<p key={`p-${blocks.length}`}>{renderInline(paragraph.join("\n"))}</p>); paragraph = []; } };
-  const flushList = () => { if (list.length) { const Tag = ordered ? "ol" : "ul"; blocks.push(<Tag key={`l-${blocks.length}`}>{list.map((item, i) => <li key={i}>{renderInline(item)}</li>)}</Tag>); list = []; } };
-  lines.forEach((line, index) => {
-    if (line.trim().startsWith("```")) { flushParagraph(); flushList(); if (code) { blocks.push(<pre key={`c-${index}`}><code>{code.join("\n")}</code></pre>); code = null; } else code = []; return; }
-    if (code) { code.push(line); return; }
-    const heading = line.match(/^(#{1,3})\s+(.+)/); const bullet = line.match(/^\s*[-*+]\s+(.+)/); const number = line.match(/^\s*\d+[.)]\s+(.+)/);
-    if (heading) { flushParagraph(); flushList(); const Tag = `h${heading[1].length}` as "h1" | "h2" | "h3"; blocks.push(<Tag key={`h-${index}`}>{renderInline(heading[2])}</Tag>); return; }
-    if (bullet || number) { flushParagraph(); if (list.length && ordered !== Boolean(number)) flushList(); ordered = Boolean(number); list.push((bullet || number)![1]); return; }
-    if (!line.trim()) { flushParagraph(); flushList(); return; }
-    paragraph.push(line);
-  });
-  flushParagraph(); flushList();
-  const finalCode = code as string[] | null;
-  if (finalCode) blocks.push(<pre key="c-final"><code>{finalCode.join("\n")}</code></pre>);
-  return <div className="markdown">{blocks}</div>;
+  return <div className="markdown">
+    <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={MARKDOWN_COMPONENTS}>{children}</ReactMarkdown>
+  </div>;
 }
 
-// A link's destination may hold parentheses one deep, as Wikipedia's do: "Mercury_(planet)" was cut at
-// its first ")", which then trailed the label (issue #76, P10). React refuses a javascript: destination.
-const LINK = String.raw`\[[^\]]+\]\((?:[^()]|\([^()]*\))+\)`;
-const INLINE = new RegExp(String.raw`(\*\*[^*]+\*\*|\`[^\`]+\`|${LINK}|\*[^*]+\*)`, "g");
-
-function renderInline(value: string): ReactNode[] {
-  const parts = value.split(INLINE);
-  return parts.map((part, index) => {
-    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith("*") && part.endsWith("*")) return <em key={index}>{part.slice(1, -1)}</em>;
-    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
-    const link = part.match(/^\[([^\]]+)\]\((.+)\)$/);
-    if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
-    return <span key={index}>{part.split("\n").map((line, i) => <span key={i}>{line}{i < part.split("\n").length - 1 && <br/>}</span>)}</span>;
-  });
-}
+const MARKDOWN_PLUGINS = [remarkGfm, remarkBreaks];
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer"/>,
+};
 
 export function timeAgo(value?: string | number) {
   if (!value) return "";
