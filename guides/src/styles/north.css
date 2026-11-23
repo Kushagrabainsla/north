@@ -27,6 +27,15 @@
 
 	--sl-color-hairline: #202621;
 	--sl-color-hairline-light: #2d352e;
+	--sl-color-hairline-shade: #202621;
+
+	/* The header, as the landing page has it: 60px, see-through, with a line under it. */
+	--sl-nav-height: 61px;
+	--sl-color-bg-nav: rgba(10, 12, 11, 0.86);
+}
+
+header.header {
+	backdrop-filter: blur(10px);
 }
 
 ::selection {
@@ -34,8 +43,10 @@
 	background: #b8ef72;
 }
 
-/* The site title is the wordmark: "north" and a green full stop. */
+/* The site title is the wordmark, as on the landing page: "north" and a green full stop. */
 .site-title {
+	color: var(--sl-color-white);
+	font-size: 20px;
 	font-weight: 800;
 	letter-spacing: -0.055em;
 }
