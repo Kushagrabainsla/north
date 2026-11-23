@@ -1090,7 +1090,7 @@ def inference_routing(
     _console.print()
     if not rows:
         _console.print("  [bright_black]No routing decisions recorded yet.[/bright_black]")
-        _console.print("  [bright_black]They are written as calls are made, under NORTH_ROUTING=chain.[/bright_black]")
+        _console.print("  [bright_black]North writes one each time it picks a model for a call.[/bright_black]")
         _console.print()
         return
     for row in rows:

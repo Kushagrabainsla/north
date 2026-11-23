@@ -928,7 +928,7 @@ All providers share the same `Provider` protocol (`inference/provider.py`) and a
 
 ### 8.2 Model Routing
 
-Selection is driven by fetched facts, not by model names. `NORTH_ROUTING` picks the router: `chain` (default), `legacy` (the pool router below), or `shadow` (route on legacy, record where chain would have differed).
+Selection is driven by fetched facts, not by model names. One router, the chain (`inference/routing/router.py`), picks every model; `NORTH_ROUTING` and the pool router were removed in b28c64d. Each pick is written to `models.db`, and `north routing` shows why each part ran on its model.
 
 **The facts layer (`inference/facts/`).** Two catalog sources are merged onto a canonical model identity:
 

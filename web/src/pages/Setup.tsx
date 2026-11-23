@@ -56,7 +56,7 @@ export function YourFiles() {
       : <Button variant="primary" busy={data.status === "in_progress"} busyLabel="Reading…" onClick={() => void start()}>{fresh.length ? `Read ${fresh.length} new file${fresh.length > 1 ? "s" : ""}` : "Read my files"}</Button>}>
     <Note>
       <p>North can read documents like your resume, notes and plans once, and remember facts about you: your work, goals and preferences. Then you don’t have to repeat them.</p>
-      <p>It looks only in your Documents, Desktop, Downloads and notes folders and skips code and build files. The text of each document goes to your AI provider to pull out facts. Nothing starts until you press the button.</p>
+      <p>It looks in your Documents, Desktop, Downloads and notes folders. It also reads <code>.csv</code> and <code>.txt</code> files directly in your home folder, and the <code>README.md</code> files in <code>~/Desktop/projects</code>. It skips code and build files. The text of each document goes to your AI provider to pull out facts. Nothing starts until you press the button.</p>
       {data?.status === "complete" && <p>North has read the documents marked completed. Facts it learned are on the <Link to="/memory?tab=facts">Memory</Link> page, where you can correct or forget them.{fresh.length > 0 && " Files added or changed since then are marked pending."}</p>}
     </Note>
     {said && <Notice tone={said.tone}>{said.text}</Notice>}

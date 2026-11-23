@@ -296,7 +296,7 @@ export function CodingAgents() {
     finally { setChecking(false); }
   };
   useEffect(() => { void check(); }, []);
-  return <Panel title="Coding agents" about="North hands coding to these agents in their own login. Ready means installed, recent enough, logged in and able to run its sandbox here; usage limits are only known when a run starts." actions={<Button size="sm" busy={checking} busyLabel="Checking…" onClick={() => void check()}>Check again</Button>}>
+  return <Panel title="Coding agents" about="North hands coding to these agents in their own login. Ready means installed, recent enough, logged in, and with what north needs to run it here: Claude Code's sandbox tools, or Codex's app-server. Usage limits are only known when a run starts." actions={<Button size="sm" busy={checking} busyLabel="Checking…" onClick={() => void check()}>Check again</Button>}>
     {error && <Notice tone="error">{error}</Notice>}
     {!agents && !error && <Loading label="Checking each agent’s install and login"/>}
     {agents?.map(agent => {
