@@ -173,6 +173,29 @@ JSON.stringify(out)
 """
 )
 
+# Finds the element a vanished uid named, by the role and name inspect showed for it, and gives it that
+# uid again: only when exactly one shown element has both. A page that redrew drops north's tags, so a uid
+# from the last page view named nothing, and the click failed "not found" (4 times in 3 runs, 2026-11-22).
+_RELOCATE_SCRIPT = (
+    _ELEMENT_JS
+    + """
+const uid = %(uid)s, role = %(role)s, name = %(name)s;
+let out = "present";
+if (!document.querySelector('[data-north-uid="' + uid + '"]')) {
+  const shown = el => getComputedStyle(el).visibility !== "hidden" && el.getClientRects().length > 0;
+  const hits = [];
+  for (const el of document.querySelectorAll("*")) {
+    if ((roleOf(el) || el.tagName.toLowerCase()) !== role || !shown(el)) continue;
+    if (JSON.stringify(nameOf(el)) === name) hits.push(el);
+    if (hits.length > 1) break;
+  }
+  if (hits.length === 1) { hits[0].dataset.northUid = uid; out = "found"; }
+  else out = hits.length ? "several" : "none";
+}
+JSON.stringify(out)
+"""
+)
+
 _TABLES_SCRIPT = """
 const limit = %(limit)d, query = %(query)s.toLowerCase(), records = [];
 for (const table of document.querySelectorAll("table")) {
@@ -646,8 +669,25 @@ class TaskWindowBrowser:
         except (BridgeInputError, _ToolError, RuntimeError, OSError, httpx.HTTPError) as exc:
             return ToolOutput(success=False, error=str(exc))
 
+    async def relocate(self, profile: BrowserProfile, task_id: str, uid: str) -> str:
+        """Give *uid* back to the element it named, when the page redrew and dropped it.
+
+        "present" (nothing to do), "found" (one element had its role and name, and has the uid again),
+        "several", "none", or "unknown" (north never showed this uid). Only "present" and "found" leave a
+        uid that names an element; any other answer leaves the call to fail as before. The approval card
+        looks at the page after this, so it describes the element the action then lands on.
+        """
+        seen = self._seen.get((profile.id, task_id), {}).get(uid)
+        if seen is None or not uid.removeprefix("n").isdigit():
+            return "unknown"
+        code = _RELOCATE_SCRIPT % {"uid": json.dumps(uid), "role": json.dumps(seen[0]), "name": json.dumps(seen[1])}
+        with span("bridge.relocate"):
+            return str(await self._script(profile, self._session(profile, task_id), code))
+
     async def _act(self, profile: BrowserProfile, task_id: str, action: str, params: dict) -> dict:
         session = self._session(profile, task_id)
+        if params.get("uid") and action not in {"goto", "navigate", "read", "inspect", "extract", "query", "wait"}:
+            await self.relocate(profile, task_id, str(params["uid"]))
         if action in {"goto", "navigate"}:
             return await self._open(profile, session, params)
         if action == "read" and params.get("urls"):

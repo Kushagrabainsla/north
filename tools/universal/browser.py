@@ -88,6 +88,9 @@ _STEP_RESULT_CHARS = 8_000
 # What the page shows after an action that changes it, so the model needs no inspect to see the result.
 _PAGE_VIEW_LIMIT = 60
 _VIEW_AFTER = frozenset({"click", "dblclick", "press", "select", "check", "uncheck"})
+# A failed action shows the page too: a wait that ran out (12), an element not found or covered (23), and
+# the model's next call was an inspect just to see why (2026-11-10 to 11-22).
+_VIEW_AFTER_FAILURE = _VIEW_AFTER | {"fill", "type", "wait", "assert", "upload"}
 
 
 def _site(url: str) -> str:
@@ -536,6 +539,41 @@ def _batch_problem(params: dict[str, Any]) -> str:
     return ""
 
 
+# What each action needs to run, besides its target element. A call without it reached the approval layer,
+# waited for a decision, and only then failed: 8 calls from 2026-11-10 to 11-22 had no 'action' or no 'js',
+# and on 2026-11-22 a script sent under another name went to the approval model, then failed.
+_ACTION_NEEDS: dict[str, tuple[str, ...]] = {
+    "eval": ("js",),
+    "goto": ("url",),
+    "navigate": ("url",),
+    "fill": ("value",),
+    "type": ("value",),
+    "select": ("value",),
+    "upload": ("filename",),
+    "screenshot": ("filename",),
+    "pdf": ("filename",),
+    "query": ("selector",),
+}
+_NEEDS_TARGET = frozenset({"click", "dblclick", "fill", "select", "check", "uncheck", "upload"})
+_TARGET_KEYS = ("uid", "selector", "xy")
+# Parameters north adds to a call itself, which the schema does not name.
+_NORTH_KEYS = frozenset({"task_id", "workspace", "session_id", "page", "xy"})
+
+
+def _call_problem(params: dict[str, Any], properties: dict[str, Any]) -> str:
+    """What a call lacks to run, named, with any parameter it gave that the browser does not take; "" when none."""
+    action = str(params.get("action") or ("goto" if params.get("url") else ""))
+    missing = [repr(name) for name in _ACTION_NEEDS.get(action, ()) if params.get(name) in (None, "")]
+    if action in _NEEDS_TARGET and not any(params.get(key) for key in _TARGET_KEYS):
+        missing.append("'uid' or 'selector'")
+    if not missing:
+        return ""
+    problem = f"'{action}' needs {' and '.join(missing)}"
+    if unknown := sorted(key for key in params if key not in properties and key not in _NORTH_KEYS):
+        problem += f"; the browser does not take {', '.join(repr(key) for key in unknown)}"
+    return f"{problem}. Nothing ran."
+
+
 def _steps_problem(params: dict[str, Any]) -> str:
     """Why a step list cannot run, or "" when it can (or the call is not one)."""
     steps = params.get("steps")
@@ -556,8 +594,8 @@ def _steps_problem(params: dict[str, Any]) -> str:
             )
         if refused := [key for key in _STEP_KEYS_REFUSED if key in step]:
             return f"Step {number} names {', '.join(refused)}; give those once, on the call, not on a step."
-        if action in _NAVIGATING_ACTIONS and not str(step.get("url") or "").strip():
-            return f"Step {number}: '{action}' needs a url."
+        if problem := _call_problem(step, BrowserTool.parameters_schema["properties"]["steps"]["items"]["properties"]):
+            return f"Step {number}: {problem}"
         if reason := _unsafe_url_reason(action, step):
             return f"Step {number}: {reason}"
     return ""
@@ -1208,7 +1246,12 @@ class BrowserTool(Tool):
         why = browser_unavailable()
         if why:
             return f"The browser cannot work here: {why}."
-        if problem := _batch_problem(input.params or {}) or _steps_problem(input.params or {}):
+        params = input.params or {}
+        if problem := (
+            _batch_problem(params)
+            or _steps_problem(params)
+            or _call_problem(params, self.parameters_schema["properties"])
+        ):
             return problem
         # A call that names no saved profile is refused before the approval layer: the memory decider
         # spent 28 s ruling on "84b241fdce825114]" (a stray bracket) before run() refused it (issue #83).
@@ -1282,6 +1325,18 @@ class BrowserTool(Tool):
         with span("browser.describe"):
             return await self._describe(input)
 
+    async def _relocate(self, profile: BrowserProfile, params: dict[str, Any]) -> None:
+        """Before north looks at the page for a card: give a vanished uid back to its element (bridge.relocate).
+
+        The card then names the element the action will land on, so a "Send" whose uid the page dropped is
+        still seen as a send. Done again when the action runs, in case the page changed in between.
+        """
+        uid = str(params.get("uid") or "")
+        if uid and self._existing_browser is not None:
+            task = str(params.get("task_id") or "default")
+            with contextlib.suppress(ValueError, OSError, RuntimeError, httpx.HTTPError):
+                await self._existing_browser.relocate(profile, task, uid)
+
     async def _peek(
         self, profile: BrowserProfile | None, params: dict[str, Any]
     ) -> tuple[ApprovalRequest, bool] | None:
@@ -1294,6 +1349,7 @@ class BrowserTool(Tool):
             if profile is not None and profile.context == "existing":
                 if self._existing_browser is None:
                     return None
+                await self._relocate(profile, resolved)
                 if resolved.get("uid") and not resolved.get("selector"):
                     # The page script then reads the element too: whether it is in a search form.
                     resolved["selector"] = f'[data-north-uid="{resolved["uid"]}"]'
@@ -1461,6 +1517,7 @@ class BrowserTool(Tool):
                         connection_id = connection.data.get("connection_id") if connection.success else None
                     if connection_id and binding == (profile.model_dump_json(), connection_id):
                         if profile.context == "existing" and self._existing_browser is not None:
+                            await self._relocate(profile, resolved)
                             request = await describe_browser_call(
                                 resolved, [], self._existing_browser.description_runner(profile, resolved)
                             )
@@ -1842,7 +1899,10 @@ class BrowserTool(Tool):
             task = str(params.get("task_id") or "default")
             self._task_profiles[task] = used if self._task_profiles.get(task, used) == used else ""
         action = params.get("action", "") or ("goto" if params.get("url") else "")
-        if action in _VIEW_AFTER and output.success and not in_list:
+        shows_page = action in _VIEW_AFTER if output.success else action in _VIEW_AFTER_FAILURE
+        # A call refused for its profile never reached a page, so there is none to show.
+        reached = bool(params.get("profile_id")) or not self._profiles()
+        if shows_page and reached and not in_list and output.failure_kind != "refused":
             base = {key: params[key] for key in ("profile_id", "task_id") if params.get(key)}
             output.data["page"] = await self._page_view(input, base)
         return output

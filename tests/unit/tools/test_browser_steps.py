@@ -157,7 +157,7 @@ async def test_a_wait_in_a_list_waits_at_most_15_seconds(settings) -> None:
         ([{"action": "eval", "js": "1"}], "'eval' cannot be a step"),
         ([{"action": "upload", "selector": "input"}], "'upload' cannot be a step"),
         ([{"action": "click", "selector": "a", "profile_id": "other"}], "names profile_id"),
-        ([{"action": "goto"}], "'goto' needs a url"),
+        ([{"action": "goto"}], "Step 1: 'goto' needs 'url'. Nothing ran."),
         ([{"action": "goto", "url": "file:///etc/passwd"}], "Step 1: Security policy blocked"),
         ([{"action": "click", "selector": "a"}] * 11, "at most 10 steps"),
         (["click"], "Step 1 is not an object"),
@@ -293,3 +293,68 @@ def test_a_list_without_a_profile_needs_a_card_only_when_it_changes_something() 
     tool = BrowserTool(binary_cmd=["chrome-agent"])
     assert tool.mutates({"action": "steps", "steps": [{"action": "query", "selector": "a"}]}) is False
     assert tool.mutates({"action": "steps", "steps": [{"action": "click", "selector": "a"}]}) is True
+
+
+async def test_a_step_on_a_vanished_uid_is_found_again_before_north_looks_at_it(settings) -> None:
+    """The check before a click then reads the element the click will land on, a "Send" included."""
+    native = _bridge(target_text="Send invitation")
+    order: list[str] = []
+    native.relocate = AsyncMock(side_effect=lambda profile, task, uid: order.append(f"relocate {uid}") or "found")
+
+    async def read_page(command, timeout):
+        if command[0] == "inspect":  # the tree, with the uid back on its element
+            return SimpleNamespace(stdout=json.dumps({"snapshot": 'uid=n4 button "Send invitation"'}))
+        page = {"url": "https://www.linkedin.com/in/ada/", "title": "Ada", "focused": None, "target": None}
+        return SimpleNamespace(stdout=json.dumps({"result": json.dumps(page)}))
+
+    native.description_runner = Mock(side_effect=lambda profile, params: order.append("look") or read_page)
+    tool = BrowserTool(north_settings=settings, existing_browser=native)
+
+    output = await tool.run(_call([{"action": "click", "uid": "n4"}]))
+
+    assert order[:2] == ["relocate n4", "look"]
+    assert not output.success and "send something" in output.error  # the found-again "Send" is still a send
+
+
+async def test_a_failed_click_shows_the_page(settings) -> None:
+    """The model's next call after a failed click or wait was an inspect, just to see why."""
+    native = _bridge(fail_on="click")
+    tool = BrowserTool(north_settings=settings, existing_browser=native)
+
+    output = await tool.run(ToolInput(params={"action": "click", "uid": "n4", "profile_id": "work", "task_id": TASK}))
+
+    assert not output.success
+    assert native.ran == ["click", "inspect"]
+    assert output.data["page"]["snapshot"] == 'uid=n1 button "More"'
+
+
+async def test_a_call_refused_for_its_profile_shows_no_page(settings) -> None:
+    native = _bridge()
+    tool = BrowserTool(north_settings=settings, existing_browser=native)
+
+    output = await tool.run(ToolInput(params={"action": "click", "uid": "n4", "task_id": TASK}))
+
+    assert not output.success and "page" not in output.data
+    assert native.ran == []
+
+
+@pytest.mark.parametrize(
+    ("params", "problem"),
+    [
+        ({"action": "eval", "script": "document.title"}, "'eval' needs 'js'; the browser does not take 'script'"),
+        ({"action": "click"}, "'click' needs 'uid' or 'selector'"),
+        ({"action": "fill", "selector": "input"}, "'fill' needs 'value'"),
+        ({"action": "goto"}, "'goto' needs 'url'"),
+    ],
+)
+async def test_a_call_missing_what_it_needs_is_refused_before_any_card_and_names_it(settings, params, problem) -> None:
+    """8 such calls waited for a decision first (2026-11-10 to 11-22), and then failed anyway."""
+    store = ApprovalStore()
+    native = _bridge()
+    tool = bind_approvals(BrowserTool(north_settings=settings, existing_browser=native), ApprovalMode.ASK, store=store)
+
+    call = ToolInput(params={**params, "profile_id": "work", "task_id": TASK})
+    output = await asyncio.wait_for(tool.execute(call), 5)
+
+    assert not output.success and output.error == f"{problem}. Nothing ran."
+    assert not store.all(10) and native.ran == []

@@ -150,8 +150,9 @@ async def test_click_is_refused_when_the_element_changed_since_inspect(adapter, 
 async def test_click_lands_on_the_inspected_element(adapter, profile):
     adapter._seen[(profile.id, "t")] = {"n4": ("button", '"Next"')}
     spot = {"found": True, "reachable": True, "x": 5, "y": 6, "role": "button", "name": '"Next"'}
-    # Two looks that agree (the element is still), then the click.
-    adapter._tool = AsyncMock(side_effect=[text(json.dumps(spot)), text(json.dumps(spot)), text("clicked")])
+    # The uid is still on the page; two looks that agree (the element is still); then the click.
+    looks = [text('"present"'), text(json.dumps(spot)), text(json.dumps(spot)), text("clicked")]
+    adapter._tool = AsyncMock(side_effect=looks)
     output = await adapter.call(profile, {"action": "click", "task_id": "t", "uid": "n4"})
     assert output.success
     tool, arguments = adapter._tool.call_args_list[-1].args[1:3]
@@ -404,3 +405,36 @@ async def test_a_stopped_script_is_not_a_read_and_a_failed_read_is_still_one(ada
         assert output is None
     else:
         assert not output.success and output.data["read_only"] is True and "TypeError" in output.error
+
+
+@pytest.mark.asyncio
+async def test_a_uid_north_never_showed_is_not_looked_for(adapter, profile):
+    adapter._script = AsyncMock()
+    assert await adapter.relocate(profile, "t", "n9") == "unknown"
+    adapter._script.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_vanished_uid_is_looked_for_by_the_role_and_name_north_showed(adapter, profile):
+    """A page that redrew dropped north's tags: "Element was not found" 4 times in 3 runs on 2026-11-22."""
+    adapter._seen[(profile.id, "t")] = {"n4": ("link", '"Charles Babbage"')}
+    adapter._script = AsyncMock(return_value="found")
+
+    assert await adapter.relocate(profile, "t", "n4") == "found"
+
+    code = adapter._script.await_args.args[2]
+    assert 'const uid = "n4", role = "link", name = "\\"Charles Babbage\\""' in code
+    assert "hits.length === 1" in code  # only one match gets the uid; zero or several leave it failing
+
+
+@pytest.mark.asyncio
+async def test_a_click_on_a_vanished_uid_lands_on_the_element_found_again(adapter, profile, monkeypatch):
+    monkeypatch.setattr(bridge.asyncio, "sleep", AsyncMock())
+    adapter._seen[(profile.id, "t")] = {"n4": ("link", '"Charles Babbage"')}
+    spot = {"found": True, "reachable": True, "x": 7, "y": 8, "role": "link", "name": '"Charles Babbage"'}
+    adapter._script = AsyncMock(side_effect=["found", spot, spot])
+    adapter._tool = AsyncMock(return_value=text("clicked"))
+
+    output = await adapter.call(profile, {"action": "click", "task_id": "t", "uid": "n4"})
+
+    assert output.success and (output.data["x"], output.data["y"]) == (7, 8)

@@ -110,9 +110,9 @@ async def test_opening_a_site_asks_once_then_reading_it_does_not(settings) -> No
         {"action": "goto", "url": "https://collector.example/?data=read-from-linkedin"},
         {"action": "click", "uid": "n1"},
         {"action": "fill", "uid": "n1", "value": "x"},
-        {"action": "type", "text": "x"},
-        {"action": "upload", "filename": "resume.pdf"},
-        {"action": "eval", "script": "1"},
+        {"action": "type", "value": "x"},
+        {"action": "upload", "filename": "resume.pdf", "selector": "input[type=file]"},
+        {"action": "eval", "js": "1"},
     ],
 )
 async def test_another_site_or_any_change_still_asks(settings, params) -> None:
@@ -256,7 +256,9 @@ async def test_a_card_names_the_rule_its_answer_could_become(settings) -> None:
     await _open(tool, store)
 
     running = asyncio.create_task(
-        tool.execute(ToolInput(params={"profile_id": "university", "task_id": TASK, "action": "fill", "uid": "n1"}))
+        tool.execute(
+            ToolInput(params={"profile_id": "university", "task_id": TASK, "action": "fill", "uid": "n1", "value": "x"})
+        )
     )
     while not store.pending():
         await asyncio.sleep(0.01)

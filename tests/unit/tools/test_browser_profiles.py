@@ -288,6 +288,7 @@ async def test_target_description_preserves_external_effect_facts_and_profile_id
 
     native = Mock()
     native.verify = AsyncMock(return_value={"connection_id": "connection", "profile_verified": True})
+    native.relocate = AsyncMock(return_value="present")
     tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings, existing_browser=native)
     profile = settings.browser_profiles[0]
     tool._verified_bindings[("task", profile.id)] = (profile.model_dump_json(), "connection")
