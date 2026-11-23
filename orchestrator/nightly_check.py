@@ -66,6 +66,7 @@ _LAST_PASS_FILE_NAME = "last_pass.json"
 # The live tests run an agent only when its variable is "1" (tests/live).
 _LIVE_VARIABLE = "NORTH_LIVE_{name}"
 _LIVE_TESTS = "tests/live/"
+_LIVE_BROWSER_TEST = "tests/live/test_browser_live.py"
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,7 @@ async def nightly_check() -> str:
     # and hide a real failure among them. It is named with its fix, and its tests do not run.
     agents = [agent for agent in await try_agents() if agent.installed]
     live = {_LIVE_VARIABLE.format(name=agent.name.upper()): "1" if agent.ready else "0" for agent in agents}
+    live |= _browser_variables()
     report = settings.north_home / "smoke" / f"{localnow():%Y-%m-%d_%H%M}.log"
     # The lowest CPU priority: after a night asleep it can run while you work.
     process = await asyncio.create_subprocess_exec(
@@ -225,6 +227,27 @@ async def nightly_check() -> str:
 _READ_REPORT = "Read the report named below to see what failed."
 
 
+def _browser_variables() -> dict[str, str]:
+    """Switch on the live browser test (tests/live/test_browser_live.py) for one of your connected profiles.
+
+    Two browser bugs lived for weeks because only a live run shows them: Enter never submitted a form,
+    and Chrome ran an extension copy five days old. The test runs two read-only Wikipedia tasks in the
+    first enabled existing Chrome profile north has connected (its TaskWindow folder exists, which only
+    a Chrome that loaded it makes). With none, it does not run: there is nothing to check.
+    """
+    from config.strategy import NorthSettings
+
+    bridges = settings.north_home / "browser" / "taskwindow"
+    profiles = NorthSettings(settings.north_home / "settings.json").browser_profiles
+    connected = next(
+        (p.id for p in profiles if p.enabled and p.context == "existing" and (bridges / p.id / "extension").is_dir()),
+        "",
+    )
+    if not connected:
+        return {"NORTH_LIVE_BROWSER": "0"}
+    return {"NORTH_LIVE_BROWSER": "1", "NORTH_LIVE_BROWSER_PROFILE": connected}
+
+
 def _agent_problem(agent: Readiness) -> Problem:
     """A coding agent that cannot take a run: its tests did not run, and what it needs."""
     skipped = f"{agent.name} cannot take a coding run, so north did not test it tonight"
@@ -240,7 +263,11 @@ def _code_problem(failure: Failure, folder: Path, since: str) -> Problem:
         return Problem(f"{failure.stage} failed: {failure.cause}", f"{broke} {_READ_REPORT}")
     count = len(failure.tests)
     test = failure.tests[0]
-    live = "NORTH_LIVE_CLAUDE=1 NORTH_LIVE_CODEX=1 " if test.startswith(_LIVE_TESTS) else ""
+    live = ""
+    if test.startswith(_LIVE_BROWSER_TEST):
+        live = " ".join(f"{name}={value}" for name, value in _browser_variables().items()) + " "
+    elif test.startswith(_LIVE_TESTS):
+        live = "NORTH_LIVE_CLAUDE=1 NORTH_LIVE_CODEX=1 "
     issue = f"{'1 test' if count == 1 else f'{count} tests'} in {failure.stage} failed: {failure.cause}"
     return Problem(
         f"{issue} (for example {test}).",

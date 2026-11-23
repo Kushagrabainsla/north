@@ -351,3 +351,77 @@ def test_the_nightly_check_ships_as_a_flow_of_one_system_step() -> None:
 
     assert flow.status == "active"
     assert [step.action for step in flow.steps] == ["nightly_check"]
+
+
+def _connected_profile(home: Path, monkeypatch: pytest.MonkeyPatch, *, connected: bool = True) -> None:
+    """A saved existing Chrome profile, connected when its TaskWindow folder exists."""
+    from config.browser_profiles import BrowserProfile
+    from config.strategy import NorthSettings
+
+    home.mkdir(parents=True, exist_ok=True)
+    profile = BrowserProfile(id="p1", name="Work", purpose="w", context="existing", data_directory=str(home))
+    NorthSettings(home / "settings.json").set_browser_profiles([profile])
+    if connected:
+        (home / "browser" / "taskwindow" / "p1" / "extension").mkdir(parents=True)
+
+
+@pytest.mark.asyncio
+async def test_the_live_browser_test_runs_in_a_connected_profile(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enter never submitted a form, and Chrome ran old extension code, for weeks: only a live run shows such bugs."""
+    _connected_profile(home, monkeypatch)
+    _project(
+        tmp_path,
+        home,
+        'echo "$NORTH_LIVE_BROWSER:$NORTH_LIVE_BROWSER_PROFILE" >"$NORTH_HOME/live"\necho "smoke passed"\n',
+    )
+
+    await nightly.nightly_check()
+
+    assert (home / "live").read_text().strip() == "1:p1"
+
+
+@pytest.mark.asyncio
+async def test_without_a_connected_profile_the_live_browser_test_does_not_run(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _connected_profile(home, monkeypatch, connected=False)
+    _project(tmp_path, home, 'echo "$NORTH_LIVE_BROWSER" >"$NORTH_HOME/live"\necho "smoke passed"\n')
+
+    await nightly.nightly_check()
+
+    assert (home / "live").read_text().strip() == "0"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_browser_check_says_how_to_run_it_again(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _connected_profile(home, monkeypatch)
+    folder = _project(
+        tmp_path,
+        home,
+        """
+cat >"${SMOKE_REPORT%.log}.live-coding-agents.xml" <<'JUNIT'
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" tests="1" failures="1">
+<testcase classname="tests.live.test_browser_live" name="test_a_browser_task_finishes[wiki]">
+<failure message="AssertionError: wiki took 9 browser calls, more than 6">x</failure></testcase>
+</testsuite></testsuites>
+JUNIT
+echo "--- live coding agents: FAILED" >>"$SMOKE_REPORT"
+echo "smoke failed: live coding agents"
+exit 1
+""",
+    )
+
+    with pytest.raises(nightly.NightlyCheckFailed) as failure:
+        await nightly.nightly_check()
+
+    [problem] = failure.value.problems
+    assert "wiki took 9 browser calls, more than 6" in problem.issue
+    assert (
+        f"In {folder}, run `NORTH_LIVE_BROWSER=1 NORTH_LIVE_BROWSER_PROFILE=p1 .venv/bin/python -m pytest"
+        in problem.fix
+    )

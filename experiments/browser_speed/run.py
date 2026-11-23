@@ -28,7 +28,7 @@ from pathlib import Path
 import httpx
 
 _REPO = Path(__file__).parents[2]
-_REAL_HOME = Path.home() / ".north"
+_REAL_HOME = Path(os.environ.get("NORTH_HOME") or Path.home() / ".north")
 _LOGIN = Path("credentials") / "openai_codex.json"
 _RESULTS = Path.home() / ".cache" / "north" / "browser-speed"
 _DONE = {"completed", "failed", "cancelled", "dead", "timed_out", "error"}
@@ -130,10 +130,17 @@ def _run_task(client: httpx.Client, name: str, prompt: str) -> dict:
 
 
 def main(argv: list[str]) -> None:
-    profile_id, names = argv[0], argv[1:] or list(TASKS)
+    run_tasks(argv[0], argv[1:] or list(TASKS))
+
+
+def run_tasks(profile_id: str, names: list[str], results: Path = _RESULTS) -> tuple[list[dict], Path]:
+    """Run the named tasks in a scratch north with *profile_id*; their results, and the folder that keeps them.
+
+    Also what the nightly check's live browser test runs (tests/live/test_browser_live.py).
+    """
     settings = json.loads((_REAL_HOME / "settings.json").read_text())
     profile = next(p for p in settings["browser_profiles"] if p["id"] == profile_id)
-    out = _RESULTS / time.strftime("%Y%m%d-%H%M%S")
+    out = results / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True)
     home = Path(tempfile.mkdtemp(prefix="north-speed-home-")) / "home"
     _make_home(home, profile_id)
@@ -148,7 +155,7 @@ def main(argv: list[str]) -> None:
     command = [sys.executable, "-m", "uvicorn", "orchestrator.app:app", "--host", "127.0.0.1", "--port", str(port)]
     with (out / "server.log").open("w") as server_log:
         server = subprocess.Popen(command, cwd=_REPO, env=env, stdout=server_log, stderr=subprocess.STDOUT)
-    results = []
+    done: list[dict] = []
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=60) as client:
             deadline = time.monotonic() + 180
@@ -164,7 +171,7 @@ def main(argv: list[str]) -> None:
                 time.sleep(1)
             for name in names:
                 result = _run_task(client, name, TASKS[name].format(profile=profile["name"]))
-                results.append(result)
+                done.append(result)
                 print(json.dumps({k: v for k, v in result.items() if k != "answer"}), flush=True)
     finally:
         server.terminate()
@@ -182,10 +189,11 @@ def main(argv: list[str]) -> None:
         # North's screenshot of each task's last page (BrowserTool.end_task).
         for shot in home.joinpath("tasks").glob("*/browser-*.png"):
             shutil.copy2(shot, out / f"{shot.parent.name}-{shot.name}")
-        (out / "results.json").write_text(json.dumps(results, indent=2, default=str))
+        (out / "results.json").write_text(json.dumps(done, indent=2, default=str))
         (home / "browser" / "taskwindow" / profile_id).unlink()  # the link, never the user's folder
         shutil.rmtree(home.parent, ignore_errors=True)
     print(f"results in {out}")
+    return done, out
 
 
 if __name__ == "__main__":
