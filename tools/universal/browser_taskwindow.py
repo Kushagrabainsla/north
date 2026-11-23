@@ -91,6 +91,8 @@ def page_chars(pages: int) -> int:
     return max(_MIN_PAGE_CHARS, _BATCH_TEXT_CHARS // max(pages, 1))
 
 
+_ENTER_KEYS = frozenset({"enter", "return"})
+
 _PAGE_CHANGING = frozenset(
     {"goto", "navigate", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "eval", "upload"}
 )
@@ -614,11 +616,14 @@ class TaskWindowBrowser:
             )
             return {}
         if action == "press":
-            await self._tool(
-                profile,
-                "computer",
-                {"action": "key", "key": str(params.get("value") or "Enter"), "sessionToken": session},
-            )
+            key = str(params.get("value") or "Enter")
+            if key.strip().lower() in _ENTER_KEYS:
+                # TaskWindow's "key" sends a named key with no character (rawKeyDown), and a form submits
+                # only on an Enter that carries "\r": Enter in Wikipedia's search box never searched. Its
+                # typing sends each character as real key events, a line break as Enter with "\r".
+                await self._tool(profile, "computer", {"action": "type", "text": "\n", "sessionToken": session})
+                return {}
+            await self._tool(profile, "computer", {"action": "key", "key": key, "sessionToken": session})
             return {}
         if action == "upload":
             return await self._upload(profile, session, params)

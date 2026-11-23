@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
@@ -63,7 +63,10 @@ _PAGE_SCRIPT = """(() => {
     if (!el || el === document.body || el === document.documentElement) return null;
     const tag = el.tagName.toLowerCase();
     const buttonish = tag === "button" || (tag === "input" && ["submit", "button", "image"].includes(el.type));
+    const form = el.closest("form");
     return {
+      searches: el.type === "search" || !!el.closest('[role="search"]')
+        || !!(form && form.querySelector('input[type="search"]')),
       role: el.getAttribute("role") || (buttonish ? "button" : tag === "a" ? "link" : tag),
       text: (el.getAttribute("aria-label") || (el.labels && el.labels[0] && el.labels[0].innerText)
         || el.innerText || (el.type === "password" ? "" : el.value)
@@ -91,6 +94,8 @@ class _Element:
     role: str = ""
     text: str = ""
     in_form: bool = False
+    # A search field, or a control in a search form: submitting it looks something up and sends nothing.
+    searches: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,10 +115,16 @@ async def describe_browser_call(params: dict[str, Any], command: list[str], run:
     *command* is chrome-agent plus the call's ``--browser`` session; *run* runs
     one chrome-agent command and returns its result (stdout on ``.stdout``).
     """
+    request, _ = await describe_and_look(params, command, run)
+    return request
+
+
+async def describe_and_look(params: dict[str, Any], command: list[str], run: Runner) -> tuple[Request, bool]:
+    """The request, and whether north could read the page it describes (False for an unseen page)."""
     action = str(params.get("action") or ("goto" if params.get("url") else "")).strip().lower()
     page = _Page() if action in ("goto", "navigate") else await _look(action, params, command, run)
     element = _element_for(action, params, page)
-    return _request(action, params, page, element)
+    return _request(action, params, page, element), page.seen
 
 
 async def _look(action: str, params: dict[str, Any], command: list[str], run: Runner) -> _Page:
@@ -129,7 +140,9 @@ async def _look(action: str, params: dict[str, Any], command: list[str], run: Ru
         if params.get("uid") and action != "press":
             # Plain `inspect` keeps the tree; `--limit` flattens it, and the nesting is what shows a form.
             inspected = await run([*command, "inspect"], _LOOK_TIMEOUT_SECONDS)
-            target = _element_in_snapshot(json.loads(inspected.stdout).get("snapshot", ""), str(params["uid"]))
+            found = _element_in_snapshot(json.loads(inspected.stdout).get("snapshot", ""), str(params["uid"]))
+            # The tree has no search flag; the page script read it when a selector named the same element.
+            target = replace(found, searches=target.searches) if found and target else found
         return _Page(
             url=str(page.get("url") or ""),
             title=str(page.get("title") or ""),
@@ -144,7 +157,12 @@ async def _look(action: str, params: dict[str, Any], command: list[str], run: Ru
 def _element(raw: Any) -> _Element | None:
     if not isinstance(raw, dict):
         return None
-    return _Element(role=str(raw.get("role") or ""), text=str(raw.get("text") or ""), in_form=bool(raw.get("inForm")))
+    return _Element(
+        role=str(raw.get("role") or ""),
+        text=str(raw.get("text") or ""),
+        in_form=bool(raw.get("inForm")),
+        searches=bool(raw.get("searches")),
+    )
 
 
 def _element_in_snapshot(snapshot: str, uid: str) -> _Element | None:
@@ -196,7 +214,11 @@ def _request(action: str, params: dict[str, Any], page: _Page, element: _Element
     label = _label(params, element)
     presses = _presses(action, params)
     words = _words(element.text) if element else set()
-    submits_form = bool(element and element.in_form and (element.role == "button" or action == "press"))
+    # Enter in Wikipedia's search box counted as a send, so a step list stopped before every search.
+    # A search form looks something up; a control whose own words say send still sends (below).
+    submits_form = bool(
+        element and element.in_form and not element.searches and (element.role == "button" or action == "press")
+    )
     # An upload hands a local file to the site, whatever the button later does.
     sends = action == "upload" or (presses and (bool(words & _SENDING_WORDS) or submits_form))
     at_checkout = any(part in urlparse(page.url).path.lower() for part in _SPENDING_PATH_PARTS)

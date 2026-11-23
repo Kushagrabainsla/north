@@ -36,7 +36,7 @@ from config.browser_connection import cdp_http_base as _cdp_http_base
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal.browser_accounts import BrowserAccounts, Pick, site_of
-from tools.universal.browser_describe import describe_browser_call
+from tools.universal.browser_describe import describe_and_look, describe_browser_call
 from tools.universal.browser_query import query_script
 from tools.universal.browser_taskwindow import TaskWindowBrowser, page_chars
 from utils.net import HostNotFoundError, UnsafeUrlError, validate_public_url
@@ -72,6 +72,22 @@ _IDENTITY_KEYS = frozenset(
 _IDENTITY_ACTIONS = frozenset({"preflight", "status"})
 # Pages one batch read may name (issue #83): read in one call, in parallel tabs where the bridge allows.
 _MAX_BATCH_URLS = 10
+# A step list (action='steps'): several actions in one call, one card and one model turn. A run made a
+# median of 31 browser calls, each after a model turn of about 2.5 s, and each click waited about 4 s for
+# its own decision (2026-11-10 to 11-22). A script, an upload or a file is not a step: each is its own call,
+# so the card can show it whole.
+_STEP_ACTIONS = frozenset(
+    {"goto", "navigate", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck"}
+    | {"wait", "query", "assert", "read"}
+)
+_MAX_STEPS = 10
+# A wait in a list waits for its condition, not for a time; a long one stops the list, not the task.
+_STEP_WAIT_SECONDS = 15
+_STEP_KEYS_REFUSED = ("profile_id", "task_id", "steps", "urls")
+_STEP_RESULT_CHARS = 8_000
+# What the page shows after an action that changes it, so the model needs no inspect to see the result.
+_PAGE_VIEW_LIMIT = 60
+_VIEW_AFTER = frozenset({"click", "dblclick", "press", "select", "check", "uncheck"})
 
 
 def _site(url: str) -> str:
@@ -520,6 +536,104 @@ def _batch_problem(params: dict[str, Any]) -> str:
     return ""
 
 
+def _steps_problem(params: dict[str, Any]) -> str:
+    """Why a step list cannot run, or "" when it can (or the call is not one)."""
+    steps = params.get("steps")
+    if params.get("action") != "steps":
+        return "Only action='steps' takes 'steps'." if steps not in (None, []) else ""
+    if not isinstance(steps, list) or not steps:
+        return "action='steps' needs 'steps': a list of actions, e.g. [{'action': 'click', 'uid': 'n12'}]."
+    if len(steps) > _MAX_STEPS:
+        return f"A list has at most {_MAX_STEPS} steps; send the rest in a second call."
+    for number, step in enumerate(steps, 1):
+        if not isinstance(step, dict):
+            return f"Step {number} is not an object with an 'action'."
+        action = str(step.get("action") or "")
+        if action not in _STEP_ACTIONS:
+            return (
+                f"Step {number}: '{action}' cannot be a step. Steps are {', '.join(sorted(_STEP_ACTIONS))}; "
+                "make eval, upload, screenshot and the rest their own calls."
+            )
+        if refused := [key for key in _STEP_KEYS_REFUSED if key in step]:
+            return f"Step {number} names {', '.join(refused)}; give those once, on the call, not on a step."
+        if action in _NAVIGATING_ACTIONS and not str(step.get("url") or "").strip():
+            return f"Step {number}: '{action}' needs a url."
+        if reason := _unsafe_url_reason(action, step):
+            return f"Step {number}: {reason}"
+    return ""
+
+
+def _step_target(step: dict[str, Any]) -> str:
+    """What a step acts on, in the words of its own params: for a card line and the step's result."""
+    action = str(step.get("action") or "")
+    if action in _NAVIGATING_ACTIONS:
+        return str(step.get("url") or "")
+    if action == "wait":
+        return f"{step.get('condition') or 'network-idle'} {step.get('pattern') or ''}".strip()
+    target = step.get("uid") or step.get("selector") or step.get("xy") or ""
+    return str(target)
+
+
+def _step_line(number: int, step: dict[str, Any], seen: Any = None) -> str:
+    """One numbered card line: 'Click "Connect" (button)', 'Fill input#name with "Ada"'."""
+    action = str(step.get("action") or "")
+    if seen is not None:
+        line = seen.title.removeprefix("Browser - ")
+    else:
+        verb = {"goto": "Open", "navigate": "Open", "wait": "Wait for", "query": "Read", "assert": "Check"}
+        line = f"{verb.get(action, action.title())} {_step_target(step)}".strip()
+        if action in ("fill", "type", "select") and "value" in step:
+            line += f' with "{step["value"]}"'
+        if action == "press" and "value" in step:
+            line += f" ({step['value']})"
+    return f"{number}. {line}"
+
+
+def _step_result(number: int, step: dict[str, Any], output: ToolOutput) -> dict[str, Any]:
+    """A step's outcome as the model reads it: what it was, whether it worked, and what it read."""
+    result: dict[str, Any] = {"step": number, "action": step.get("action"), "target": _step_target(step)}
+    result["ok"] = output.success
+    if not output.success:
+        result["error"] = output.error or "the step failed"
+    data = output.data or {}
+    for key in ("url", "title", "signin_page", "held", "items", "count", "picked_profile"):
+        if key in data:
+            result[key] = data[key]
+    if article := data.get("article"):
+        content = str(article.get("content", article.get("text", "")))
+        result["text"] = content[:_STEP_RESULT_CHARS]
+        result["cut"] = len(content) > _STEP_RESULT_CHARS
+    return result
+
+
+def _format_page_view(page: dict[str, Any]) -> str:
+    if page.get("error"):
+        return f"### Page now\nNorth could not read the page: {page['error']}"
+    head = f"### Page now: {page.get('title') or ''} - {page.get('url') or ''}".rstrip(" -")
+    return f"{head}\n```yaml\n{page.get('snapshot') or ''}\n```"
+
+
+def _format_steps(data: dict[str, Any]) -> str:
+    lines = []
+    for step in data.get("steps", []):
+        mark = "ok" if step.get("ok") else "FAILED"
+        line = f"{step['step']}. {step.get('action')} {step.get('target') or ''}".rstrip() + f": {mark}"
+        if step.get("error"):
+            line += f" - {step['error']}"
+        lines.append(line)
+        extra = {k: v for k, v in step.items() if k not in ("step", "action", "target", "ok", "error", "text", "cut")}
+        if extra:
+            lines.append(f"   {json.dumps(extra)}")
+        if step.get("text"):
+            lines.append(f"   Text{' (cut)' if step.get('cut') else ''}:\n{step['text']}")
+    if (skipped := data.get("not_run")) is not None and skipped:
+        lines.append(f"Steps {', '.join(str(n) for n in skipped)} did not run.")
+    text = "### Steps\n" + "\n".join(lines)
+    if page := data.get("page"):
+        text += "\n\n" + _format_page_view(page)
+    return text
+
+
 def _unsafe_page(url: str) -> str:
     """Why opening *url* must not happen, or ""."""
     # Loopback stays reachable so agents can drive a locally served app under test.
@@ -750,6 +864,16 @@ class BrowserTool(Tool):
         "or state before continuing the original task in the same profile. Do not end the task as "
         "completed or failed merely because it is waiting, and do not repeat completed external actions. "
         "Actions:\n"
+        "  - 'steps': Several actions in ONE call, run in order in the task's tab: 'steps' is a list of up to "
+        "10 objects, each with its own 'action' (goto, click, dblclick, fill, type, press, select, check, "
+        "uncheck, wait, query, assert, read) and that action's fields. Prefer it whenever you know the next "
+        "few actions, e.g. [{'action': 'fill', 'selector': 'input[name=q]', 'value': 'north'}, {'action': "
+        "'click', 'selector': 'button[type=submit]'}, {'action': 'wait', 'condition': 'text', 'pattern': "
+        "'Results'}]. The whole list is one approval and one model turn. It stops at the first step that "
+        "fails, and before any click or key press that would send something to someone or spend money: "
+        "make that step its own call. A wait in a list waits for its condition (text, url, selector), at "
+        "most 15 s. The result lists each step and shows the page at the end. uids come from the current "
+        "page: after a goto in the list, name later targets by selector.\n"
         "  - 'goto' (or 'navigate'): Navigate to URL.\n"
         "  - 'extract': Structured records; existing Chrome supports HTML tables; read/inspect for other listings.\n"
         "  - 'read': Reader-mode text of a page (url), or of up to 10 pages at once (urls), which load in "
@@ -758,7 +882,8 @@ class BrowserTool(Tool):
         "  - 'query': Read elements by CSS selector: their text and the attributes you name (e.g. "
         "selector='main button', attributes=['aria-label'], contains='Connect', visible_only=true). It only "
         "reads, so it needs no approval once the site may be read. Use it, not eval, to read a page.\n"
-        "  - 'click', 'dblclick': Click element by UID (e.g. uid='n12'), selector, or coordinates.\n"
+        "  - 'click', 'dblclick': Click element by UID (e.g. uid='n12'), selector, or coordinates. A click, key "
+        "press, select or check shows the page after it in 'page', so do not inspect just to see the result.\n"
         "  - 'fill', 'type', 'press': Enter text into input fields or send key presses.\n"
         "  - 'select', 'check', 'uncheck': Manipulate dropdowns and checkboxes.\n"
         "  - 'screenshot', 'pdf': Capture viewport or full page to a file.\n"
@@ -802,8 +927,36 @@ class BrowserTool(Tool):
                     "status",
                     "preflight",
                     "upload",
+                    "steps",
                 ],
                 "description": "Action to perform in the browser.",
+            },
+            "steps": {
+                "type": "array",
+                "maxItems": _MAX_STEPS,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": sorted(_STEP_ACTIONS)},
+                        "url": {"type": "string"},
+                        "uid": {"type": "string"},
+                        "selector": {"type": "string"},
+                        "value": {"type": "string"},
+                        "condition": {"type": "string", "enum": ["text", "url", "selector", "network-idle"]},
+                        "pattern": {"type": "string"},
+                        "attributes": {"type": "array", "items": {"type": "string"}},
+                        "contains": {"type": "string"},
+                        "visible_only": {"type": "boolean"},
+                        "assert_type": {"type": "string"},
+                        "assert_condition": {"type": "string"},
+                        "timeout_seconds": {"type": "integer"},
+                    },
+                    "required": ["action"],
+                },
+                "description": (
+                    "For action='steps': the actions to run in order, each an object with its own 'action' and "
+                    "fields. One call, one approval, one model turn."
+                ),
             },
             "url": {
                 "type": "string",
@@ -1048,7 +1201,7 @@ class BrowserTool(Tool):
         why = browser_unavailable()
         if why:
             return f"The browser cannot work here: {why}."
-        if problem := _batch_problem(input.params or {}):
+        if problem := _batch_problem(input.params or {}) or _steps_problem(input.params or {}):
             return problem
         # A call that names no saved profile is refused before the approval layer: the memory decider
         # spent 28 s ruling on "84b241fdce825114]" (a stray bracket) before run() refused it (issue #83).
@@ -1072,6 +1225,8 @@ class BrowserTool(Tool):
             return False
         if values.get("profile_id"):
             return True
+        if action == "steps":
+            return any(isinstance(s, dict) and s.get("action") in self._MUTATING_ACTIONS for s in values["steps"])
         return action in self._MUTATING_ACTIONS
 
     def _note_page(self, key: tuple[str, str], action: str, params: dict[str, Any], success: bool) -> None:
@@ -1120,8 +1275,105 @@ class BrowserTool(Tool):
         with span("browser.describe"):
             return await self._describe(input)
 
+    async def _peek(
+        self, profile: BrowserProfile | None, params: dict[str, Any]
+    ) -> tuple[ApprovalRequest, bool] | None:
+        """What one action would land on, read from the page now, and whether north could read it.
+
+        The same look a single action's card takes (`browser_describe`). None when there is nothing to look with.
+        """
+        try:
+            resolved, _ = self._resolve_profile(params)
+            if profile is not None and profile.context == "existing":
+                if self._existing_browser is None:
+                    return None
+                if resolved.get("uid") and not resolved.get("selector"):
+                    # The page script then reads the element too: whether it is in a search form.
+                    resolved["selector"] = f'[data-north-uid="{resolved["uid"]}"]'
+                runner = self._existing_browser.description_runner(profile, resolved)
+                return await describe_and_look(resolved, [], runner)
+            if profile is not None:
+                endpoint = active_cdp_endpoint(profile.managed_directory)
+                resolved["page"] = _task_page(params.get("task_id"))
+                prefix = self._prefix({**resolved, "connect": endpoint}, profile.browser_name)
+                return await describe_and_look(resolved, prefix, _run_chrome_agent)
+            session = str(params.get("task_id") or "default")
+            return await describe_and_look(
+                resolved, [*self._get_cmd(), "--json", "--browser", session], _run_chrome_agent
+            )
+        except (ValueError, OSError, RuntimeError, httpx.HTTPError):
+            return None
+
+    async def _describe_steps(self, params: dict[str, Any]) -> ApprovalRequest:
+        """One card for a whole step list: each step on its own line, the sites it opens, what a yes covers.
+
+        Steps before the list's first page change are read from the page now, so a click shows its button's
+        words, as a single click's card does; later pages cannot be read yet, so those steps show their own
+        params. A yes covers exactly this list. The list never sends or spends: it stops before such a step.
+        """
+        from approval.approvals import Request
+        from approval.policy import Action, ActionKind
+
+        task = str(params.get("task_id") or "default")
+        profile_id = str(params.get("profile_id") or "")
+        profile = next((p for p in self._profiles() if p.id == profile_id), None)
+        binding_config = {"browser_profile": profile.model_dump_json() if profile else None}
+        config_id = hashlib.sha256(str(binding_config["browser_profile"]).encode()).hexdigest()
+        label = profile.name if profile else (profile_id or "North's browser")
+        site_now = self._open_sites.get((task, profile_id), "")
+        binding = self._verified_bindings.get((task, profile_id))
+        may_look = profile is None or bool(binding and binding[0] == profile.model_dump_json())
+
+        steps: list[dict[str, Any]] = params["steps"]
+        lines, sites, changes, page_changed = [], set(), False, False
+        for number, step in enumerate(steps, 1):
+            action = str(step["action"])
+            seen = None
+            if action in _NAVIGATING_ACTIONS:
+                sites.add(_site(str(step["url"])))
+                page_changed = True
+            elif action in self._MUTATING_ACTIONS:
+                changes = True
+                if may_look and not page_changed:
+                    named = {"profile_id": profile_id} if profile_id else {}
+                    looked = await self._peek(profile, {**step, **named, "task_id": task})
+                    seen = looked[0] if looked and looked[1] else None
+                page_changed = page_changed or action in ("click", "dblclick", "press")
+            lines.append(_step_line(number, step, seen))
+        if site_now and not any(str(s["action"]) in _NAVIGATING_ACTIONS for s in steps[:1]):
+            sites.add(site_now)
+        where = ", ".join(sorted(s for s in sites if s)) or "the current page"
+        message = (
+            f"Run {len(steps)} steps in {label} on {where}:\n"
+            + "\n".join(lines)
+            + "\nNorth runs them in order and stops at the first step that fails. It stops before any click "
+            "or key press that would send something to someone or spend money: that step needs its own card."
+        )
+        if profile is not None:
+            message += f"\n{_profile_note(profile)}"
+        scope = ""
+        if profile is not None and not changes and len(sites) == 1:
+            scope = f"reading pages on {next(iter(sites))} in profile {profile_id} ({config_id[:12]})"
+        return Request(
+            action=Action(
+                agent="browser",
+                kind=ActionKind.BROWSER,
+                operation="steps",
+                summary=f"{label}: {len(steps)} browser steps on {where}",
+                command=where,
+                args=json.dumps({"steps": steps, "profile_config": config_id}, sort_keys=True),
+                scope=scope,
+                details=message,
+            ),
+            title=f"Browser: {label} - {len(steps)} steps",
+            prepared=binding_config if profile is not None else None,
+            message=message,
+        )
+
     async def _describe(self, input: ToolInput) -> ApprovalRequest:
         params = input.params or {}
+        if params.get("action") == "steps":
+            return await self._describe_steps(params)
         if params.get("profile_id"):
             from approval.approvals import Request
             from approval.policy import Action, ActionKind
@@ -1230,6 +1482,10 @@ class BrowserTool(Tool):
         """The one copy of a result the model reads (`model_reads_formatted`)."""
         action = data.get("action", "")
         shown = data if action in _IDENTITY_ACTIONS else {k: v for k, v in data.items() if k not in _IDENTITY_KEYS}
+        if action == "steps":
+            return _format_steps(data)
+        if page := shown.pop("page", None):
+            return json.dumps(shown) + "\n\n" + _format_page_view(page)
         if action == "extract" and "items" in data:
             return _format_records(data)
         if action == "read" and "pages" in data:
@@ -1443,7 +1699,82 @@ class BrowserTool(Tool):
         if self._existing_browser is not None:
             await self._existing_browser.aclose()
 
+    async def _page_view(self, input: ToolInput, base: dict[str, Any]) -> dict[str, Any]:
+        """The page as it is now, short: its url, title and the elements one can act on, with their uids."""
+        view = await self.run(
+            input.model_copy(update={"params": {**base, "action": "inspect", "limit": _PAGE_VIEW_LIMIT, "_step": True}})
+        )
+        if not view.success:
+            return {"error": view.error or "the page could not be read"}
+        data = view.data or {}
+        snapshot = data.get("snapshot") or data.get("tree") or ""  # chrome-agent names it tree
+        return {"url": data.get("url", ""), "title": data.get("title", ""), "snapshot": snapshot}
+
+    async def _step_stop(self, profile: BrowserProfile | None, params: dict[str, Any]) -> str:
+        """Why a list must stop before this step, or "": it would send or spend, or north cannot see it.
+
+        A list's card cannot show the pages it has not reached, so a send or a spend is never part of one.
+        The step is read from the page as it is now, as a single action's card reads it.
+        """
+        if params["action"] not in ("click", "dblclick", "press"):
+            return ""
+        looked = await self._peek(profile, params)
+        if looked is None or not looked[1]:
+            return "North could not see what this step lands on, so it did not run it. Make it its own call."
+        request = looked[0]
+        if request.action.reaches_third_party or request.action.spends_money:
+            what = "spend money" if request.action.spends_money else "send something to someone"
+            return (
+                f"This step would {what} ({request.title.removeprefix('Browser - ')}), so the list stopped before "
+                "it. Make it its own call, so it gets its own card."
+            )
+        return ""
+
+    async def _run_steps(self, input: ToolInput, params: dict[str, Any], profile: BrowserProfile | None) -> ToolOutput:
+        """Run an approved step list in order, in the task's tab; stop at the first step that fails or must stop."""
+        base = {key: params[key] for key in ("profile_id", "task_id") if params.get(key)}
+        steps: list[dict[str, Any]] = params["steps"]
+        results: list[dict[str, Any]] = []
+        failed = ""
+        for number, step in enumerate(steps, 1):
+            step_params = {**base, **step, "_step": True}
+            if step["action"] == "wait":
+                asked = int(step.get("timeout_seconds") or _STEP_WAIT_SECONDS)
+                step_params["timeout_seconds"] = min(max(asked, 1), _STEP_WAIT_SECONDS)
+            with span("steps.check"):
+                stop = await self._step_stop(profile, step_params)
+            if stop:
+                results.append({"step": number, "action": step["action"], "target": _step_target(step), "ok": False})
+                results[-1]["error"] = stop
+                failed = f"Step {number} did not run: {stop}"
+                break
+            output = await self.run(input.model_copy(update={"params": step_params}))
+            results.append(_step_result(number, step, output))
+            if not output.success:
+                failed = f"Step {number} ({step['action']}) failed: {output.error or 'the step failed'}"
+                break
+        data: dict[str, Any] = {
+            "action": "steps",
+            "steps": results,
+            "not_run": list(range(len(results) + 1, len(steps) + 1)),
+        }
+        if profile is not None:
+            data.update(profile_id=profile.id, profile_name=profile.name)
+        data["page"] = await self._page_view(input, base)
+        return ToolOutput(success=not failed, data=data, error=failed or None)
+
     async def run(self, input: ToolInput) -> ToolOutput:
+        params = dict(input.params or {})
+        in_list = bool(params.pop("_step", False))
+        input = input.model_copy(update={"params": params})
+        output = await self._run_one(input)
+        action = params.get("action", "") or ("goto" if params.get("url") else "")
+        if action in _VIEW_AFTER and output.success and not in_list:
+            base = {key: params[key] for key in ("profile_id", "task_id") if params.get(key)}
+            output.data["page"] = await self._page_view(input, base)
+        return output
+
+    async def _run_one(self, input: ToolInput) -> ToolOutput:
         params = input.params or {}
         action = params.get("action", "") or ("goto" if params.get("url") else "")
         if action == "list_profiles":
@@ -1469,6 +1800,11 @@ class BrowserTool(Tool):
                 return ToolOutput(
                     success=False, error="Browser profile changed while awaiting approval. Retry the call."
                 )
+
+        if action == "steps":
+            if problem := _steps_problem(params):
+                return ToolOutput(success=False, error=problem)
+            return await self._run_steps(input, params, profile)
 
         if profile is not None and profile.context == "existing":
             unsafe_url = _unsafe_url_reason(action, params)

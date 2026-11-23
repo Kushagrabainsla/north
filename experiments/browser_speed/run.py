@@ -45,6 +45,12 @@ TASKS = {
         "Using my {profile} browser profile, go to https://en.wikipedia.org, type 'Ada Lovelace' in the "
         "search box and search, open her article, and tell me her birth date and one notable work."
     ),
+    # A chain of dependent pages, each reached by a search or a click: the case a step list is for.
+    "chain": (
+        "Using my {profile} browser profile, go to https://en.wikipedia.org, search for 'Ada Lovelace' with the "
+        "search box, open her article, then follow its link to the article on Charles Babbage, and from there "
+        "the link to the Analytical Engine article. Tell me one fact from each of the three articles."
+    ),
     # Several independent pages: the case a batch read is for.
     "three": (
         "Using my {profile} browser profile, read the Wikipedia articles on Ada Lovelace, Alan Turing and "

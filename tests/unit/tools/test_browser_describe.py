@@ -112,6 +112,35 @@ async def test_enter_in_a_form_field_submits_the_form(key: str, sends: bool) -> 
     assert request.action.reaches_third_party is sends
 
 
+@pytest.mark.parametrize(
+    ("action", "element", "sends"),
+    [
+        ("press", {"role": "input", "text": "Search Wikipedia", "inForm": True, "searches": True}, False),
+        ("click", {"role": "button", "text": "Search", "inForm": True, "searches": True}, False),
+        ("click", {"role": "button", "text": "Send", "inForm": True, "searches": True}, True),
+    ],
+)
+async def test_a_search_form_looks_something_up_and_sends_nothing(action: str, element: dict, sends: bool) -> None:
+    """Enter in Wikipedia's search box counted as a send, so a step list stopped before every search."""
+    page = _Page("https://en.wikipedia.org/wiki/Main_Page", target=element, focused=element)
+
+    request = await _describe({"action": action, "value": "Enter", "selector": "form *"}, page)
+
+    assert request.action.reaches_third_party is sends
+
+
+async def test_a_search_button_named_by_uid_is_still_a_search() -> None:
+    """The tree names the element; the page script, given the same element by selector, says it is a search."""
+    tree = 'uid=n1 form\n  uid=n2 searchbox "Search Wikipedia"\n  uid=n3 button "Search"\n'
+    target = {"role": "button", "text": "Search", "inForm": True, "searches": True}
+    page = _Page("https://en.wikipedia.org/", target=target, tree=tree)
+
+    request = await _describe({"action": "click", "uid": "n3", "selector": '[data-north-uid="n3"]'}, page)
+
+    assert request.title == 'Browser - Click "Search"'
+    assert not request.action.reaches_third_party
+
+
 async def test_typing_is_not_sending_and_the_card_shows_the_value() -> None:
     request = await _describe({"action": "fill", "uid": "n2", "value": "Ada"}, _Page("https://jobs.acme.test/apply/7"))
 

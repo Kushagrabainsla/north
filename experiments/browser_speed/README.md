@@ -13,7 +13,7 @@ This experiment measures where the time and the tokens go, from north's own run 
   It uses a scratch north home and a server started from this checkout.
   It answers cards itself: yes only for a browser card on those two sites, no for all others.
   Results go to `~/.cache/north/browser-speed/<time>/`.
-  Run it with `.venv/bin/python experiments/browser_speed/run.py PROFILE_ID [hn] [wiki]`.
+  Run it with `.venv/bin/python experiments/browser_speed/run.py PROFILE_ID [hn] [wiki] [chain] [three]`; name a task again to run it again.
 
 The step data comes from the `tool_timing` event (`utils/spans.py`).
 Runs from before 2026-11-18 have no steps, only call start and end.
@@ -128,3 +128,40 @@ Task `three`: read three Wikipedia articles and give each person's birth year. 3
 - Before, the second and third reads already took 0.27 s each (the scope fix); the saving is the model turns between them.
 
 Not changed yet: finding 3, and the decider call on each `click`, `fill`, `press`, `eval` and `close` (3 to 7 s each).
+
+## Results, 2026-11-22: step lists
+
+Profile sjsu.edu (existing Chrome), approval mode Autonomous, model Opus 5.5 (the user's routing that day).
+Before is `15bd2fc`; after is the step-list code (`action='steps'`, one card per list, the page view after a click, Enter sent with `"\r"`, search not counted as a send).
+New task `chain`: search Wikipedia for Ada Lovelace, then follow links to Charles Babbage and the Analytical Engine.
+
+### Past runs (30 runs that called the browser, 2026-11-10 to 11-22)
+
+- A run made a median of 31 browser calls (113 at most); 631 of 1,158 calls were `eval`.
+- Model time between browser calls: 130 min in all, median 2.5 s. Browser actions: 11 min.
+- The memory decider took 3.5 to 4.3 s on each click and fill, 13 min in all.
+- 10% of calls failed (117), mostly a missing profile, a covered or removed element, a script with a top-level `return`, and waits that ran out.
+
+### A/B, 3 runs of each task (`20261122-202157` and `20261122-202754` before, `20261122-204226` after)
+
+| Median | wiki before | after | change | chain before | after | change |
+|---|---|---|---|---|---|---|
+| Wall time | 17.2 s | 10.1 s | -41% | 44.6 s | 37.5 s | -16% |
+| Browser time | 7.5 s | 3.7 s | -50% | 24.3 s | 20.7 s | -15% |
+| Turns | 6 | 3 | -50% | 17 | 8 | -53% |
+| Browser calls | 5 | 2 | -60% | 18 | 7 | -61% |
+| Input tokens | 100,088 | 52,810 | -47% | 308,417 | 170,966 | -45% |
+| Cost | $0.026 | $0.021 | -22% | $0.082 | $0.065 | -20% |
+
+- Every after run answered correctly. Each wiki run was one list: goto, fill, press Enter, wait, query.
+- Input tokens per turn rose 3-13%: a list result carries the page view. Fewer turns more than make up for it.
+
+Two rounds in between were slower, and showed two bugs that the single calls had hidden:
+
+1. **Enter never submitted a form** in existing profiles. TaskWindow's `computer` key action sends a named key as `rawKeyDown` with no `text`, and Chrome submits a form only on an Enter that carries `"\r"`.
+   In the before runs the model pressed Enter, saw nothing happen, and clicked the Search button instead.
+   In a list, the wait after Enter ran to its 15 s limit (4 of 6 lists). Fixed: north sends Enter through TaskWindow's typing, which sends a real Enter with `"\r"`.
+   A pause until the page was quiet was tried first and did not help, so it was removed.
+2. **Enter in a search box counted as a send**, so the list stopped before every search. Fixed: a search field, or a control in a search form, sends nothing unless its own words say send.
+
+Not changed yet: `eval` with a top-level `return` still fails (`SyntaxError: Illegal return statement`), and a click on an element the last page change removed still fails with "inspect again".

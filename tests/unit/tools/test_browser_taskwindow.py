@@ -257,7 +257,21 @@ async def test_a_key_press_goes_to_the_element_the_call_names(adapter, profile):
     assert output.success
     (focus, focus_args), (press, press_args) = [call.args[1:3] for call in adapter._tool.call_args_list]
     assert focus == "javascript_execute" and '"#q"' in focus_args["code"] and ".focus()" in focus_args["code"]
-    assert press == "computer" and press_args["key"] == "Enter"
+    assert press == "computer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "sent"), [("Enter", {"action": "type", "text": "\n"}), ("Tab", {"key": "Tab"})])
+async def test_enter_is_sent_as_typed_so_it_submits_a_form(adapter, profile, key, sent):
+    """TaskWindow's "key" sends Enter with no "\\r", and a form submits only on an Enter that carries it.
+
+    Wikipedia's search box never searched. Typed, a line break is a real Enter with "\\r".
+    """
+    adapter._tool = AsyncMock(side_effect=[text("pressed")])
+    output = await adapter.call(profile, {"action": "press", "task_id": "t", "value": key})
+    assert output.success
+    name, arguments = adapter._tool.call_args.args[1:3]
+    assert name == "computer" and sent.items() <= arguments.items()
 
 
 @pytest.mark.asyncio
