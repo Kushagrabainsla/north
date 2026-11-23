@@ -64,6 +64,18 @@ async def test_an_agent_that_stops_at_the_request_cap_after_reaching_its_model_i
     assert claude.ready and not claude.detail
 
 
+async def test_a_budget_stop_that_reports_only_its_cost_is_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code 2.1's real result on this stop (2026-11-23): `usage` all 0, `total_cost_usd` 0.152."""
+    capped = RunOutcome(
+        False, "", "s", cost_usd=0.152, failure=FailureKind.LIMIT, error="Reached maximum budget ($0.05)"
+    )
+    _installed(monkeypatch, claude=_Agent(Availability(True, "2.1.308"), capped))
+
+    [claude] = await discovery.try_agents(["claude"])
+
+    assert claude.ready and not claude.detail
+
+
 async def test_a_stop_before_the_model_answered_is_still_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     """A run that timed out before any model call proves nothing about the login or the credit."""
     timed_out = RunOutcome(False, "", "s", failure=FailureKind.LIMIT, error="The run did not finish in 600 seconds.")

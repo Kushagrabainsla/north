@@ -134,8 +134,13 @@ def _reached_the_model(outcome: RunOutcome) -> bool:
     "Reached maximum budget". That stop means the agent was logged in, reached its model and was
     billed. Read as a failure, it stopped the nightly check on 2026-11-22 and told the user to run
     `claude` in a terminal, where there was nothing wrong.
+
+    A cost proves it as well as tokens do, and Claude Code 2.1 gives only the cost on this stop: its
+    result says `usage` 0 tokens and `total_cost_usd` 0.152 (measured 2026-11-23). Checked on tokens
+    alone, the nightly check failed the same way on 2026-11-23.
     """
-    return outcome.failure is FailureKind.LIMIT and outcome.tokens_in > 0
+    reached = outcome.tokens_in > 0 or outcome.cost_usd > 0
+    return outcome.failure is FailureKind.LIMIT and reached
 
 
 async def _git_init(folder: str) -> None:
