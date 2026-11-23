@@ -150,7 +150,8 @@ async def test_click_is_refused_when_the_element_changed_since_inspect(adapter, 
 async def test_click_lands_on_the_inspected_element(adapter, profile):
     adapter._seen[(profile.id, "t")] = {"n4": ("button", '"Next"')}
     spot = {"found": True, "reachable": True, "x": 5, "y": 6, "role": "button", "name": '"Next"'}
-    adapter._tool = AsyncMock(side_effect=[text(json.dumps(spot)), text("clicked")])
+    # Two looks that agree (the element is still), then the click.
+    adapter._tool = AsyncMock(side_effect=[text(json.dumps(spot)), text(json.dumps(spot)), text("clicked")])
     output = await adapter.call(profile, {"action": "click", "task_id": "t", "uid": "n4"})
     assert output.success
     tool, arguments = adapter._tool.call_args_list[-1].args[1:3]
@@ -284,3 +285,86 @@ async def test_connected_asks_the_running_bridge_and_starts_none(tmp_path, profi
     browser._health = AsyncMock(return_value={"ok": True, "extensionConnected": True})
     assert await browser.connected(profile) is True
     browser._health.assert_awaited_once_with(4321)
+
+
+def test_an_old_extension_copy_is_brought_up_to_date_in_place(tmp_path):
+    """Both profiles ran without evaluate.js five days after it shipped: the copy was written only at connect."""
+    folder = tmp_path / "copy"
+    bridge._write_extension(folder, {"code": "KEEP", "port": 1})
+    (folder / "tools" / "evaluate.js").unlink()
+    (folder / "tools" / "javascript.js").write_text("// old code")
+    (folder / "tools" / "gone.js").write_text("// a file the audited copy no longer has")
+    audited = bridge.resource_path("taskwindow/extension")
+
+    assert bridge._refresh_extension_files(folder) is True
+
+    assert bridge._same_files(audited, folder)
+    assert not (folder / "tools" / "gone.js").exists()
+    assert json.loads((folder / "taskwindow-bootstrap.json").read_text())["code"] == "KEEP"  # still paired
+    assert bridge._refresh_extension_files(folder) is False  # nothing to do the second time
+
+
+@pytest.mark.asyncio
+async def test_an_updated_copy_is_reloaded_once_and_waits_for_the_extension(tmp_path, profile, monkeypatch):
+    browser = TaskWindowBrowser(tmp_path / "north")
+    token = browser.state_dir(profile) / "daemon" / "token"
+    token.parent.mkdir(parents=True)
+    token.write_text("key")
+    monkeypatch.setattr(bridge.asyncio, "sleep", AsyncMock())
+    changed = iter([True, False])
+    monkeypatch.setattr(bridge, "_refresh_extension_files", lambda folder: next(changed))
+    posted = []
+
+    class _Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, headers):
+            posted.append((url, headers["Authorization"]))
+            return bridge.httpx.Response(200, request=bridge.httpx.Request("POST", url))
+
+    monkeypatch.setattr(bridge.httpx, "AsyncClient", _Client)
+    back = {"extensionConnected": True, "extensionId": NORTH_EXTENSION_ID, "extensionVersion": "new"}
+    browser._health = AsyncMock(side_effect=[{"extensionConnected": False}, back])
+
+    assert await browser._bring_extension_up_to_date(profile, 5, {}) == back
+    assert posted == [("http://127.0.0.1:5/extension/reload", "Bearer key")]
+    assert profile.id in browser._extension_current
+
+
+@pytest.mark.asyncio
+async def test_a_click_waits_until_its_element_is_drawn_uncovered_and_still(adapter, profile, monkeypatch):
+    """23 clicks ended "not found" or "covered" on their first look (2026-11-10 to 11-22)."""
+    monkeypatch.setattr(bridge.asyncio, "sleep", AsyncMock())
+    looks = [
+        {"found": False},
+        {"found": True, "reachable": False, "x": 5, "y": 5, "role": "button", "name": '"Go"'},
+        {"found": True, "reachable": True, "x": 10, "y": 40, "role": "button", "name": '"Go"'},
+        {"found": True, "reachable": True, "x": 10, "y": 20, "role": "button", "name": '"Go"'},
+        {"found": True, "reachable": True, "x": 10, "y": 20, "role": "button", "name": '"Go"'},
+    ]
+    adapter._script = AsyncMock(side_effect=looks)
+    adapter._tool = AsyncMock(return_value=text("clicked"))
+
+    output = await adapter.call(profile, {"action": "click", "task_id": "t", "selector": "#go"})
+
+    assert output.success and output.data["x"] == 10 and output.data["y"] == 20  # where it stopped moving
+    assert adapter._script.await_count == 5
+
+
+@pytest.mark.asyncio
+async def test_a_click_on_an_element_that_never_shows_still_fails_and_says_so(adapter, profile, monkeypatch):
+    monkeypatch.setattr(bridge, "_CLICKABLE_SECONDS", 0)
+    adapter._script = AsyncMock(return_value={"found": False})
+    adapter._tool = AsyncMock()
+
+    output = await adapter.call(profile, {"action": "click", "task_id": "t", "selector": "#gone"})
+
+    assert not output.success and "not found" in output.error
+    adapter._tool.assert_not_awaited()  # nothing was clicked

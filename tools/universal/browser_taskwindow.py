@@ -43,6 +43,11 @@ PINNED_VERSION = "0.2.13"
 _INSTALL_TIMEOUT_SECONDS = 180
 _CONNECT_GRACE_SECONDS = 35  # the extension's reconnect backoff tops out at 30s
 _LAUNCH_WAIT_SECONDS = 30
+# A click waits this long for its element to be drawn, uncovered and still, looking again each pause.
+_CLICKABLE_SECONDS = 3
+_CLICKABLE_PAUSE = 0.1
+# An extension reload restarts its worker, which reconnects to the daemon within a few seconds.
+_RELOAD_WAIT_TENTHS = 150
 _TASK_GROUP = "North"  # TaskWindow allows one or two words
 _READ_ATTEMPTS = 3
 # A page that is loading or switching sites detaches Chrome's debugger for a
@@ -276,6 +281,8 @@ class TaskWindowBrowser:
         self._install_lock = asyncio.Lock()
         # uid -> (role, name) last shown per task, to refuse clicks on a changed element.
         self._seen: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
+        # Profiles whose loaded extension north has seen match the audited copy since it started.
+        self._extension_current: set[str] = set()
 
     # Pinned runtime ------------------------------------------------------
 
@@ -460,12 +467,49 @@ class TaskWindowBrowser:
                 f"North's folder for {profile.name} is loaded in {holders or 'no profile'}, "
                 f"not only in {profile.profile_directory}. Load it in that profile only and connect again."
             )
+        if profile.id not in self._extension_current:
+            health = await self._bring_extension_up_to_date(profile, port, health)
         return {
             "profile_verified": True,
             "login_verified": False,
             "connection_id": hashlib.sha256(f"{port}:{folder}".encode()).hexdigest(),
             "extension_version": health.get("extensionVersion"),
         }
+
+    async def _bring_extension_up_to_date(self, profile: BrowserProfile, port: int, health: dict) -> dict:
+        """Make the extension Chrome runs for *profile* the audited copy north ships, then reload it.
+
+        The copy was written once, when the profile was connected, so a fix to the extension never reached
+        Chrome: on 2026-11-22 both profiles still ran without evaluate.js (84a8432, 2026-11-17), and a script
+        with a top-level `return` failed 14 times. The daemon reloads the extension through its own
+        /extension/reload route; the pairing lives in the extension's storage, so it stays paired. Checked
+        once per profile per north start; a reload that fails is logged and the old copy keeps working.
+        """
+        folder = self.extension_dir(profile)
+        with span("bridge.extension_check"):
+            changed = await asyncio.to_thread(_refresh_extension_files, folder)
+        if not changed:
+            self._extension_current.add(profile.id)
+            return health
+        logger.info("Updated %s's browser extension files; reloading the extension", profile.name)
+        try:
+            async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+                response = await client.post(
+                    f"http://127.0.0.1:{port}/extension/reload",
+                    headers={"Authorization": f"Bearer {self._token(profile)}"},
+                )
+                response.raise_for_status()
+        except httpx.HTTPError:
+            logger.warning("Could not reload %s's browser extension; it runs its old code", profile.name)
+            return health
+        await asyncio.sleep(1)  # the old worker's connection still answers for a moment
+        for _ in range(_RELOAD_WAIT_TENTHS):
+            await asyncio.sleep(0.1)
+            fresh = await self._health(port)
+            if fresh.get("extensionConnected") and fresh.get("extensionId") == NORTH_EXTENSION_ID:
+                self._extension_current.add(profile.id)
+                return fresh
+        raise BridgeInputError(f"{profile.name}'s browser extension did not come back after an update. Retry.")
 
     async def _await_connection(self, profile: BrowserProfile, port: int) -> dict:
         """Give a running profile time to reconnect, then open it in the background."""
@@ -724,7 +768,7 @@ class TaskWindowBrowser:
             except ValueError:
                 raise BridgeInputError("Invalid coordinates.") from None
         else:
-            spot = await self._script(profile, session, _LOCATE_SCRIPT % {"selector": json.dumps(_selector(params))})
+            spot = await self._clickable(profile, session, _selector(params))
             if not spot.get("found"):
                 raise BridgeInputError("Element was not found or was removed; inspect again.")
             if not spot.get("reachable"):
@@ -736,6 +780,25 @@ class TaskWindowBrowser:
         kind = "double_click" if double else "left_click"
         await self._tool(profile, "computer", {"action": kind, "x": x, "y": y, "sessionToken": session})
         return {"x": x, "y": y}
+
+    async def _clickable(self, profile: BrowserProfile, session: str, selector: str) -> dict:
+        """Where to click *selector*, once it is on the page, not covered and has stopped moving.
+
+        One look failed when the element had not been drawn yet, or a banner or an animation still lay
+        over it: 23 clicks from 2026-11-10 to 11-22 ended "not found" or "covered". As Playwright does,
+        north looks again until it can click, for a short time; what is still wrong then is reported.
+        """
+        code = _LOCATE_SCRIPT % {"selector": json.dumps(selector)}
+        deadline = asyncio.get_running_loop().time() + _CLICKABLE_SECONDS
+        spot = await self._script(profile, session, code)
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(_CLICKABLE_PAUSE)
+            again = await self._script(profile, session, code)
+            # Two looks that agree: there, not covered, and at the same point, so a click lands on it.
+            if spot.get("reachable") and again.get("reachable") and (spot["x"], spot["y"]) == (again["x"], again["y"]):
+                return again
+            spot = again
+        return spot
 
     async def _upload(self, profile: BrowserProfile, session: str, params: dict) -> dict:
         path = Path(str(params.get("filename") or "")).expanduser()
@@ -875,6 +938,33 @@ def _write_extension(folder: Path, bootstrap: dict) -> None:
         )
     (folder / "taskwindow-bootstrap.json").write_text(json.dumps(bootstrap), encoding="utf-8")
     (folder / "taskwindow-bootstrap.json").chmod(0o600)
+
+
+def _refresh_extension_files(folder: Path) -> bool:
+    """Copy the audited extension over *folder* in place; True when a file changed.
+
+    In place, so Chrome's loaded folder never disappears: each audited file that differs is written,
+    the manifest with North's key; a file the audited copy no longer has is removed. The pairing file,
+    which is North's own, is kept.
+    """
+    audited = resource_path("taskwindow/extension")
+    if not folder.is_dir() or _same_files(audited, folder):
+        return False
+    for source in audited.rglob("*"):
+        copy = folder / source.relative_to(audited)
+        if source.is_dir():
+            copy.mkdir(parents=True, exist_ok=True)
+        elif source.name == "manifest.json" and source.parent == audited:
+            manifest = json.loads(source.read_text(encoding="utf-8"))
+            copy.write_text(json.dumps({**manifest, "key": _EXTENSION_KEY}, indent=2), encoding="utf-8")
+        elif not copy.is_file() or copy.read_bytes() != source.read_bytes():
+            shutil.copy2(source, copy)
+    for extra in sorted(folder.rglob("*"), reverse=True):
+        if extra.name == "taskwindow-bootstrap.json" and extra.parent == folder:
+            continue
+        if not (audited / extra.relative_to(folder)).exists():
+            shutil.rmtree(extra) if extra.is_dir() else extra.unlink()
+    return True
 
 
 def _same_files(audited: Path, folder: Path) -> bool:

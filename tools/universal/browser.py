@@ -1088,6 +1088,8 @@ class BrowserTool(Tool):
         self._verified_bindings: dict[tuple[str, str], tuple[str, str]] = {}
         # The site open in each (task, profile) tab: a fact the approval scope of a read names.
         self._open_sites: dict[tuple[str, str], str] = {}
+        # The one profile each task has used with success, or "" when it used more than one.
+        self._task_profiles: dict[str, str] = {}
 
     @property
     def existing_browser(self) -> TaskWindowBrowser | None:
@@ -1540,21 +1542,33 @@ class BrowserTool(Tool):
         return await super().prepare(await self._with_picked_profile(input))
 
     async def _with_picked_profile(self, input: ToolInput) -> ToolInput:
-        """*input* with a profile_id when the call names none and one profile stands out (browser_accounts).
+        """*input* with a profile_id when the call names none, or none that exists, and one profile stands out.
 
-        A page opened on a site: the one profile seen signed in there, else the one you browse it in.
-        Any other call: the profile the task's page is open in. With no answer, the call goes on
-        without one and is refused with "Select profile_id", so the agent asks you.
+        First the one profile the task has already used. Else, for a page opened on a site, the one
+        profile seen signed in there or the one you browse it in (browser_accounts); for any other call,
+        the profile the task's page is open in. With no answer, the call goes on as it is and is refused
+        ("Select profile_id", or "missing or disabled"), so the agent asks you.
         """
         params = input.params or {}
         profiles = self._profiles()
         action = str(params.get("action") or ("goto" if params.get("url") else ""))
-        if params.get("profile_id") or not profiles or action in {"", "list_profiles"}:
+        if not profiles or action in {"", "list_profiles"}:
+            return input
+        named = str(params.get("profile_id") or "")
+        enabled = {profile.id for profile in profiles if profile.enabled}
+        if named in enabled:
             return input
         task = str(params.get("task_id") or "default")
         urls = [str(url) for url in params.get("urls") or []] or ([str(params["url"])] if params.get("url") else [])
         pick: Pick | None = None
-        if action in _NAVIGATING_ACTIONS and urls and self._accounts is not None:
+        # A task keeps the profile it used. 17 of 19 calls refused for their profile (2026-11-10 to 11-22)
+        # came after the task had used one profile: the model left the id out, or wrote it wrong
+        # ("84b241ifdce825114", "sjsu"). A wrong id names no profile, so it cannot mean another one.
+        if (kept := self._task_profiles.get(task)) and kept in enabled:
+            pick = Pick(kept, "the profile this task already used" + (f"; '{named}' is not one" if named else ""))
+        elif named:
+            return input  # no profile to keep: refused, so the agent asks
+        elif action in _NAVIGATING_ACTIONS and urls and self._accounts is not None:
             if len({site_of(url) for url in urls}) == 1:
                 await asyncio.to_thread(self._accounts.refresh_history, [p for p in profiles if p.enabled])
                 pick = await asyncio.to_thread(self._accounts.pick, urls[0], profiles)
@@ -1650,6 +1664,7 @@ class BrowserTool(Tool):
         good and piled up in North's tab group (issue #83).
         """
         await self._finish_existing_tabs(task_id)
+        self._task_profiles.pop(task_id, None)
         page = _task_page(task_id)
         pages = sorted(opened for opened in self._opened_pages if opened[1] == page)
         self._opened_pages.difference_update(pages)
@@ -1768,6 +1783,9 @@ class BrowserTool(Tool):
         in_list = bool(params.pop("_step", False))
         input = input.model_copy(update={"params": params})
         output = await self._run_one(input)
+        if output.success and (used := str(params.get("profile_id") or "")):
+            task = str(params.get("task_id") or "default")
+            self._task_profiles[task] = used if self._task_profiles.get(task, used) == used else ""
         action = params.get("action", "") or ("goto" if params.get("url") else "")
         if action in _VIEW_AFTER and output.success and not in_list:
             base = {key: params[key] for key in ("profile_id", "task_id") if params.get(key)}

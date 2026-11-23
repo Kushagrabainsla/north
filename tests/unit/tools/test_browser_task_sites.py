@@ -265,3 +265,61 @@ async def test_a_card_names_the_rule_its_answer_could_become(settings) -> None:
     await running
 
     assert card.rule_scope.startswith("browser fill on linkedin.com in profile university (")
+
+
+@pytest.fixture
+def two_profiles(tmp_path):
+    settings = NorthSettings(tmp_path / "two.json")
+    settings.set_browser_profiles(
+        [
+            BrowserProfile(id=pid, name=pid.title(), purpose=pid, context="existing", data_directory=str(tmp_path))
+            for pid in ("university", "personal")
+        ]
+    )
+    return settings
+
+
+@pytest.mark.asyncio
+async def test_a_task_keeps_the_profile_it_used_when_a_call_names_none_or_a_wrong_one(two_profiles) -> None:
+    """17 of 19 calls refused for their profile came after the task had used one (2026-11-10 to 11-22)."""
+    tool = _tool(two_profiles, ApprovalStore())
+    await tool.run(ToolInput(params={"profile_id": "personal", "task_id": TASK, "action": "inspect"}))
+
+    for named in ({}, {"profile_id": "84b241ifdce825114"}, {"profile_id": "sjsu"}):
+        call = ToolInput(params={"task_id": TASK, "action": "click", "uid": "n1", **named})
+        assert (await tool._with_picked_profile(call)).params["profile_id"] == "personal"
+    # A real profile the call names is its own choice.
+    call = ToolInput(params={"task_id": TASK, "action": "inspect", "profile_id": "university"})
+    assert (await tool._with_picked_profile(call)).params["profile_id"] == "university"
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_profile_is_still_refused_when_the_task_has_none_to_keep(two_profiles) -> None:
+    store = ApprovalStore()
+    tool = _tool(two_profiles, store)
+
+    output = await tool.execute(ToolInput(params={"profile_id": "sjsu", "task_id": "fresh", "action": "inspect"}))
+
+    assert not output.success and "missing or disabled" in output.error
+    assert not store.all(10)
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_used_two_profiles_keeps_neither(two_profiles) -> None:
+    tool = _tool(two_profiles, ApprovalStore())
+    for pid in ("personal", "university"):
+        await tool.run(ToolInput(params={"profile_id": pid, "task_id": TASK, "action": "inspect"}))
+
+    call = ToolInput(params={"task_id": TASK, "action": "click", "uid": "n1"})
+    assert "profile_id" not in (await tool._with_picked_profile(call)).params
+
+
+@pytest.mark.asyncio
+async def test_the_kept_profile_ends_with_its_task(two_profiles) -> None:
+    tool = _tool(two_profiles, ApprovalStore())
+    tool._approvals = Mock(return_value=Mock(interaction=None))
+    await tool.run(ToolInput(params={"profile_id": "personal", "task_id": TASK, "action": "inspect"}))
+    await tool.end_task(TASK)
+
+    call = ToolInput(params={"task_id": TASK, "action": "click", "uid": "n1"})
+    assert "profile_id" not in (await tool._with_picked_profile(call)).params

@@ -159,5 +159,8 @@ async def test_a_call_that_names_no_profile_uses_the_one_signed_in_and_says_so(t
     assert native.call.await_args.args[0].id == "school"
     assert output.data["picked_profile"].startswith("School (school): signed in on linkedin.com as Ada Lovelace")
 
-    unknown = await tool.execute(ToolInput(params={"action": "goto", "url": "https://example.org/", "task_id": "t"}))
+    # A site no profile is known on, in a task that has used no profile yet: north cannot pick, so it asks.
+    # (Task "t" now keeps School, the profile it used.)
+    call = ToolInput(params={"action": "goto", "url": "https://example.org/", "task_id": "fresh"})
+    unknown = await tool.execute(call)
     assert not unknown.success and "Select profile_id" in unknown.error
