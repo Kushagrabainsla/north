@@ -616,14 +616,20 @@ class TaskWindowBrowser:
             return None
         session = self._session(profile, task_id)
         arguments = {"code": READ_ONLY_MARKER + js, "sessionToken": session}
-        try:
-            result = await self._tool(profile, "javascript_execute", arguments)
-        except _ToolError as exc:
-            message = str(exc)
-            if _SIDE_EFFECT in message or exc.uncertain or any(sign in message for sign in _NAVIGATION_RACES):
-                return None
-            # It failed while reading (an element it looked for is not there); it changed nothing.
-            return ToolOutput(success=False, data={"action": "eval", "read_only": True}, error=message)
+        for attempt in range(_READ_ATTEMPTS):
+            try:
+                result = await self._tool(profile, "javascript_execute", arguments)
+                break
+            except _ToolError as exc:
+                message = str(exc)
+                if any(sign in message for sign in _NAVIGATION_RACES) and attempt < _READ_ATTEMPTS - 1:
+                    # The page was still loading: a script that can only read is safe to run again.
+                    await asyncio.sleep(0.5)
+                    continue
+                if _SIDE_EFFECT in message or exc.uncertain or any(sign in message for sign in _NAVIGATION_RACES):
+                    return None
+                # It failed while reading (an element it looked for is not there); it changed nothing.
+                return ToolOutput(success=False, data={"action": "eval", "read_only": True}, error=message)
         text = self._text(result)
         with contextlib.suppress(ValueError):
             return ToolOutput(success=True, data={"action": "eval", "read_only": True, "result": json.loads(text)})

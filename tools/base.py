@@ -55,6 +55,10 @@ class Tool(ABC):
     # text alone, not the data beside it. Off, the model reads the data, and the text too when it says more
     # than the data's JSON. Both at once sent a browser page tree three times, on every later turn (issue #83).
     model_reads_formatted: bool = False
+    # Text that starts a view of something that changes, such as a page, in this tool's results. A newer view
+    # makes the older ones wrong, yet every turn sent them all again: 54,000 characters of old browser page
+    # views by turn 74 of one run (2026-11-23). The agent loop cuts each older view out (`outdated_view`).
+    view_markers: tuple[str, ...] = ()
     # The names of your secrets this tool reads with `secret(name)` (CODING_STYLE §7.6). North gives a call
     # only these, and its approval card names them.
     uses_secrets: tuple[str, ...] = ()

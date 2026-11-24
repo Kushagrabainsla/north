@@ -377,6 +377,7 @@ class AgenticLLMAgent(LLMAgent):
             await self._record_tool_call_confidence(call.name, result_str, success)
 
         self._append_tool_call_exchange(messages, results)
+        _drop_outdated_views(messages, tool_map)
         return [(call.name, success) for call, _, success, _ in results]
 
     async def _record_quick_evidence(
@@ -1383,6 +1384,10 @@ class AgenticLLMAgent(LLMAgent):
                     data.pop("data", None)
             else:
                 data = result.model_dump()
+                if tool_map[tool_name].model_reads_formatted and result.data:
+                    # A failure is read by its text too: its data was the page view a second time, as JSON.
+                    data["formatted"] = tool_map[tool_name].format_output(result.data)
+                    data.pop("data", None)
         except Exception as exc:
             logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
             return _failed_json(str(exc)), []
@@ -1454,6 +1459,43 @@ def _one_copy(tool: Tool, data: dict[str, Any]) -> dict[str, str]:
     if tool.model_reads_formatted or formatted != Tool.format_output(tool, data):
         return {"formatted": formatted}
     return {}
+
+
+_OUTDATED_VIEW = "(An older view was removed here: a later result shows the newer one.)"
+
+
+def _drop_outdated_views(messages: list[dict], tool_map: dict[str, Tool]) -> None:
+    """Cut each view (`Tool.view_markers`) out of a tool's results but its newest, so the model reads only that one.
+
+    Every turn sent every old view again: 54,000 characters of out-of-date browser page views by turn 74 of
+    one run (2026-11-23). Only a result that still holds a view is rewritten, which is the one before the
+    newest view, so the cached part of the conversation before it stays the same.
+    """
+    names = {
+        call["id"]: call["function"]["name"]
+        for message in messages
+        if message.get("role") == "assistant"
+        for call in message.get("tool_calls") or []
+    }
+    has_newer: set[str] = set()
+    for message in reversed(messages):
+        name = names.get(message.get("tool_call_id", "")) if message.get("role") == "tool" else None
+        markers = tool_map[name].view_markers if name in tool_map else ()
+        if not markers:
+            continue
+        try:
+            result = json.loads(message["content"])
+        except (TypeError, ValueError):
+            continue
+        text = result.get("formatted") if isinstance(result, dict) else None
+        starts = [text.find(marker) for marker in markers if isinstance(text, str) and marker in text]
+        if not starts:
+            continue
+        if name not in has_newer:
+            has_newer.add(name)
+            continue
+        result["formatted"] = f"{text[: min(starts)].rstrip()}\n\n{_OUTDATED_VIEW}".lstrip()
+        message["content"] = json.dumps(result)
 
 
 def _tool_result_event(tool_name: str, result_str: str, success: bool) -> dict[str, Any]:

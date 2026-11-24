@@ -166,6 +166,9 @@ class MemoryDecider:
                     component=COMPONENT,
                     task_id=subject.task_id,
                     json_mode=True,
+                    # A ruling follows your rules and memory; thinking first made it 2.6x slower and changed no
+                    # decision in 21 test calls (2026-11-23).
+                    thinking=False,
                 )
             )
             reply = extract_json(response.text)

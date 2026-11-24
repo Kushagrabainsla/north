@@ -78,8 +78,12 @@ _MAX_BATCH_URLS = 10
 # so the card can show it whole.
 _STEP_ACTIONS = frozenset(
     {"goto", "navigate", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck"}
-    | {"wait", "query", "assert", "read"}
+    | {"wait", "query", "assert", "read", "eval"}
 )
+# A script in a list may only read: Chrome runs it in its mode that stops any change (TaskWindowBrowser.read_only),
+# so the card needs to show no page the list has not reached yet. Only your own Chrome has that mode. The model
+# opened a page and read it with a script in two turns 15 times in one run (2026-11-23), about 4 s each.
+_READ_ONLY_STEP = "eval"
 _MAX_STEPS = 10
 # A wait in a list waits for its condition, not for a time; a long one stops the list, not the task.
 _STEP_WAIT_SECONDS = 15
@@ -574,8 +578,11 @@ def _call_problem(params: dict[str, Any], properties: dict[str, Any]) -> str:
     return f"{problem}. Nothing ran."
 
 
-def _steps_problem(params: dict[str, Any]) -> str:
-    """Why a step list cannot run, or "" when it can (or the call is not one)."""
+def _steps_problem(params: dict[str, Any], *, read_only_scripts: bool = True) -> str:
+    """Why a step list cannot run, or "" when it can (or the call is not one).
+
+    *read_only_scripts* is False for a browser that cannot run a script in read-only mode: north's own.
+    """
     steps = params.get("steps")
     if params.get("action") != "steps":
         return "Only action='steps' takes 'steps'." if steps not in (None, []) else ""
@@ -590,7 +597,12 @@ def _steps_problem(params: dict[str, Any]) -> str:
         if action not in _STEP_ACTIONS:
             return (
                 f"Step {number}: '{action}' cannot be a step. Steps are {', '.join(sorted(_STEP_ACTIONS))}; "
-                "make eval, upload, screenshot and the rest their own calls."
+                "make upload, screenshot and the rest their own calls."
+            )
+        if action == _READ_ONLY_STEP and not read_only_scripts:
+            return (
+                f"Step {number}: a script can be a step only in your own Chrome profiles, where Chrome runs it "
+                "so that it can only read. Make it its own eval call."
             )
         if refused := [key for key in _STEP_KEYS_REFUSED if key in step]:
             return f"Step {number} names {', '.join(refused)}; give those once, on the call, not on a step."
@@ -606,6 +618,8 @@ def _step_target(step: dict[str, Any]) -> str:
     action = str(step.get("action") or "")
     if action in _NAVIGATING_ACTIONS:
         return str(step.get("url") or "")
+    if action == _READ_ONLY_STEP:
+        return "script"
     if action == "wait":
         return f"{step.get('condition') or 'network-idle'} {step.get('pattern') or ''}".strip()
     target = step.get("uid") or step.get("selector") or step.get("xy") or ""
@@ -617,6 +631,8 @@ def _step_line(number: int, step: dict[str, Any], seen: Any = None) -> str:
     action = str(step.get("action") or "")
     if seen is not None:
         line = seen.title.removeprefix("Browser - ")
+    elif action == _READ_ONLY_STEP:
+        line = f"Read the page with a script that Chrome stops before any change:\n```js\n{step.get('js', '')}\n```"
     else:
         verb = {"goto": "Open", "navigate": "Open", "wait": "Wait for", "query": "Read", "assert": "Check"}
         line = f"{verb.get(action, action.title())} {_step_target(step)}".strip()
@@ -637,8 +653,13 @@ def _step_result(number: int, step: dict[str, Any], output: ToolOutput) -> dict[
     for key in ("url", "title", "signin_page", "held", "items", "count", "picked_profile"):
         if key in data:
             result[key] = data[key]
+    content = None
     if article := data.get("article"):
         content = str(article.get("content", article.get("text", "")))
+    elif "result" in data:  # a script's value
+        value = data["result"]
+        content = value if isinstance(value, str) else json.dumps(value)
+    if content is not None:
         result["text"] = content[:_STEP_RESULT_CHARS]
         result["cut"] = len(content) > _STEP_RESULT_CHARS
     return result
@@ -842,6 +863,8 @@ class BrowserTool(Tool):
     name = "browser"
     is_mutating = False
     model_reads_formatted = True
+    # The page after an action, and an inspect's tree: each newer one makes the older ones out of date.
+    view_markers = ("### Page now", "### Accessibility Tree")
     _MUTATING_ACTIONS = frozenset(
         {
             "click",
@@ -904,7 +927,10 @@ class BrowserTool(Tool):
         "Actions:\n"
         "  - 'steps': Several actions in ONE call, run in order in the task's tab: 'steps' is a list of up to "
         "10 objects, each with its own 'action' (goto, click, dblclick, fill, type, press, select, check, "
-        "uncheck, wait, query, assert, read) and that action's fields. Prefer it whenever you know the next "
+        "uncheck, wait, query, assert, read, eval) and that action's fields. An eval step may only read the page: "
+        "in your own Chrome profiles Chrome stops it before any change, and the list stops there; so open a page "
+        "and read it with a script in one list, e.g. [{'action': 'goto', 'url': ...}, {'action': 'eval', 'js': "
+        "...}]. Prefer a list whenever you know the next "
         "few actions, e.g. [{'action': 'fill', 'selector': 'input[name=q]', 'value': 'north'}, {'action': "
         "'click', 'selector': 'button[type=submit]'}, {'action': 'wait', 'condition': 'text', 'pattern': "
         "'Results'}]. The whole list is one approval and one model turn. It stops at the first step that "
@@ -985,6 +1011,7 @@ class BrowserTool(Tool):
                         "value": {"type": "string"},
                         "condition": {"type": "string", "enum": ["text", "url", "selector", "network-idle"]},
                         "pattern": {"type": "string"},
+                        "js": {"type": "string"},
                         "attributes": {"type": "array", "items": {"type": "string"}},
                         "contains": {"type": "string"},
                         "visible_only": {"type": "boolean"},
@@ -1249,7 +1276,7 @@ class BrowserTool(Tool):
         params = input.params or {}
         if problem := (
             _batch_problem(params)
-            or _steps_problem(params)
+            or _steps_problem(params, read_only_scripts=self._reads_only(params.get("profile_id")))
             or _call_problem(params, self.parameters_schema["properties"])
         ):
             return problem
@@ -1260,6 +1287,11 @@ class BrowserTool(Tool):
         ):
             return "Browser profile is missing or disabled. Select an enabled profile from list_profiles."
         return ""
+
+    def _reads_only(self, profile_id: object) -> bool:
+        """Whether a script can run so that it only reads in this profile: your own Chrome, through the bridge."""
+        profile = next((p for p in self._profiles() if p.id == profile_id and p.enabled), None)
+        return self._existing_browser is not None and profile is not None and profile.context == "existing"
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
         """Classify writes and any use of a signed-in profile per call; True means the approval layer decides.
@@ -1423,6 +1455,8 @@ class BrowserTool(Tool):
             if action in _NAVIGATING_ACTIONS:
                 sites.add(_site(str(step["url"])))
                 page_changed = True
+            elif action == _READ_ONLY_STEP:
+                pass  # it can only read: Chrome stops it before any change, and the list with it
             elif action in self._MUTATING_ACTIONS:
                 changes = True
                 if may_look and not page_changed:
@@ -1857,6 +1891,33 @@ class BrowserTool(Tool):
             )
         return ""
 
+    async def _read_only_step(self, profile: BrowserProfile, params: dict[str, Any]) -> ToolOutput:
+        """A script in a list, run only in Chrome's mode that stops any change; it never runs any other way.
+
+        The card did not show what the script reads, because the list may not have reached that page yet;
+        that is safe only because the script cannot change anything. A script Chrome stopped fails the
+        step, and the list stops there, as at any other failed step.
+        """
+        if self._existing_browser is None:
+            return ToolOutput(success=False, error="A script can be a step only in your own Chrome profiles.")
+        task = str(params.get("task_id") or "default")
+        try:
+            await self._existing_browser.verify(profile)  # the same profile check every action makes first
+        except (ValueError, OSError, RuntimeError, httpx.HTTPError) as exc:
+            return ToolOutput(success=False, error=str(exc))
+        with span("browser.read_only"):
+            output = await self._existing_browser.read_only(profile, task, str(params.get("js") or "").strip())
+        if output is None:
+            return ToolOutput(
+                success=False,
+                error=(
+                    "North could not prove that this script only reads the page (Chrome stopped it before a "
+                    "change, or the bridge did not answer), so it did not run it. A script in a list may only "
+                    "read; if it must change something, make it its own eval call."
+                ),
+            )
+        return output
+
     async def _run_steps(self, input: ToolInput, params: dict[str, Any], profile: BrowserProfile | None) -> ToolOutput:
         """Run an approved step list in order, in the task's tab; stop at the first step that fails or must stop."""
         base = {key: params[key] for key in ("profile_id", "task_id") if params.get(key)}
@@ -1875,7 +1936,10 @@ class BrowserTool(Tool):
                 results[-1]["error"] = stop
                 failed = f"Step {number} did not run: {stop}"
                 break
-            output = await self.run(input.model_copy(update={"params": step_params}))
+            if step["action"] == _READ_ONLY_STEP and profile is not None:
+                output = await self._read_only_step(profile, step_params)
+            else:
+                output = await self.run(input.model_copy(update={"params": step_params}))
             results.append(_step_result(number, step, output))
             if not output.success:
                 failed = f"Step {number} ({step['action']}) failed: {output.error or 'the step failed'}"
@@ -1935,7 +1999,7 @@ class BrowserTool(Tool):
                 )
 
         if action == "steps":
-            if problem := _steps_problem(params):
+            if problem := _steps_problem(params, read_only_scripts=self._reads_only(params.get("profile_id"))):
                 return ToolOutput(success=False, error=problem)
             return await self._run_steps(input, params, profile)
 

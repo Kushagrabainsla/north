@@ -56,6 +56,10 @@ class CompletionRequest(BaseModel):
     # true} - or a bare JSON Schema, which is wrapped for you by
     # ``structured_schema()``. Read it through that property, never directly.
     response_schema: dict | None = None
+    # False asks the model not to think before it answers, as far as the model allows: for a short answer that
+    # follows rules, such as an approval. None leaves the model's own default. Haiku 5.5 thinks by default: about
+    # 530 of the 646 output tokens of each approval were thinking, 2.7 s of 3.5 s (2026-11-23).
+    thinking: bool | None = None
     # Model ids to keep out of candidate selection for this call. Used to force an
     # independent second opinion (e.g. a reviewer must not reuse the coder's model).
     # The dispatcher degrades gracefully if excluding would leave no candidates.

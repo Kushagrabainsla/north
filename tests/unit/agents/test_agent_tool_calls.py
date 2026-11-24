@@ -231,6 +231,22 @@ async def test_the_browser_sends_one_copy_without_the_profile_check(tmp_path: Pa
     assert "connection_id" in checked
 
 
+async def test_a_failed_browser_call_is_read_by_its_text(tmp_path: Path) -> None:
+    """A failure's page view came as data JSON, which no later result could mark out of date."""
+    from tools.models import ToolInput, ToolOutput
+    from tools.universal.browser import BrowserTool
+
+    class _Browser(BrowserTool):
+        async def execute(self, inp: ToolInput) -> ToolOutput:
+            page = {"snapshot": 'uid=n2 button "Retry"', "url": "u", "title": "T"}
+            return ToolOutput(success=False, data={"action": "click", "page": page}, error="covered")
+
+    agent = _make_agent(tmp_path)
+    sent = json.loads((await agent._call_tool({"browser": _Browser()}, "browser", {"action": "click"}, _payload()))[0])
+    assert sent["error"] == "covered" and "data" not in sent
+    assert '### Page now: T - u\n```yaml\nuid=n2 button "Retry"' in sent["formatted"]
+
+
 async def test_a_timing_record_that_cannot_be_saved_does_not_fail_the_call(tmp_path: Path) -> None:
     """The call worked; only its timing record failed, and the agent must not be told the call failed."""
     from tools.base import Tool

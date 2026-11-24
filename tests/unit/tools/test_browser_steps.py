@@ -154,7 +154,8 @@ async def test_a_wait_in_a_list_waits_at_most_15_seconds(settings) -> None:
     ("steps", "problem"),
     [
         ([], "needs 'steps'"),
-        ([{"action": "eval", "js": "1"}], "'eval' cannot be a step"),
+        ([{"action": "eval"}], "Step 1: 'eval' needs 'js'. Nothing ran."),
+        ([{"action": "screenshot", "filename": "a.png"}], "'screenshot' cannot be a step"),
         ([{"action": "upload", "selector": "input"}], "'upload' cannot be a step"),
         ([{"action": "click", "selector": "a", "profile_id": "other"}], "names profile_id"),
         ([{"action": "goto"}], "Step 1: 'goto' needs 'url'. Nothing ran."),
@@ -358,3 +359,84 @@ async def test_a_call_missing_what_it_needs_is_refused_before_any_card_and_names
 
     assert not output.success and output.error == f"{problem}. Nothing ran."
     assert not store.all(10) and native.ran == []
+
+
+# A script in a list may only read. The model opened a page, then read it with a script, in two turns 15 times
+# in one run (2026-11-23), about 4 s each. Chrome runs the script in its mode that stops any change.
+READ = [
+    {"action": "goto", "url": "https://search.example/results"},
+    {"action": "eval", "js": "return [...document.querySelectorAll('h2')].map(h => h.innerText)"},
+]
+
+
+def _reading_bridge(result: ToolOutput | None):
+    native = _bridge()
+    native.verify = AsyncMock(return_value={"profile_verified": True, "connection_id": "c"})
+    native.read_only = AsyncMock(return_value=result)
+    return native
+
+
+async def test_a_script_in_a_list_runs_only_in_read_only_mode(settings) -> None:
+    read = ToolOutput(success=True, data={"action": "eval", "read_only": True, "result": ["Ada", "Babbage"]})
+    native = _reading_bridge(read)
+    tool = BrowserTool(north_settings=settings, existing_browser=native)
+
+    output = await tool.run(_call(READ))
+
+    assert output.success
+    assert native.ran == ["goto", "inspect"]  # the script never went to the bridge's ordinary eval
+    native.read_only.assert_awaited_once()
+    assert native.read_only.await_args.args[1:] == (TASK, READ[1]["js"])
+    assert output.data["steps"][1]["text"] == '["Ada", "Babbage"]'
+    assert '["Ada", "Babbage"]' in tool.format_output(output.data)
+
+
+async def test_a_script_chrome_stopped_fails_its_step_and_stops_the_list(settings) -> None:
+    native = _reading_bridge(None)
+    tool = BrowserTool(north_settings=settings, existing_browser=native)
+
+    output = await tool.run(_call([*READ, {"action": "click", "selector": "a"}]))
+
+    assert not output.success
+    assert output.error.startswith("Step 2 (eval) failed: North could not prove that this script only reads")
+    assert native.ran == ["goto", "inspect"]  # neither an ordinary eval nor the click ran
+    assert output.data["not_run"] == [3]
+
+
+async def test_a_list_that_opens_a_page_and_reads_it_with_a_script_needs_no_new_card(settings) -> None:
+    store = ApprovalStore()
+    native = _reading_bridge(ToolOutput(success=True, data={"action": "eval", "read_only": True, "result": 1}))
+    tool = bind_approvals(BrowserTool(north_settings=settings, existing_browser=native), ApprovalMode.ASK, store=store)
+
+    opened = ToolInput(
+        params={"action": "goto", "url": "https://search.example/", "profile_id": "work", "task_id": TASK}
+    )
+    assert await _cards(tool, store, opened)
+    assert await _cards(tool, store, _call(READ)) == []
+
+
+async def test_the_card_of_a_list_shows_its_script_whole(settings) -> None:
+    store = ApprovalStore()
+    native = _reading_bridge(ToolOutput(success=True, data={"action": "eval", "read_only": True, "result": 1}))
+    tool = bind_approvals(BrowserTool(north_settings=settings, existing_browser=native), ApprovalMode.ASK, store=store)
+
+    [card] = await _cards(tool, store, _call(READ))
+
+    assert "2. Read the page with a script that Chrome stops before any change:" in card.message
+    assert READ[1]["js"] in card.message
+
+
+async def test_a_script_cannot_be_a_step_in_north_s_own_browser(tmp_path) -> None:
+    """North's own browser has no read-only mode, so a script there is its own call, with its own card."""
+    settings = NorthSettings(tmp_path / "settings.json")
+    settings.set_browser_profiles([BrowserProfile(id="iso", name="Isolated", purpose="Test", context="isolated")])
+    store = ApprovalStore()
+    tool = bind_approvals(
+        BrowserTool(north_settings=settings, binary_cmd=["chrome-agent"]), ApprovalMode.ASK, store=store
+    )
+
+    call = ToolInput(params={"action": "steps", "steps": READ, "profile_id": "iso", "task_id": TASK})
+    output = await asyncio.wait_for(tool.execute(call), 5)
+
+    assert not output.success and "only in your own Chrome profiles" in output.error
+    assert not store.all(10)

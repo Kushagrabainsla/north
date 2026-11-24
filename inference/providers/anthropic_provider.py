@@ -377,6 +377,21 @@ def _takes_adaptive_thinking(model: Any) -> bool:
     return capabilities is not None and bool(capabilities.thinking.types.adaptive.supported)
 
 
+def _without_thinking(model: Any) -> dict[str, Any]:
+    """What asks *model* not to think, as the Models API says it may be asked: thinking off, and low effort.
+
+    Haiku 5.5 takes thinking off; Opus 5.5 and Sonnet 5.5 reject it with a 400 and get low effort alone.
+    Read from the raw capabilities: the installed SDK has no field for "disabled" and keeps it as an extra.
+    """
+    capabilities = (model.to_dict() if hasattr(model, "to_dict") else {}).get("capabilities") or {}
+    settings: dict[str, Any] = {}
+    if ((capabilities.get("thinking") or {}).get("types") or {}).get("disabled", {}).get("supported"):
+        settings["thinking"] = {"type": "disabled"}
+    if ((capabilities.get("effort") or {}).get("low") or {}).get("supported"):
+        settings["effort"] = "low"
+    return settings
+
+
 def _raise_if_degenerate(message: Any, model_id: str, provider_name: str) -> None:
     if message.stop_reason == "refusal":
         detail = getattr(message, "stop_details", None)
@@ -471,6 +486,8 @@ class AnthropicProvider:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._models: dict[str, ModelInfo] = {}
         self._adaptive_models: set[str] = set()
+        # Per model, what asks it not to think (`_without_thinking`), for a request with thinking=False.
+        self._no_thinking: dict[str, dict[str, Any]] = {}
         # Claude's turns by the conversation that led to them: see `_with_kept_thinking`.
         self._kept_turns: OrderedDict[str, list[dict]] = OrderedDict()
 
@@ -485,10 +502,12 @@ class AnthropicProvider:
         """
         live: dict[str, ModelInfo] = {}
         adaptive: set[str] = set()
+        no_thinking: dict[str, dict[str, Any]] = {}
         try:
             async for model in self._client.models.list():
                 if _takes_adaptive_thinking(model):
                     adaptive.add(model.id)
+                no_thinking[model.id] = _without_thinking(model)
                 price, price_known = _model_price(model.id)
                 context_window = int(getattr(model, "max_input_tokens", 0) or 200_000)
                 live[model.id] = ModelInfo(
@@ -510,6 +529,7 @@ class AnthropicProvider:
         if live:
             self._models = live
             self._adaptive_models = adaptive
+            self._no_thinking = no_thinking
 
     async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
         # Sampling params (temperature/top_p/top_k) are not passed: current
@@ -524,6 +544,12 @@ class AnthropicProvider:
         schema = request.structured_schema
         if schema is not None:
             kwargs["output_config"] = {"format": {"type": "json_schema", "schema": schema["schema"]}}
+        if request.thinking is False:
+            quiet = self._no_thinking.get(model_id, {})
+            if "thinking" in quiet:
+                kwargs["thinking"] = quiet["thinking"]
+            if "effort" in quiet:
+                kwargs.setdefault("output_config", {})["effort"] = quiet["effort"]
         try:
             message = await self._client.messages.create(
                 model=model_id,
