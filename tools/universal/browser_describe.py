@@ -219,8 +219,11 @@ def _request(action: str, params: dict[str, Any], page: _Page, element: _Element
     submits_form = bool(
         element and element.in_form and not element.searches and (element.role == "button" or action == "press")
     )
-    # An upload hands a local file to the site, whatever the button later does.
-    sends = action == "upload" or (presses and (bool(words & _SENDING_WORDS) or submits_form))
+    # An upload hands a local file to the site, whatever the button later does. A script can click any button,
+    # a Send included, and north cannot see which: on 2026-11-23 nine LinkedIn invitations went out as scripts,
+    # each allowed in milliseconds by a standing rule for scripts, while a click on "Send invitation" is checked
+    # every time. A script that Chrome proved only reads is decided as a read (BrowserTool) and never comes here.
+    sends = action in ("upload", "eval") or (presses and (bool(words & _SENDING_WORDS) or submits_form))
     at_checkout = any(part in urlparse(page.url).path.lower() for part in _SPENDING_PATH_PARTS)
     spends = presses and (bool(words & _SPENDING_WORDS) or (at_checkout and (sends or submits_form)))
     attaches = params.get("browser_context") == "existing"
@@ -304,7 +307,12 @@ def _message(
         lines.append("north could not read the page, so it cannot say what this lands on.")
     if attaches:
         lines.append("This uses your own browser: your logged-in sessions and cookies.")
-    if sends:
+    if sends and action == "eval":
+        lines.append(
+            "This script can change the page, and it can send something in your name: north cannot see what "
+            "it clicks. So it is checked each time, and no earlier yes or standing rule covers it."
+        )
+    elif sends:
         lines.append("This sends something to someone else in your name.")
     if spends:
         lines.append("This may spend money.")

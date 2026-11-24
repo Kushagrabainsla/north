@@ -208,6 +208,40 @@ async def test_opening_a_page_in_your_own_browser_says_so_without_looking() -> N
     assert "your own browser" in request.message
 
 
+async def test_a_script_that_may_change_the_page_is_checked_each_time(tmp_path) -> None:
+    """Nine LinkedIn invitations went out as scripts under a standing rule for scripts (2026-11-23).
+
+    A click on "Send invitation" was checked each time; a script that clicked it was not. A script that
+    Chrome proved only reads never gets here: BrowserTool decides it as a read.
+    """
+    from dataclasses import replace
+
+    from approval import standing_rules
+    from approval.approval_memory import ApprovalMemory
+    from approval.models import ApprovalDecision, Card, CardType, DecidedBy
+    from approval.policy import Answer
+
+    class _Decider:
+        async def rule(self, action, session=None):
+            return Answer(ApprovalDecision.APPROVED, "", "the decider looked at it", DecidedBy.MEMORY_DECIDER)
+
+    js = "document.querySelector('#interop-outlet').shadowRoot.querySelector('button.send').click()"
+    request = await _describe({"action": "eval", "js": js}, _Page("https://www.linkedin.com/in/ada/"))
+
+    assert request.action.reaches_third_party
+    assert "it is checked each time" in request.message and js in request.message
+
+    scope = "browser eval on linkedin.com in profile p1 (3f2a00000000)"
+    memory = ApprovalMemory(tmp_path / "memory.db")
+    card = Card.new(type=CardType.APPROVAL, task_id="t1", agent="browser", title="Browser", message="eval")
+    standing_rules.keep("browser", scope, ApprovalDecision.APPROVED, memory, card)
+    policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTONOMOUS, approval_memory=memory, decider=_Decider())
+
+    ruling = await policy.rule(replace(request.action, rule_scope=scope), "t1")
+
+    assert ruling.decided_by == DecidedBy.MEMORY_DECIDER  # your rule for scripts did not decide it
+
+
 async def test_an_upload_names_the_file_and_counts_as_sending_it() -> None:
     page = _Page("https://jobs.acme.test/apply/7")
 
