@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import subprocess
@@ -157,20 +158,61 @@ async def test_click_lands_on_the_inspected_element(adapter, profile):
     assert output.success
     tool, arguments = adapter._tool.call_args_list[-1].args[1:3]
     assert tool == "computer" and (arguments["x"], arguments["y"]) == (5, 6) and arguments["sessionToken"]
+    assert arguments["human"] is False, "one move and a press: the curved walk cost up to 1.4 s a click"
+
+
+def _tabs(*listings: str):
+    """A bridge whose session lists *listings* in turn, and whose page reads all say "loaded"."""
+    shown = iter(listings)
+    page = json.dumps({"url": "https://a.test/", "title": "A"})
+
+    async def tool(profile, name, arguments, timeout=60):
+        if name == "tabs_list":
+            return text(next(shown))
+        if name == "javascript_execute":
+            return text("true" if "readyState" in arguments["code"] and "names" not in arguments["code"] else page)
+        return text("done")
+
+    return AsyncMock(side_effect=tool)
 
 
 @pytest.mark.asyncio
-async def test_open_creates_the_task_tab_once_then_navigates(adapter, profile):
-    page = text(json.dumps({"url": "https://a.test/", "title": "A"}))
-    adapter._tool = AsyncMock(
-        side_effect=[text("no tabs in this session's groups yet"), text("opened"), text("true"), page]
-    )
+async def test_the_first_page_creates_the_task_tab(adapter, profile):
+    adapter._tool = _tabs("no tabs in this session's groups yet", "12. A — https://a.test/")
+
     await adapter.call(profile, {"action": "goto", "task_id": "t", "url": "https://a.test/"})
-    assert adapter._tool.call_args_list[1].args[1] == "tabs_create"
-    assert adapter._tool.call_args_list[1].args[2]["longRunning"] is True
-    adapter._tool = AsyncMock(side_effect=[text("12. A — https://a.test/"), text("now at"), page])
+
+    names = [call.args[1] for call in adapter._tool.call_args_list]
+    assert "tabs_create" in names and "tabs_close" not in names and "navigate" not in names
+    create = next(call.args[2] for call in adapter._tool.call_args_list if call.args[1] == "tabs_create")
+    assert create["longRunning"] is True
+
+
+@pytest.mark.asyncio
+async def test_each_later_page_opens_in_a_new_tab_and_the_old_tab_closes_once_it_loaded(adapter, profile):
+    """Pages of one site in one tab share a renderer whose old code slows each read-only check: 0.4 s to 7.9 s."""
+    adapter._tool = _tabs("12. A — https://a.test/", "12. A — https://a.test/\n13. B — https://a.test/b")
+
     await adapter.call(profile, {"action": "goto", "task_id": "t", "url": "https://a.test/b"})
-    assert adapter._tool.call_args_list[1].args[1] == "navigate"
+
+    calls = [(call.args[1], call.args[2]) for call in adapter._tool.call_args_list]
+    names = [name for name, _ in calls]
+    assert "navigate" not in names
+    waited = next(arguments for name, arguments in calls if name == "javascript_execute")
+    assert waited["tabId"] == 13, "the load wait looks at the new tab, not the old one"
+    assert names.index("javascript_execute") < names.index("tabs_close")
+    assert [arguments["tabId"] for name, arguments in calls if name == "tabs_close"] == [12]
+
+
+@pytest.mark.asyncio
+async def test_the_same_address_again_reloads_the_tab_the_extension_gave_back(adapter, profile):
+    """The extension returns the tab it opened for an address a moment ago; north never closes that tab."""
+    adapter._tool = _tabs("12. A — https://a.test/", "12. A — https://a.test/")
+
+    await adapter.call(profile, {"action": "goto", "task_id": "t", "url": "https://a.test/"})
+
+    names = [call.args[1] for call in adapter._tool.call_args_list]
+    assert "navigate" in names and "tabs_close" not in names
 
 
 @pytest.mark.asyncio
@@ -249,6 +291,29 @@ async def test_front_goes_back_to_the_users_app_only_when_chrome_jumped(tmp_path
     async with bridge._front_kept(chrome):
         pass
     assert restored == []
+
+
+@pytest.mark.asyncio
+async def test_a_later_tab_is_not_held_up_and_the_front_is_still_handed_back(tmp_path, monkeypatch):
+    """Each page opens in a new tab now; waiting out the watch each time would add up to 1 s a page."""
+    chrome = BrowserProfile(
+        id="p", name="P", purpose="x", context="existing",
+        data_directory=str(tmp_path / "Library/Application Support/Google/Chrome"),
+    )  # fmt: skip
+    fronts = iter(["com.user.App", "com.user.App"])
+    monkeypatch.setattr(bridge, "frontmost_app", lambda: next(fronts, "com.google.Chrome"))
+    restored = []
+    monkeypatch.setattr(bridge, "activate", restored.append)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    async with bridge._front_kept(chrome, linger=False):
+        pass
+    assert loop.time() - started < 0.5
+    for _ in range(20):  # the watch goes on in the background
+        if restored:
+            break
+        await asyncio.sleep(0.05)
+    assert restored == ["com.user.App"]
 
 
 @pytest.mark.asyncio
@@ -390,6 +455,7 @@ async def test_a_read_only_script_runs_marked_only_on_an_up_to_date_extension(ad
     ("error", "proved"),
     [
         ("page script threw: EvalError: Possible side-effect in debug-evaluate", None),
+        ("Execution was terminated", None),  # ran past the 3 s limit: not proved a read
         ("Error: Debugger is not attached to the tab with id: 7.", None),
         ("page script threw: TypeError: Cannot read properties of null (reading 'innerText')", False),
     ],

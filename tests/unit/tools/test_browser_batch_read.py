@@ -62,6 +62,8 @@ async def test_the_bridge_reads_pages_three_at_a_time_in_tabs_of_their_own(tmp_p
         return {"url": params["url"], "title": f"Title of {session}"}
 
     async def tool(profile, name, arguments, timeout=60):
+        if name == "javascript_execute":  # the text of open shadow roots: none on these pages
+            return {"content": [{"type": "text", "text": '""'}]}
         asked.append((name, arguments))
         return {"content": [{"type": "text", "text": f"text of {arguments['sessionToken']}"}]}
 

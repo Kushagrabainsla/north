@@ -173,6 +173,18 @@
       .join("\n");
   }
 
+  // A selector finds an element in an open shadow root too, as the snapshot lists it: LinkedIn's
+  // invitation dialog is in one, and form_input by selector could not fill its note.
+  function deepQuery(selector, root = document) {
+    const el = root.querySelector(selector);
+    if (el) return el;
+    for (const host of root.querySelectorAll("*")) {
+      const found = host.shadowRoot && deepQuery(selector, host.shadowRoot);
+      if (found) return found;
+    }
+    return null;
+  }
+
   function resolveTarget({ ref, selector }) {
     if (ref) {
       const el = refMap.get(ref);
@@ -180,7 +192,7 @@
       throw new Error(`ref "${ref}" is stale — run read_page or find again`);
     }
     if (selector) {
-      const el = document.querySelector(selector);
+      const el = deepQuery(selector);
       if (el) return el;
       throw new Error(`no element matches selector "${selector}"`);
     }

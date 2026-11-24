@@ -53,11 +53,19 @@ export const READ_ONLY_MARKER = "#north:read-only\n";
 // "EvalError: Possible side-effect in debug-evaluate", before that step happens. So a script that ran
 // to its end read the page and nothing else, and one that was stopped changed nothing.
 //
+// In this mode V8 throws away the optimised code of each function the script calls, and to find it
+// walks all optimised code in the tab's renderer, old pages' included until they are collected. So
+// north opens each page in a new tab (browser_taskwindow.py `_open`): an extension cannot ask Chrome to
+// collect the garbage, as chrome.debugger has no HeapProfiler.
+//
+// A script still running after READ_ONLY_TIMEOUT_MS is stopped ("Execution was terminated"): it changed
+// nothing, and north asks about it as about any script.
+//
 // It runs as a block first, so its top-level `const` and `let` stay inside it (declared at the top level
 // they are a write to the page's scope); then as a function body, for `return x;`; then as an async
 // function body, for `await`. Running one again is safe: the earlier try changed nothing.
 export async function evaluateReadOnly(send, code) {
-  const base = { returnByValue: true, throwOnSideEffect: true, timeout: 10_000 };
+  const base = { returnByValue: true, throwOnSideEffect: true, timeout: READ_ONLY_TIMEOUT_MS };
   let reply;
   for (const [expression, extra] of [
     [`{\n${code}\n}`, {}],
@@ -69,6 +77,8 @@ export async function evaluateReadOnly(send, code) {
   }
   return reply;
 }
+
+export const READ_ONLY_TIMEOUT_MS = 10_000;
 
 async function markerWasSet(send, marker) {
   const key = JSON.stringify(marker);

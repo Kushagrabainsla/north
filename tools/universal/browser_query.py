@@ -14,6 +14,8 @@ import json
 import re
 from typing import Any
 
+from tools.universal.browser_deep import DEEP_JS
+
 _DEFAULT_ITEMS = 20
 _MAX_ITEMS = 100
 _DEFAULT_CHARS = 300
@@ -22,11 +24,16 @@ _MAX_ATTRIBUTES = 10
 # An attribute name, nothing that could be read as code.
 _ATTRIBUTE = re.compile(r"^[A-Za-z_:][-A-Za-z0-9_:.]{0,63}$")
 
-# Values come in as one JSON object, so nothing the model sends is ever part of the code.
-_SCRIPT = """(() => {
+# Values come in as one JSON object, so nothing the model sends is ever part of the code. It finds
+# elements in open shadow roots too, as the page shows them.
+_SCRIPT = (
+    """(() => {
+"""
+    + DEEP_JS
+    + """
   const q = %s;
   let found;
-  try { found = [...document.querySelectorAll(q.selector)]; }
+  try { found = deepAll(q.selector); }
   catch (error) { return JSON.stringify({error: "not a valid CSS selector: " + q.selector}); }
   const shown = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
   const needle = q.contains.toLowerCase();
@@ -45,6 +52,7 @@ _SCRIPT = """(() => {
   });
   return JSON.stringify({url: location.href, title: document.title, count: matching.length, items});
 })()"""
+)
 
 
 def _bounded(value: Any, default: int, ceiling: int, name: str) -> int:

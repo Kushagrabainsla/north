@@ -21,6 +21,8 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+from tools.universal.browser_deep import DEEP_JS
+
 if TYPE_CHECKING:
     from approval.approvals import Request
 
@@ -58,7 +60,11 @@ _VERBS = {
 
 # Reads the page and the element a selector, a point or the focus names. Fixed:
 # the only inputs are the selector and point, passed as JSON literals.
-_PAGE_SCRIPT = """(() => {
+_PAGE_SCRIPT = (
+    """(() => {
+"""
+    + DEEP_JS
+    + """
   const describe = (el) => {
     if (!el || el === document.body || el === document.documentElement) return null;
     const tag = el.tagName.toLowerCase();
@@ -77,14 +83,15 @@ _PAGE_SCRIPT = """(() => {
   let target = null;
   try {
     const selector = %(selector)s, point = %(point)s;
-    if (selector) target = document.querySelector(selector);
-    else if (point) target = document.elementFromPoint(point[0], point[1]);
+    if (selector) target = deepQuery(selector);
+    else if (point) target = deepFromPoint(point[0], point[1]);
   } catch (e) {}
   return JSON.stringify({
     url: location.href, title: document.title,
-    target: describe(target), focused: describe(document.activeElement),
+    target: describe(target), focused: describe(deepActive()),
   });
 })()"""
+)
 
 Runner = Callable[[list[str], int], Awaitable[Any]]
 

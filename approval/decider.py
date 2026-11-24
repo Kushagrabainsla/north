@@ -22,10 +22,16 @@ When it cannot decide - no model, an error, an unreadable reply, or an
 abstention - it returns None and the card waits for you. That is the one case
 Autonomous pauses.
 
-An action that leaves the sandbox (a push, a host it was not given) is the same:
-it is approved only when the reply cites something you stated - a message in this
-session, a fact, a past decision, your rules or your profile. Citing nothing is a
-guess, so the card waits.
+An action that leaves the sandbox (a push, a host it was not given), sends
+something to a person, spends money or destroys is the same: it is approved only
+when the reply cites something you stated - a message in this session, a fact, a
+past decision, your rules or your profile. Citing nothing is a guess, so the card
+waits.
+
+Every ruling is made without thinking first. Thinking made a ruling 2.6x slower and
+changed no decision on 21 plain actions. On a daily batch of the same kind you had
+approved twice, it asked you each time because the people were new, where you want
+autonomous mode to say yes (2026-11-24).
 
 Your messages are trusted; north's answers in the session are not read at all. It
 refused a camera recording you had asked for in chat because it never saw the
@@ -59,6 +65,7 @@ COMPONENT = "approval_decider"
 _FACT_LIMIT = 10
 _EPISODE_LIMIT = 3
 _PAST_DECISION_LIMIT = 10
+_ANSWER_LIMIT = 5
 # One past decision as the decider reads it: a whole card, a long flow question included.
 _DECISION_CHARS = 1500
 _DOCUMENT_CHARS = 3000
@@ -104,7 +111,14 @@ class _Subject:
     options: tuple[str, ...]
     task_id: str = ""
     leaves_sandbox: bool = False
+    # Sends to a person, spends money or destroys: a yes needs something you stated, as one out of the sandbox does.
+    cannot_undo: bool = False
     session: Session = NO_SESSION
+
+    @property
+    def needs_cover(self) -> bool:
+        """A yes to this must cite something you stated: it cannot be undone, or it leaves the sandbox."""
+        return self.leaves_sandbox or self.cannot_undo
 
 
 class MemoryDecider:
@@ -129,6 +143,7 @@ class MemoryDecider:
             content=_action_content(action),
             options=("approve", "reject"),
             leaves_sandbox=action.leaves_sandbox,
+            cannot_undo=action.reaches_third_party or action.spends_money or action.obviously_destructive,
             session=session,
         )
         return await self._decide(subject)
@@ -166,8 +181,6 @@ class MemoryDecider:
                     component=COMPONENT,
                     task_id=subject.task_id,
                     json_mode=True,
-                    # A ruling follows your rules and memory; thinking first made it 2.6x slower and changed no
-                    # decision in 21 test calls (2026-11-23).
                     thinking=False,
                 )
             )
@@ -187,8 +200,8 @@ class MemoryDecider:
         answer = _read_reply(reply, subject, said + items)
         if answer is not None and _is_a_guess(answer, subject):
             logger.info(
-                "Memory decider: nothing you stated covers this action from %s that leaves the sandbox - "
-                "the card waits for you",
+                "Memory decider: nothing you stated covers this action from %s that sends, spends or leaves the "
+                "sandbox - the card waits for you",
                 subject.agent,
             )
             return None
@@ -216,27 +229,31 @@ class MemoryDecider:
         ]
         items += [_Item(f"D{n}", ref.text, ref) for n, ref in enumerate(self._past_decisions(subject.agent), 1)]
         if rules:
-            text = f"Your judgement rules:\n{rules[:_DOCUMENT_CHARS]}"
+            text = f"Your judgement rules:\n{_cut(rules)}"
             items.append(_Item("R1", text, MemoryRef(kind=MemoryKind.JUDGEMENT_RULES)))
         items += [
-            _Item(f"P{n}", f"Your profile:\n{document[:_DOCUMENT_CHARS]}", MemoryRef(kind=MemoryKind.PROFILE))
+            _Item(f"P{n}", f"Your profile:\n{_cut(document)}", MemoryRef(kind=MemoryKind.PROFILE))
             for n, document in enumerate(recalled.documents, 1)
         ]
         return items
 
     def _past_decisions(self, agent: str) -> list[MemoryRef]:
-        """Your decisions on *agent*'s cards: actions you approved or rejected, and questions you answered.
+        """Your decisions on *agent*'s cards, then your latest answers to any agent's questions.
 
-        Each in its whole text. A label cut to its first and last 40 characters read
-        "Step 'outreach' is read…the user does not approve, send nothing.", and the decider
-        took your yes to that step for a no.
+        Each in its whole text, and each text once. A label cut to its first and last 40
+        characters read "Step 'outreach' is read…the user does not approve, send nothing.",
+        and the decider took your yes to that step for a no. Three yeses to the same
+        "Rules to confirm" card were three copies of the same text.
         """
         if self._approval_memory is None:
             return []
-        return [
-            MemoryRef(kind=MemoryKind.PAST_DECISION, text=_decision_text(row), ref=str(row["fingerprint"]))
-            for row in self._approval_memory.decisions_on(agent, _PAST_DECISION_LIMIT)
-        ]
+        rows = self._approval_memory.decisions_on(agent, _PAST_DECISION_LIMIT)
+        rows += self._approval_memory.answers(_ANSWER_LIMIT)
+        refs: dict[str, MemoryRef] = {}
+        for row in rows:
+            text = _decision_text(row)
+            refs.setdefault(text, MemoryRef(kind=MemoryKind.PAST_DECISION, text=text, ref=str(row["fingerprint"])))
+        return list(refs.values())
 
 
 def _decision_text(row: dict[str, object]) -> str:
@@ -250,6 +267,18 @@ def _decision_text(row: dict[str, object]) -> str:
 def _clip(text: str) -> str:
     """At most _DECISION_CHARS, cut at the end and marked: a cut in the middle changed what the text said."""
     return text if len(text) <= _DECISION_CHARS else f"{text[: _DECISION_CHARS - 1]}…"
+
+
+def _cut(document: str) -> str:
+    """At most _DOCUMENT_CHARS, cut after the last whole line or sentence and marked as cut.
+
+    Your profile was cut in the middle of a sentence, so its last line said something you did not.
+    """
+    if len(document) <= _DOCUMENT_CHARS:
+        return document
+    head = document[:_DOCUMENT_CHARS]
+    end = max(head.rfind("\n"), head.rfind(". ") + 1)
+    return f"{head[:end] if end > _DOCUMENT_CHARS // 2 else head}…"
 
 
 def _said_items(session: Session) -> list[_Item]:
@@ -321,8 +350,8 @@ def _read_reply(reply: Any, subject: _Subject, items: list[_Item]) -> Answer | N
 
 
 def _is_a_guess(answer: Answer, subject: _Subject) -> bool:
-    """An approval for an action that leaves the sandbox, with nothing the user stated behind it."""
-    if not subject.leaves_sandbox or answer.decision != ApprovalDecision.APPROVED:
+    """An approval for an action that sends, spends or leaves the sandbox, with nothing the user stated behind it."""
+    if not subject.needs_cover or answer.decision != ApprovalDecision.APPROVED:
         return False
     return not any(ref.kind in _COVERING_KINDS for ref in answer.memory_used)
 

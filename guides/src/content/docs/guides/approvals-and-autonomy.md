@@ -81,7 +81,7 @@ The offer goes to the **Inbox**, under **When you have a minute**.
 | --- | --- | --- |
 | `ask` (default) | Runs work that only reads. | For every change. |
 | `safe` | Runs work that only reads, the actions on the **Safe actions** list, exact repeats of your past answers, and your rules. | For everything else. No model decides for you. |
-| `autonomous` | Runs what `safe` runs. For everything else, decides for you from what north knows about you, your past answers and your rules. | When it cannot decide, for example a step outside the workspace that nothing you said covers. In a chat, also when it would say no. |
+| `autonomous` | Runs what `safe` runs. For everything else, decides for you from what north knows about you, your past answers and your rules. | When it cannot decide, for example a step outside the workspace, a message to a person or a payment that nothing you said covers. In a chat, also when it would say no. |
 | `yolo` | Says yes to every approval and gives the yes answer to every question. | Only for the few actions that always ask, for example a request to forget facts. |
 
 Below `yolo`, these limits apply:

@@ -237,3 +237,55 @@ Each driven tab now gets a 1280 x 900 desktop screen when the extension attaches
 
 A minimized window was no slower than a visible one.
 The failures left are clicks on an element named by a selector that a page change removed, and scripts that read a missing element.
+
+## Results, 2026-11-24: approvals, shadow roots, read-only checks, clicks
+
+Before is `4cb2e01`; after is the working tree with the four fixes. Profile sjsu.edu (existing Chrome), approval mode Autonomous.
+The scripts are scratch copies, not in the repository: an approval replay, a bridge probe, and `run.py` with one more task, `shadow`.
+`shadow` opens a local test page (`http://127.0.0.1:8765/`) whose invitation dialog is in an open shadow root, like LinkedIn's: connect, add a note, send, and report the page text. Nothing leaves the Mac.
+Results are in `~/.cache/north/browser-ab-2026-11-24/` (`before/20261124-095101`, `after/20261124-101104`).
+
+### Approval model, 5 calls per case (Haiku 5.5, a copy of north's real memory)
+
+| Case | before | after |
+|---|---|---|
+| Today's batch of 10 invitations, of the kind you approved on 2026-11-19 and 11-23 | approved 5 of 5, 0.9 s | approved 4 of 5, 0.9 s |
+| A send to a person in the batch you approved on 2026-11-23 | approved 5 of 5, 1.0 s | approved 5 of 5, 0.9 s |
+| A send to a person in a new batch | waits 4 of 5, rejected 1 | approved 5 of 5, citing your earlier yeses |
+
+- Thinking first was tried and dropped: it asked you about each new batch (5 of 5) because the people were new, and took 4 s. A stricter prompt for sends did the same, so the prompt is unchanged.
+- A send now must cite something you stated, in code: every approved send above did.
+
+### Bridge probe on the shadow-root page
+
+| | before | after |
+|---|---|---|
+| Actions that worked on the dialog (inspect, query, wait, assert, fill, click Send, read) | 0 of 9 | 9 of 9 |
+| A click, end to end | 1,702 ms | 159-169 ms |
+
+### Read-only check of a reading script, 12 YouTube search pages in one task
+
+| Page | 1 | 4 | 8 | 10 | 12 |
+|---|---|---|---|---|---|
+| before | 0.36 s | 1.0 s | 2.8 s | 7.9 s | 6.2 s |
+| after | 0.35 s | 0.33 s | 0.35 s | 0.50 s | 0.34 s |
+
+- After, every check proved a read; a `goto` took a median 2.07 s, against 1.97 s before.
+- Collecting the garbage first, which fixed it in a Chrome driven directly, did nothing here: `chrome.debugger` has no `HeapProfiler`, and the call failed silently. A new tab for each page is what works.
+- Chrome never came to the front during the 12 new tabs.
+
+### Tasks, 3 runs each (medians)
+
+| | shadow before | after | chain before | after |
+|---|---|---|---|---|
+| Done right | 0 of 3 | 3 of 3 | 3 of 3 | 3 of 3 |
+| Wall time | 47.5 s | 16.1 s | 27.3 s | 33.4 s |
+| Turns | 17 | 7 | 7 | 8 |
+| Browser calls | 17 | 7 | 6 | 7 |
+| Scripts | 3 | 0 | 5 | 5 |
+| Failed calls | 6 | 0 | 1 | 3 |
+| Input tokens | 313k | 118k | 135k | 167k |
+| Cost | $0.178 | $0.030 | $0.066 | $0.095 |
+
+- Before, no shadow run sent the invitation: north reported that it never saw the dialog.
+- The chain task differs within run-to-run noise (19 s to 40 s in one version). Its failed calls are of the same kinds in both versions: a script that reads an element that is not there, and a link selector that matches nothing.

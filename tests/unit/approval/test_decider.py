@@ -324,3 +324,84 @@ async def test_the_prompt_says_which_action_leaves_the_sandbox() -> None:
     await decider.rule(_push())
 
     assert "leaves the sandbox or the workspace" in model.requests[0].prompt
+
+
+def _send() -> Action:
+    return Action(
+        agent="browser",
+        kind=ActionKind.OTHER,
+        summary='Click "Send invitation" on linkedin.com',
+        reaches_third_party=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "ask",
+    [
+        lambda d: d.rule(_deploy()),
+        lambda d: d.rule(_send()),
+        lambda d: d.rule(_push()),
+        lambda d: d.answer(_question("Send all 10", "Send none")),
+    ],
+)
+async def test_every_ruling_is_made_without_thinking(ask) -> None:
+    """Thinking asked you about each new daily batch of a kind you had approved twice (2026-11-24)."""
+    decider, model = _decider({"decision": "abstain", "reason": "r"})
+
+    await ask(decider)
+
+    assert model.requests[0].thinking is False
+
+
+async def test_a_send_citing_nothing_you_stated_is_a_guess_so_the_card_waits() -> None:
+    decider, _ = _decider({"decision": "approve", "reason": "looks fine", "used": []}, facts=())
+
+    assert await decider.rule(_send()) is None
+
+
+async def test_a_send_sees_your_answer_to_another_agents_batch_question(tmp_path: Path) -> None:
+    """Your "Approve all 10" was on north's card; each invitation is a browser action (2026-11-23)."""
+    past = ApprovalMemory(tmp_path / "m.db")
+    batch = Card.new(
+        type=CardType.QUESTION,
+        agent="north",
+        title="North - Question",
+        message="Send invitations to Ada Lovelace and Alan Turing?",
+        options=["Approve all 10", "Send none"],
+    )
+    past.record("north", "", ApprovalDecision.ANSWERED, card=batch, chosen_option="Approve all 10")
+    past.record("git", "git git op=push", "approved")
+    decider, model = _decider(
+        {"decision": "approve", "reason": "you approved the batch", "used": ["D1"]}, facts=(), approval_memory=past
+    )
+
+    answer = await decider.rule(_send())
+
+    prompt = model.requests[0].prompt
+    assert "Ada Lovelace" in prompt and "'Approve all 10'" in prompt
+    assert "op=push" not in prompt, "approvals still count only for their own agent"
+    assert answer.decision == ApprovalDecision.APPROVED
+
+
+async def test_the_same_decision_text_is_shown_once(tmp_path: Path) -> None:
+    past = ApprovalMemory(tmp_path / "m.db")
+    rules = Card.new(type=CardType.APPROVAL, agent="browser", title="Rules to confirm", message="Allow scripts?")
+    for n in range(3):
+        past.record("browser", f"browser rule {n}", "approved", card=rules)
+    decider, model = _decider({"decision": "reject", "reason": "r"}, approval_memory=past)
+
+    await decider.rule(Action(agent="browser", kind=ActionKind.OTHER, summary="s"))
+
+    assert model.requests[0].prompt.count("Allow scripts?") == 1
+
+
+async def test_a_long_profile_is_cut_after_a_whole_sentence() -> None:
+    from approval.decider import _DOCUMENT_CHARS, _cut
+
+    text = "A short sentence. " * (_DOCUMENT_CHARS // 18) + "The last sentence says not to send."
+
+    cut = _cut(text)
+
+    assert cut.endswith("sentence.…")
+    assert "not to send" not in cut
+    assert _cut("short") == "short"

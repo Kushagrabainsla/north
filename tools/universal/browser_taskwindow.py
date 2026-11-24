@@ -29,6 +29,7 @@ import httpx
 
 from tools.models import ToolOutput
 from tools.universal.browser_accounts import chrome_identity
+from tools.universal.browser_deep import DEEP_JS
 from tools.universal.browser_query import query_script
 from utils.desktop import activate, frontmost_app
 from utils.runtime_resources import resource_path
@@ -101,6 +102,8 @@ _ENTER_KEYS = frozenset({"enter", "return"})
 # and what V8 says when it stops such a script before a side effect.
 READ_ONLY_MARKER = "#north:read-only\n"
 _SIDE_EFFECT = "Possible side-effect in debug-evaluate"
+# What V8 says when it stops a read-only script that ran past the extension's time limit (10 s).
+_TERMINATED = "Execution was terminated"
 
 _PAGE_CHANGING = frozenset(
     {"goto", "navigate", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "eval", "upload"}
@@ -108,7 +111,9 @@ _PAGE_CHANGING = frozenset(
 
 # Role and accessible name, read the same way by inspect and by a click's check
 # that the element is still the one inspect showed.
-_ELEMENT_JS = """
+_ELEMENT_JS = (
+    DEEP_JS
+    + """
 const ROLES = {A: "link", BUTTON: "button", SELECT: "combobox", TEXTAREA: "textbox", FORM: "form",
   IMG: "img", NAV: "navigation", MAIN: "main", TABLE: "table", UL: "list", OL: "list", LI: "listitem",
   LABEL: "label", DIALOG: "dialog", H1: "heading", H2: "heading", H3: "heading", H4: "heading"};
@@ -120,10 +125,12 @@ const nameOf = el => (el.getAttribute("aria-label") || (el.labels && el.labels[0
   || (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ? el.placeholder || el.name || "" : el.innerText)
   || el.getAttribute("title") || el.getAttribute("alt") || "").trim().replace(/\\s+/g, " ").slice(0, 200);
 """
+)
 
 # Reads the page into North's snapshot lines (uid=... role "name"), tagging each
 # element so later calls can find it. Existing tags are kept, so a uid an agent
-# or approval card saw keeps naming the same element. Plain text is uid=-.
+# or approval card saw keeps naming the same element. Plain text is uid=-. It walks the page as it is
+# shown: into open shadow roots and through slots, so a dialog in a shadow root is listed too.
 _SNAPSHOT_SCRIPT = (
     _ELEMENT_JS
     + """
@@ -142,11 +149,11 @@ const walk = (el, depth) => {
     if (!el.dataset.northUid) el.dataset.northUid = "n" + (++next);
     lines.push("  ".repeat(depth) + "uid=" + el.dataset.northUid + " " + (role || el.tagName.toLowerCase())
       + " " + JSON.stringify(nameOf(el)));
-  } else if (!el.children.length && shown(el) && el.innerText && el.innerText.trim()) {
+  } else if (!flatChildren(el).length && shown(el) && el.innerText && el.innerText.trim()) {
     const words = el.innerText.trim().replace(/\\s+/g, " ").slice(0, 200);
     lines.push("  ".repeat(depth) + "uid=- text " + JSON.stringify(words));
   }
-  for (const child of el.children) walk(child, depth + (interactive ? 1 : 0));
+  for (const child of flatChildren(el)) walk(child, depth + (interactive ? 1 : 0));
 };
 walk(document.body || document.documentElement, 0);
 document.documentElement.dataset.northNext = String(next);
@@ -159,15 +166,15 @@ JSON.stringify({snapshot: lines.join("\\n"), url: location.href, title: document
 _LOCATE_SCRIPT = (
     _ELEMENT_JS
     + """
-const el = document.querySelector(%(selector)s);
+const el = deepQuery(%(selector)s);
 let out = {found: false};
 if (el && el.isConnected) {
   el.scrollIntoView({block: "center", inline: "center"});
   const r = el.getBoundingClientRect();
   const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
-  const hit = document.elementFromPoint(x, y);
+  const hit = deepFromPoint(x, y);
   out = {found: true, x, y, role: roleOf(el) || el.tagName.toLowerCase(), name: JSON.stringify(nameOf(el)),
-    reachable: !!hit && (hit === el || el.contains(hit) || hit.contains(el))};
+    reachable: !!hit && (hit === el || flatContains(el, hit) || flatContains(hit, el))};
 }
 JSON.stringify(out)
 """
@@ -181,10 +188,10 @@ _RELOCATE_SCRIPT = (
     + """
 const uid = %(uid)s, role = %(role)s, name = %(name)s;
 let out = "present";
-if (!document.querySelector('[data-north-uid="' + uid + '"]')) {
+if (!deepQuery('[data-north-uid="' + uid + '"]')) {
   const shown = el => getComputedStyle(el).visibility !== "hidden" && el.getClientRects().length > 0;
   const hits = [];
-  for (const el of document.querySelectorAll("*")) {
+  for (const el of deepAll()) {
     if ((roleOf(el) || el.tagName.toLowerCase()) !== role || !shown(el)) continue;
     if (JSON.stringify(nameOf(el)) === name) hits.push(el);
     if (hits.length > 1) break;
@@ -196,9 +203,11 @@ JSON.stringify(out)
 """
 )
 
-_TABLES_SCRIPT = """
+_TABLES_SCRIPT = (
+    DEEP_JS
+    + """
 const limit = %(limit)d, query = %(query)s.toLowerCase(), records = [];
-for (const table of document.querySelectorAll("table")) {
+for (const table of deepAll("table")) {
   const headers = [...table.querySelectorAll("tr th")].map(c => c.innerText.trim().slice(0, 200));
   for (const row of table.querySelectorAll("tr")) {
     const cells = [...row.querySelectorAll("td")];
@@ -211,10 +220,13 @@ for (const table of document.querySelectorAll("table")) {
 }
 JSON.stringify(records)
 """
+)
 
-_ASSERT_SCRIPT = """
+_ASSERT_SCRIPT = (
+    DEEP_JS
+    + """
 const kind = %(kind)s, condition = %(condition)s, expected = %(expected)s, selector = %(selector)s;
-const el = selector ? document.querySelector(selector) : null;
+const el = selector ? deepQuery(selector) : null;
 let actual;
 if (kind === "url") actual = location.href;
 else if (kind === "exists") actual = el !== null;
@@ -222,33 +234,42 @@ else if (kind === "state") actual = !!el && ({checked: el.checked === true, unch
   selected: el.selected === true, enabled: !el.disabled, disabled: !!el.disabled,
   visible: el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden"})[condition] === true;
 else if (el) actual = kind === "value" ? el.value : el.innerText;
-else actual = document.body ? document.body.innerText : "";
+else actual = deepText();
 const held = ["state", "exists"].includes(kind) ? actual === true
   : condition === "equals" ? String(actual) === expected
   : condition === "matches" ? new RegExp(expected).test(String(actual)) : String(actual).includes(expected);
 JSON.stringify(held)
 """
+)
 
-_WAIT_SCRIPT = """
+_WAIT_SCRIPT = (
+    DEEP_JS
+    + """
 const condition = %(condition)s, pattern = %(pattern)s;
-JSON.stringify(condition === "selector" ? !!document.querySelector(pattern)
+JSON.stringify(condition === "selector" ? !!deepQuery(pattern)
   : condition === "url" ? location.href.includes(pattern)
-  : condition === "text" ? !!document.body && document.body.innerText.includes(pattern)
+  : condition === "text" ? deepText().includes(pattern)
   : condition === "loaded" ? location.href !== "about:blank" && document.readyState === "complete"
   : document.readyState === "complete")
 """
+)
 
+
+_LOADED_SCRIPT = 'JSON.stringify(location.href !== "about:blank" && document.readyState === "complete")'
 
 # What a page says about signing in, read after each page opens: whether it asks to sign in (a password
 # field, or a sign-in path), and which of the profile's own names (its Google account) it shows.
-_PAGE_STATE_SCRIPT = """
+_PAGE_STATE_SCRIPT = (
+    DEEP_JS
+    + """
 const names = %(names)s;
 const text = (document.body && document.body.innerText) || "";
-const asks = !!document.querySelector('input[type="password"]')
+const asks = !!deepQuery('input[type="password"]')
   || /(^|\\/)(login|log-in|signin|sign-in|sign_in|auth|session)(\\/|$)/i.test(location.pathname);
 JSON.stringify({url: location.href, title: document.title, signin_page: asks,
   account: names.find(name => name && text.includes(name)) || ""})
 """
+)
 
 
 class BridgeInputError(ValueError):
@@ -282,6 +303,11 @@ def profiles_loading(data_directory: Path, extension_id: str) -> dict[str, str]:
             if isinstance(entry, dict) and entry.get("location") and entry.get("path"):
                 found[preferences.parent.name] = str(Path(entry["path"]).resolve())
     return found
+
+
+def _tab_ids(listing: str) -> set[int]:
+    """The tab ids in a `tabs_list` text: each tab is a line that starts with its id and a dot."""
+    return {int(head) for row in listing.splitlines() if (head := row.split(".", 1)[0].strip()).isdigit()}
 
 
 def _selector(params: dict[str, Any]) -> str:
@@ -626,7 +652,8 @@ class TaskWindowBrowser:
                     # The page was still loading: a script that can only read is safe to run again.
                     await asyncio.sleep(0.5)
                     continue
-                if _SIDE_EFFECT in message or exc.uncertain or any(sign in message for sign in _NAVIGATION_RACES):
+                stopped = _SIDE_EFFECT in message or _TERMINATED in message
+                if stopped or exc.uncertain or any(sign in message for sign in _NAVIGATION_RACES):
                     return None
                 # It failed while reading (an element it looked for is not there); it changed nothing.
                 return ToolOutput(success=False, data={"action": "eval", "read_only": True}, error=message)
@@ -700,7 +727,7 @@ class TaskWindowBrowser:
             return {"pages": await self._read_many(profile, task_id, list(params["urls"]))}
         if action == "read":
             opened = await self._open(profile, session, params) if params.get("url") else {}
-            text = self._text(await self._tool(profile, "get_page_text", {"sessionToken": session}))
+            text = await self._page_text(profile, session)
             page = await self._script(profile, session, "JSON.stringify({title: document.title, url: location.href})")
             state = {key: opened[key] for key in ("signin_page", "account") if key in opened}
             return {"article": {"title": page["title"], "content": text}, "url": page["url"], **state}
@@ -728,7 +755,7 @@ class TaskWindowBrowser:
             # The keys go to the element the call names. A press ignored it, so "fill the search box, press
             # Enter" sent Enter to whatever had focus, the search never ran, and each wait after it ran out (#83).
             await self._script(
-                profile, session, f"document.querySelector({json.dumps(_selector(params))})?.focus(); 'null'"
+                profile, session, f"{DEEP_JS}deepQuery({json.dumps(_selector(params))})?.focus(); 'null'"
             )
         if action == "type":
             await self._tool(
@@ -783,17 +810,41 @@ class TaskWindowBrowser:
         url = str(params.get("url") or "").strip()
         if not url:
             raise BridgeInputError("A URL is required.")
-        listing = self._text(await self._tool(profile, "tabs_list", {"sessionToken": session}))
-        if listing.startswith("no tabs"):
-            arguments = {"url": url, "task": _TASK_GROUP, "longRunning": True, "sessionToken": session}
-            async with self._creating.setdefault(profile.id, asyncio.Lock()), _front_kept(profile):
-                await self._tool(profile, "tabs_create", arguments)  # the first tab may create North's window
-            with contextlib.suppress(BridgeInputError):  # a slow page is still open, as with navigate
-                await self._wait(profile, session, {"condition": "loaded", "timeout_seconds": 15})
-        else:
+        # Each page opens in a new background tab, and the task's old tab closes once it has loaded. Pages of
+        # one site opened in one tab share its renderer, and the code of every page it showed stays there
+        # until the renderer collects it, which an extension cannot ask for (chrome.debugger has no
+        # HeapProfiler). A read-only check walks all that code: 0.4 s on a tab's first page, 7.9 s on its 12th.
+        # With a new tab for each page it stayed at 0.25-0.5 s (2026-11-24).
+        old = _tab_ids(self._text(await self._tool(profile, "tabs_list", {"sessionToken": session})))
+        arguments = {"url": url, "task": _TASK_GROUP, "longRunning": True, "sessionToken": session}
+        # Only the first tab may create North's window, which is when Chrome has come forward.
+        async with self._creating.setdefault(profile.id, asyncio.Lock()), _front_kept(profile, linger=not old):
+            await self._tool(profile, "tabs_create", arguments)
+        new = _tab_ids(self._text(await self._tool(profile, "tabs_list", {"sessionToken": session}))) - old
+        if old and not new:
+            # The extension gave back the tab it opened for this address a moment ago: open it again there.
             await self._tool(profile, "navigate", {"url": url, "sessionToken": session})
+        else:
+            await self._loaded(profile, session, min(new) if new else None)
+            for tab_id in sorted(old):
+                await self._tool(profile, "tabs_close", {"tabId": tab_id, "sessionToken": session})
         names = json.dumps(chrome_identity(profile))
         return await self._script(profile, session, _PAGE_STATE_SCRIPT % {"names": names})
+
+    async def _loaded(self, profile: BrowserProfile, session: str, tab_id: int | None) -> None:
+        """Wait up to 15 s for the page in *tab_id* to load. A slow page is still open, as with navigate.
+
+        It looks every 0.1 s, without the page reads' retries: while the page loads, a look can fail.
+        """
+        arguments: dict[str, Any] = {"code": _LOADED_SCRIPT, "sessionToken": session}
+        if tab_id is not None:
+            arguments["tabId"] = tab_id
+        deadline = asyncio.get_running_loop().time() + 15
+        while asyncio.get_running_loop().time() < deadline:
+            with contextlib.suppress(_ToolError):
+                if self._text(await self._tool(profile, "javascript_execute", arguments)) == "true":
+                    return
+            await asyncio.sleep(0.1)
 
     async def _read_many(self, profile: BrowserProfile, task_id: str, urls: list[str]) -> list[dict]:
         """Read *urls*, PARALLEL_READS at a time, each in a tab of its own that is closed after; in order.
@@ -809,8 +860,7 @@ class TaskWindowBrowser:
             async with limit:
                 try:
                     page = await self._open(profile, session, {"url": url})
-                    result = await self._tool(profile, "get_page_text", {"sessionToken": session, "maxLength": chars})
-                    text = self._text(result)
+                    text = await self._page_text(profile, session, chars)
                     state = {key: page[key] for key in ("signin_page", "account") if key in page}
                     return {
                         "url": page["url"],
@@ -826,6 +876,17 @@ class TaskWindowBrowser:
                         await self._close(profile, slot)
 
         return list(await asyncio.gather(*(read(number, url) for number, url in enumerate(urls))))
+
+    async def _page_text(self, profile: BrowserProfile, session: str, chars: int | None = None) -> str:
+        """The page's text, with the text of its open shadow roots, which TaskWindow's page text leaves out."""
+        arguments: dict[str, Any] = {"sessionToken": session}
+        if chars is not None:
+            arguments["maxLength"] = chars
+        text = self._text(await self._tool(profile, "get_page_text", arguments))
+        shadow = str(await self._script(profile, session, f"{DEEP_JS}JSON.stringify(shadowText())"))
+        if shadow:
+            text = f"{text}\n\n{shadow}"
+        return text if chars is None else text[:chars]
 
     async def _inspect(self, profile: BrowserProfile, task_id: str, session: str, params: dict) -> dict:
         limit = min(max(int(params.get("limit") or 100), 1), 1000)
@@ -854,7 +915,12 @@ class TaskWindowBrowser:
                 raise BridgeInputError("This element changed since it was inspected. Inspect again before clicking.")
             x, y = spot["x"], spot["y"]
         kind = "double_click" if double else "left_click"
-        await self._tool(profile, "computer", {"action": kind, "x": x, "y": y, "sessionToken": session})
+        # One pointer move to the element, then the press, as Playwright and Puppeteer click. The bridge's
+        # default walks a curved path first: 350-1,400 ms a click, against 17 ms (2026-11-24). Curves made in
+        # code are detected 97-100% of the time, and LinkedIn's documented checks are volume, sequence and
+        # replies, so the walk bought nothing. Typing keeps its real key presses: type-ahead boxes need them.
+        arguments = {"action": kind, "x": x, "y": y, "human": False, "sessionToken": session}
+        await self._tool(profile, "computer", arguments)
         return {"x": x, "y": y}
 
     async def _clickable(self, profile: BrowserProfile, session: str, selector: str) -> dict:
@@ -1065,13 +1131,15 @@ def _browser_app(profile: BrowserProfile) -> tuple[str, str] | None:
 
 
 @contextlib.asynccontextmanager
-async def _front_kept(profile: BrowserProfile):
-    """Hand the front back if Chrome comes forward while North opens its window.
+async def _front_kept(profile: BrowserProfile, *, linger: bool = True):
+    """Hand the front back if Chrome comes forward while North opens its window or a tab.
 
     Chrome creates North's window unfocused, yet on macOS can still raise itself;
     TaskWindow hands focus back between Chrome windows but cannot hand it back to
     another app. Only a jump to this browser, during the call or just after, is
     undone, and only once, so a person who switches to Chrome is not fought.
+    With *linger* the call waits out the time just after; without it the watch
+    goes on in the background for that time, so a new page is not held up by it.
     """
     before = await asyncio.to_thread(frontmost_app)
     app = _browser_app(profile)
@@ -1088,11 +1156,18 @@ async def _front_kept(profile: BrowserProfile):
     watcher = asyncio.create_task(watch())
     try:
         yield
+        if not linger:
+            asyncio.get_running_loop().call_later(_FRONT_GRACE_SECONDS, watcher.cancel)
+            return
         await asyncio.wait({watcher}, timeout=_FRONT_GRACE_SECONDS)
+    except BaseException:
+        linger = True  # a failed call stops the watch now
+        raise
     finally:
-        watcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher
+        if linger:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
 
 
 def _open_profile_in_background(profile: BrowserProfile) -> None:

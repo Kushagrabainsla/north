@@ -116,7 +116,7 @@ def test_a_page_says_whether_it_asks_to_sign_in_and_whose_name_it_shows(path, pa
     page = (
         f"globalThis.location = {{href: 'https://x.test{path}', pathname: {json.dumps(path)}}};"
         f"globalThis.document = {{title: 'T', body: {{innerText: {json.dumps(text)}}},"
-        f" querySelector: () => {'({})' if password else 'null'}}};"
+        f" querySelector: () => {'({})' if password else 'null'}, querySelectorAll: () => []}};"
     )
     script = bridge._PAGE_STATE_SCRIPT % {"names": json.dumps(["Ada Lovelace", "ada@school.edu"])}
     done = subprocess.run(

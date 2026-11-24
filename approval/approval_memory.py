@@ -258,6 +258,27 @@ class ApprovalMemory:
             return []
         return [dict(row) for row in rows]
 
+    def answers(self, limit: int) -> list[dict[str, object]]:
+        """Your answers to questions from any agent, newest first, in the shape of `decisions_on`.
+
+        An answer says what you want, whichever card asked. Your "Approve all 10" was on
+        north's card, but each invitation was a browser action, so the decider read only
+        the browser's rows and asked you again in the middle of the batch (2026-11-23).
+        """
+        query = (
+            "SELECT d.fingerprint, d.decision, d.chosen_option, 1 AS count, "
+            "COALESCE(NULLIF(d.summary, ''), NULLIF(d.title, ''), d.signature) AS text "
+            "FROM decisions d WHERE d.decided_by = 'you' AND d.decision = 'answered' AND d.chosen_option != '' "
+            "ORDER BY d.id DESC LIMIT ?"
+        )
+        try:
+            with open_db_connection(self._db_path) as conn:
+                rows = conn.execute(query, (limit,)).fetchall()
+        except Exception:
+            logger.warning("ApprovalMemory: failed to read your answers", exc_info=True)
+            return []
+        return [dict(row) for row in rows]
+
     def forget(self, fingerprint: str) -> bool:
         """Stop replaying one action's decision. True when there was one.
 
