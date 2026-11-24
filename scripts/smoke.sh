@@ -45,7 +45,11 @@ echo "north smoke run $(date '+%Y-%m-%d %H:%M') at $(git rev-parse --short HEAD)
 git status --short >>"$report"
 
 stage "lint" "$repo/.venv/bin/ruff" check .
-stage "suite" "$python" -m pytest -q --tb=short -m "not integration" -p no:cacheprovider --junitxml "$(junit suite)"
+# The suite is what CI runs. The live tests run only in their own stage: the nightly check
+# switches them on for the whole script, and in the suite they ran twice and changed the
+# logging that later tests read.
+stage "suite" "$python" -m pytest -q --tb=short -m "not integration" -p no:cacheprovider --ignore=tests/live \
+    --junitxml "$(junit suite)"
 if [ "${SMOKE_LIVE:-0}" = "1" ]; then
     # The nightly check sets an agent's variable to 0 when the agent cannot take a run tonight.
     stage "live coding agents" env NORTH_LIVE_CLAUDE="${NORTH_LIVE_CLAUDE:-1}" NORTH_LIVE_CODEX="${NORTH_LIVE_CODEX:-1}" \

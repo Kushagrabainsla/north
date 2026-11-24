@@ -50,15 +50,19 @@ def test_the_log_rotates_when_the_server_writes_it(tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(root, "handlers", [])
     monkeypatch.setattr(logging_module, "_LOG_BYTES", 400)
     level = root.level
+    server = logging.getLogger("uvicorn.error")
+    # Each uvicorn server another test builds leaves this logger at its own level.
+    server_level = server.level
+    server.setLevel(logging.INFO)
     log_file = tmp_path / "north.log"
 
     configure_structured_logging(log_file=log_file)
     for number in range(40):
-        # A warning: building the callback server leaves this logger at warnings only.
-        logging.getLogger("uvicorn.error").warning("line %d", number)
+        server.warning("line %d", number)
     for handler in root.handlers:
         handler.close()
     root.setLevel(level)
+    server.setLevel(server_level)
 
     assert log_file.exists() and (tmp_path / "north.log.1").exists()
     assert log_file.stat().st_size <= 800
