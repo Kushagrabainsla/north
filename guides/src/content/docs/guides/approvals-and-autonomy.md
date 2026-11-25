@@ -86,6 +86,7 @@ The offer goes to the **Inbox**, under **When you have a minute**.
 
 Below `yolo`, these limits apply:
 
+- In `autonomous`, a step outside the workspace, a message to a person, a payment or a delete runs only when one of these covers it: your message in the chat, a past answer of yours, or your **Judgement rules**. Your facts and profile never cover it, because a model wrote them from your chat and your files, and a fact can be wrong. To allow such an action every time, add a line to your **Judgement rules**.
 - A change to north's own settings always asks you.
 - In `autonomous`, a "no" in a run that is not a chat is final. After north says no 3 times in one task, it asks you about the next refusal.
 - In `ask` and `safe`, work that north prepared for your review always asks you.
