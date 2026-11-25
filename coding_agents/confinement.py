@@ -34,6 +34,12 @@ HOME_TOOLCHAINS: tuple[str, ...] = (
     "go",
     ".gitconfig",
 )
+# Git's own files under `~/.config`: its config, the global ignore and attributes. Read-only, as `.gitconfig`
+# is. Only these files, because git can keep a credential store in the same folder. They are listed even
+# when they do not exist: git looks for them on every command, and a closed `~/.config` made each git
+# command warn "unable to access '~/.config/git/ignore'" (279 lines in 116 real runs), and the user's
+# global ignore was not used.
+HOME_GIT_FILES: tuple[str, ...] = (".config/git/config", ".config/git/ignore", ".config/git/attributes")
 # Package-manager caches: written by installs, read by builds.
 HOME_CACHES: tuple[str, ...] = (".cache", ".npm", "Library/Caches", ".gradle", ".m2")
 # Where north keeps the isolated copies. One run must not read or write another run's copy.
@@ -46,21 +52,31 @@ def codex_filesystem(
     protected: Iterable[str],
     command_dirs: Iterable[str] = (),
     home: Path | None = None,
+    scratch: str | None = None,
 ) -> dict[str, str]:
-    """Path -> "read" | "write" | "deny" for one run. *workspace* is the folder the agent was given."""
+    """Path -> "read" | "write" | "deny" for one run. *workspace* is the folder the agent was given.
+
+    *scratch* is the run's own temp folder, writable in both modes. North deletes it after the run, so
+    a plan run still changes nothing. Without it a plan run could not run a heredoc: the shell writes
+    the text to a temp file first.
+    """
     home = home or Path.home()
     editing = mode is Mode.EDIT
     rules: dict[str, str] = {}
     for relative in HOME_TOOLCHAINS:
         if (home / relative).exists():
             rules[str(home / relative)] = "read"
+    for relative in HOME_GIT_FILES:
+        rules[str(home / relative)] = "read"
     for relative in HOME_CACHES:
         if (home / relative).exists():
             rules[str(home / relative)] = "write" if editing else "read"
     rules[str(home / ".codex")] = "write"  # the agent's own login and session files
     for directory in command_dirs:
         rules[directory] = "read"
-    rules[str(home / COPIES_DIR)] = "deny"
+    if scratch:
+        rules[os.path.realpath(scratch)] = "write"
+    rules.update(_close_copies(home / COPIES_DIR, os.path.realpath(workspace)))
     rules.update(_workspace_rules(workspace, editing))
     rules.update(_close(home, [path for path, access in rules.items() if access != "deny"]))
     for path in protected:  # last, so nothing above can reopen a secret
@@ -95,6 +111,35 @@ def _close(home: Path, open_paths: Iterable[str]) -> dict[str, str]:
             else:
                 denied[entry.path] = "deny"
     return denied
+
+
+def _close_copies(copies: Path, workspace: str) -> dict[str, str]:
+    """Close the other copies in *copies*, and keep the folders on the way to this run's copy readable.
+
+    A deny on the whole copies folder also hid the folders above the run's own copy. Node, npm and a
+    virtualenv's python look at each folder on the way to their own path, so `npm test`, `npm run build`
+    and `.venv/bin/python` failed with "operation not permitted" in a copy (benchmark, 2026-11-12). Each
+    other copy is denied instead. The folders on the way are `read`, not left to the writable cache
+    around them, so a copy that another run makes during this run is never writable from this one.
+    """
+    root = os.path.realpath(copies)
+    if not workspace.startswith(root + os.sep):
+        return {root: "deny"}
+    rules: dict[str, str] = {}
+    folder = Path(root)
+    target = Path(workspace)
+    while folder != target:
+        rules[str(folder)] = "read"
+        step = folder / target.relative_to(folder).parts[0]
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            entries = []
+        for entry in entries:
+            if entry.path != str(step):
+                rules[entry.path] = "deny"
+        folder = step
+    return rules
 
 
 def _workspace_rules(workspace: str, editing: bool) -> dict[str, str]:

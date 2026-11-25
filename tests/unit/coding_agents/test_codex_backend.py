@@ -300,6 +300,39 @@ class TestWhenTheAgentAsksForMore:
         assert outcome.denials
 
 
+class TestWhatTheSandboxRefused:
+    """A path the profile denies is never asked about; the command only fails (#64)."""
+
+    async def test_a_refusal_that_failed_a_command_is_recorded_once_with_its_line(
+        self, make_fake_codex, workspace
+    ) -> None:
+        outcome, _ = await _run(CodexBackend(str(make_fake_codex(fixture="codex_refused"))), _spec(workspace))
+
+        assert outcome.ok
+        assert [(d.tool, d.detail) for d in outcome.denials] == [
+            ("Sandbox", "Error: EPERM: operation not permitted, lstat '/home/me/.cache/north'")
+        ], "npm test and npm run build hit the same refusal: one record"
+
+    async def test_a_warning_in_a_command_that_worked_and_a_plain_test_failure_are_not_refusals(
+        self, make_fake_codex, workspace
+    ) -> None:
+        outcome, _ = await _run(CodexBackend(str(make_fake_codex(fixture="codex_refused"))), _spec(workspace))
+
+        details = " ".join(d.detail for d in outcome.denials)
+        assert ".config/git" not in details and "assert 1 == 2" not in details
+
+    async def test_each_run_has_its_own_temp_folder_writable_in_plan_mode_and_deleted_after(
+        self, make_fake_codex, workspace
+    ) -> None:
+        await _run(CodexBackend(str(make_fake_codex())), _spec(workspace))
+
+        scratch = _calls(workspace)["tmpdir"]
+        assert Path(scratch).name.startswith("north-codex-tmp-")
+        rules = _sent(workspace, "thread/start")[0]["params"]["config"]["permissions"]["northworker"]["filesystem"]
+        assert rules[os.path.realpath(scratch)] == "write", "a heredoc needs a temp file, even in a plan run"
+        assert not Path(scratch).exists()
+
+
 class TestWhyARunFails:
     @pytest.mark.parametrize(
         ("fixture", "failure"),
