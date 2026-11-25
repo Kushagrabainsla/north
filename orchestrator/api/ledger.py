@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from pydantic import BaseModel
 
 from ledger.base import LedgerFilters
@@ -21,8 +21,16 @@ async def query_ledger(
     agent: str | None = None,
     source: str | None = None,
     limit: int = 50,
+    tasks: int | None = Query(default=None, ge=1, le=1000),
+    q: str = "",
 ) -> list[LedgerEntry]:
-    """Query ledger entries with optional filters."""
+    """Query ledger entries with optional filters.
+
+    *tasks* asks for whole tasks instead: every entry of the *tasks* tasks with the newest activity, and
+    with *q* only tasks that match it (full text). The other filters do not apply then.
+    """
+    if tasks is not None:
+        return await _get_ledger().task_events(tasks, q)
     src: LedgerSource | None = None
     if source is not None:
         try:

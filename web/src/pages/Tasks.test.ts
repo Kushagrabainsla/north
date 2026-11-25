@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { turnStatus } from "./Chat";
-import { runFacts, summarise, taskStatus, Tasks } from "./Tasks";
+import { ledgerPath, runFacts, summarise, TASK_PAGE, taskStatus, Tasks } from "./Tasks";
 import { ArtifactGrid } from "./Artifacts";
 import type { AgentRun, Artifact, LedgerEntry } from "../types";
 
@@ -134,7 +134,7 @@ describe("the task list", () => {
   });
 
   it("lists each task as a row that opens it, under the kit's tabs and search", () => {
-    served.data = { "/orchestrator/ledger?limit=500": [
+    served.data = { "/orchestrator/ledger?tasks=100": [
       { id: "e1", timestamp: "2026-11-02T10:00:00Z", source: "prompt", task_id: "t1", action: "task_received", input: "Book the flight" },
     ] };
     const html = page("/tasks");
@@ -145,8 +145,30 @@ describe("the task list", () => {
   });
 
   it("says why the list is empty", () => {
-    served.data = { "/orchestrator/ledger?limit=500": [] };
+    served.data = { "/orchestrator/ledger?tasks=100": [] };
     expect(page("/tasks")).toContain("No task history yet.");
+  });
+
+  it("offers more tasks when a full page came back, and not when fewer did", () => {
+    const tasks = (n: number) => Array.from({ length: n }, (_, i) =>
+      ({ id: `e${i}`, timestamp: "2026-11-02T10:00:00Z", source: "prompt", task_id: `t${i}`, action: "task_received", input: `Task ${i}` }));
+    served.data = { "/orchestrator/ledger?tasks=100": tasks(TASK_PAGE) };
+    expect(page("/tasks")).toContain(`Show ${TASK_PAGE} more tasks`);
+    served.data = { "/orchestrator/ledger?tasks=100": tasks(3) };
+    expect(page("/tasks")).not.toContain("more tasks");
+  });
+});
+
+describe("where the list's data comes from", () => {
+  // The latest 500 events were 16 of 421 tasks, about a day and a half; older tasks could not be found.
+  it("asks the server for whole tasks, and searches there", () => {
+    expect(ledgerPath("all", "", 100)).toBe("/orchestrator/ledger?tasks=100");
+    expect(ledgerPath("completed", "paneer tikka", 200)).toBe("/orchestrator/ledger?tasks=200&q=paneer%20tikka");
+  });
+
+  it("keeps the raw stream for Everything, and searches all of it", () => {
+    expect(ledgerPath("everything", "", 100)).toBe("/orchestrator/ledger?limit=500");
+    expect(ledgerPath("everything", "nightly", 100)).toBe("/orchestrator/ledger/search?q=nightly&limit=200");
   });
 });
 
