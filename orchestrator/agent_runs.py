@@ -297,10 +297,17 @@ class AgentRunStore:
     def _set_skills_sync(self, run_id: str, skills: list[dict[str, str]]) -> None:
         now = format_timestamp(utcnow())
         with open_db_connection(self._db_path) as conn:
-            row = conn.execute("SELECT task_id FROM agent_runs WHERE run_id=?", (run_id,)).fetchone()
+            row = conn.execute("SELECT task_id, skills FROM agent_runs WHERE run_id=?", (run_id,)).fetchone()
             if row is None:
                 return
-            conn.execute("UPDATE agent_runs SET skills=? WHERE run_id=?", (json.dumps(skills), run_id))
+            # A run adds a skill each time it loads one with use_skill, so the earlier ones stay.
+            try:
+                earlier = [s for s in json.loads(row["skills"] or "[]") if isinstance(s, dict)]
+            except (TypeError, ValueError):
+                earlier = []
+            names = {skill["name"] for skill in skills}
+            merged = [s for s in earlier if s.get("name") not in names] + skills
+            conn.execute("UPDATE agent_runs SET skills=? WHERE run_id=?", (json.dumps(merged), run_id))
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO skill_usage

@@ -375,6 +375,8 @@ class AgenticLLMAgent(LLMAgent):
                     {**_tool_result_event(call.name, result_str, success), "chars": len(result_str)},
                 )
             await self._record_tool_call_confidence(call.name, result_str, success)
+            if call.name == "use_skill" and success:
+                await self.record_skill_loaded(payload, str(call.params.get("name") or "").strip())
 
         self._append_tool_call_exchange(messages, results)
         _drop_outdated_views(messages, tool_map)
