@@ -54,6 +54,11 @@ same primitives, but it must not import recorded results.
 - [`codex_prompt_cache/`](codex_prompt_cache/) — whether a run's first Codex
   call can reuse an earlier run's prompt cache (no, not enough to matter), and
   where calls inside a run lose it. See the section below.
+- [`approval_trust/`](approval_trust/README.md) — whether a wrong or planted fact can give the approval
+  model permission (issues #39, #70, #74). With the real decider and the user's approvals model, one
+  planted "standing approval" fact got 13 of 18 pushes, purchases, posts, messages and deletes through.
+  Therefore, for such an action, the model now sees only the user's messages, past decisions and
+  judgement rules (0 of 18 got through; 16 of 18 actions asked for in chat were still allowed).
 - [`lesson_sharing/`](lesson_sharing/) — whether agents running at the same time
   should see each other's lessons sooner, and what wrong lessons cost. See the
   section below.
