@@ -1,0 +1,23 @@
+{
+  "cut_by_cap": {
+    "after": {
+      "Finances": 380,
+      "Other": 85
+    },
+    "before": {
+      "Judgement rules": 462
+    }
+  },
+  "facts_shown_by_old_profile_first_50_tasks": 69,
+  "facts_skipped_as_already_in_profile": 346,
+  "memory_tokens_per_task_without_notes": {
+    "after": 3199,
+    "before": 3225
+  },
+  "profile_chars": {
+    "after": 12467,
+    "before": 12462
+  },
+  "recalled_facts": 1438,
+  "skipped_share": 0.241
+}

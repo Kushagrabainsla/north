@@ -1,0 +1,246 @@
+{
+  "spend_usd_this_run": 0.65,
+  "tasks": 98,
+  "triggers": {
+    "name/above_best": {
+      "real": {
+        "fire_rate": 0.122,
+        "items_added_per_task": 0.7,
+        "needed_share": 0.043,
+        "tasks_gaining_a_needed_item": 3,
+        "tokens_added_per_task": 38
+      },
+      "unrelated_control": {
+        "fire_rate": 0.194,
+        "items_added_per_task": 0.8,
+        "needed_share": 0.038,
+        "tasks_gaining_a_needed_item": 2,
+        "tokens_added_per_task": 43
+      }
+    },
+    "name/above_cut": {
+      "real": {
+        "fire_rate": 0.296,
+        "items_added_per_task": 1.59,
+        "needed_share": 0.026,
+        "tasks_gaining_a_needed_item": 4,
+        "tokens_added_per_task": 79
+      },
+      "unrelated_control": {
+        "fire_rate": 0.286,
+        "items_added_per_task": 1.77,
+        "needed_share": 0.029,
+        "tasks_gaining_a_needed_item": 2,
+        "tokens_added_per_task": 84
+      }
+    },
+    "name/abs_0.6": {
+      "real": {
+        "fire_rate": 0.286,
+        "items_added_per_task": 1.81,
+        "needed_share": 0.023,
+        "tasks_gaining_a_needed_item": 2,
+        "tokens_added_per_task": 99
+      },
+      "unrelated_control": {
+        "fire_rate": 0.337,
+        "items_added_per_task": 1.87,
+        "needed_share": 0.033,
+        "tasks_gaining_a_needed_item": 2,
+        "tokens_added_per_task": 108
+      }
+    },
+    "path/above_best": {
+      "real": {
+        "fire_rate": 0.653,
+        "items_added_per_task": 5.58,
+        "needed_share": 0.037,
+        "tasks_gaining_a_needed_item": 11,
+        "tokens_added_per_task": 307
+      },
+      "unrelated_control": {
+        "fire_rate": 0.684,
+        "items_added_per_task": 5.64,
+        "needed_share": 0.024,
+        "tasks_gaining_a_needed_item": 8,
+        "tokens_added_per_task": 295
+      }
+    },
+    "path/above_cut": {
+      "real": {
+        "fire_rate": 0.735,
+        "items_added_per_task": 7.65,
+        "needed_share": 0.032,
+        "tasks_gaining_a_needed_item": 9,
+        "tokens_added_per_task": 347
+      },
+      "unrelated_control": {
+        "fire_rate": 0.745,
+        "items_added_per_task": 7.81,
+        "needed_share": 0.009,
+        "tasks_gaining_a_needed_item": 5,
+        "tokens_added_per_task": 346
+      }
+    },
+    "path/abs_0.6": {
+      "real": {
+        "fire_rate": 0.786,
+        "items_added_per_task": 7.58,
+        "needed_share": 0.027,
+        "tasks_gaining_a_needed_item": 11,
+        "tokens_added_per_task": 361
+      },
+      "unrelated_control": {
+        "fire_rate": 0.796,
+        "items_added_per_task": 7.73,
+        "needed_share": 0.018,
+        "tasks_gaining_a_needed_item": 10,
+        "tokens_added_per_task": 381
+      }
+    },
+    "plan/above_best": {
+      "real": {
+        "fire_rate": 0.061,
+        "items_added_per_task": 0.34,
+        "needed_share": 0.0,
+        "tasks_gaining_a_needed_item": 0,
+        "tokens_added_per_task": 21
+      },
+      "unrelated_control": {
+        "fire_rate": 0.061,
+        "items_added_per_task": 0.27,
+        "needed_share": 0.0,
+        "tasks_gaining_a_needed_item": 0,
+        "tokens_added_per_task": 19
+      }
+    },
+    "plan/above_cut": {
+      "real": {
+        "fire_rate": 0.061,
+        "items_added_per_task": 0.58,
+        "needed_share": 0.0,
+        "tasks_gaining_a_needed_item": 0,
+        "tokens_added_per_task": 28
+      },
+      "unrelated_control": {
+        "fire_rate": 0.061,
+        "items_added_per_task": 0.46,
+        "needed_share": 0.0,
+        "tasks_gaining_a_needed_item": 0,
+        "tokens_added_per_task": 24
+      }
+    },
+    "plan/abs_0.6": {
+      "real": {
+        "fire_rate": 0.061,
+        "items_added_per_task": 0.58,
+        "needed_share": 0.0,
+        "tasks_gaining_a_needed_item": 0,
+        "tokens_added_per_task": 24
+      },
+      "unrelated_control": {
+        "fire_rate": 0.061,
+        "items_added_per_task": 0.61,
+        "needed_share": 0.0,
+        "tasks_gaining_a_needed_item": 0,
+        "tokens_added_per_task": 20
+      }
+    },
+    "site/above_best": {
+      "real": {
+        "fire_rate": 0.245,
+        "items_added_per_task": 1.03,
+        "needed_share": 0.03,
+        "tasks_gaining_a_needed_item": 3,
+        "tokens_added_per_task": 80
+      },
+      "unrelated_control": {
+        "fire_rate": 0.286,
+        "items_added_per_task": 1.17,
+        "needed_share": 0.017,
+        "tasks_gaining_a_needed_item": 2,
+        "tokens_added_per_task": 65
+      }
+    },
+    "site/above_cut": {
+      "real": {
+        "fire_rate": 0.296,
+        "items_added_per_task": 1.38,
+        "needed_share": 0.022,
+        "tasks_gaining_a_needed_item": 3,
+        "tokens_added_per_task": 63
+      },
+      "unrelated_control": {
+        "fire_rate": 0.316,
+        "items_added_per_task": 1.51,
+        "needed_share": 0.027,
+        "tasks_gaining_a_needed_item": 3,
+        "tokens_added_per_task": 72
+      }
+    },
+    "site/abs_0.6": {
+      "real": {
+        "fire_rate": 0.337,
+        "items_added_per_task": 1.51,
+        "needed_share": 0.014,
+        "tasks_gaining_a_needed_item": 2,
+        "tokens_added_per_task": 87
+      },
+      "unrelated_control": {
+        "fire_rate": 0.347,
+        "items_added_per_task": 1.6,
+        "needed_share": 0.025,
+        "tasks_gaining_a_needed_item": 3,
+        "tokens_added_per_task": 96
+      }
+    },
+    "step/above_best": {
+      "real": {
+        "fire_rate": 0.837,
+        "items_added_per_task": 5.76,
+        "needed_share": 0.035,
+        "tasks_gaining_a_needed_item": 16,
+        "tokens_added_per_task": 453
+      },
+      "unrelated_control": {
+        "fire_rate": 0.867,
+        "items_added_per_task": 6.81,
+        "needed_share": 0.015,
+        "tasks_gaining_a_needed_item": 7,
+        "tokens_added_per_task": 527
+      }
+    },
+    "step/above_cut": {
+      "real": {
+        "fire_rate": 0.959,
+        "items_added_per_task": 8.87,
+        "needed_share": 0.032,
+        "tasks_gaining_a_needed_item": 17,
+        "tokens_added_per_task": 548
+      },
+      "unrelated_control": {
+        "fire_rate": 0.939,
+        "items_added_per_task": 9.31,
+        "needed_share": 0.025,
+        "tasks_gaining_a_needed_item": 8,
+        "tokens_added_per_task": 527
+      }
+    },
+    "step/abs_0.6": {
+      "real": {
+        "fire_rate": 0.969,
+        "items_added_per_task": 9.16,
+        "needed_share": 0.028,
+        "tasks_gaining_a_needed_item": 17,
+        "tokens_added_per_task": 574
+      },
+      "unrelated_control": {
+        "fire_rate": 0.99,
+        "items_added_per_task": 9.51,
+        "needed_share": 0.009,
+        "tasks_gaining_a_needed_item": 7,
+        "tokens_added_per_task": 557
+      }
+    }
+  }
+}

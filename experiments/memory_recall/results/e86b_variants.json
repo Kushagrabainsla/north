@@ -1,0 +1,48 @@
+{
+  "noise_full_vs_full_again": {
+    "mean_abs_diff": 0.281,
+    "same_grade_share": 0.719
+  },
+  "questions": 34,
+  "spend_usd_this_run": 5.5,
+  "variants": {
+    "full": {
+      "broad_mean_score": 1.4,
+      "full_marks": 0.382,
+      "invented": 15,
+      "mean_score": 1.324,
+      "mean_start_tokens": 3205
+    },
+    "full_again": {
+      "broad_mean_score": 1,
+      "full_marks": 0.324,
+      "invented": 16,
+      "mean_score": 1.265,
+      "mean_start_tokens": 3205
+    },
+    "lean": {
+      "broad_mean_score": 1.2,
+      "full_marks": 0.235,
+      "invented": 15,
+      "mean_score": 1.088,
+      "mean_start_tokens": 2444,
+      "paired_diff_vs_full": -0.188
+    },
+    "whole": {
+      "broad_mean_score": 1.2,
+      "full_marks": 0.324,
+      "invented": 16,
+      "mean_score": 1.235,
+      "mean_start_tokens": 3321,
+      "paired_diff_vs_full": -0.062
+    },
+    "whole_dedup": {
+      "broad_mean_score": 1,
+      "full_marks": 0.294,
+      "invented": 16,
+      "mean_score": 1.206,
+      "mean_start_tokens": 3256,
+      "paired_diff_vs_full": -0.062
+    }
+  }
+}
