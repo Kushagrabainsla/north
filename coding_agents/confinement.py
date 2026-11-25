@@ -37,7 +37,7 @@ HOME_TOOLCHAINS: tuple[str, ...] = (
 # Git's own files under `~/.config`: its config, the global ignore and attributes. Read-only, as `.gitconfig`
 # is. Only these files, because git can keep a credential store in the same folder. They are listed even
 # when they do not exist: git looks for them on every command, and a closed `~/.config` made each git
-# command warn "unable to access '~/.config/git/ignore'" (279 lines in 116 real runs), and the user's
+# command warn "unable to access '~/.config/git/ignore'" (279 lines in 116 runs on north's coding path), and the user's
 # global ignore was not used.
 HOME_GIT_FILES: tuple[str, ...] = (".config/git/config", ".config/git/ignore", ".config/git/attributes")
 # Package-manager caches: written by installs, read by builds.

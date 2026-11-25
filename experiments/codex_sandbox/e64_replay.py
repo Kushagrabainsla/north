@@ -1,10 +1,12 @@
-"""#64 before/after: do the sandbox refusals of real Codex runs reach north's record of the run?
+"""#64 before/after: do the sandbox refusals of north's Codex runs reach north's record of the run?
 
 Usage: e64_replay.py <label> <checkout>
 
 Reads every Codex session north started since the home folder was closed (2026-10-03) whose folder is
-one of north's copies (`~/.cache/north`): real runs, not tests. Each finished command goes through
-*checkout*'s own `_Run`, as the app-server would send it, and the run's denials are counted.
+in north's copies folder (`~/.cache/north`): the benchmark, live tests, smoke runs, the nightly check
+and the user's own tasks, all on north's real profile. Unit-test runs in temp folders are left out.
+Each finished command goes through *checkout*'s own `_Run`, as the app-server would send it, and the
+run's denials are counted.
 Read-only. The results hold counts only.
 """
 

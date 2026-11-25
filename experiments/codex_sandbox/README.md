@@ -15,8 +15,11 @@ no paths, no command output and no credentials.
 
 ## #64: Codex refusals
 
-**What real runs hit.** Codex keeps a log of each session. 116 sessions since 2026-10-03 were north's
-real runs in a copy (tests and evals excluded). They ran 585 commands.
+**What runs on north's coding path hit.** Codex keeps a log of each session. 116 sessions since
+2026-10-03 ran in north's copies folder: 50 from the harness benchmark and 66 in coding copies. Only 2
+of the 66 came from the user's own tasks; the rest came from live tests, smoke runs and the nightly
+check. All went through north's real profile. They ran 585 commands. Unit-test runs in temp folders
+are left out.
 
 | Refusal | Where | Effect |
 |---|---|---|
@@ -40,7 +43,7 @@ in the environment the backend starts the agent with. No model call.
 | Refusal lines printed by `git status` (plan + edit) | 6 | **0** |
 | Safety checks refused (13: other copy read/write, `~/.north/secret.key`, `~/.ssh`, another `~/.config` file, the copies folder, the home folder, writes in plan mode) | 13 | 13 |
 
-**`e64_replay.py`.** Every command of the 116 real runs goes through the checkout's own `_Run`, in the
+**`e64_replay.py`.** Every command of those 116 runs goes through the checkout's own `_Run`, in the
 shape the app-server sends.
 
 | | main | branch |
