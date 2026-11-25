@@ -87,6 +87,45 @@ In all runs since 2026-09-01: 27 meta runs, 38 of 99 meta calls failed, the meta
 
 Fixing the check is the general fix. How strict it should be is the owner's decision (see the #87 comment). Keeping the tool list fixed during a run is a separate, smaller fix (at most about 3% of uncached tokens).
 
+### Does the model pick the right skill from a list better than the score? (`e87_list_vs_score.py`)
+
+**Do we need the test at all?** The open Agent Skills standard shows the model every skill's name and description, and the model chooses. It has no selection test.
+- North gives a task a skill's description only when the skill scores 0.70 or more. Every other skill is listed by name only.
+- This test compares the two ways on the real requests, with the 24 skills of the `general` domain.
+
+**Setup**
+- **Chat requests:** the 168 distinct prompts of north's finished chat runs. The ground truth comes from a judge (Opus 5.5, high effort) that saw every skill in full: name, description and steps. It said that a skill fits 50 of the requests.
+- **Example requests:** the 64 example requests of the skill drafts whose skills exist now. The draft gives each label, so these labels do not depend on the judge.
+- **Pickers:**
+  - `score`: north's real `SkillSelector`, as a live task calls it (floor 0.70, the domain's skills; up to 2 picks).
+  - `list_opus`: Opus 5.5, medium effort, reads every name and description and answers one skill or none.
+  - `list_haiku`: the same with Haiku 5.5, low effort.
+- **Results:** `results/e87_list_vs_score.json`.
+
+**Chat requests:**
+
+| Picker | Right skill found (of 50 that need one) | Picked a skill when none fits (of 118) | Overall right |
+|---|---|---|---|
+| score (today) | 7 (14%) | 3 | 72.6% |
+| list, Opus 5.5 | **49 (98%)** | 27 | **83.3%** |
+| list, Haiku 5.5 | 26 (52%) | 17 | 75.6% |
+
+**Example requests from the drafts:**
+
+| Picker | Must-pick requests picked | Must-not requests kept out | Overall right |
+|---|---|---|---|
+| score (today) | 8 of 34 (24%) | 29 of 30 | 57.8% |
+| list, Opus 5.5 | 32 of 34 | 30 of 30 | 96.9% |
+| list, Haiku 5.5 | 34 of 34 | 29 of 30 | 98.4% |
+
+- **The score misses most skills.** A task gets the right skill for only about 1 request in 7 that needs one.
+- **A list of names and descriptions, read by the task model, finds almost all of them.** Its cost is extra picks when no skill fits (27 of 118). In a real task, an extra pick costs one `use_skill` read. In this test, the model had to choose before it worked.
+- **Limit:** the judge is also Opus, so `list_opus` may agree with it more easily. The example requests have their own labels, and the list wins there too.
+
+**Decision:**
+- **How tasks pick a skill:** show every task the name and description of every skill of its domain, and let the task model choose. This replaces the similarity suggestion.
+- **`create_skill`:** drop the selection test and the example requests. Check the recipe (name, a description with what the skill does and "Use when ..."), the format, the size, the tool names, and that the skill is not a near-copy of an existing skill.
+
 ## #77: do failures recur? (`failure_recurrence.py`)
 
 - **Method:** each failed tool result is reduced to a signature: the tool and the first line of its error, with paths, ids, numbers and quoted text masked.

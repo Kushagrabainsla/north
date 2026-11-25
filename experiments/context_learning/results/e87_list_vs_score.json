@@ -1,0 +1,59 @@
+{
+  "sets": {
+    "chat": {
+      "distinct_skills_the_judge_picked": 15,
+      "judge_picks_by_kind": {
+        "builtin": 45,
+        "learned": 5
+      },
+      "judge_says_a_skill_fits": 50,
+      "list_haiku": {
+        "accuracy": 0.756,
+        "missed": 18,
+        "picked_a_skill_when_none_fits": 17,
+        "right_none": 101,
+        "right_skill": 26,
+        "skill_found_share": 0.52,
+        "wrong_skill": 6
+      },
+      "list_opus": {
+        "accuracy": 0.833,
+        "missed": 0,
+        "picked_a_skill_when_none_fits": 27,
+        "right_none": 91,
+        "right_skill": 49,
+        "skill_found_share": 0.98,
+        "wrong_skill": 1
+      },
+      "requests": 168,
+      "score": {
+        "accuracy": 0.726,
+        "missed": 41,
+        "picked_a_skill_when_none_fits": 3,
+        "right_none": 115,
+        "right_skill": 7,
+        "skill_found_share": 0.14,
+        "wrong_skill": 2
+      }
+    },
+    "examples": {
+      "list_haiku": {
+        "accuracy": 0.984,
+        "negatives_kept_out": "29/30",
+        "positives_picked": "34/34"
+      },
+      "list_opus": {
+        "accuracy": 0.969,
+        "negatives_kept_out": "30/30",
+        "positives_picked": "32/34"
+      },
+      "requests": 64,
+      "score": {
+        "accuracy": 0.578,
+        "negatives_kept_out": "29/30",
+        "positives_picked": "8/34"
+      }
+    }
+  },
+  "skills_in_domain": 24
+}
