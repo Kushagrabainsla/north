@@ -58,7 +58,8 @@ same primitives, but it must not import recorded results.
   whether tool failures recur (issues #77, #87, #92). Since 2026-11-01, no compaction ran (largest prompt
   167k tokens against a 750k threshold). Meta-programming runs (1 in 20) used 3 times the tokens, and half
   of their meta calls failed. 10.4% of tool calls failed, and recurring agent mistakes still happen. Therefore
-  #92 is not built, #87 needs a reliability test first, and #77 belongs in the task-end learning step.
+  #92 is not built; for #87 a child run did not help, because the skill selection check is the cause; and #77
+  belongs in the task-end learning step.
 - [`lesson_sharing/`](lesson_sharing/) — whether agents running at the same time
   should see each other's lessons sooner, and what wrong lessons cost. See the
   section below.

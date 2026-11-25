@@ -41,7 +41,51 @@ In all runs since 2026-09-01: 27 meta runs, 38 of 99 meta calls failed, the meta
 
 **The prompt cache.** A turn right after the tool list grew had 1.1% cached, against 83.1% on other turns (26 turns, 736,758 uncached tokens, 3.2% of all uncached tokens). `find_tools` grew the list most often (10 of 26). Also, `_sync_hot_loaded_tools` adds every tool that appears anywhere in north's registry to every running task, not only the tools that the task built.
 
-**Decision:** #87 should cover all meta-programming, not only tools. The value is real for the runs that do it. The open question is reliability: does a separate run on a strong coding model lower the 51% failure rate? Test that on the failed meta calls before building. Keeping the tool list fixed during a run is a separate, smaller fix (at most about 3% of uncached tokens).
+### Why meta calls fail, and does a child run help? (`e87_skill_check.py`, `e87_child_run.py`, `e87_prompt_changes.py`)
+
+**Why the calls failed.** 13 of the 19 failed meta calls since 2026-11-13 were `create_skill` drafts that failed the selection check, in 4 runs. The other 6 were flow drafts with missing inputs, a blocked path, a paused test run, a wrong schedule field and an unknown tool name. Each of those passed within 1 or 2 retries.
+
+**The selection check does not test what live tasks do.**
+
+| | The `create_skill` check | Live tasks (`agents/base.py`) |
+|---|---|---|
+| Similarity floor | 0.35 (the selector's default) | 0.70 (`_SUGGESTED_SKILL_MIN_SIMILARITY`) |
+| Skills it competes against | every skill in north | only the skills of the agent's domain |
+
+`e87_skill_check.py` rebuilt all 23 real drafts that carried example requests, and ran north's real `SkillSelector` under both rules (`results/e87_skill_check.json`):
+- Of the 13 drafts that failed the check, only **1** would pass the live rule. So the check is not too strict.
+- Of the 6 drafts that passed the check, a live task picks the skill for only **11 of their 21** example requests. So the check is too loose.
+- The replay matched the recorded check outcome in 16 of 19 cases. The skill set has changed since then.
+
+**How skills really reach tasks** (since 2026-11-13):
+- Flow steps: all 64 name their skill directly.
+- Chat runs (119): similarity suggested a skill in 10, and the agent called `use_skill` in 7.
+
+**How the main runs passed.** In all 4 runs, the agent changed its own example requests until the check passed (`results/e87_prompt_changes.txt`). For the two hard skills, it replaced 4 of 5 positive requests, and then all 5 positive and 4 of 5 negative requests.
+
+**The child-run test.**
+- **Setup:** each of the 4 skills went to a fresh child run (Opus 5.5, high effort). The child got the purpose, the procedure and the user's example requests, and one tool that runs north's real selection check and writes nothing.
+- **Rules:** the example requests stayed fixed. The child could change only the name and the description, at most 8 attempts.
+- **Results:** `results/e87_child_run.json`.
+
+| | Skills that passed | Failed attempts per skill | Model tokens (all 4) |
+|---|---|---|---|
+| Main run (as recorded; it could change its examples) | 4 of 4 | 1, 3, 1, 8 | inside runs of ~300k tokens each |
+| Child run, today's feedback (only the failed requests) | 1 of 4 | 4, 8, 8, 8 | 85,915 |
+| Child run, plus each score, the floor and the rival skill | 2 of 4 | 2, 8, 3, 8 | 82,130 |
+| Child run, full feedback, live rule | 2 of 4 | 0, 8, 0, 8 | 67,931 |
+
+- **A child run does not lower the failure rate.** With fixed examples, it passed fewer skills than the main runs, which passed by rewriting their tests.
+- **The child run saves little context.** It used about 17,000 to 21,000 tokens per skill. The meta work inside a main run was about 26,000 tokens (8.6% of a median 300k run).
+- **Scores in the feedback help:** 2 passes instead of 1, with fewer attempts. Under the live rule, two skills passed on the first try.
+- **Two skills never passed.** This embedding model cannot separate their example requests from other skills by name and description alone.
+
+**Decision:** do not build the child run for #87. The cause of the meta-programming failures is the skill selection check:
+1. It does not match the live rule.
+2. The agent can rewrite its own test cases.
+3. Its feedback has no scores.
+
+Fixing the check is the general fix. How strict it should be is the owner's decision (see the #87 comment). Keeping the tool list fixed during a run is a separate, smaller fix (at most about 3% of uncached tokens).
 
 ## #77: do failures recur? (`failure_recurrence.py`)
 
