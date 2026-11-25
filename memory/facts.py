@@ -16,7 +16,7 @@ import json
 import logging
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -381,8 +381,13 @@ def _retention_rank_sql() -> str:
     return f"(CASE {whens} ELSE {_DEFAULT_RETENTION_RANK} END)"
 
 
-def _apply_recall_cutoff(scored: list[tuple[str, float]], max_results: int) -> list[str]:
-    """Keep the facts worth injecting from *scored*, best first.
+def _apply_recall_cutoff(
+    scored: list[tuple[str, str, float]], max_results: int, boosts: dict[str, float] | None = None
+) -> list[tuple[str, str]]:
+    """Keep the facts worth injecting from *scored* (id, text, score), best first, as (id, text).
+
+    *boosts* (fact id -> score) is added to each similarity before ranking and the
+    relative test: the use score of #91. Without it the ranking is similarity alone.
 
     Past the first _RECALL_ALWAYS_KEEP, a fact survives if it is within
     _RECALL_RELATIVE_MARGIN of the best match for this query and clears the
@@ -393,12 +398,18 @@ def _apply_recall_cutoff(scored: list[tuple[str, float]], max_results: int) -> l
     """
     if not scored:
         return []
-    best = scored[0][1]
+    boosts = boosts or {}
+    keyed = sorted(
+        ((fact_id, content, score + boosts.get(fact_id, 0.0)) for fact_id, content, score in scored),
+        key=lambda row: row[2],
+        reverse=True,
+    )
+    best = keyed[0][2]
     cutoff = max(_RECALL_MIN_SIMILARITY, best - _RECALL_RELATIVE_MARGIN)
     return [
-        content
-        for rank, (content, score) in enumerate(scored[:max_results])
-        if rank < _RECALL_ALWAYS_KEEP or score >= cutoff
+        (fact_id, content)
+        for rank, (fact_id, content, key) in enumerate(keyed[:max_results])
+        if rank < _RECALL_ALWAYS_KEEP or key >= cutoff
     ]
 
 
@@ -1115,11 +1126,26 @@ class FactStore:
         max_results: int = _MAX_FACTS_RETURNED,
         allowed_categories: frozenset[str] | None = None,
     ) -> list[str]:
-        """Return up to max_results fact strings most semantically similar to query.
+        """Return up to max_results fact strings most semantically similar to query."""
+        return [text for _, text in await self.search_with_ids(query, max_results, allowed_categories)]
 
-        When *allowed_categories* is given, only facts in those categories are
-        considered, so a caller never receives a fact it is not permitted to
-        read. Falls back to recency order when embeddings are unavailable.
+    async def search_with_ids(
+        self,
+        query: str,
+        max_results: int = _MAX_FACTS_RETURNED,
+        allowed_categories: frozenset[str] | None = None,
+        boost: Callable[[list[str]], dict[str, float]] | None = None,
+    ) -> list[tuple[str, str]]:
+        """Return up to max_results (fact id, fact text) pairs most semantically similar to query.
+
+        The id lets a task's record say which facts it was given, so their use can
+        be measured (#85). When *allowed_categories* is given, only facts in those
+        categories are considered, so a caller never receives a fact it is not
+        permitted to read. Falls back to recency order when embeddings are unavailable.
+
+        *boost* maps fact ids to a score added to their similarity (#91). It is asked
+        about twice max_results candidates, so a fact just past the similarity top
+        can move in.
         """
         try:
             q_embs = await self._embed_fn([query])
@@ -1136,18 +1162,28 @@ class FactStore:
             # Return the most recent facts so recall still answers.
             return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
 
+        pool = max_results * 2 if boost is not None else max_results
         # Fast path: native sqlite-vec vector search in SQL
-        results = await asyncio.to_thread(self._search_vector_sync, qvec, max_results, allowed_categories)
-        if results is not None:
-            return results
+        scored = await asyncio.to_thread(self._search_vector_sync, qvec, pool, allowed_categories)
+        if scored is None:
+            scored = self._search_cache(qvec, cache, allowed_categories)[:pool]
+        boosts = boost([fact_id for fact_id, _, _ in scored]) if boost is not None and scored else None
+        return _apply_recall_cutoff(scored, max_results, boosts)
 
-        # Fallback path: in-memory cache with Python cosine calculation.
-        # The length guard is not paranoia: comparing vectors of different sizes
-        # raises inside numpy, and one stray row would take down the whole recall
-        # rather than being skipped as the unusable row it is.
+    @staticmethod
+    def _search_cache(
+        qvec: list[float], cache: list[_Cached], allowed_categories: frozenset[str] | None
+    ) -> list[tuple[str, str, float]]:
+        """In-memory cosine ranking, best first: the path when sqlite-vec is unavailable.
+
+        The length guard is not paranoia: comparing vectors of different sizes
+        raises inside numpy, and one stray row would take down the whole recall
+        rather than being skipped as the unusable row it is.
+        """
         today = _today()
         scored = [
             (
+                fact.id,
                 _with_dates(fact.content, fact.valid_from, fact.valid_until, fact.observed_at, fact.found_in),
                 cosine_similarity(qvec, fact.embedding),
             )
@@ -1156,20 +1192,20 @@ class FactStore:
             and (allowed_categories is None or fact.category in allowed_categories)
             and (fact.valid_until is None or fact.valid_until >= today)
         ]
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return _apply_recall_cutoff(scored, max_results)
+        scored.sort(key=lambda x: x[2], reverse=True)
+        return scored
 
     def _search_vector_sync(
         self,
         qvec: list[float],
         max_results: int,
         allowed_categories: frozenset[str] | None,
-    ) -> list[str] | None:
-        """Native sqlite-vec query in SQLite; returns None if sqlite-vec is unavailable."""
+    ) -> list[tuple[str, str, float]] | None:
+        """Native sqlite-vec query: (id, text, similarity), best first; None if sqlite-vec is unavailable."""
         try:
             qvec_json = json.dumps(qvec)
             sql = (
-                "SELECT content, valid_from, valid_until, observed_at, confirmed, source_path, "
+                "SELECT id, content, valid_from, valid_until, observed_at, confirmed, source_path, "
                 "(1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
                 "FROM context_facts "
                 "WHERE embedding IS NOT NULL AND embedding != '' AND embedding != '[]' "
@@ -1189,18 +1225,18 @@ class FactStore:
             params.append(max_results)
             # The relative half of the cutoff needs the best score for this query,
             # which SQL only knows once the rows are ordered - so SQL applies the
-            # absolute floor and the margin is applied to the result below.
+            # absolute floor and the caller applies the margin.
 
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(sql, params).fetchall()
-            scored = [
+            return [
                 (
+                    r["id"],
                     _with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"], _found_in(r)),
                     r["similarity"],
                 )
                 for r in rows
             ]
-            return _apply_recall_cutoff(scored, max_results)
         except Exception:
             return None
 
@@ -1541,11 +1577,11 @@ class FactStore:
                 )
         return cached
 
-    def _recent_facts_sync(self, limit: int, allowed_categories: frozenset[str] | None = None) -> list[str]:
+    def _recent_facts_sync(self, limit: int, allowed_categories: frozenset[str] | None = None) -> list[tuple[str, str]]:
         if allowed_categories is not None and not allowed_categories:
             return []
         sql = (
-            "SELECT content, valid_from, valid_until, observed_at, confirmed, source_path "
+            "SELECT id, content, valid_from, valid_until, observed_at, confirmed, source_path "
             f"FROM context_facts WHERE {_CURRENT_SQL}"
         )
         params: list[Any] = [_today()]
@@ -1555,7 +1591,8 @@ class FactStore:
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(f"{sql} ORDER BY updated_at DESC LIMIT ?", (*params, limit)).fetchall()
         return [
-            _with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"], _found_in(r)) for r in rows
+            (r["id"], _with_dates(r["content"], r["valid_from"], r["valid_until"], r["observed_at"], _found_in(r)))
+            for r in rows
         ]
 
     def _count_sync(self, category: str | None = None) -> int:

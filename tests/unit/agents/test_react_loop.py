@@ -737,6 +737,33 @@ async def test_context_loading_emits_content_free_memory_telemetry(tmp_path: Pat
     assert "private" not in str(telemetry)
 
 
+async def test_a_finished_run_has_its_recalled_memory_judged_in_the_background(tmp_path: Path, monkeypatch) -> None:
+    """#85: the judge gets the items this run was given, and the run does not keep them afterwards."""
+    import agents.base as base_module
+    from memory import MemoryContext, MemoryPrincipal
+
+    class Memory:
+        use_store = "counts"
+
+        async def principal_for(self, name, domain):
+            return MemoryPrincipal(name=name, domain=domain, allowed_domains=frozenset({"general"}))
+
+        async def recall(self, principal, prompt):
+            return MemoryContext(facts=["the user likes tea"], fact_ids=["f1"])
+
+    calls: list[dict] = []
+    monkeypatch.setattr(base_module, "judge_later", lambda router, runs, **kw: calls.append(kw))
+    agent = _load_agent("north", tmp_path)
+    agent.deps.memory = Memory()
+    payload = AgentPayload(task_id="t1", run_id="r1", prompt="make tea")
+
+    await agent._load_context(payload, selected_skills=[])
+    agent._judge_memory_use(payload, "Here is your tea.")
+
+    assert [i.id for i in calls[0]["items"]] == ["fact:f1"]
+    assert calls[0]["answer"] == "Here is your tea." and calls[0]["counts"] == "counts"
+
+
 # ---------------------------------------------------------------------------
 # Task message structure
 # ---------------------------------------------------------------------------

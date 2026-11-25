@@ -52,6 +52,25 @@ async def test_the_profile_shows_facts_and_the_goal_and_rule_documents(facts, do
 
 
 @pytest.mark.asyncio
+async def test_goals_and_rules_come_before_the_rarely_used_topics(facts, documents) -> None:
+    """The recall cap cuts the end of the profile, so the most used sections must not be last (#86)."""
+    await facts.add_fact("User is called Sam", category="identity")
+    await facts.add_fact("User prefers tea", category="preferences")
+    await facts.add_fact("User said to call them Sam", category="user")
+    await facts.add_fact("User has a savings account", category="finances")
+    await documents.write(ContextDocument.NORTH_STARS, "User wants to lead a team by 2028.")
+    await documents.write(ContextDocument.JUDGEMENT_RULES, "User rejects roles that need relocation.")
+
+    await rebuild_profile(facts, documents)
+
+    profile = await documents.read(ContextDocument.USER)
+    order = [profile.index(h) for h in ("## Identity", "## Preferences", "## User", "## North stars", "## Judgement")]
+    assert order == sorted(order)
+    assert profile.index("## Judgement rules") < profile.index("## Finances")
+    assert profile.startswith("# User Profile")
+
+
+@pytest.mark.asyncio
 async def test_without_a_fact_store_the_profile_is_left_alone(documents) -> None:
     await documents.write(ContextDocument.USER, "# User Profile\n- built earlier")
 
