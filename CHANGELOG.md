@@ -58,6 +58,10 @@ All notable changes to north are documented here.
 - **North's local embedding model is never asked for a completion** (`inference/facts/sources/catalog.py`). A fresh north with no chat provider sent completions to "BAAI/bge-small-en-v1.5", and Home listed it under "Is anything broken?" as a model waiting out a limit. The model's facts came from a guess from its name, which has no "embed" in it, so the guess made it a chat model, although its provider declares it embeddings-only. The facts now come from what the provider declares; the name is the guess only when a provider declares nothing.
 - **A first start catches up nothing from before north was installed** (`jobs/scheduler.py`, `jobs/cron_store.py`, `jobs/sqlite_processor.py`). On 2026-11-22 a fresh north ran every built-in flow at its first start, each "16 h 24 min late: north was not running". A built-in ships with north, so it had no creation time, and catch-up counted it as there at every past slot. A schedule without one now exists from when this north first had it (a new `schedule_first_seen` table), or from its earliest firing in the queue, so an upgraded north still catches up what it missed.
 
+### Removed
+- **A schedule never runs as a plain prompt any more: every job is a flow** (`orchestrator/app.py`; issue #45). A job ran either its flow or, with none, a prompt submitted as a task. Every way to make a schedule or a one-off job has made a flow for two months: of 594 jobs in the queue, the last plain-prompt one ran on 2026-09-24, and all 550 since were flows. The prompt path (`_run_scheduled_task`, its task watcher and `ScheduledTaskFailed`) is deleted. A job with no flow, left by an older north, now needs attention with what to do, and nothing runs; on the 550 real jobs since 2026-09-25 that happens for none.
+- **`MacOSNotifier`** (`approval/macos.py`; issue #49). Nothing has built it since 1.0.2 (2026-05-22), `alerter` was not installed, and its buttons answered a card with `store.resolve` directly, outside north's approval API. North has three notifiers now: terminal, Telegram, and the batching wrapper.
+
 ## [1.22.0] - 2026-11-22
 
 ### Security
