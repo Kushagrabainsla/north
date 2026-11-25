@@ -1,0 +1,18 @@
+{
+  "EpisodeConsolidator": {
+    "has_run_method": true,
+    "run_is_endless_loop": true
+  },
+  "SkillDistiller": {
+    "has_run_method": true,
+    "run_is_endless_loop": true
+  },
+  "calls_in_north_code": {
+    "run": [],
+    "run_once": [
+      "orchestrator/app.py:868 episode_consolidator.run_once()",
+      "orchestrator/app.py:871 skill_distiller.run_once()"
+    ]
+  },
+  "label": "before"
+}
