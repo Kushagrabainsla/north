@@ -1,6 +1,10 @@
-runs since 2026-11-13: 176
+runs since 2026-11-13: 179
 runs with a meta-tool call: 8; meta share of tool output: median 79.3%, runs at 3.5% or more: 8
-turns after the tool list grew: 27; mean cached share 1.0%; uncached tokens on them: 759022
-other later turns: 2068; mean cached share 83.1%
-all turns: input 118967266 tokens, uncached 22954093; tool-list growth caused 3.3% of the uncached tokens
-tool called just before the list grew: {'find_tools': 11, 'bash': 5, 'browser': 4, 'fetch_url': 2, 'read_file': 2, 'create_flow': 1, 'ask_user': 1, 'take_photo': 1}
+turns after the tool list grew: 28; mean cached share 2.8%; uncached tokens on them: 773937
+other later turns: 2079; mean cached share 83.2%
+all turns: input 119437142 tokens, uncached 23006094; tool-list growth caused 3.4% of the uncached tokens
+tool called just before the list grew: {'find_tools': 11, 'bash': 6, 'browser': 4, 'fetch_url': 2, 'read_file': 2, 'create_flow': 1, 'ask_user': 1, 'take_photo': 1}
+meta-programming runs: 8; calls: {'create_skill': 23, 'create_flow': 14}; failed meta calls: 19
+how those runs ended: {'completed': 8}
+input tokens per run, median: meta runs 299522, other runs 104255
+tokens the meta work re-sent on later turns: 211574 of 2467153 input tokens (8.6%); per run median 3.9%, max 23.0%

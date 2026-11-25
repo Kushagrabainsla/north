@@ -2,8 +2,13 @@
 
 Reads ~/.north/tasks/tasks.db read-only.
 
-1. Context: for each run that called create_tool, create_skill or create_flow, the share
-   of all tool-result characters that came from those calls.
+1. Context: for each run that did meta-programming (any authoring tool: create_tool,
+   create_skill, create_flow, create_view), the share of all tool-result characters that
+   came from those calls, and the tokens the meta work carried: each meta call's input
+   and result stay in the conversation, so they are re-sent on every later turn of the
+   run. That carried amount, as a share of the run's input tokens, is what a separate
+   child run (#87) would remove, less a short receipt. Also: failed meta calls, and how
+   the run ended.
 2. Cache: model turns come with a prompt_profile event (input tokens, cached tokens,
    tool-schema tokens). A turn whose tool list grew since the turn before is a "tool
    change" turn; its cached share is compared with the other turns of the same runs.
@@ -22,7 +27,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 DB = Path.home() / ".north" / "tasks" / "tasks.db"
-META = {"create_tool", "create_skill", "create_flow"}
+# Every authoring tool north has: tools, skills, flows (schedules are flows) and views.
+META = {"create_tool", "create_skill", "create_flow", "create_view"}
+CHARS_PER_TOKEN = 4
 SINCE = sys.argv[1] if len(sys.argv) > 1 else "2026-11-01"
 
 
@@ -91,6 +98,55 @@ def main() -> None:
         f"tool-list growth caused {lost_tokens / max(all_uncached, 1):.1%} of the uncached tokens"
     )
     print(f"tool called just before the list grew: {dict(growers.most_common(8))}")
+    carried_report(runs)
+
+
+def carried_report(runs: dict[str, list[tuple[str, dict]]]) -> None:
+    """For runs with meta calls: tokens the meta work re-sent on later turns, failures, and the end."""
+    with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as conn:
+        status = dict(conn.execute("SELECT run_id, status FROM agent_runs").fetchall())
+    shares, carried_all, input_all, calls, failed = [], 0, 0, Counter(), 0
+    endings: Counter[str] = Counter()
+    other_inputs, meta_inputs = [], []
+    for run_id, events in runs.items():
+        turns = [i for i, (event, _) in enumerate(events) if event == "prompt_profile"]
+        run_input = sum((d.get("actual_input_tokens") or 0) for e, d in events if e == "prompt_profile")
+        meta_at = [
+            (i, d) for i, (e, d) in enumerate(events) if e in ("tool_called", "tool_result") and d.get("tool") in META
+        ]
+        if not meta_at:
+            if run_input:
+                other_inputs.append(run_input)
+            continue
+        carried = 0
+        for index, data in meta_at:
+            size = len(json.dumps(data.get("params", ""))) + len(str(data.get("formatted") or data.get("error") or ""))
+            later_turns = sum(1 for t in turns if t > index)
+            carried += size // CHARS_PER_TOKEN * later_turns
+            if data.get("tool") in META and "params" in data:
+                calls[data["tool"]] += 1
+            if data.get("success") is False:
+                failed += 1
+        endings[status.get(run_id, "?")] += 1
+        meta_inputs.append(run_input)
+        carried_all += carried
+        input_all += run_input
+        if run_input:
+            shares.append(carried / run_input)
+    if not shares:
+        print("no runs with meta calls")
+        return
+    print(f"meta-programming runs: {len(shares)}; calls: {dict(calls)}; failed meta calls: {failed}")
+    print(f"how those runs ended: {dict(endings)}")
+    print(
+        f"input tokens per run, median: meta runs {statistics.median(meta_inputs):.0f}, "
+        f"other runs {statistics.median(other_inputs or [0]):.0f}"
+    )
+    print(
+        f"tokens the meta work re-sent on later turns: {carried_all} of {input_all} input tokens "
+        f"({carried_all / max(input_all, 1):.1%}); per run median {statistics.median(shares):.1%}, "
+        f"max {max(shares):.1%}"
+    )
 
 
 if __name__ == "__main__":

@@ -18,23 +18,30 @@ The scripts read `~/.north` in read-only mode and print counts only. Their outpu
 - **No compaction call (`:compact`) was ever recorded.** The last tool-summary call was in 2026-10.
 - **Decision:** a "surprising result" mark for compaction cannot change anything now, because compaction does not run. Step 3 of #92 (learning from mistakes) already belongs to #77, and the failure data below serves it.
 
-## #87: what meta tools cost (`meta_tools.py`)
+## #87: what meta-programming costs (`meta_tools.py`)
 
-**Since 2026-11-13** (175 runs; in all runs since 2026-09-01 the picture is the same):
+"Meta-programming" here means every authoring tool: `create_tool`, `create_skill`, `create_flow` and `create_view`. Schedules are flows, so they are included. `create_view` was never called.
+
+**Since 2026-11-13** (179 runs; `results/meta_tools_since_2026-11-13.txt`):
 
 | | Count |
 |---|---|
-| Runs that called `create_tool`, `create_skill` or `create_flow` | 8 |
-| Their meta-tool share of all tool output, median | 79% (all 8 runs at 3.5% or more) |
+| Runs that did meta-programming | 8 (`create_skill` 23 calls, `create_flow` 14) |
+| Meta calls that failed (test or check failed, draft refused) | **19 of 37 (51%)** |
+| How those runs ended | 8 completed |
+| Input tokens per run, median | **299,522** for meta runs, 104,255 for other runs |
+| Meta share of all tool output in those runs, median | 79% |
+| Tokens that the meta calls (input and result) were re-sent with on later turns | **8.6%** of those runs' input (per run: median 3.9%, max 23%) |
 | `create_tool` calls since 2026-10-25 | 0 |
-| Turns right after the tool list grew | 26 |
-| Cached share of those turns | 1.1% (other turns: 83.1%) |
-| Uncached tokens on those turns | 736,758, which is **3.2%** of all uncached tokens (22.9 million) |
-| Tool called just before the list grew | `find_tools` 10, `bash` 5, `browser` 4, others 7 |
 
-- **The cache loss is real, but small.** A tool list that grows during a run breaks the cached prompt prefix: tools come first in the prompt. But it happened on 26 of 2,089 later turns.
-- **`find_tools` causes it more than the meta tools.** Also, `_sync_hot_loaded_tools` adds every tool that appears anywhere in north's registry to every running task, not only the tools that the task built.
-- **Decision:** the meta tools are too rare now to justify building them in their own child run. A general fix that keeps the tool list fixed during a run could save at most about 3% of uncached tokens. That is a follow-up, not this issue.
+In all runs since 2026-09-01: 27 meta runs, 38 of 99 meta calls failed, the meta runs used a median of 74,567 input tokens against 53,933, and the meta calls made 7.7% of their input.
+
+- **Meta-programming is rare, but where it happens it is costly and unreliable.** About 1 run in 20 builds a skill or a flow. Those runs use about 3 times the tokens of other runs, and half of their meta calls fail and are retried in the main conversation.
+- **The 8.6% is a lower bound** for what a child run would remove. It counts only the meta calls themselves, not the reads and edits that the agent made to fix each failure.
+
+**The prompt cache.** A turn right after the tool list grew had 1.1% cached, against 83.1% on other turns (26 turns, 736,758 uncached tokens, 3.2% of all uncached tokens). `find_tools` grew the list most often (10 of 26). Also, `_sync_hot_loaded_tools` adds every tool that appears anywhere in north's registry to every running task, not only the tools that the task built.
+
+**Decision:** #87 should cover all meta-programming, not only tools. The value is real for the runs that do it. The open question is reliability: does a separate run on a strong coding model lower the 51% failure rate? Test that on the failed meta calls before building. Keeping the tool list fixed during a run is a separate, smaller fix (at most about 3% of uncached tokens).
 
 ## #77: do failures recur? (`failure_recurrence.py`)
 
@@ -58,7 +65,11 @@ The scripts read `~/.north` in read-only mode and print counts only. Their outpu
   - a file name too long for `bash` (5 runs)
   - skill tests that fail in `create_skill` (4 runs)
 - **The top one was fixed by hand, but late.** It ran in 14 runs over 9 days, until 464bb9a (2026-11-22). It has not happened since. A digest would have shown it after its 3rd run.
-- **Decision:** phase 1 of #77 (a read-only failure digest) has measured value. Recurring agent mistakes are concentrated, most still recur, and at most 18% of failures were preventable. How to deliver it (a section of the nightly check, or its own flow) is the owner's decision, because north is in a feature freeze.
+- **Decision:** phase 1 of #77 has measured value. Recurring agent mistakes are concentrated, most still recur, and at most 18% of failures were preventable.
+- **Where it belongs:** at task end, not in a nightly report. North learns at task end: `memory/task_end_learning.py` writes the task's note and then learns skills.
+  - At each task end, the same step can record the run's failure signatures.
+  - When a signature reaches 3 runs, it can be reported (phase 1) and passed to a refiner (phase 2).
+- **Why not the extraction pipeline:** the fact extraction pipeline (`memory/extraction.py`) also runs at task end. But it reads only the user's own words, on purpose, so that north never learns the assistant's text as fact. Tool failures come from tool output.
 
 ## Limits
 
