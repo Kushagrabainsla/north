@@ -444,7 +444,22 @@ class FactStore:
         # must not interleave loads and clobber each other's cache.
         self._cache_lock = asyncio.Lock()
 
-    async def _supersede_contradicted(self, content: str, new_emb: list[float], about: str | None = None) -> int:
+    async def retire_contradicted(self, content: str, about: str | None, written_at: str) -> int:
+        """Run the contradiction check of a fact written with ``check_contradictions=False``.
+
+        The check asks a model, and it took 13 s on average in north's ledger, so a
+        writer that a task waits on (`remember`) stores the fact first and runs this
+        later. Only facts last written at or before *written_at* (the time of that
+        write) can be retired: a fact stored or restated after it is newer, and
+        this fact must not retire it. Returns how many facts it retired. Never raises.
+        """
+        return await self._supersede_contradicted(
+            content, await self._embedding(content), _about_key(about), written_before=written_at
+        )
+
+    async def _supersede_contradicted(
+        self, content: str, new_emb: list[float], about: str | None = None, written_before: str | None = None
+    ) -> int:
         """Retire active facts that *content* makes untrue. Returns how many.
 
         Across every topic, not only the new fact's own: "I finished my internship",
@@ -469,6 +484,7 @@ class FactStore:
                 _SUPERSEDE_MIN_SIMILARITY,
                 _DEDUP_SIMILARITY_THRESHOLD,
                 about,
+                written_before,
             )
             if not candidates:
                 return 0
@@ -487,20 +503,30 @@ class FactStore:
             return 0
 
     def _candidates_in_band_sync(
-        self, emb: list[float], low: float, high: float, about: str | None = None
+        self,
+        emb: list[float],
+        low: float,
+        high: float,
+        about: str | None = None,
+        written_before: str | None = None,
     ) -> list[tuple[str, str]]:
         """Active facts whose similarity to *emb* falls in [low, high).
 
         For a fact with a label, only facts with none: one labelled differently
         is about something else, and one labelled the same was already replaced.
+        With *written_before*, only facts last written at or before that time.
         """
         emb_json = json.dumps(emb)
         unlabelled = "AND about IS NULL" if about is not None else ""
+        # Every stored time is an ISO string in UTC, so they compare as text. The column has
+        # numeric affinity: a bare "9999" would become a number, and SQLite sorts every number
+        # before every text, so no fact would match. A full date stays text and sorts last.
+        before = written_before or "9999-12-31T23:59:59+00:00"
         sql = f"""
         SELECT id, content FROM (
             SELECT id, content, (1.0 - vec_distance_cosine(embedding, ?)) AS sim
             FROM context_facts
-            WHERE status = ? {unlabelled}
+            WHERE status = ? {unlabelled} AND updated_at <= ?
               AND embedding IS NOT NULL AND embedding != '' AND embedding != '[]'
             ORDER BY updated_at DESC LIMIT ?
         )
@@ -511,7 +537,7 @@ class FactStore:
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(
                     sql,
-                    (emb_json, _STATUS_ACTIVE, _DEDUP_SCAN_LIMIT, low, high, _SUPERSEDE_MAX_CANDIDATES),
+                    (emb_json, _STATUS_ACTIVE, before, _DEDUP_SCAN_LIMIT, low, high, _SUPERSEDE_MAX_CANDIDATES),
                 ).fetchall()
             return [(r["id"], r["content"]) for r in rows]
         except Exception:
@@ -519,8 +545,8 @@ class FactStore:
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(
                     f"SELECT id, content, embedding FROM context_facts "  # noqa: S608 - a fixed clause
-                    f"WHERE status = ? {unlabelled} ORDER BY updated_at DESC LIMIT ?",
-                    (_STATUS_ACTIVE, _DEDUP_SCAN_LIMIT),
+                    f"WHERE status = ? {unlabelled} AND updated_at <= ? ORDER BY updated_at DESC LIMIT ?",
+                    (_STATUS_ACTIVE, before, _DEDUP_SCAN_LIMIT),
                 ).fetchall()
             scored: list[tuple[float, str, str]] = []
             for row in rows:
@@ -896,12 +922,15 @@ class FactStore:
         about: str | None = None,
         said_at: datetime | None = None,
         confirmed: bool = True,
+        check_contradictions: bool = True,
     ) -> bool:
         """Embed and persist one fact with full provenance. Returns True when a new row was inserted.
 
         This is the extended version used by bootstrap and other provenance-aware writers.
         *confirmed* is False for a fact north found itself and the user has not stated; a
-        later confirmed statement of the same fact confirms it.
+        later confirmed statement of the same fact confirms it. With *check_contradictions*
+        False, the model check for older facts this one makes untrue does not run here; the
+        caller runs it later with `retire_contradicted`.
         """
         content = content.strip()
         if not content:
@@ -929,6 +958,7 @@ class FactStore:
                 source_mtime=source_mtime,
                 evidence=evidence,
                 confirmed=confirmed,
+                check_contradictions=check_contradictions,
             )
 
         # Exact-match dedup runs BEFORE any embedding call: identical content
@@ -982,7 +1012,7 @@ class FactStore:
         # Runs after the write, not before: learning that "the internship ended"
         # is only worth acting on once that fact is safely stored, and a new fact
         # is the more current of any pair it contradicts.
-        if inserted:
+        if inserted and check_contradictions:
             await self._supersede_contradicted(content, new_emb)
         return inserted
 
@@ -1009,6 +1039,7 @@ class FactStore:
         subject = str(provenance.get("subject") or "user")
         said = said_at.isoformat()
         confirmed = bool(provenance.get("confirmed", True))
+        check = bool(provenance.pop("check_contradictions", True))
         fact_id = await asyncio.to_thread(self._restate_sync, category, subject, about, content, said, dates, confirmed)
         inserted = fact_id is None
         new_emb: list[float] = []
@@ -1037,7 +1068,7 @@ class FactStore:
         self.invalidate_cache()
         if retired:
             logger.info("FactStore: %d older fact(s) about %r replaced by %r", retired, about, content[:80])
-        if inserted:
+        if inserted and check:
             # A fact stored before labels existed can still contradict this one.
             await self._supersede_contradicted(content, new_emb, about)
         return inserted

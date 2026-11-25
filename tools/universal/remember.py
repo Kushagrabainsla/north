@@ -9,15 +9,24 @@ A fact is filed under what it is about, so a newer one replaces the older, which
 kept as an earlier value, as for what the user says in chat. A fact north found by
 itself is kept as unconfirmed, with where it was read, until the user states it:
 recall shows "unconfirmed: north read it in <source>". The pair of `forget`.
+
+The task waits for this tool, so it does only the fast part: it stores the fact and
+rewrites the profile (about 20 ms together). The check for older facts that this one
+makes untrue asks a model (13 s on average in north's ledger, up to 59 s), so it runs
+in the background after the tool answers (issue #88). Until it ends, an older fact
+without a label that this one contradicts can stay current for a few seconds.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from memory.profile import rebuild_profile
 from tools import Tool, ToolInput, ToolOutput
+from utils.tasks import spawn
 
 if TYPE_CHECKING:
     from approval.approvals import Request
@@ -28,6 +37,8 @@ if TYPE_CHECKING:
 # stated one about the same thing replace each other.
 _CATEGORY = "user"
 _QUOTE_CHARS = 500
+
+logger = logging.getLogger(__name__)
 
 
 class RememberTool(Tool):
@@ -114,13 +125,22 @@ class RememberTool(Tool):
             source_path=source or None,
             evidence=quote or None,
             confirmed=said,
+            check_contradictions=False,
         )
+        written_at = datetime.now(UTC).isoformat()
         # The profile is written from the facts; left alone it would not show this one.
         await rebuild_profile(self._facts, self._documents)
+        if stored:
+            spawn(self._retire_contradicted(fact, about, written_at), name="remember: older facts", logger=logger)
         return ToolOutput(
             success=True,
             data={"fact": fact, "about": about, "new": stored, "confirmed": said, "source": source},
         )
+
+    async def _retire_contradicted(self, fact: str, about: str, written_at: str) -> None:
+        """Retire the older facts that *fact* makes untrue, and show that in the profile."""
+        if await self._facts.retire_contradicted(fact, about, written_at):
+            await rebuild_profile(self._facts, self._documents)
 
     def format_output(self, data: dict[str, Any]) -> str:
         state = "" if data.get("confirmed") else f" (unconfirmed; found in {data.get('source') or 'a source'})"

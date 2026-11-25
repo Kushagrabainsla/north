@@ -1,0 +1,30 @@
+{
+  "fact_changes_total": 314,
+  "cases": 10,
+  "cases_open_over_a_day": 8,
+  "cases_changes": [
+    138,
+    11,
+    11,
+    11,
+    11,
+    1,
+    1,
+    1,
+    1,
+    2
+  ],
+  "top_level": {
+    "runs": 2140,
+    "runs_with_a_fact_change_inside": 10,
+    "share": 0.0047,
+    "mean_run_minutes": 141.65
+  },
+  "all": {
+    "runs": 2171,
+    "runs_with_a_fact_change_inside": 13,
+    "share": 0.006,
+    "mean_run_minutes": 163.83
+  },
+  "fact_changes_since_first_run": 314
+}
