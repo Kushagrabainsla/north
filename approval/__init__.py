@@ -9,7 +9,6 @@ from approval.base import Notifier
 from approval.decider import MemoryDecider
 from approval.exceptions import ApprovalError
 from approval.interaction import CardEvent, UserInteraction
-from approval.macos import MacOSNotifier
 from approval.models import ApprovalDecision, Card, CardType
 from approval.terminal import TerminalNotifier
 
@@ -20,7 +19,6 @@ __all__ = [
     "CardEvent",
     "CardType",
     "MemoryDecider",
-    "MacOSNotifier",
     "Notifier",
     "TerminalNotifier",
     "UserInteraction",
