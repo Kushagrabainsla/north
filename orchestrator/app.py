@@ -57,7 +57,7 @@ from jobs.models import Job, JobStatus, late_note
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, merge_entries, next_firing, provision_default_schedules
 from jobs.seen import SeenStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from mcp.manager import McpManager
+from mcp_client.manager import McpManager
 from memory.consolidator import EpisodeConsolidator
 from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline

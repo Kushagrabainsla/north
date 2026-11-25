@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from mcp.client import McpClient, McpError
-from mcp.models import McpServerConfig
+from mcp_client.client import McpClient, McpError
+from mcp_client.models import McpServerConfig
 
 # A minimal MCP server. Like the official SDK, it sends a tool's result twice:
 # as ``content`` text and as ``structuredContent``.
@@ -26,7 +26,7 @@ for line in sys.stdin:
     method, rid = req.get("method"), req.get("id")
     if method == "initialize":
         send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2024-11-05",
-              "capabilities": {"tools": {}}, "serverInfo": {"name": "fake"}}})
+              "capabilities": {"tools": {}}, "serverInfo": {"name": "fake", "version": "1"}}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": rid, "result": {"tools": [
             {"name": "big", "inputSchema": {"type": "object"}},
@@ -40,6 +40,8 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": rid, "result": {
             "content": [{"type": "text", "text": text}],
             "structuredContent": {"result": text}, "isError": False}})
+    elif rid is not None:  # JSON-RPC: a request for a method the server lacks gets "method not found"
+        send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}})
 """
 
 
@@ -94,9 +96,10 @@ async def test_closing_a_server_that_already_exited_does_not_raise(server_script
     client = await _client(server_script, timeout=30.0)
     with pytest.raises(McpError):
         await client.call_tool("die", {})
-    assert client._proc is not None
-    await client._proc.wait()
 
+    started = time.monotonic()
     await client.close()
 
-    assert client._proc is None
+    assert time.monotonic() - started < 5.0
+    with pytest.raises(McpError, match="not running"):
+        await client.call_tool("echo", {"text": "hi"})

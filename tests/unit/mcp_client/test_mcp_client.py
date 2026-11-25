@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from mcp.client import McpClient
-from mcp.manager import McpManager
-from mcp.models import McpCallResult, McpConfigFile, McpToolDefinition
+from mcp_client.client import McpClient
+from mcp_client.manager import McpManager
+from mcp_client.models import McpCallResult, McpConfigFile, McpToolDefinition
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from tools.specialized.mcp_tool import McpTool
