@@ -21,6 +21,8 @@ from typing import Any
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from coding_agents.constants import VERIFY_TIMEOUT_SECONDS
+from config.settings import Settings
+from inference.registry import PROVIDER_DEFINITIONS
 from tools._path import (
     deletes_a_root,
     edited_paths,
@@ -202,8 +204,29 @@ def _north_commands() -> str:
     return str(folder)
 
 
+@functools.cache
+def credential_names() -> frozenset[str]:
+    """The environment variables north reads its own credentials from.
+
+    A command north runs never needs one: north's home and its key file are already closed to it. They
+    can still be in north's own environment: the dashboard puts a provider key or the Telegram token there
+    when you save one, and Docker sets `NORTH_SECRET`. Every command inherited them, and with the secret
+    an approved command could call north's API on localhost and answer its own cards (#40).
+    """
+    return frozenset(
+        {
+            "NORTH_SECRET",
+            *(definition.env_key for definition in PROVIDER_DEFINITIONS if definition.env_key),
+            *(f"NORTH_{name.upper()}" for name in Settings.model_fields if name.endswith(("_api_key", "_token"))),
+        }
+    )
+
+
 def _environment() -> dict[str, str]:
-    return {**os.environ, "PATH": os.pathsep.join([_north_commands(), os.environ.get("PATH", "")])}
+    """North's environment for a command, without north's own credentials (see `credential_names`)."""
+    closed = credential_names()
+    environment = {name: value for name, value in os.environ.items() if name not in closed}
+    return {**environment, "PATH": os.pathsep.join([_north_commands(), os.environ.get("PATH", "")])}
 
 
 def _timeout(input: ToolInput) -> int:
