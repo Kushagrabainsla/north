@@ -1,0 +1,6 @@
+runs since 2026-11-13: 176
+runs with a meta-tool call: 8; meta share of tool output: median 79.3%, runs at 3.5% or more: 8
+turns after the tool list grew: 27; mean cached share 1.0%; uncached tokens on them: 759022
+other later turns: 2068; mean cached share 83.1%
+all turns: input 118967266 tokens, uncached 22954093; tool-list growth caused 3.3% of the uncached tokens
+tool called just before the list grew: {'find_tools': 11, 'bash': 5, 'browser': 4, 'fetch_url': 2, 'read_file': 2, 'create_flow': 1, 'ask_user': 1, 'take_photo': 1}

@@ -54,6 +54,11 @@ same primitives, but it must not import recorded results.
 - [`codex_prompt_cache/`](codex_prompt_cache/) — whether a run's first Codex
   call can reuse an earlier run's prompt cache (no, not enough to matter), and
   where calls inside a run lose it. See the section below.
+- [`context_learning/`](context_learning/README.md) — whether compaction runs, what meta tools cost, and
+  whether tool failures recur (issues #77, #87, #92). Since 2026-11-01, no compaction ran (largest prompt
+  167k tokens against a 750k threshold). A growing tool list made 3.2% of uncached tokens. 10.4% of tool
+  calls failed, and recurring agent mistakes (17 signatures) still happen. Therefore #92 and #87 are not
+  built, and a read-only failure digest (#77 phase 1) waits for the owner's decision.
 - [`lesson_sharing/`](lesson_sharing/) — whether agents running at the same time
   should see each other's lessons sooner, and what wrong lessons cost. See the
   section below.
