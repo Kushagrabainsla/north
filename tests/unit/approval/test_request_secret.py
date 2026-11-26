@@ -22,7 +22,7 @@ from approval.store import ApprovalStore
 from approval.telegram import TelegramNotifier
 from config import secret_store
 from config.approval_mode import ApprovalMode
-from tests.conftest import StubDecider, deciding
+from tests.conftest import StubDecider, deciding, wait_until
 from tests.unit.agents.test_autonomous_ask_user import _agent
 from tests.unit.approval.test_overrule import _orchestrator
 from utils.runtime_resources import builtin_skills_dir
@@ -57,16 +57,7 @@ def _on_disk(folder: Path) -> bytes:
 async def _pending(store: ApprovalStore, asking: asyncio.Task) -> Card:
     """The card *asking* raised. It waited 50 event-loop turns, no time at all, and said only "no card was
     raised" when the request had ended with an error; it now waits up to 5 s and says how the request ended."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 5
-    while loop.time() < deadline:
-        if store.pending():
-            return store.pending()[0]
-        if asking.done():
-            ended = repr(asking.exception()) if asking.exception() else asking.result()
-            raise AssertionError(f"the request ended without a card: {ended}")
-        await asyncio.sleep(0.01)
-    raise AssertionError("no card was raised within 5 s")
+    return (await wait_until(store.pending, what="a secret card", task=asking))[0]
 
 
 async def test_the_value_saved_on_the_card_reaches_the_store_and_the_model_sees_only_the_name(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ from ledger import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.running_tasks import RunningTaskStore
+from tests.conftest import wait_until
 
 
 @pytest.fixture
@@ -244,11 +245,12 @@ async def test_drain_queued_tasks_loop_resumes_task(running_task_store: RunningT
 
     orch._process_task = mock_process
 
-    # Run one tick of the drainer loop
+    # Run the drainer until it hands the task on. Its store reads and writes run in a thread, so a
+    # fixed 50 ms was not always enough on a slow machine.
     drain_task = asyncio.create_task(orch.drain_queued_tasks_loop(poll_interval=0.01))
     orch.notify_model_recovery()
 
-    await asyncio.sleep(0.05)
+    await wait_until(lambda: "t1" in processed_tasks, what="the drainer resumed t1", task=drain_task)
     drain_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await drain_task

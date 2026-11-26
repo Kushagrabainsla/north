@@ -924,6 +924,9 @@ class ModelDispatcher(InferenceRouter):
 
         The same rule as the chain router (issue #82, item 5): while the soonest cooldown fits in
         `_MAX_INLINE_WAIT_SECONDS`, and for at most `_MAX_WALKS` passes, wait for it and try again.
+        A cooldown can end before the pass does (a 0.5 s cooldown on a slow machine); that model is
+        usable again, so the next pass starts at once. It used to read as "nothing to wait for" and
+        failed the call.
         """
         if not candidates:
             raise AllModelsRateLimitedError("No models available for this request")
@@ -936,9 +939,13 @@ class ModelDispatcher(InferenceRouter):
                 result = await self._call_candidate(info, provider, plan)
                 if result is not _NO_RESULT:
                     return result
+            if walked == _MAX_WALKS:
+                break
+            if any(not self._is_unusable(info, plan.capability) for info, _ in candidates):
+                continue
             wait = self._shortest_transient_wait(candidates)
             pause = wait + _WAIT_GRACE_SECONDS
-            if wait <= 0 or walked == _MAX_WALKS or waited + pause > _MAX_INLINE_WAIT_SECONDS:
+            if wait <= 0 or waited + pause > _MAX_INLINE_WAIT_SECONDS:
                 break
             logger.info("All candidates are cooling down - waiting %.1fs and trying again", wait)
             await asyncio.sleep(pause)
