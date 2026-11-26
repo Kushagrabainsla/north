@@ -1,18 +1,17 @@
 ---
 name: controlling-smart-home-devices
-description: "Use for lights, lamps, bulbs, plugs and other Kasa devices, lighting moods and scenes, colour and brightness, this computer's screen brightness, and any other smart-home platform (Stratis, SmartThings, Lutron, Ring, Nest, Matter)."
+description: "Use for lights, lamps, bulbs, plugs and switches (Kasa, Hue, Govee, Shelly...), lighting moods and scenes, colour and brightness, this computer's screen brightness, and any other smart-home platform (Stratis, SmartThings, Lutron, Ring, Nest, Matter)."
 domains:
   - general
 execution:
   agent: general
   tools:
-    - kasa
     - screen_brightness
+    - create_tool
+    - create_view
     - create_flow
     - web_search
     - fetch_url
-    - bash
-    - create_tool
   approval: on_mutation
   inputs:
     type: object
@@ -31,7 +30,7 @@ execution:
   success_criteria:
     - Every device the request named was found, or the user was told which was not.
     - Each change was read back and reported with the device's new state.
-    - An unsupported platform got a tool built for it, never a bare shell command.
+    - A brand or platform with no tool yet got one built for it, never a bare shell command.
 ---
 # Controlling smart home devices
 
@@ -39,45 +38,24 @@ execution:
 
 ## Tools
 
-- `kasa` - TP-Link Kasa devices on the local network: plugs, switches, bulbs, light strips.
+- The brand's own tool, which north made for it (`create_tool` `action='list'` names them, such as `kasa_lights` or `hue_lights`): `action='list'` for the devices, their ids and state, then `action='set'` with `id` (or `"all"`) and any of `on`, `brightness` 1-100, `hue` 0-360 with `saturation`, `kelvin`.
 - `screen_brightness` - the brightness of this computer's screens, 0-100: the laptop's own and external monitors. Not for lamps or bulbs.
-- `create_flow` (`schedule`, `list`, `reschedule`, `unschedule`) - automations ("turn off all lights at 11pm"): make it a flow first (`create_flow`), test it, then schedule it, in the user's local time.
-- `web_search`, `fetch_url`, `bash`, `create_tool` - for a platform north has no tool for yet (below).
-
-Lights, plugs and switches of another brand that north has a tool for (one added on the Devices page) are changed with that tool: `action='list'` for the devices and their ids, then `action='set'` with `ids` and any of `on`, `brightness`, `hue` + `saturation`, `kelvin`, or a `scene`.
-
-## kasa actions
-
-| action | what it does | extra params |
-|---|---|---|
-| `on` | turn on | - |
-| `off` | turn off | - |
-| `toggle` | flip current state | - |
-| `list` | show all devices and their current state | - |
-| `brightness` | set brightness | `brightness` 0–100 |
-| `color` | set colour by name or hue | `color` (name) OR `hue` 0–360 + optional `saturation` 0–100 |
-| `color_temp` | set white colour temperature | `color_temp`: candlelight/warm/soft/neutral/cool/daylight or Kelvin 2500–6500 |
-| `scene` | apply a lighting preset | `scene`: moody/cozy/movie/focus/romantic/party/sunset; optional `device` |
-
-Named colours: red, orange, yellow, green, cyan, blue, purple, pink, magenta.
-Named temperatures: candlelight (2500K), warm (2700K), soft (3000K), neutral (4000K), cool (5000K), daylight (6500K).
-
-Power actions (`on`, `off`, `toggle`) need a `device` (alias or IP). `brightness`, `color`, `color_temp` and `scene` may omit `device` to apply to every discovered light. A mood request ("make the lights cozy") is a named `scene`: apply it at once, no follow-up question.
+- `create_flow` (`schedule`, `list`, `reschedule`, `unschedule`) - automations ("turn off all lights at 11pm"): make it a flow first, test it, then schedule it, in the user's local time.
+- `create_tool`, `create_view`, `request_secret`, `web_search`, `fetch_url` - for a brand or platform north has no tool for yet (below).
 
 ## Procedure
 
-1. Map the request to one action. "turn off the desk lamp" → `off`, `device="desk lamp"`; "set the bedroom lamp to blue" → `color`; "dim the office light to 30%" → `brightness=30`; "make the bedroom lamp warm" → `color_temp="warm"`; "make my lights moody" → `scene="moody"` on every light; "set the living room lights for a movie" → `scene="movie"`, `device="living room"`.
-2. If the device name is uncertain, or the request is "all the lights", call `list` first, then act on each device by name.
-3. For screens: "dim my screens to 30%" → `screen_brightness` `brightness=30`; "set the laptop screen to 50%" or "make the monitor a bit brighter" → `action=get` to read the screens' names and levels, then `action=set` on that screen.
-4. Read back and report what changed: which devices, and their new state. A device that lacks a feature (colour on a white-only bulb) is reported as such, not retried.
-5. For an unrecognised mood, ask one concise question; recognised scenes run immediately.
+1. Find the brand's tool with `create_tool` `action='list'`. None for this brand: follow `adding-a-home-device` first, then come back to the request.
+2. Map the request to calls. "turn off the desk lamp" → `list`, then `set` with that lamp's `id` and `on=false`; "dim the office light to 30%" → `brightness=30`; "set the bedroom lamp to blue" → `hue=240`; "make the bedroom lamp warm" → `kelvin=2700`; "all the lights" → `id="all"`.
+3. A mood is a set of values, applied at once with no follow-up question: cozy (2700 K, 40%), moody (hue 280, 25%), movie (2700 K, 15%), focus (5000 K, 100%), romantic (hue 340, 30%), party (a different hue per light, 100%), sunset (hue 25, 60%). Ask one concise question only for a mood not listed.
+4. For screens: "dim my screens to 30%" → `screen_brightness` `brightness=30`; "set the laptop screen to 50%" or "make the monitor a bit brighter" → `action=get` for the screens' names and levels, then `action=set` on that screen.
+5. Read back and report what changed: which devices, and their new state. A device that lacks a feature (colour on a white-only bulb) is reported as such, not retried.
 
 ## A platform north has no tool for
 
 Stratis, Latch, SmartThings, Lutron, Ring, Nest, Yale, Matter/Thread, a building-management app:
 
 1. Identify the platform. "Stratis" is a property-management smart-home platform (stratis.com), not the Linux `stratis` storage tool; never run system commands for a smart-home request.
-2. `web_search` for its API: docs, authentication (OAuth, API key, token), the device list and control endpoints.
-3. Call `create_tool` with `action='list'` for an existing tool before creating anything.
-4. Lights, plugs and switches of a new brand: follow `adding-a-home-device`, which makes one `DeviceTool` whose devices also show on the Devices page. Anything else: `create_tool` a Python tool for the platform (`adding-a-north-tool`).
-5. Use the new tool for the request. If no usable API documentation turns up, say what was found and ask for credentials or app details; never fall back to bare bash.
+2. `web_search` for its API: docs, authentication (OAuth, API key, token), the device list and control endpoints, or a Python package for it.
+3. Lights, plugs and switches: follow `adding-a-home-device`, which makes the tool and its panel. Anything else: `create_tool` a tool for the platform (`adding-a-north-tool`).
+4. Use the new tool for the request. If no usable API turns up, say what was found and what it would take; never fall back to bare bash.

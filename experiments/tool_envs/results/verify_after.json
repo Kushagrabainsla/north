@@ -1,0 +1,39 @@
+{
+ "checkout": "after",
+ "north_packaging_after": "26.2",
+ "cases": [
+  {
+   "case": "new_package",
+   "created": true,
+   "why_not": "",
+   "result": {
+    "version": "0.9.0"
+   }
+  },
+  {
+   "case": "other_version",
+   "created": true,
+   "why_not": "",
+   "result": {
+    "version": "23.2"
+   }
+  },
+  {
+   "case": "north_files",
+   "created": true,
+   "why_not": "",
+   "result": {
+    "read": false
+   }
+  },
+  {
+   "case": "panel_can_read",
+   "created": true,
+   "why_not": "",
+   "result": {
+    "lamps": []
+   },
+   "view_may_read_list": true
+  }
+ ]
+}

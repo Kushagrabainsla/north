@@ -1,0 +1,39 @@
+{
+ "checkout": "before",
+ "request_secret": false,
+ "cases": [
+  {
+   "case": "dashboard",
+   "card_waits_for_user": false,
+   "task_went_on": true,
+   "task_told_secret_saved": true,
+   "secret_saved": true,
+   "user_actions": 7,
+   "value_reached_model": false,
+   "value_in_card_store": false,
+   "value_in_ledger": false
+  },
+  {
+   "case": "reply",
+   "card_waits_for_user": false,
+   "task_went_on": true,
+   "task_told_secret_saved": true,
+   "secret_saved": false,
+   "user_actions": 1,
+   "value_reached_model": true,
+   "value_in_card_store": true,
+   "value_in_ledger": true
+  },
+  {
+   "case": "yolo",
+   "card_waits_for_user": false,
+   "task_went_on": true,
+   "task_told_secret_saved": true,
+   "secret_saved": false,
+   "user_actions": 0,
+   "value_reached_model": false,
+   "value_in_card_store": false,
+   "value_in_ledger": false
+  }
+ ]
+}

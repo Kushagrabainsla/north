@@ -1,10 +1,10 @@
 """CreateViewTool - north makes a page for itself on the dashboard, from the UI kit only.
 
 A view is A2UI v0.9 JSON on north's kit catalog (`views.catalog`): what it shows, the
-read-only tools it reads when opened, and the flows its buttons run. `draft` checks it and
-keeps it where only a link reaches it, so you can open it first; `add` puts the draft on
-the Views page, and is the one call that asks. Its buttons never act by themselves: each
-starts a flow, whose steps ask as usual.
+read-only tools it reads when opened, and what its buttons and inputs do. `draft` checks it
+and keeps it where only a link reaches it, so you can open it first; `add` puts the draft on
+the Views page, and is the one call that asks. Its parts never act by themselves: each runs
+a flow, whose steps ask as usual, or a tool call the user makes by using it.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from config.settings import settings
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from views import ViewStore, check_view, describe_catalog, summary
-from views.document import reference_checks
+from views.document import action_tool_check, reference_checks
 
 GUIDE = "authoring-a-north-view"
 
@@ -31,13 +31,15 @@ class CreateViewTool(Tool):
     name = "create_view"
     is_mutating = True
     description = (
-        "Make a page for yourself on the dashboard's Views page, drawn only from north's UI kit: a status board, "
-        "a list of a flow's runs, figures you track. Read the authoring-a-north-view skill first. action='parts' "
-        "lists the parts a view may use. action='draft' checks a view (A2UI v0.9 JSON: id, title, data, actions, "
-        "components) and keeps it as a draft with a preview link; fix every problem it names and draft again. "
-        "action='add' puts the checked draft on the Views page, and asks first. A view reads only tools that "
-        "change nothing, and its buttons only run flows, whose steps ask as usual. list, read and remove do what "
-        "they say."
+        "Make a custom panel on the dashboard's Views page, drawn only from north's UI kit, for anything the user "
+        "wants to see or control: a status board, a flow's runs, their lights with switches and sliders, a form "
+        "that starts a flow. Read the authoring-a-north-view skill first. action='parts' lists the parts. "
+        "action='draft' checks a view (A2UI v0.9 JSON: id, title, data, state, refresh, actions, components) and "
+        "keeps it as a draft with a preview link; fix every problem it names and draft again. action='add' puts "
+        "the checked draft on the Views page, and asks first. A view reads data from tools that change nothing. "
+        "Its buttons and inputs run flows or call tools as the user: a call that sends, spends, deletes, pushes, "
+        "runs a command or changes north asks the user to confirm its exact values. list, read and remove do "
+        "what they say."
     )
     parameters_schema = {
         "type": "object",
@@ -60,7 +62,12 @@ class CreateViewTool(Tool):
 
     def _problems(self, view: Any) -> list[str]:
         tool_problem, flow_problem = reference_checks(self._tool_registry, self._flow_registry)
-        return check_view(view, tool_problem=tool_problem, flow_problem=flow_problem)
+        return check_view(
+            view,
+            tool_problem=tool_problem,
+            flow_problem=flow_problem,
+            action_tool_problem=action_tool_check(self._tool_registry),
+        )
 
     async def describe(self, input: ToolInput):
         request = await super().describe(input)
