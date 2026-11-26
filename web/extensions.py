@@ -474,14 +474,14 @@ async def delete_tool(name: str) -> None:
     registry = current_services().require("tool_registry")
     learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
     candidate = _find_candidate_path(name, learned_dir)
-    if candidate is not None:
-        await asyncio.to_thread(candidate.unlink)
+    if candidate is not None and name in registry.all_tool_names():
+        await asyncio.to_thread(candidate.unlink)  # a draft of a live tool: only the draft goes
         return
     path = _find_tool_path(name, learned_dir)
     if path is None or not path.is_relative_to(learned_dir):
         raise HTTPException(status_code=403, detail="Built-in tools cannot be deleted")
-    await asyncio.to_thread(path.unlink)
-    registry.remove(name)
+    # Its process, environment and own folder too: deleting only the code left them, and the tool stayed callable.
+    await registry.forget_learned(name)
 
 
 @router.get("/flow-definitions")

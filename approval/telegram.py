@@ -24,6 +24,7 @@ import httpx
 
 from approval.base import Notifier
 from approval.models import Card, CardType
+from config.server_url import server_url
 from config.settings import settings
 from gateways.telegram_api import (
     HTTP_TIMEOUT,
@@ -108,7 +109,18 @@ class TelegramNotifier(Notifier):
         if card.message:
             lines.append(card.message)
 
-        if card.asks_several:
+        if card.secret_names:
+            # The value must never pass through Telegram: the card names what to save, and where.
+            lines.append("")
+            lines.extend(f"• {field.display_label()} (saved as `{field.name}`)" for field in card.fields)
+            lines.extend(
+                [
+                    "",
+                    f"Type it on north's dashboard: {server_url()}/app/#/inbox?focus={card.id}",
+                    "or in Settings, Secrets. Do not send it here. Then tap Done.",
+                ]
+            )
+        elif card.asks_several:
             lines.append("")
             lines.extend(card.numbered_questions())
         elif card.fields:
@@ -127,7 +139,7 @@ class TelegramNotifier(Notifier):
 
         if card.asks_several:
             lines.extend(["", "Reply with one line per question, in order. An option's number picks it."])
-        elif card.type is CardType.QUESTION:
+        elif card.type is CardType.QUESTION and not card.secret_names:
             lines.extend(["", "Tap an answer, or reply with your own." if card.options else "Reply with your answer."])
 
         if card.type is CardType.QUESTION:

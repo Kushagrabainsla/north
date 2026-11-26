@@ -64,6 +64,10 @@ same primitives, but it must not import recorded results.
 - [`lesson_sharing/`](lesson_sharing/) — whether agents running at the same time
   should see each other's lessons sooner, and what wrong lessons cost. See the
   section below.
+- [`kasa_rebuild/`](kasa_rebuild/README.md) — whether north makes the Kasa tool and
+  its panel from one prompt, on real bulbs. On 2026-11-26 runs 2 and 3 made both,
+  with no failed meta call. Each earlier failure was in north (Local Network access,
+  a removed tool kept, a deleted start folder) and is fixed.
 
 ## Lessons between agents running at the same time (2026-10-26)
 

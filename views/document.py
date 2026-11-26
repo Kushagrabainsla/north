@@ -11,23 +11,40 @@
     }
 
 `data` is read when the view opens, from tools that change nothing; each result is at
-`/<name>` in the view's data. A button runs an `action`, which runs a flow: the flow's
-own steps ask before acting, as any run does. Nothing in a view acts on its own.
+`/<name>` in the view's data, read again after each action and every `refresh` seconds.
+`state` holds what the view's inputs set, at `/state/<name>`.
+
+An action runs a flow (`{"flow": ..., "inputs": {...}}`), whose own steps ask as any run
+does, or calls a tool (`{"tool": ..., "args": {...}}`). A value in `inputs` or `args` is
+written as is, or read when the action runs with `{"path": ...}`: from `state`, the data,
+or the row the part is in. A tool call is yours: you pressed the button, so it runs at
+once with no approval card, as your own dashboard controls do (CODING_STYLE §7.3). A call
+that sends to someone, spends, deletes, pushes, runs a command or changes north asks you
+to confirm it first, with its exact values; `"confirm": true` asks for any other call too.
+Nothing in a view acts on its own: an action runs only when you use a part.
+
+    "state": {"level": 50},
+    "actions": {"set_level": {"tool": "screen_brightness",
+                              "args": {"action": "set", "brightness": {"path": "/state/level"}}}}
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from views.catalog import A2UI_VERSION, CATALOG_ID, COMPONENTS, CONTAINERS, ID_PATTERN, component_schema
+from views.catalog import A2UI_VERSION, CATALOG_ID, COMPONENTS, CONTAINERS, ID_PATTERN, INPUTS, component_schema
 
 SLUG = r"^[a-z0-9][a-z0-9-]{0,62}$"
 MAX_COMPONENTS = 200
 MAX_DEPTH = 12
 ABOUT_KINDS = ("flow", "skill", "tool")
+# The view's own values, at /state/<name>: what its inputs set.
+STATE = "state"
+MIN_REFRESH_SECONDS = 5
 
 VIEW_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -55,19 +72,40 @@ VIEW_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        "state": {
+            "type": "object",
+            "maxProperties": 20,
+            "propertyNames": {"pattern": ID_PATTERN},
+        },
+        "refresh": {"type": "integer", "minimum": MIN_REFRESH_SECONDS, "maximum": 3600},
         "actions": {
             "type": "object",
-            "maxProperties": 8,
+            "maxProperties": 16,
             "propertyNames": {"pattern": ID_PATTERN},
             "additionalProperties": {
-                "type": "object",
-                "properties": {
-                    "flow": {"type": "string", "minLength": 1},
-                    "inputs": {"type": "object"},
-                    "label": {"type": "string", "maxLength": 120},
-                },
-                "required": ["flow"],
-                "additionalProperties": False,
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "flow": {"type": "string", "minLength": 1},
+                            "inputs": {"type": "object", "maxProperties": 12},
+                            "label": {"type": "string", "maxLength": 120},
+                        },
+                        "required": ["flow"],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string", "minLength": 1},
+                            "args": {"type": "object", "maxProperties": 12},
+                            "label": {"type": "string", "maxLength": 120},
+                            "confirm": {"type": "boolean"},
+                        },
+                        "required": ["tool"],
+                        "additionalProperties": False,
+                    },
+                ]
             },
         },
         "components": {"type": "array", "minItems": 1, "maxItems": MAX_COMPONENTS, "items": {"type": "object"}},
@@ -116,12 +154,32 @@ def reference_checks(tool_registry: Any, flow_registry: Any) -> tuple[ToolCheck,
     return tool_problem, flow_problem
 
 
+def action_tool_check(tool_registry: Any) -> ToolCheck:
+    """The check for a tool an action calls: it must exist. What the call does is judged when it runs."""
+
+    def problem(name: str, args: dict[str, Any]) -> str | None:
+        del args
+        if tool_registry is None:
+            return "tools are not loaded yet"
+        try:
+            tool_registry.get(name)
+        except Exception:
+            return f"there is no tool named {name!r}"
+        return None
+
+    return problem
+
+
 def _where(error) -> str:
     return "/".join(str(part) for part in error.absolute_path) or "the view"
 
 
 def check_view(
-    document: Any, *, tool_problem: ToolCheck | None = None, flow_problem: FlowCheck | None = None
+    document: Any,
+    *,
+    tool_problem: ToolCheck | None = None,
+    flow_problem: FlowCheck | None = None,
+    action_tool_problem: ToolCheck | None = None,
 ) -> list[str]:
     """Every reason *document* cannot be shown, in words north can act on. Empty when it can."""
     errors = [f"{_where(e)}: {e.message}" for e in _VIEW.iter_errors(document)]
@@ -148,6 +206,9 @@ def check_view(
     data_names = [source["name"] for source in document.get("data", [])]
     if len(set(data_names)) != len(data_names):
         errors.append("Two data sources share a name.")
+    if STATE in data_names:
+        errors.append(f"A data source cannot be named {STATE!r}: /{STATE} is the view's own values.")
+    state = document.get(STATE, {})
     actions = document.get("actions", {})
 
     # Children and templates name parts that exist; the tree has no loops and is not too deep.
@@ -176,22 +237,50 @@ def check_view(
     if unused:
         errors.append(f"Not reachable from 'root', so never shown: {', '.join(unused)}")
 
+    def path_problem(path: str) -> str | None:
+        """Why an absolute *path* reads nothing the view has, or None."""
+        parts = path.strip("/").split("/")
+        if parts[0] == STATE:
+            if len(parts) < 2 or parts[1] not in state:
+                return f"{path!r} names no value in the view's {STATE}; add it there with its first value"
+            return None
+        if parts[0] not in data_names:
+            return f"reads {path!r}, but the view has no data named {parts[0]!r}"
+        return None
+
     for component in components:
         for path in _paths(component):
-            if path.startswith("/") and path.strip("/").split("/")[0] not in data_names:
+            if path.startswith("/") and (problem := path_problem(path)):
+                errors.append(f"{component['id']!r}: {problem}")
+        event = component.get("action")
+        if isinstance(event, dict) and (name := event["event"]["name"]) not in actions:
+            errors.append(
+                f"{component['component']} {component['id']!r} runs {name!r}, which is not one of the view's actions"
+            )
+        if component["component"] in INPUTS:
+            written = component["value"]["path"]
+            if written.startswith("/") and not written.startswith(f"/{STATE}/"):
                 errors.append(
-                    f"{component['id']!r} reads {path!r}, but the view has no data named {path.split('/')[1]!r}"
+                    f"{component['id']!r} keeps its value at {written!r}: an input writes to /{STATE}/<name>, "
+                    "or to a field of its row (a path without the leading slash)"
                 )
-        if component["component"] == "Button":
-            name = component["action"]["event"]["name"]
-            if name not in actions:
-                errors.append(f"Button {component['id']!r} runs {name!r}, which is not one of the view's actions")
+
+    for name, action in actions.items():
+        for path in _paths(action):
+            if path.startswith("/") and (problem := path_problem(path)):
+                errors.append(f"action {name!r}: {problem}")
 
     for source in document.get("data", []):
         if tool_problem is not None and (problem := tool_problem(source["tool"], source.get("args") or {})):
             errors.append(f"data {source['name']!r}: {problem}")
     for name, action in actions.items():
-        if flow_problem is not None and (problem := flow_problem(action["flow"])):
+        if "flow" in action and flow_problem is not None and (problem := flow_problem(action["flow"])):
+            errors.append(f"action {name!r}: {problem}")
+        if (
+            "tool" in action
+            and action_tool_problem is not None
+            and (problem := action_tool_problem(action["tool"], action.get("args") or {}))
+        ):
             errors.append(f"action {name!r}: {problem}")
     return errors
 
@@ -212,10 +301,12 @@ def _paths(node: Any) -> list[str]:
 def messages(document: dict[str, Any], data: dict[str, Any]) -> list[dict[str, Any]]:
     """The view as the A2UI v0.9 messages a renderer reads: the surface, its parts, its data."""
     surface = document["id"]
+    # The view's own values start as it declares them; its inputs change them in the browser.
+    value = {**data, STATE: document[STATE]} if STATE in document else data
     return [
         {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface, "catalogId": CATALOG_ID}},
         {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface, "components": document["components"]}},
-        {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface, "path": "/", "value": data}},
+        {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface, "path": "/", "value": value}},
     ]
 
 
@@ -228,7 +319,20 @@ def summary(document: dict[str, Any]) -> str:
     lines.append(
         "Reads, when you open it: " + (", ".join(reads) if reads else "nothing") + ". These tools change nothing."
     )
+    if refresh := document.get("refresh"):
+        lines.append(f"Reads them again every {refresh} s while it is open.")
     for name, action in document.get("actions", {}).items():
-        what = action.get("label") or f"runs the flow {action['flow']}"
-        lines.append(f"Button action {name}: {what} (the flow {action['flow']}; its steps ask as usual).")
+        if "flow" in action:
+            what = action.get("label") or f"runs the flow {action['flow']}"
+            lines.append(f"Action {name}: {what} (the flow {action['flow']}; its steps ask as usual).")
+            continue
+        what = action.get("label") or f"calls {action['tool']}"
+        args = json.dumps(action.get("args") or {}, sort_keys=True)
+        ask = (
+            "asks you to confirm every time"
+            if action.get("confirm")
+            else "runs at once when you use it; asks you to confirm if it sends, spends, deletes, pushes, "
+            "runs a command or changes north"
+        )
+        lines.append(f"Action {name}: {what} (the tool {action['tool']} with {args}; {ask}).")
     return "\n".join(lines)

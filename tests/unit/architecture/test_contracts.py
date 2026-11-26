@@ -19,7 +19,7 @@ PRODUCTION_ROOTS = (
     "inference",
     "jobs",
     "ledger",
-    "mcp",
+    "mcp_client",
     "memory",
     "orchestrator",
     "resources",

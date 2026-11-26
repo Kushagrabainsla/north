@@ -28,7 +28,15 @@ from pathlib import Path
 from typing import Any
 
 from approval.continuation import CardContinuations, CardOutcome
-from approval.models import ApprovalDecision, Card, CardType, DecidedBy, PriorDecision
+from approval.models import (
+    SECRET_NOT_SAVED,
+    SECRET_SAVED,
+    ApprovalDecision,
+    Card,
+    CardType,
+    DecidedBy,
+    PriorDecision,
+)
 from utils.db import open_db_connection
 
 logger = logging.getLogger(__name__)
@@ -245,6 +253,11 @@ class ApprovalStore:
         card = self._cards.get(card_id)
         if card is None or card.status != _PENDING:
             return False
+        if card.secret_names:
+            # A reply to a secret card can be the secret itself, typed in Telegram or the chat. Every
+            # way a card is answered passes here, so here the reply is dropped: the card keeps only
+            # whether the secret store now holds each name (`Card.secrets_saved`).
+            status, chosen_option, values = _secret_outcome(card, status)
         update: dict[str, Any] = {"status": status, "chosen_option": chosen_option, "decided_at": datetime.now(UTC)}
         if decided_by:
             update["decided_by"] = decided_by
@@ -378,6 +391,17 @@ class ApprovalStore:
         """Every card still waiting, however many, then the latest *limit* decided, newest first."""
         cards = sorted(self._cards.values(), key=lambda c: c.created_at, reverse=True)
         return [c for c in cards if c.status == _PENDING] + [c for c in cards if c.status != _PENDING][:limit]
+
+
+# How a secret card ends without the user: the task stopped, or nobody answered in time.
+_ENDED_WITHOUT_YOU = frozenset({ApprovalDecision.TIMEOUT_REJECTED, ApprovalDecision.TASK_ENDED})
+
+
+def _secret_outcome(card: Card, status: str) -> tuple[str, str, None]:
+    """What a secret card resolves to, whatever reply came with it: (status, chosen_option, no values)."""
+    if card.secrets_saved():
+        return ApprovalDecision.ANSWERED, SECRET_SAVED, None
+    return (status if status in _ENDED_WITHOUT_YOU else ApprovalDecision.REJECTED), SECRET_NOT_SAVED, None
 
 
 def _check_fits(card: Card, status: str, chosen_option: str) -> None:

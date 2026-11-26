@@ -16,8 +16,6 @@ from approval.policy import Action, ActionKind
 from approval.store import ApprovalStore
 from config.approval_mode import ApprovalMode
 from tests.conftest import approvals
-from tools.models import ToolInput
-from tools.specialized.kasa import KasaTool
 
 
 def _lights_off(**facts) -> Request:
@@ -73,16 +71,6 @@ async def test_a_send_is_asked_about_every_time() -> None:
     assert len(store.pending()) == 1
     store.resolve(store.pending()[0].id, ApprovalDecision.REJECTED)
     await asking
-
-
-async def test_a_device_named_in_another_case_is_the_same_action() -> None:
-    kasa = KasaTool()
-    lower = await kasa.describe(ToolInput(params={"action": "off", "device": "living room lights"}))
-    title = await kasa.describe(ToolInput(params={"action": "off", "device": "Living room lights"}))
-
-    assert lower is not None and title is not None
-    assert lower.action.describe() == title.action.describe()
-    assert "Living room lights" in title.message
 
 
 def test_the_decider_is_told_what_a_yes_covers() -> None:

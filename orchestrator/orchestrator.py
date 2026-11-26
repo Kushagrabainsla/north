@@ -23,6 +23,7 @@ from approval.approval_memory import ApprovalMemory
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent
 from approval.models import DecidedBy
 from approval.store import ApprovalStore
+from config import secret_store
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.exceptions import missing_resource
@@ -165,6 +166,7 @@ class Orchestrator:
             self_repair=self_repair,
             critic=critic,
             tracked_router=tracked_router,
+            tool_registry=tool_registry,
         )
 
     def notify_model_recovery(self) -> None:
@@ -523,12 +525,20 @@ class Orchestrator:
             raise LookupError(f"Unknown approval card {card_id!r}.")
         if card.status != "pending":
             raise ValueError(f"Approval card {card_id!r} is already resolved ({card.status}).")
+        if card.secret_names and any(str(value or "") for value in (values or {}).values()):
+            # The dashboard's secret card: what was typed goes to the secret store, not onto the card.
+            await self.save_secret_answer(card_id, {name: str(value or "") for name, value in (values or {}).items()})
+            return
         decision, chosen_option = _decision_from_reply(card, decision, chosen_option)
 
         if not self._approval_store.resolve(
             card_id, decision, chosen_option=chosen_option, values=values, decided_by=DecidedBy.YOU
         ):
             raise ValueError(f"Approval card {card_id!r} could not be resolved.")
+        if card.secret_names:
+            # The reply can be the secret itself; the store kept only "Saved" or "Not saved", and there is
+            # nothing to learn from either.
+            return
         # A card of several questions resolves to all its answers, which the client did not send as one.
         chosen_option = (self._approval_store.get(card_id) or card).chosen_option
         # Which fields the user changed, by name only. Whether the work was
@@ -538,6 +548,39 @@ class Orchestrator:
         proposed = card.field_values()
         edited = sorted(name for name, value in card.merge_response(values).items() if value != proposed.get(name))
         await self._learn_your_decision(card, decision, chosen_option, reason=reason, edited=edited)
+
+    async def save_secret_answer(self, card_id: str, values: dict[str, str]) -> None:
+        """Save the secrets a `request_secret` card asks for, then resolve the card as saved.
+
+        Reached through `respond_approval` when the dashboard's secret card sends what was typed. The
+        values go to the secret store under the names the server-issued card holds; nothing else keeps
+        them. Every value is checked before any is saved, so a bad one leaves the card waiting.
+
+        Raises:
+            LookupError: card_id does not correspond to an issued card.
+            ValueError: the card is resolved, asks for no secret, does not ask for a name in
+                *values*, misses one it asks for, or a value is one north cannot keep.
+        """
+        card = self._approval_store.get(card_id)
+        if card is None:
+            raise LookupError(f"Unknown approval card {card_id!r}.")
+        if card.status != "pending":
+            raise ValueError(f"Approval card {card_id!r} is already resolved ({card.status}).")
+        if not card.secret_names:
+            raise ValueError(f"Approval card {card_id!r} does not ask for a secret.")
+        if extra := sorted(set(values) - set(card.secret_names)):
+            raise ValueError(f"This card does not ask for {', '.join(extra)}.")
+        if missing := [name for name in card.secret_names if not str(values.get(name) or "")]:
+            raise ValueError(f"Fill in {', '.join(missing)}.")
+        for name in card.secret_names:
+            if why := secret_store.unusable(name, values[name]):
+                raise ValueError(f"{name}: {why}")
+        store = secret_store.store()
+        for name in card.secret_names:
+            await asyncio.to_thread(store.save, name, values[name], card.message[:200])
+        logger.info("Secrets: %s saved from card %s", ", ".join(card.secret_names), card_id)  # names only
+        if not self._approval_store.resolve(card_id, "answered", decided_by=DecidedBy.YOU):
+            raise ValueError(f"Approval card {card_id!r} could not be resolved.")
 
     async def overrule_approval(self, card_id: str, decision: str, chosen_option: str = "", reason: str = "") -> Card:
         """Replace a decision north took for you with yours, and teach memory.
