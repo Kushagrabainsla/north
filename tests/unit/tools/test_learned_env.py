@@ -207,6 +207,65 @@ async def test_an_idle_tool_stops_its_process(tmp_path: Path, monkeypatch, token
     assert tool._client is None, "an idle tool holds no process"
 
 
+SPAWNS = TOOL.replace(
+    'if action == "list":',
+    'if action == "spawn":\n'
+    "            import subprocess\n"
+    "            import sys\n"
+    "\n"
+    "            child = subprocess.Popen(\n"
+    '                [sys.executable, "-c", "import time; time.sleep(60)"],\n'
+    "                start_new_session=True,\n"
+    "                stdin=subprocess.DEVNULL,\n"
+    "                stdout=subprocess.DEVNULL,\n"
+    "                stderr=subprocess.DEVNULL,\n"
+    "            )\n"
+    '            return ToolOutput(success=True, data={"pid": child.pid})\n'
+    '        if action == "list":',
+)
+
+
+def _gone(pid: int, seconds: float = 5.0) -> bool:
+    import time
+
+    import psutil
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+                return True
+        except psutil.NoSuchProcess:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+async def test_what_a_tool_started_stops_with_it_even_when_it_left_the_tools_process_group(
+    tmp_path: Path, token
+) -> None:
+    """In the one-prompt Kasa rebuild the tool started a daemon in its own session. Deleting the tool stopped the
+    tool's process, but the daemon kept the lamps' only login session until it was killed by hand."""
+    import subprocess
+
+    out, registry = await _create(tmp_path, content=SPAWNS)
+    assert out.success, out.error
+    tool = registry.get("lamps")
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        spawned = await tool.run(ToolInput(params={"action": "spawn"}))
+        assert spawned.success, spawned.error
+        daemon = spawned.data["pid"]
+
+        await tool.aclose()
+
+        assert _gone(daemon), "the daemon the tool started outlived the tool"
+        assert unrelated.poll() is None, "a process the tool did not start was stopped"
+    finally:
+        unrelated.kill()
+        unrelated.wait()
+
+
 # ── Read-only calls, and the sandbox that makes them safe ─────────────────────
 
 

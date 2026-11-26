@@ -4,7 +4,9 @@ North never imports the tool's code. `tools.learned_runner` loads it in the tool
 environment (`tools.learned_env`) and serves it over MCP on stdio; this class is the tool
 as north's agents, approvals and views see it, and talks to that process through north's
 MCP client. The process starts on the first call and stops when the tool has been idle a
-while (each one holds about 80 MB), unless the tool keeps a job running.
+while (each one holds about 80 MB), unless the tool keeps a job running. Whatever the tool
+started stops with it, even a process that left its group: each start marks its environment,
+and every process that inherited the mark is stopped too.
 
 Under the OS sandbox the process reaches the network, but not the credential folders,
 the keychain or north's own data; it writes only its own folders and temp; and it gets
@@ -20,11 +22,15 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import shlex
 import shutil
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+import psutil
 
 from approval.approvals import Request
 from config import secret_store
@@ -42,11 +48,41 @@ RUNNER = Path(__file__).with_name("learned_runner.py")
 IDLE_SECONDS = 600
 CALL_TIMEOUT_SECONDS = 120.0
 START_TIMEOUT_SECONDS = 60.0
+# Every process a tool's start runs, and every process those start, inherit this variable with one value.
+PROCESS_MARK = "NORTH_TOOL_PROCESS"
+STOP_GRACE_SECONDS = 3.0
 
 
 def metadata_path(tool_file: Path) -> Path:
     """Where what the runner said about *tool_file* is kept, beside it."""
     return tool_file.with_suffix(".json")
+
+
+def stop_marked_processes(mark: str, grace: float = STOP_GRACE_SECONDS) -> int:
+    """Stop every process of this user whose environment holds *mark* in PROCESS_MARK; how many there were.
+
+    A tool's process can start one that leaves its process group (a daemon in its own session), so stopping
+    the tool's process alone left it running: in the one-prompt Kasa rebuild such a daemon kept the lamps'
+    only login session after the tool was deleted. The mark is inherited, so it finds those too.
+    """
+    me, found = os.getuid(), []
+    for process in psutil.process_iter(["uids"]):
+        try:
+            uids = process.info["uids"]
+            if uids is None or uids.real != me or process.pid == os.getpid():
+                continue
+            if process.environ().get(PROCESS_MARK) == mark:
+                found.append(process)
+        except (psutil.Error, OSError):
+            continue  # gone, or not ours to read
+    for process in found:
+        with contextlib.suppress(psutil.Error):
+            process.terminate()
+    _, alive = psutil.wait_procs(found, timeout=grace)
+    for process in alive:
+        with contextlib.suppress(psutil.Error):
+            process.kill()
+    return len(found)
 
 
 class LearnedRuntime:
@@ -94,6 +130,7 @@ class RunnerTool(Tool):
         self._read_only_when: dict[str, list[Any]] = dict(meta.get("read_only_when") or {})
         self._keeps_running = bool(meta.get("keeps_running"))
         self._client: McpClient | None = None
+        self._mark: str | None = None  # PROCESS_MARK of the running process, and of all it started
         self._secrets_seen: tuple[tuple[str, str], ...] = ()
         self._lock = asyncio.Lock()
         self._idle: asyncio.Task[None] | None = None
@@ -157,7 +194,12 @@ class RunnerTool(Tool):
         argv, env = await self.command()
         config = McpServerConfig(command=argv[0], args=argv[1:], env=env, timeout=CALL_TIMEOUT_SECONDS)
         client = McpClient(f"tool:{self.name}", config)
-        await asyncio.wait_for(client.start(), START_TIMEOUT_SECONDS)
+        self._mark = env[PROCESS_MARK]
+        try:
+            await asyncio.wait_for(client.start(), START_TIMEOUT_SECONDS)
+        except BaseException:
+            await self._stop_marked()
+            raise
         self._client, self._secrets_seen = client, seen
         logger.info("Tool %s: started in its own process%s", self.name, "" if self.sandboxed else " (no OS sandbox)")
         return client
@@ -166,6 +208,7 @@ class RunnerTool(Tool):
         """The argv that runs the runner for this tool (in the sandbox when there is one), and its environment.
 
         The environment holds only the secrets the tool declared; `McpClient` adds no more than a worker needs.
+        It also holds a new PROCESS_MARK, so all that this start runs can be found and stopped with it.
         """
         python = await self.runtime.environments.python_for(self.name, self.packages)
         data = self.runtime.data_dir(self.name)
@@ -181,7 +224,8 @@ class RunnerTool(Tool):
             argv = self.runtime.sandbox.wrap(shlex.join(argv), str(data), writable=True, north_folders=own)
         store = secret_store.store()
         secrets = {name: value for name in self.uses_secrets if (value := store.value(name)) is not None}
-        return argv, {"NORTH_TOOL_SECRETS": json.dumps(secrets), "HOME": str(Path.home())}
+        mark = f"{self.name}-{uuid.uuid4().hex}"
+        return argv, {"NORTH_TOOL_SECRETS": json.dumps(secrets), "HOME": str(Path.home()), PROCESS_MARK: mark}
 
     def _secret_stamp(self) -> tuple[tuple[str, str], ...]:
         saved = {item.name: item.updated_at for item in secret_store.store().saved()}
@@ -206,6 +250,16 @@ class RunnerTool(Tool):
         if client is not None:
             await client.close()
             logger.info("Tool %s: process stopped", self.name)
+        await self._stop_marked()
+
+    async def _stop_marked(self) -> None:
+        """Stop what the tool's process started that is still running, such as a daemon in its own session."""
+        mark, self._mark = self._mark, None
+        if mark is None:
+            return
+        stopped = await asyncio.to_thread(stop_marked_processes, mark)
+        if stopped:
+            logger.info("Tool %s: stopped %d process(es) it had started", self.name, stopped)
 
     async def aclose(self) -> None:
         if self._idle is not None:
@@ -238,6 +292,9 @@ async def describe_file(tool_file: Path, name: str, packages: list[str], runtime
     except TimeoutError:
         process.kill()
         raise ValueError(f"the tool did not load within {START_TIMEOUT_SECONDS:.0f} s") from None
+    finally:
+        # Loading the tool runs its module code, which can start processes too.
+        await asyncio.to_thread(stop_marked_processes, env[PROCESS_MARK])
     if process.returncode != 0:
         said = stderr.decode(errors="replace").strip().splitlines()
         raise ValueError(said[-1] if said else "the tool could not be loaded")
