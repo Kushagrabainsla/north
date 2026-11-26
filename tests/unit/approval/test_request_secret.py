@@ -54,12 +54,19 @@ def _on_disk(folder: Path) -> bytes:
     return b"".join(part.read_bytes() for part in sorted(folder.glob("approvals.db*")))
 
 
-async def _pending(store: ApprovalStore) -> Card:
-    for _ in range(50):
+async def _pending(store: ApprovalStore, asking: asyncio.Task) -> Card:
+    """The card *asking* raised. It waited 50 event-loop turns, no time at all, and said only "no card was
+    raised" when the request had ended with an error; it now waits up to 5 s and says how the request ended."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5
+    while loop.time() < deadline:
         if store.pending():
             return store.pending()[0]
-        await asyncio.sleep(0)
-    raise AssertionError("no card was raised")
+        if asking.done():
+            ended = repr(asking.exception()) if asking.exception() else asking.result()
+            raise AssertionError(f"the request ended without a card: {ended}")
+        await asyncio.sleep(0.01)
+    raise AssertionError("no card was raised within 5 s")
 
 
 async def test_the_value_saved_on_the_card_reaches_the_store_and_the_model_sees_only_the_name(tmp_path: Path) -> None:
@@ -68,7 +75,7 @@ async def test_the_value_saved_on_the_card_reaches_the_store_and_the_model_sees_
     orch = _orchestrator(store)
 
     asking = asyncio.create_task(_request(agent))
-    card = await _pending(store)
+    card = await _pending(store, asking)
     assert [(f.name, f.type) for f in card.fields] == [("kasa_password", CardFieldType.SECRET)]
     assert card.requires_user_action and card.message == WHY
 
@@ -93,7 +100,7 @@ async def test_a_value_typed_as_the_answer_is_never_kept_anywhere(tmp_path: Path
     orch = _orchestrator(store)
 
     asking = asyncio.create_task(_request(agent))
-    card = await _pending(store)
+    card = await _pending(store, asking)
     await orch.respond_approval(card.id, "answered", PASSWORD)
     out = await asyncio.wait_for(asking, timeout=1)
 
@@ -112,7 +119,7 @@ async def test_done_after_saving_on_the_secrets_panel_counts_as_saved(tmp_path: 
     agent = _agent(tmp_path, ApprovalMode.ASK, StubDecider(None), store)
 
     asking = asyncio.create_task(_request(agent))
-    card = await _pending(store)
+    card = await _pending(store, asking)
     secret_store.store().save("kasa_password", PASSWORD)
     await _orchestrator(store).respond_approval(card.id, "answered", "Done")
 
@@ -124,7 +131,7 @@ async def test_not_now_tells_the_model_what_to_do_instead(tmp_path: Path) -> Non
     agent = _agent(tmp_path, ApprovalMode.ASK, StubDecider(None), store)
 
     asking = asyncio.create_task(_request(agent))
-    card = await _pending(store)
+    card = await _pending(store, asking)
     await _orchestrator(store).respond_approval(card.id, "answered", "Not now")
     out = json.loads(await asyncio.wait_for(asking, timeout=1))
 
@@ -140,7 +147,7 @@ async def test_no_mode_answers_a_secret_card_for_the_user(tmp_path: Path, mode: 
 
     asking = asyncio.create_task(_request(agent))
     try:
-        card = await _pending(store)
+        card = await _pending(store, asking)
         assert card.status == "pending"
         assert not decider.asked
     finally:
@@ -165,7 +172,7 @@ async def test_replace_asks_again_and_needs_a_new_value(tmp_path: Path) -> None:
     agent = _agent(tmp_path, ApprovalMode.ASK, StubDecider(None), store)
 
     asking = asyncio.create_task(_request(agent, replace=True))
-    card = await _pending(store)
+    card = await _pending(store, asking)
     await _orchestrator(store).respond_approval(card.id, "answered", "Done")
     out = json.loads(await asyncio.wait_for(asking, timeout=1))
 
@@ -178,7 +185,7 @@ async def test_two_secrets_are_asked_on_one_card(tmp_path: Path) -> None:
     names = [{"name": "kasa_email", "label": "TP-Link email"}, {"name": "kasa_password", "label": "TP-Link password"}]
 
     asking = asyncio.create_task(_request(agent, secrets=names))
-    card = await _pending(store)
+    card = await _pending(store, asking)
     typed = {"kasa_email": "me@example.com", "kasa_password": PASSWORD}
     await _orchestrator(store).respond_approval(card.id, "answered", "Done", values=typed)
 
