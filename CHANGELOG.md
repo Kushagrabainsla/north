@@ -4,6 +4,9 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **After an update from the dashboard, north can make a tool's environment again** (`cli/_server.py`). The dashboard's Update runs `north update` in site-packages, which `uv tool install --force` deletes and makes again. The restarted server inherited the deleted folder, so every `uv` it ran failed with "Current directory does not exist", and no tool north wrote could get its packages until north was started by hand. The server now starts in north's code folder, found again by its path. Found in run 2 of the one-prompt Kasa rebuild (`experiments/kasa_rebuild/`): 3 of 6 `create_tool` calls failed with this error, so neither the tool nor its panel was made.
+
 ### Added
 - **A tool north wrote can be removed while north runs, and nothing of it is left** (`tools/registry.py`, `tools/universal/create_tool.py`, `web/extensions.py`, the `adding-a-north-tool` skill). North kept a removed tool until it restarted: the registry only ever added tools north wrote, so a tool whose file was deleted stayed callable, and `create_tool` refused to make it again ("already exists"). The dashboard's delete removed only the code, so the tool's process, environment and own folder stayed, and `create_tool` had no way to remove a tool at all. Now:
   - `ToolRegistry.forget_learned` is the one way to remove a tool north wrote: it stops its process, deletes its code, its draft, what the runner said about it, its environment and its own folder, and drops it from the catalog. A built-in tool is never removed.
