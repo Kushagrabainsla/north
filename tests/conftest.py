@@ -334,6 +334,33 @@ def sample_provisioned_default(monkeypatch):
     return entry
 
 
+async def wait_until(condition, *, what: str, timeout: float = 5.0, task: asyncio.Future | None = None):
+    """Wait in real time until *condition()* gives a true value, and return that value.
+
+    Use it when a test waits for work in a thread, a subprocess or on a timer. A fixed number of
+    `asyncio.sleep(0)` turns takes no real time, so such a wait fails on a slow CI runner. A
+    zero-length sleep that only lets a task already scheduled run is still fine. If *task* ends
+    first, the wait fails at once and says how the task ended.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        value = condition()
+        if value:
+            return value
+        if task is not None and task.done():
+            if task.cancelled():
+                ended = "it was cancelled"
+            elif task.exception() is not None:
+                ended = f"it raised {task.exception()!r}"
+            else:
+                ended = f"it returned {task.result()!r}"
+            raise AssertionError(f"{what} did not happen: the task ended first ({ended})")
+        if loop.time() >= deadline:
+            raise AssertionError(f"{what} did not happen within {timeout:g} s")
+        await asyncio.sleep(0.01)
+
+
 async def started_pid(pid_file: Path, timeout: float = 5.0) -> int:
     """The pid a test command wrote to *pid_file*, once it has written it."""
     deadline = asyncio.get_running_loop().time() + timeout
