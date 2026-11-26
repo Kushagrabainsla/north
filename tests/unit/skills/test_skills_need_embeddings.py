@@ -1,10 +1,10 @@
-"""Whether embeddings work is found by trying them, and skill learning says so before it asks you.
+"""Whether embeddings work is found by trying them, and skill learning does not need them.
 
 In the issue #76 test the local embedding model could not load (HuggingFace
 answered 403 Forbidden, every three minutes in north.log) while Settings read
 "Local embeddings ... Ready". Every skill north tried to learn then failed its
 selection test after you had approved it: four cards for a status report, seven
-for a GitHub digest, four for a reminder (M6).
+for a GitHub digest, four for a reminder (M6). That test is gone (issue #87).
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from approval.store import ApprovalStore
 from config.approval_mode import ApprovalMode
 from config.strategy import NorthSettings
 from inference.dispatcher import ModelDispatcher
@@ -24,7 +23,7 @@ from inference.providers.local_embeddings import LocalEmbeddingProvider
 from orchestrator.api_context import ApiServices, bind_services
 from skills.registry import SkillRegistry
 from skills.selector import SkillSelector
-from tests.conftest import bind_approvals
+from tests.conftest import approving_store, bind_approvals
 from tools.models import ToolInput
 from tools.universal.create_skill import CreateSkillTool
 
@@ -73,12 +72,17 @@ async def test_the_settings_row_says_the_embedder_is_not_working(
     assert overview["embeddings"]["state"] == "unavailable"
 
 
-async def test_no_card_is_raised_for_a_skill_that_cannot_be_tested(tmp_path: Path) -> None:
+async def test_a_skill_is_learned_while_embeddings_do_not_work(tmp_path: Path) -> None:
+    """Embeddings only guard against a near-copy now; a task finds a skill by reading its description.
+
+    The old selection test needed them, so every skill north tried to learn failed after you approved it.
+    """
+
     async def no_embeddings(texts: list[str]) -> list[list[float]]:
         raise RuntimeError("No embedding model is available: could not load BAAI/bge-small-en-v1.5 (403 Forbidden)")
 
     registry = SkillRegistry(builtin_dir=tmp_path / "builtin", learned_dir=tmp_path / "learned")
-    store = ApprovalStore()
+    store = approving_store()
     tool = bind_approvals(
         CreateSkillTool(
             registry,
@@ -89,7 +93,6 @@ async def test_no_card_is_raised_for_a_skill_that_cannot_be_tested(tmp_path: Pat
         store=store,
     )
 
-    # Bounded: on the old code a card went up here and waited for an answer that never came.
     out = await asyncio.wait_for(
         tool.execute(
             ToolInput(
@@ -98,15 +101,12 @@ async def test_no_card_is_raised_for_a_skill_that_cannot_be_tested(tmp_path: Pat
                     "name": "weekly-status",
                     "description": "Use when writing my weekly status report.",
                     "instructions": "Three bullets: wins, blockers, next.",
-                    "positive_prompts": ["write my weekly status report"],
-                    "negative_prompts": ["review this python function"],
                 }
             )
         ),
         timeout=5,
     )
 
-    assert not out.success
-    assert "Skills cannot be learned right now" in out.error and "403 Forbidden" in out.error
-    assert store.all() == [], "no card for a change that cannot pass its test"
-    assert not (tmp_path / "learned" / "weekly-status").exists()
+    assert out.success, out.error
+    store.wait_for_decision.assert_awaited_once()
+    assert registry.get("weekly-status").status == "active"

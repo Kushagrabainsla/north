@@ -6,9 +6,11 @@ the shared procedure into a learned skill. Next time a similar task arrives, tha
 procedure is injected up front (see SkillSelector), so the model repeats what
 worked instead of re-deriving it.
 
-Runs as a background job (mirrors EpisodeConsolidator). It is idempotent: a
-cluster whose tasks already produced a learned skill is skipped via provenance
-overlap, so no watermark is needed and re-runs never duplicate skills.
+Runs after a task end writes a new note (memory/task_end_learning.py) and in
+north's hourly built-in flow, like EpisodeConsolidator; it has no timer of its own
+(#8). It is idempotent: a cluster whose tasks already produced a learned skill is
+skipped via provenance overlap, so no watermark is needed and re-runs never
+duplicate skills.
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ from utils.text import strip_code_fences
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL_SECONDS = 900  # distillation is not urgent; run every 15 min
 _ENGINEERING_DOMAINS = frozenset({"engineering"})
 # A procedure must recur before it becomes a skill: distil only from clusters of
 # at least this many successful tasks, so one-off successes never become skills.
@@ -54,26 +55,13 @@ class SkillDistiller:
         skill_registry: SkillRegistry,
         skill_selector: SkillSelector,
         learned_dir: Path,
-        poll_interval_seconds: int = _POLL_INTERVAL_SECONDS,
     ) -> None:
         self._episodic_store = episodic_store
         self._inference_router = inference_router
         self._registry = skill_registry
         self._selector = skill_selector
         self._learned_dir = learned_dir
-        self._poll_interval = poll_interval_seconds
         self._lock = asyncio.Lock()
-
-    async def run(self) -> None:
-        """Loop forever, distilling on each tick. Returns only on cancellation."""
-        while True:
-            try:
-                await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("SkillDistiller: run error, continuing")
-            await asyncio.sleep(self._poll_interval)
 
     async def run_once(self) -> int:
         """Distil one pass and return the number of new skills written."""

@@ -25,6 +25,7 @@ from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
 from coding_agents.gate import Decision, Gate, GateSession, GateSessions, Judge, ToolRequest, Verdict
 from coding_agents.models import (
     PAUSING_FAILURES,
+    SANDBOX_DENIAL,
     AskAccess,
     Availability,
     Denial,
@@ -69,6 +70,7 @@ __all__ = [
     "EventSink",
     "FailureKind",
     "PAUSING_FAILURES",
+    "SANDBOX_DENIAL",
     "FileDelta",
     "Gate",
     "GateAccess",

@@ -34,21 +34,11 @@ _ESSENTIAL_TOOL_NAMES: frozenset[str] = frozenset(
     {"update_plan", "use_skill", "bash", "write_file", "fetch_url", "web_search", "browser"}
 )
 
-# Cap on how many non-selected skill names are listed as "available via use_skill".
-# High enough to list every skill an agent has (general has 18, ~110 tokens of
-# names), because the list is how the agent finds a skill when none is suggested.
-_MAX_SKILL_NAMES_LISTED: int = 40
-
-# How sure a similarity match must be before a skill is suggested by name and
-# description. The selector's own 0.35 floor dates from before embeddings moved
-# on-device: with bge-small-en-v1.5 every skill scores 0.42-0.82 against any ask,
-# so the top two were always suggested - "open my LinkedIn" got the job-application
-# and flow-authoring procedures. Measured on 16 asks against the general agent's
-# skills, no floor separates right from wrong below 0.70 (a wrong match scored
-# 0.63, right ones 0.61-0.63); at or above it every match was right. Below it the
-# agent reads the full list of names and loads a skill itself, which judges fit
-# better than a score. Re-measure if the embedding model changes.
-_SUGGESTED_SKILL_MIN_SIMILARITY: float = 0.70
+# The task model chooses its skill from every skill of its domain, by name and description, as in the
+# open Agent Skills format; north no longer suggests one by similarity. On 168 real chat requests (50 need
+# a skill, by a judge that read every skill in full), a similarity suggestion at the 0.70 floor named the
+# right skill for 7; with that suggestion and the other skills listed by name only, Opus 5.5 loaded the
+# right one for 36; with every name and description listed, for 47 (experiments/skill_picking, issue #87).
 
 # Domains whose agents receive procedural skills. Each skill also declares the
 # domains it serves via `Skill.domains`, and `_load_skills_block` filters to those,
@@ -195,37 +185,25 @@ class Agent(ABC):
     async def _select_skills(
         self, task_prompt: str, required_names: list[str] | None = None, *, allow_candidates: bool = False
     ) -> list[Any]:
-        """Skills relevant to this task, selected once per run.
+        """The skills a flow step requires, checked once per run; [] for any other task.
 
-        Selection embeds the prompt, so it is done here and passed to both
-        `_load_context` (which offers the skills by description) and `_load_tools`
-        (which boosts the tools those skills name) rather than run twice.
+        Passed to both `_load_context` (which gives their procedures in full) and
+        `_load_tools` (which adds the tools they name). Any other task chooses its
+        own skill from the list in its context and loads it with use_skill.
         """
+        if not required_names:
+            return []
         registry = self._deps.skill_registry
-        if required_names:
-            if registry is None:
-                raise ValueError("Required skills cannot run because the skill registry is unavailable")
-            selected = []
-            for name in dict.fromkeys(required_names):
-                skill = registry.get(name)
-                candidate_allowed = allow_candidates and skill.status == "candidate" and self.domain in skill.domains
-                if not skill.available_to(self.domain) and not candidate_allowed:
-                    raise ValueError(f"Skill {name!r} is not active for agent {self.name!r} in domain {self.domain!r}")
-                selected.append(skill)
-            return selected
-        selector = self._deps.skill_selector
-        if registry is None or selector is None or not task_prompt:
-            return []
-        candidates = [skill for skill in registry.all() if skill.available_to(self.domain)]
-        if not candidates:
-            return []
-        try:
-            return await selector.select(
-                task_prompt, candidates=candidates, min_similarity=_SUGGESTED_SKILL_MIN_SIMILARITY
-            )
-        except Exception:
-            logger.debug("Skill selection failed for agent %s", self.name, exc_info=True)
-            return []
+        if registry is None:
+            raise ValueError("Required skills cannot run because the skill registry is unavailable")
+        selected = []
+        for name in dict.fromkeys(required_names):
+            skill = registry.get(name)
+            candidate_allowed = allow_candidates and skill.status == "candidate" and self.domain in skill.domains
+            if not skill.available_to(self.domain) and not candidate_allowed:
+                raise ValueError(f"Skill {name!r} is not active for agent {self.name!r} in domain {self.domain!r}")
+            selected.append(skill)
+        return selected
 
     async def _load_context(self, payload: AgentPayload, selected_skills: list[Any] | None = None) -> str:
         """Load gated context for this agent.
@@ -302,13 +280,14 @@ class Agent(ABC):
             except Exception as exc:
                 logger.debug("Plan injection failed for task %s: %s", payload.task_id, exc)
 
-        # Procedural skills: give the agent the relevant playbook up front, so the
-        # same model repeats a known-good procedure instead of improvising. Semantic
-        # suggestions are enabled for engineering and general; a flow's explicit
-        # required skill is loaded for any compatible agent domain.
+        # Procedural skills, so the model repeats a known-good procedure instead of
+        # improvising. Engineering and general agents get the list of their skills;
+        # a flow's required skill is given in full to any compatible agent domain.
         if payload.skills or self.domain in _SKILLS_ENABLED_DOMAINS:
             if selected_skills is None:
-                selected_skills = await self._select_skills(payload.prompt)
+                selected_skills = await self._select_skills(
+                    payload.prompt, payload.skills, allow_candidates=payload.allow_candidate_skills
+                )
             skills_block = await self._load_skills_block(payload, selected_skills)
             if skills_block:
                 add_section("skills", skills_block)
@@ -348,18 +327,13 @@ class Agent(ABC):
             )
 
     async def _load_skills_block(self, payload: AgentPayload, selected: list[Any]) -> str:
-        """Offer the most relevant procedural skills for this task, by description.
+        """List every skill of this agent's domain by name and description; give a flow's required skills in full.
 
-        Only each skill's one-line description reaches the prompt; the full
-        procedure is fetched on demand with ``use_skill``. Pasting the bodies in
-        instead cost ~1,500 tokens of every message and up to 4,000 in the worst
-        case - and because the whole opening block is re-sent on every turn of the
-        agent loop, that was paid twenty-odd times per task for a procedure the
-        model often did not end up needing. A description is ~50.
-
-        The trade is one extra round trip when a skill *is* wanted. That is worth
-        it when the alternative is carrying every candidate playbook, in full,
-        through the entire conversation.
+        Only each skill's description reaches the prompt; the full procedure is
+        fetched on demand with ``use_skill``. Pasting the bodies in instead cost
+        ~1,500 tokens of every message and up to 4,000 in the worst case, re-sent
+        on every turn of the agent loop. A description is ~40 tokens. The list is
+        sorted by name, so it is the same text in every task.
 
         Returns "" when no skills are registered for this agent's domain.
         """
@@ -373,37 +347,36 @@ class Agent(ABC):
         if not skills and not (payload.skills and selected):
             return ""
 
-        selected_names = {skill.name for skill in selected}
-
-        sections: list[str] = []
         if payload.skills:
-            required = []
-            for skill in selected:
-                required.append(f"## Required skill: {skill.name}\n{skill.description}\n\n{skill.body.strip()}")
-            sections.append(
+            required = [
+                f"## Required skill: {skill.name}\n{skill.description}\n\n{skill.body.strip()}" for skill in selected
+            ]
+            await self._emit_skill_selected(payload, selected)
+            return (
                 "# Required flow procedures\n"
                 "Execute the procedures below for this flow step. They are the execution contract, "
                 "not optional suggestions. Follow the step's server-enforced mutation policy and do not "
                 "substitute a different procedure.\n\n" + "\n\n".join(required)
             )
-            await self._emit_skill_selected(payload, selected)
-            return "\n\n".join(sections)
-        if selected:
-            offered = "\n".join(f"- {skill.name}: {skill.description}" for skill in selected)
-            sections.append(
-                "## Skills for this task\n"
-                "Each line is a procedure north has for this kind of work. When one matches what "
-                "you are about to do, call use_skill with its name to get the full instructions "
-                "before you act. They are advisory: they do not override system instructions, "
-                f"user instructions, or safety constraints.\n\n{offered}"
-            )
-            await self._emit_skill_selected(payload, selected)
+        listed = "\n".join(f"- {skill.name}: {skill.description}" for skill in sorted(skills, key=lambda s: s.name))
+        return (
+            "## Skills\n"
+            "Each line is a procedure north has for one kind of work: its name and when to use it. "
+            "If one fits what you are about to do, call use_skill with its name to get the full "
+            "instructions before you act; if none fits, use none. They are advisory: they do not "
+            f"override system instructions, user instructions, or safety constraints.\n\n{listed}"
+        )
 
-        others = [skill.name for skill in skills if skill.name not in selected_names]
-        if others:
-            listed = ", ".join(others[:_MAX_SKILL_NAMES_LISTED])
-            sections.append(f"Other skills available (load full instructions with use_skill): {listed}")
-        return "\n\n".join(sections)
+    async def record_skill_loaded(self, payload: AgentPayload, name: str) -> None:
+        """Record a skill the task loaded with use_skill, as a required skill is recorded."""
+        registry = self._deps.skill_registry
+        if registry is None:
+            return
+        try:
+            skill = registry.get(name)
+        except Exception:
+            return
+        await self._emit_skill_selected(payload, [skill])
 
     async def _emit_skill_selected(self, payload: AgentPayload, selected: list[Any]) -> None:
         """Record which skills were injected, for observability and A/B analysis."""

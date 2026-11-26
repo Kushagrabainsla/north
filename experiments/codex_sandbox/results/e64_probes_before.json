@@ -1,0 +1,214 @@
+{
+ "label": "before",
+ "commit": "442a3b8",
+ "rows": [
+  {
+   "mode": "plan",
+   "probe": "npm test",
+   "expected": "ok",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": false
+  },
+  {
+   "mode": "plan",
+   "probe": "npm run build",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 0,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "virtualenv python",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 0,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "python3 from the virtualenv",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 0,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "git status",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 4,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "python heredoc",
+   "expected": "ok",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": false
+  },
+  {
+   "mode": "plan",
+   "probe": "read another copy",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "read north's secret",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "list ~/.ssh",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "read another ~/.config file",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "write in the workspace (plan)",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "plan",
+   "probe": "write /tmp (plan)",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "npm test",
+   "expected": "ok",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": false
+  },
+  {
+   "mode": "edit",
+   "probe": "npm run build",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 0,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "virtualenv python",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 0,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "python3 from the virtualenv",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 0,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "git status",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 2,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "python heredoc",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 0,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "write in the workspace",
+   "expected": "ok",
+   "exit": 0,
+   "refusal_lines": 0,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "read another copy",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "read north's secret",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "list ~/.ssh",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "read another ~/.config file",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "write another copy",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "write the copies folder",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  },
+  {
+   "mode": "edit",
+   "probe": "write the home folder",
+   "expected": "refused",
+   "exit": 1,
+   "refusal_lines": 1,
+   "as_expected": true
+  }
+ ]
+}

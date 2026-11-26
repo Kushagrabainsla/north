@@ -1,0 +1,32 @@
+{
+  "drafts": {
+    "drafts": 25,
+    "refused": {
+      "Description must start with 'Use when'.": 1,
+      "No skill registered with name": 1,
+      "Skill selection tests failed": 18,
+      "Unknown skill intents": 2
+    },
+    "saved": 3
+  },
+  "label": "before",
+  "picks": {
+    "chat": {
+      "accuracy": 0.768,
+      "loaded_a_skill_when_none_fits": 25,
+      "mean_skills_text_tokens": 184,
+      "missed": 6,
+      "need_a_skill": 50,
+      "requests": 168,
+      "right_skill": 36,
+      "skill_found_share": 0.72,
+      "wrong_skill": 8
+    },
+    "drafts_examples": {
+      "accuracy": 0.891,
+      "must_not_kept_out": "27/30",
+      "must_pick_picked": "30/34",
+      "requests": 64
+    }
+  }
+}
