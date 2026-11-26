@@ -1732,13 +1732,20 @@ def _sync_hot_loaded_tools(
     tool_map: dict[str, Tool],
     known_registry_tools: set[str],
 ) -> None:
-    """Add any newly registered tools (e.g. created by create_tool) since execution started."""
+    """Add the tools registered since execution started (e.g. created by create_tool), and take the new version
+    of a tool this run already has when the registry holds another one (e.g. updated by create_tool).
+
+    The run kept the version it saw first: in the one-prompt Kasa rebuild, north rewrote its tool 18 times in
+    one task while its own calls still ran the second version, so no fix it made reached them.
+    """
     registry = getattr(deps, "tool_registry", None)
     if registry is None:
         return
     for tool in registry.available_tools():
         if tool.name not in known_registry_tools:
             known_registry_tools.add(tool.name)
+            tool_map[tool.name] = tool
+        elif tool.name in tool_map and tool_map[tool.name] is not tool:
             tool_map[tool.name] = tool
 
 

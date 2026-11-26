@@ -1351,6 +1351,73 @@ async def test_a_real_tool_error_still_counts_against_the_tool(tmp_path: Path) -
 
 
 # ---------------------------------------------------------------------------
+# A tool updated during the task
+# ---------------------------------------------------------------------------
+
+
+class _Lamp(Tool):
+    """One version of a tool north wrote; `ran` records which version answered each call."""
+
+    name = "lamp"
+    description = "switch the lamp"
+    parameters_schema = {"type": "object", "properties": {}}
+    ran: list[str] = []
+
+    def __init__(self, version: str) -> None:
+        self.version = version
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        _Lamp.ran.append(self.version)
+        return ToolOutput(success=True, data={"version": self.version})
+
+
+class _Update(Tool):
+    """Puts a new version of the lamp in the registry, as create_tool does when it activates an update."""
+
+    name = "update_lamp"
+    description = "update the lamp tool"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    def __init__(self, registry: ToolRegistry) -> None:
+        self.registry = registry
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        self.registry.register(_Lamp("v2"))
+        return ToolOutput(success=True, data={"updated": True})
+
+
+def _calls_in_turns(*names: str):
+    class Router(MockInferenceRouter):
+        turn = 0
+
+        async def complete_with_tools(self, request, token_callback=None):
+            Router.turn += 1
+            if Router.turn <= len(names):
+                name = names[Router.turn - 1]
+                call = ToolCall(name=name, call_id=f"c{Router.turn}", params={})
+                return ToolCallResponse(type="tool_calls", calls=[call], model_used="mock", tokens_in=1, tokens_out=1)
+            return ToolCallResponse(
+                type="message", content="done", calls=[], model_used="mock", tokens_in=1, tokens_out=1
+            )
+
+    return Router()
+
+
+async def test_a_tool_updated_during_the_task_answers_the_next_call_with_its_new_version(tmp_path: Path) -> None:
+    """In the one-prompt Kasa rebuild, north rewrote its tool 18 times in one task, but the task kept calling
+    the version it called first: its own test calls never ran a fix, so it kept rewriting for 20 minutes."""
+    agent = _load_agent("north", tmp_path, _calls_in_turns("lamp", "update_lamp", "lamp"))
+    registry = agent._deps.tool_registry
+    registry.register(_Lamp("v1"))
+    registry.register(_Update(registry))
+    _Lamp.ran = []
+
+    await agent.run(AgentPayload(task_id="t-update", prompt="Fix the lamp tool and try it."))
+
+    assert _Lamp.ran == ["v1", "v2"]
+
+
+# ---------------------------------------------------------------------------
 # Prompt-cache prefix stability
 #
 # A cache is a prefix match, so one changed byte near the front throws the whole
