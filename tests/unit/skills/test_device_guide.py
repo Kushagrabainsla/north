@@ -73,3 +73,11 @@ def test_the_example_panel_has_a_control_for_every_setting_the_tool_can_set() ->
 def test_the_guide_names_no_built_in_device_tool_or_page() -> None:
     assert "DeviceTool" not in GUIDE and "Devices page" not in GUIDE and "`kasa`" not in GUIDE
     assert "request_secret" in GUIDE and "packages" in GUIDE and "read_only_when" in GUIDE
+
+
+def test_the_test_steps_say_a_device_that_answers_now_and_then_is_reported_not_rewritten() -> None:
+    # In run 5 of the one-prompt Kasa rebuild, north called create_tool 9 times and spent 37 turns
+    # adding retries for two lamps that stall after a change. Its code was not broken.
+    steps = GUIDE.split("## Create it and prove it", 1)[1].split("\n## ", 1)[0]
+
+    assert "some calls" in steps and "how often" in steps and "working code" in steps
