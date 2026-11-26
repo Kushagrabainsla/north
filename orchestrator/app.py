@@ -1149,7 +1149,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     agent_deps = _build_agent_deps(deps, tool_registry, approvals.interaction)
     agent_deps.tool_index = tool_index
     agent_deps.skill_registry = skill_registry
-    agent_deps.skill_selector = skill_selector
     agent_deps.flow_registry = flow_registry
     agent_registry = _build_agent_registry(agent_deps)
     create_skill_tool._agent_registry = agent_registry

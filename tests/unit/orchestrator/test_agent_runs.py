@@ -106,6 +106,20 @@ async def test_failed_run_marks_skill_usage_failed(tmp_path) -> None:
     assert outcome == ("failed",)
 
 
+async def test_each_skill_a_run_loads_is_kept(tmp_path) -> None:
+    """A run records a skill each time it loads one with use_skill; a later one does not drop the first."""
+    store = AgentRunStore(tmp_path / "tasks.db")
+    payload = AgentPayload(task_id="task-1", run_id="run-1", prompt="work")
+    await store.start(payload, "north")
+    await store.set_skills(payload.run_id, [{"name": "research", "version": "1", "source": "builtin"}])
+    await store.set_skills(payload.run_id, [{"name": "debug", "version": "1", "source": "builtin"}])
+    await store.set_skills(payload.run_id, [{"name": "research", "version": "2", "source": "builtin"}])
+
+    run = await store.get(payload.run_id)
+    assert run is not None
+    assert [(s["name"], s["version"]) for s in run.skills] == [("debug", "1"), ("research", "2")]
+
+
 async def test_prune_removes_expired_run_internals_but_keeps_active_tasks(tmp_path) -> None:
     db_path = tmp_path / "tasks.db"
     store = AgentRunStore(db_path)
