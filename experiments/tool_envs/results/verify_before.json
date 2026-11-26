@@ -1,0 +1,36 @@
+{
+ "checkout": "before",
+ "north_packaging_after": "26.2",
+ "cases": [
+  {
+   "case": "new_package",
+   "created": false,
+   "why_not": "The draft needs these fixes before its test call:\n1. It imports 'tabulate', which north does not have. Use the standard library or a package north already has: "
+  },
+  {
+   "case": "other_version",
+   "created": true,
+   "why_not": "",
+   "result": {
+    "version": "26.2"
+   }
+  },
+  {
+   "case": "north_files",
+   "created": true,
+   "why_not": "",
+   "result": {
+    "read": true
+   }
+  },
+  {
+   "case": "panel_can_read",
+   "created": true,
+   "why_not": "",
+   "result": {
+    "lamps": []
+   },
+   "view_may_read_list": false
+  }
+ ]
+}

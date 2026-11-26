@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
-import { resolvePath, ViewSurface, type ViewComponent, type ViewMessage } from "./views";
+import { resolvePath, steadyOrder, ViewSurface, type ViewComponent, type ViewMessage } from "./views";
 import { viewsAbout } from "./pages/Views";
 
 const surface = (components: ViewComponent[], data: unknown = {}): ViewMessage[] => [
@@ -66,6 +66,44 @@ describe("a view", () => {
     expect(resolvePath(data, "/a/b~1c/1")).toBe(20);
     expect(resolvePath(data, "1", "/a/b~1c")).toBe(20);
     expect(resolvePath(data, "/missing/x")).toBeUndefined();
+  });
+});
+
+describe("a list that comes back in a new order", () => {
+  // The Kasa panel: the tool lists lights in the order the network answers, and the panel reads it every
+  // 30 s, so the row under the pointer became another light between look and click.
+  const lights = (...ids: string[]) => ids.map((id) => ({ id, name: `lamp ${id}` })) as never[];
+  const drawn = (items: never[], order: number[]) => order.map((index) => (items[index] as { id: string }).id);
+
+  it("keeps each item in the place it had when first shown", () => {
+    const first = steadyOrder(lights("a", "b", "c", "d"));
+    expect(first.order).toEqual([0, 1, 2, 3]);
+    const again = lights("c", "a", "d", "b");
+    expect(drawn(again, steadyOrder(again, first.known).order)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("puts a new item after the known ones, and gives one that was missing its old place back", () => {
+    const first = steadyOrder(lights("a", "b", "c"));
+    const missing = lights("c", "a");
+    const second = steadyOrder(missing, first.known);
+    expect(drawn(missing, second.order)).toEqual(["a", "c"]);
+    const back = lights("e", "b", "c", "a");
+    expect(drawn(back, steadyOrder(back, second.known).order)).toEqual(["a", "b", "c", "e"]);
+  });
+
+  it("is drawn as it comes when nothing says which item is which", () => {
+    const plain = [{ name: "x" }, { name: "y" }] as never[];
+    expect(steadyOrder(plain, ["y", "x"]).order).toEqual([0, 1]);
+    const twice = lights("a", "a");
+    expect(steadyOrder(twice, ["a"]).order).toEqual([0, 1]);
+  });
+
+  it("still reads each row from its own item", () => {
+    const page = html(surface([
+      { id: "root", component: "Panel", title: "Lights", children: { path: "/devices", componentId: "row" } },
+      { id: "row", component: "ListItem", title: { path: "name" } },
+    ], { devices: lights("b", "a") }));
+    expect(page.indexOf("lamp b")).toBeLessThan(page.indexOf("lamp a"));
   });
 });
 

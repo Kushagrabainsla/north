@@ -93,7 +93,29 @@ export function ApprovalCard({ card, onDecide, wide = false }: { card: Approval;
     aside: <span>{[!card.blocking && "nothing is waiting on this", timeAgo(card.created_at)].filter(Boolean).join(" · ")}</span>,
     meta: "",
   };
+  if (fields.some((field) => field.type === "secret")) return <SecretCard {...part}/>;
   return card.type === "question" ? <QuestionCard {...part}/> : <ApproveCard {...part} wide={wide}/>;
+}
+
+/** North asks for a password or key. What you type goes to north's secrets under the card's names;
+ *  north's model only ever learns the names. */
+function SecretCard({ card, onDecide, aside }: Part) {
+  const fields = card.fields.filter((field) => field.type === "secret");
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  const complete = fields.every((field) => (typed[field.name] || "") !== "");
+  const save = async () => { await onDecide("answered", "Done", typed); setTyped({}); };
+  return <WaitingCard label="North needs a secret" aside={aside} title={<Markdown>{card.message}</Markdown>}
+    actions={<ActionBar>
+      <Button onClick={() => onDecide("answered", "Not now", {})}>Not now</Button>
+      <Button variant="primary" disabled={!complete} onClick={save}>Save</Button>
+    </ActionBar>}>
+    <Stack>{fields.map((field) =>
+      <Field key={field.name} label={fieldLabel(field)} hint={`Kept in north's secrets as ${field.name}. North's model sees only the name.`}>
+        <input type="password" autoComplete="new-password" value={typed[field.name] || ""}
+          onChange={(e) => setTyped((current) => ({ ...current, [field.name]: e.target.value }))}/>
+      </Field>)}
+    </Stack>
+  </WaitingCard>;
 }
 
 function ApproveCard({ card, values, setValue, onDecide, aside, meta, wide }: Part & { wide: boolean }) {
