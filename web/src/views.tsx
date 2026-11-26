@@ -15,7 +15,7 @@ import {
   ActionBar, Badge, Button, Empty, EntityTable, Field, KeyValues, ListRow, Note, Notice, SectionHeader, Stack, Stat, StatGrid,
   Status, Text, type Column, type NoticeTone,
 } from "./kit";
-import { latestWins } from "./lights";
+import { latestWins } from "./latest";
 import type { Levels } from "./listen";
 import { sliceMs } from "./listen";
 import listenWorklet from "./listen.worklet.ts?worker&url";

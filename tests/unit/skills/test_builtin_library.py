@@ -178,5 +178,7 @@ def test_smart_home_control_is_a_skill_on_the_general_agent():
     """The home agent was its prompt and a keyword list; by the rule that retired news and wellness, it is a skill."""
     skill = _REGISTRY.get("controlling-smart-home-devices")
     assert skill.available_to("general")
-    assert {"kasa", "screen_brightness"} <= set(skill.execution.tools)
-    assert "scene" in skill.body and "Stratis" in skill.body
+    # No device tool ships with north: the brand's tool and panel are made for it (adding-a-home-device).
+    assert {"create_tool", "create_view", "screen_brightness"} <= set(skill.execution.tools)
+    assert "kasa" not in skill.execution.tools
+    assert "mood" in skill.body and "Stratis" in skill.body and "adding-a-home-device" in skill.body

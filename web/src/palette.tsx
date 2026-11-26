@@ -10,7 +10,7 @@ interface Target { kind: string; label: string; hint?: string; go: () => void }
 const PAGES: [string, string, string?][] = [
   ["Home", "/"], ["Inbox", "/inbox"], ["Inbox · For your info", "/inbox?tab=info"], ["Inbox · Done", "/inbox?tab=done"],
   ["Sessions", "/sessions"], ["Tasks", "/tasks"], ["Flows", "/flows"], ["Files", "/artifacts"],
-  ["Memory", "/memory"], ["Skills", "/skills"], ["Tools", "/tools"], ["Views", "/views"], ["Devices", "/lights"],
+  ["Memory", "/memory"], ["Skills", "/skills"], ["Tools", "/tools"], ["Views", "/views"],
   ["System · health, usage and cost", "/system"], ["Settings", "/settings"],
   ["Settings · Models", "/settings", "models"], ["Settings · Autonomy", "/settings", "autonomy"],
   ["Settings · Time zone", "/settings", "time zone"], ["Settings · Providers", "/settings", "api key"],

@@ -166,6 +166,7 @@ class Orchestrator:
             self_repair=self_repair,
             critic=critic,
             tracked_router=tracked_router,
+            tool_registry=tool_registry,
         )
 
     def notify_model_recovery(self) -> None:
