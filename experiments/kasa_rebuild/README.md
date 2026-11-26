@@ -8,8 +8,8 @@ again from one prompt, with no help:
 > Add my Kasa lights: a tool to control them, and a panel on the Views page with a switch, brightness
 > and colour for each light, and music sync.
 
-Run 4 adds one sentence, so that north tests only two of the four lights: "Test it only on Upper desk
-lamp and Desk lamp."
+Runs 4 and 5 add one sentence, so that north tests only two of the four lights: "Test it only on Upper
+desk lamp and Desk lamp."
 
 ## Method
 
@@ -28,24 +28,26 @@ lamp and Desk lamp."
 
 ## Results
 
-| | Run 1 | Run 2 (failed) | Run 2 (again) | Run 3 | Run 4 |
-|---|---|---|---|---|---|
-| Date (2026-11-) | 25 | 26 | 26 | 26 | 26 |
-| Tool made | yes | **no** | yes | yes | yes |
-| Panel added, all 4 parts | yes | **no** | yes | yes | yes |
-| Panel has a white control | no | - | no | no | yes |
-| Minutes | 2.8 | 1.3 | 1.1 | 1.3 | 20.2 (stopped) |
-| Cost (USD) | 0.70 | 0.43 | 0.46 | 0.39 | 2.25 |
-| Model turns | 19 | 13 | 10 | 8 | 72 |
-| Meta calls failed | 3 of 9 | 5 of 8 | 0 of 5 | 0 of 5 | 1 of 21 |
-| Cards (all auto-answered) | 8 | 7 | 4 | 5 | 58 |
-| Panel showed the lights | after a fix | - | 4 of 4 | 4 of 4 | 4 of 4, not on every read |
+| | Run 1 | Run 2 (failed) | Run 2 (again) | Run 3 | Run 4 | Run 5 |
+|---|---|---|---|---|---|---|
+| Date (2026-11-) | 25 | 26 | 26 | 26 | 26 | 26 |
+| Tool made | yes | **no** | yes | yes | yes | yes |
+| Panel added, all 4 parts | yes | **no** | yes | yes | yes | yes |
+| Panel has a white control | no | - | no | no | yes | yes |
+| Ended by itself | yes | yes | yes | yes | **no** | yes |
+| Minutes | 2.8 | 1.3 | 1.1 | 1.3 | 20.2 (stopped) | 7.3 |
+| Cost (USD) | 0.70 | 0.43 | 0.46 | 0.39 | 2.25 | 1.07 |
+| Model turns | 19 | 13 | 10 | 8 | 72 | 37 |
+| `create_tool` calls | 6 | 6 | 2 | 2 | 18 | 9 |
+| Meta calls failed | 3 of 9 | 5 of 8 | 0 of 5 | 0 of 5 | 1 of 21 | 0 of 12 |
+| Cards (all auto-answered) | 8 | 7 | 4 | 5 | 58 | 27 |
+| Panel showed the lights | after a fix | - | 4 of 4 | 4 of 4 | 4 of 4, not on every read | 4 of 4 |
 
 Model: Sonnet 5.5 in every run. Each run pinned `python-kasa==0.12.0` in the tool's own environment,
 used the saved Kasa secrets (no `request_secret` card) and made `list` read-only, so the panel can read
 it. Run 4 was stopped, so north saved no cost for it; its cost is the sum of its ledger rows. Files:
 `results/run1.json`, `results/run2_deleted_folder.json`, `results/run2.json`, `results/run3.json`,
-`results/run4.json`.
+`results/run4.json`, `results/run5.json`.
 
 ## What each run found
 
@@ -69,10 +71,23 @@ Each failure was in north, not in what the model wrote.
 5. **Run 4: north did not stop testing.** A `set` on a desk lamp failed now and then ("No Kasa light
    answered"). North rewrote the tool 18 times to fix it, added retries and pauses, and then a
    background daemon. The run was stopped after 20 minutes. The tool it left is 395 lines (run 3: 237).
-   Two copies of its daemon ran at the same time. The desk lamps keep one login session, so each login
-   can break the other's. With one daemon, a desk lamp still gave decrypt errors for some seconds after
-   each change. The cause is not proven. Two runner processes of the tool were also alive, from 09:12
-   and 09:30, though `create_tool` closes the old runner on an update. This is not explained yet.
+   The main cause was in north. A run kept the tool object it called first, so after each update the
+   task's own calls still went to the old version: the process that served them started at 17:12:30
+   UTC with the second version, and none of the 16 later updates stopped it. No fix north made reached
+   its own tests, so it kept rewriting. That old process also started a second copy of the daemon.
+   Fixed in PR #115: each turn takes the registry's current version of every tool the run has.
+6. **The desk lamps stall after any change.** A test through the daemon, with one daemon and no other
+   client on the Mac: 15 reads in a row worked; after one `set` to the brightness the lamp already had,
+   the next read took 60 seconds, and fresh logins also failed in that time. Stalls lasted 20 to 60
+   seconds. Only the two desk lamps (the newer KLAP protocol) do this. The cause is not known (firmware,
+   or another client such as the Kasa phone app); north cannot fix it.
+7. **Run 5: north stopped by itself.** With #114 and #115 on main, north made the tool and the panel with
+   the White slider, then kept changing the tool to handle the lamp stall (9 `create_tool` calls, 6
+   tool-change cards: retries, and a direct query of a light that discovery missed). After each update, the task's next call started a new
+   process within 2 seconds, so each fix reached north's own tests, and only one runner was alive at
+   the end. Its last 11 tool calls worked. It tested brightness, colour, power and white on the two desk
+   lamps only, put both back to warm white at 2700 K and 100 %, and said that it did not test music
+   sync or the panel in a browser. Lamp1 and Lamp2 were not changed.
 
 ## Panel click
 
@@ -102,8 +117,10 @@ reads after a change missed the changed light, so "the next good read" is the fi
 
 ## Limitations
 
-- One prompt, one user, one home network, 4 runs (5 with the failed one). The cost and turn numbers
+- One prompt, one user, one home network, 5 runs (6 with the failed one). The cost and turn numbers
   vary from run to run; they are not a benchmark.
 - Music sync was not tested: it needs the browser microphone and music playing.
-- Run 4 tested the guide change once. One run shows that north can follow the new recipe, not that it
-  always will.
+- Runs 4 and 5 tested the guide change; run 5 tested the stale-tool fix once. Two runs show that north
+  can follow the new recipe, not that it always will.
+- Run 5 cost more than run 3 ($1.07 against $0.39) because of the lamp stall: north spent its extra
+  turns on retries for a device behaviour, not on a fault in its code.
