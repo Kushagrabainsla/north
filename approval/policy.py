@@ -192,6 +192,27 @@ def standing_rule_key(rule_scope: str) -> str:
     return f"standing rule: {rule_scope}"
 
 
+# Kinds whose call you confirm even from your own panel: they run code, change north's tools, or reach GitHub.
+_CONFIRMED_KINDS = frozenset({ActionKind.SHELL_COMMAND, ActionKind.TOOL_CHANGE, ActionKind.GITHUB})
+
+
+def needs_your_confirmation(action: Action) -> bool:
+    """Whether a call you start from a panel north made shows you its exact values before it runs.
+
+    A panel's controls act as you, with no approval card (CODING_STYLE §7.3). But north wrote the panel, so
+    a button can say one thing and do another: a send, a spend, a delete, a push, a command or a change to
+    north is shown to you first. A light's switch or a slider is not.
+    """
+    return bool(
+        action.reaches_third_party
+        or action.spends_money
+        or action.obviously_destructive
+        or action.leaves_sandbox
+        or action.changes_north
+        or action.kind in _CONFIRMED_KINDS
+    )
+
+
 def may_replay_yes(action: Action) -> bool:
     """Whether a yes to *action* may stand for the next identical one: never for a send, a spend or north's settings."""
     return not (action.changes_north or forbidden_reason(action))
