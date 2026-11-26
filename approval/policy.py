@@ -342,6 +342,9 @@ class ApprovalPolicy:
         with "I'll delete it myself" first, YOLO picked that, and the reply told
         you that you had said you would delete it yourself.
         """
+        if card.secret_names:
+            # Only the user has their password: no mode can answer for them, not even yolo.
+            return None
         mode = self.mode_provider()
         if mode is ApprovalMode.YOLO:
             if card.asks_several:

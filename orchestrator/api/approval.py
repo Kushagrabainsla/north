@@ -17,7 +17,8 @@ class ApprovalResponse(BaseModel):
     # Field values as the user left them, for a card that carries work. Merged
     # against the issued card rather than trusted: unknown names are dropped and
     # read-only fields keep what north put there, so an approval can only ever
-    # approve what was actually shown.
+    # approve what was actually shown. For a `request_secret` card they are the
+    # secrets typed on it, which go to the secret store and nowhere else.
     values: dict[str, Any] = Field(default_factory=dict)
     # Why, for a rejection. Without one a rejection says only "no", which cannot
     # be learned from - and this is the highest-quality signal north gets.

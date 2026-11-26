@@ -695,8 +695,10 @@ and a fix made in one copy leaves the others broken.
 A key or password you give north for its tools lives in one store,
 `config/secret_store.py`, in north's home and readable only by you. You add,
 replace and remove secrets on the dashboard (Settings, Secrets); no tool can.
-The model works with a secret's name and never sees, writes or passes its
-value. A tool that needs one declares it, and the approval card says so; it
+North asks for one with `request_secret`: a card with a password field, which
+the dashboard saves to the store. A reply typed anywhere else is dropped, and no
+approval mode answers the card for you. The model works with a secret's name
+and never sees, writes or passes its value. A tool that needs one declares it, and the approval card says so; it
 reads the value at the last step, inside its own `run()`. North releases a value
 only to a tool that declared it, and takes every stored value back out of what
 any tool returns before the model reads it.

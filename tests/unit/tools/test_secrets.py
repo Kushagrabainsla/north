@@ -226,6 +226,7 @@ async def test_a_draft_that_needs_a_key_not_yet_saved_asks_the_user_to_add_it(tm
     assert not out.success and "learned_demo" not in registry.tools
     assert "secret 'openweather', which is not saved yet" in out.error
     assert "Settings, Secrets" in out.error and "never ask for its value in chat" in out.error
+    assert "request_secret" in out.error
     assert "Saved secrets: github." in out.error
 
 
