@@ -223,6 +223,22 @@ def test_its_read_only_calls_count_only_inside_the_sandbox(tmp_path: Path) -> No
     assert open_host.mutates({"action": "list"}) is True, "outside the sandbox its own word is not trusted"
 
 
+async def test_with_no_os_sandbox_the_test_call_keeps_its_word_and_the_live_tool_does_not(tmp_path: Path, token) -> None:
+    """Linux has no OS sandbox yet: the draft's one test call, named on the card, runs as it says (as before);
+    once live, every call is a change."""
+    registry = _registry(tmp_path)
+    creator = CreateToolTool(
+        tool_registry=registry, tools_dir=tmp_path / "learned" / "tools", runtime=LearnedRuntime(tmp_path, sandbox=None)
+    )
+    reader = TOOL.replace("is_mutating = True", "is_mutating = False")
+    params = {"action": "create", "name": "lamps", "content": reader, "test_params": {"action": "list"}}
+
+    out = await creator.run(ToolInput(params=params))
+
+    assert out.success, out.error
+    assert registry.get("lamps").mutates({"action": "list"}) is True
+
+
 def test_a_view_can_read_its_list_action_once_it_runs_in_the_sandbox(tmp_path: Path) -> None:
     for sandbox, readable in ((object(), True), (None, False)):
         registry = ToolRegistry(auto_register=False)

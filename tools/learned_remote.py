@@ -71,8 +71,19 @@ class RunnerTool(Tool):
 
     is_mutating = True
 
-    def __init__(self, tool_file: Path, meta: dict[str, Any], packages: list[str], runtime: LearnedRuntime) -> None:
+    def __init__(
+        self,
+        tool_file: Path,
+        meta: dict[str, Any],
+        packages: list[str],
+        runtime: LearnedRuntime,
+        *,
+        test_call: bool = False,
+    ) -> None:
+        """*test_call*: the one call `create_tool` makes to prove a draft, which the card that creates it named
+        with its exact values; its own word on whether that call changes anything is taken, as it always was."""
         self.tool_file = tool_file
+        self._test_call = test_call
         self.meta = meta
         self.packages = list(packages)
         self.runtime = runtime
@@ -92,8 +103,8 @@ class RunnerTool(Tool):
         return self.runtime.sandbox is not None
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
-        if not self.sandboxed:
-            return True  # its own word is trusted only inside the sandbox
+        if not self.sandboxed and not self._test_call:
+            return True  # a live tool's own word is trusted only inside the sandbox
         params = params or {}
         if any(params.get(key) in values for key, values in self._read_only_when.items()):
             return False

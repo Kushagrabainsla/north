@@ -505,7 +505,7 @@ class CreateToolTool(Tool):
         described = self._described.get(name)
         if described is not None and described[0] == _tool_fingerprint(path):
             _, meta, packages = described
-            return RunnerTool(path, meta, packages, self._runtime)
+            return RunnerTool(path, meta, packages, self._runtime, test_call=True)
         instance = _load_tool_file(path, expected_name=name)
         _validate_tool_contract(instance)
         return instance
