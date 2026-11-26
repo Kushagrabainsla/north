@@ -1,0 +1,12 @@
+{
+ "tasks_in_ledger": 421,
+ "before_tasks_the_page_reaches": 16,
+ "after_tasks_the_page_reaches": 421,
+ "after_show_more_clicks_to_reach_all": 4,
+ "older_tasks_searched": 50,
+ "before_found_by_search": 0,
+ "after_found_by_search": 47,
+ "after_found_by_search_with_show_more": 50,
+ "after_first_page_ms": 18.1,
+ "after_search_ms_median": 5.7
+}

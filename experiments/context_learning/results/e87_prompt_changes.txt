@@ -1,0 +1,4 @@
+2026-11-13T09:34:  positive kept 3, dropped 0, added 0  negative kept 2, dropped 1, added 1  description changed: True
+2026-11-14T16:09:  positive kept 1, dropped 4, added 5  negative kept 5, dropped 0, added 0  description changed: True
+2026-11-21T23:41:  positive kept 3, dropped 0, added 0  negative kept 2, dropped 1, added 1  description changed: False
+2026-11-22T06:22:  positive kept 0, dropped 5, added 5  negative kept 1, dropped 4, added 5  description changed: True

@@ -91,6 +91,25 @@ class LedgerWriter(ABC):
             for e in entries
         ]
 
+    async def task_events(self, tasks: int, query: str = "") -> list[LedgerEntry]:
+        """Every entry of the *tasks* tasks with the newest activity, newest first.
+
+        With *query*, only tasks with an entry that holds every word of it. A page that lists tasks
+        asks for this rather than for the latest N entries: 500 entries were 16 of 421 tasks, about
+        a day and a half. The default reads every entry in Python; SQL stores override it.
+        """
+        entries = await self.query(LedgerFilters(limit=1_000_000))
+        words = query.lower().split()
+        latest: dict[str, datetime] = {}
+        for entry in entries:  # newest first, so the first match of a task is its newest
+            if not entry.task_id or entry.task_id in latest:
+                continue
+            text = f"{entry.input or ''} {entry.output or ''} {entry.action or ''} {entry.agent or ''}".lower()
+            if all(word in text for word in words):
+                latest[entry.task_id] = entry.timestamp
+        chosen = set(sorted(latest, key=lambda task_id: latest[task_id], reverse=True)[:tasks])
+        return [entry for entry in entries if entry.task_id in chosen]
+
     async def pending_task_ids(self, limit: int = 500) -> list[str]:
         """Return task_ids whose *latest* entry is still PENDING.
 

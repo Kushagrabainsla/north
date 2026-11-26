@@ -194,11 +194,10 @@ class AgentDependencies:
     # Live user settings (NorthSettings) - lets agents read the current approval mode
     # so e.g. ask_user does not block in autonomous mode.
     north_settings: Any | None = field(default=None)
-    # Skills subsystem (procedural memory). When set, engineering agents get the
-    # most relevant skill(s) injected into context and can pull others via use_skill.
-    # Both are optional so non-engineering setups and tests need not wire them.
+    # Skills subsystem (procedural memory). When set, engineering and general agents
+    # get the list of their skills and load one with use_skill. Optional so other
+    # setups and tests need not wire it.
     skill_registry: Any | None = field(default=None)
-    skill_selector: Any | None = field(default=None)
     # What north has already offered the user (`jobs.seen.SeenStore`). When set, work left with
     # `request_approval(wait=False, item_keys=...)` is offered once: the same item is not offered again.
     offered_store: Any | None = field(default=None)

@@ -17,6 +17,7 @@ from pathlib import Path
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from coding_agents import (
+    SANDBOX_DENIAL,
     Briefing,
     CodingAgentError,
     CodingRunner,
@@ -282,9 +283,18 @@ class CodingAgentTool(Tool):
                 + ("\n\n" + text if text else "")
             )
         denied = data.get("denied") or []
-        if denied:
-            tried = "; ".join(f"{item['tool']} {item['detail']}".strip() for item in denied[:5])
-            text += f"\n\n(The agent tried {len(denied)} thing(s) a read-only run does not allow: {tried}.)"
+        asked = [item for item in denied if item["tool"] != SANDBOX_DENIAL]
+        refused = [item["detail"] for item in denied if item["tool"] == SANDBOX_DENIAL]
+        if asked:
+            tried = "; ".join(f"{item['tool']} {item['detail']}".strip() for item in asked[:5])
+            text += f"\n\n(The agent tried {len(asked)} thing(s) that were not allowed: {tried}.)"
+        if refused:
+            text += (
+                f"\n\n(The agent's sandbox refused {len(refused)} thing(s). It is closed outside the folder it "
+                "was given, its tools and its caches. If the work needed one of these, tell the user the path: "
+                + "; ".join(refused[:5])
+                + ")"
+            )
         return text[:_MAX_OUTPUT_CHARS] or "The coding agent returned no answer."
 
     @staticmethod

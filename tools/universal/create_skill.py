@@ -4,13 +4,21 @@ Allows agents to package recurring procedures into reusable skills on the fly.
 Writes SKILL.md to North's learned skills directory and reloads the SkillRegistry.
 
 One card per change: creating, updating or activating a skill is asked about
-once, and that approval covers testing it and switching it on. The new version
-is tested before anything is written, so one that fails never replaces a live skill.
+once, and that approval covers checking it and switching it on. The new version
+is checked before anything is written, so one that fails never replaces a live skill.
+
+The checks are what a skill needs to be found and followed: a short name, a description
+that says when to use it, a valid format and size, contract tools that exist, and no
+near-copy of another skill. A task finds a skill by reading every skill's name and
+description, so there is no selection test with example requests: that test used a
+similarity score that tasks no longer use, and it refused 18 of 25 real drafts
+(experiments/skill_picking, issue #87).
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -32,9 +40,14 @@ from utils.retired_tools import current_tool
 if TYPE_CHECKING:
     from skills.registry import SkillRegistry
 
+logger = logging.getLogger(__name__)
+
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
-# The actions that test a skill by selecting it for its example requests before anything changes.
-_TESTED_ACTIONS = frozenset({"create", "update", "activate"})
+# A draft this similar to another skill of its domains is the same procedure under another name.
+# Measured with bge-small-en-v1.5 on the text a skill is matched on: the 24 general skills, all
+# different procedures, score at most 0.838 against each other; the 14 real drafts that reworded
+# a saved skill scored 0.899 to 0.990 against it. Re-measure if the embedding model changes.
+NEAR_COPY_SIMILARITY = 0.88
 
 
 def _slug(name: str) -> str:
@@ -55,9 +68,9 @@ class CreateSkillTool(Tool):
     is_mutating = True
     description = (
         "Create, update, inspect, or activate procedural skills. Use the authoring-a-north-skill skill "
-        "first and reuse an existing procedure when possible. create, update and activate each take "
-        "positive_prompts and negative_prompts: the user is asked once, then the skill is tested with them "
-        "and is live if they pass. A failing new version changes nothing."
+        "first and reuse an existing procedure when possible. Tasks choose a skill by its name and "
+        "description, so the description must say what the skill does and when to use it. The user is "
+        "asked once; then the skill is checked and is live if it passes. A failing new version changes nothing."
     )
     parameters_schema = {
         "type": "object",
@@ -66,7 +79,7 @@ class CreateSkillTool(Tool):
                 "type": "string",
                 "enum": ["create", "update", "activate", "list", "read"],
                 "default": "create",
-                "description": "activate = test a skill that is still a draft, as it is, and switch it on.",
+                "description": "activate = check a skill that is still a draft, as it is, and switch it on.",
             },
             "name": {
                 "type": "string",
@@ -109,16 +122,6 @@ class CreateSkillTool(Tool):
                 "required": ["tools", "approval", "inputs", "outputs", "success_criteria"],
                 "additionalProperties": False,
             },
-            "positive_prompts": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Requests that must select this skill. Required for create, update, activate.",
-            },
-            "negative_prompts": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Nearby requests that must not select this skill. Required for create/update/activate.",
-            },
         },
         "required": [],
     }
@@ -160,36 +163,18 @@ class CreateSkillTool(Tool):
         request = await super().describe(input)
         action = str(input.params.get("action") or "create").strip().lower()
         name = _slug(str(input.params.get("name") or ""))
-        verb = {"create": "creates", "update": "updates", "activate": "tests"}.get(action, action)
+        verb = {"create": "creates", "update": "updates", "activate": "checks"}.get(action, action)
         request = replace(
             request,
             message=(
-                f"Approving {verb} the skill '{name}', checks it is picked for the example requests and not "
-                "the others, and switches it on if that passes. If it fails, nothing changes.\n\n" + request.message
+                f"Approving {verb} the skill '{name}', checks it, and switches it on if the checks pass. "
+                "If they fail, nothing changes.\n\n" + request.message
             ),
         )
         if action == "update":
             path = self._learned_dir / _slug(str(input.params.get("name") or "")) / SKILL_FILENAME
             return describe_user_edit(self._self_edit_policy, path, input, request)
         return request
-
-    async def unavailable(self, input: ToolInput) -> str:
-        """Why skills cannot be tested now, for a call that tests one; "" otherwise.
-
-        Every create, update and activate tests the skill by selecting it for its example requests, which
-        needs embeddings. Without them each attempt failed "Skill selection tests failed" after you had
-        approved it: seven cards for one GitHub digest (issue #76, M6).
-        """
-        action = str(input.params.get("action") or "create").strip().lower()
-        if action not in _TESTED_ACTIONS or self._skill_selector is None:
-            return ""
-        if not (why := await self._skill_selector.unavailable()):
-            return ""
-        return (
-            "Skills cannot be learned right now: they are tested with the embedding model, which is not "
-            f"working ({why}). Nothing was changed. Tell the user skill learning is unavailable until it works "
-            "(the System page shows its state); trying again will fail the same way."
-        )
 
     def _will_refuse(self, params: dict[str, Any]) -> bool:
         action = str(params.get("action") or "create").strip().lower()
@@ -307,8 +292,8 @@ class CreateSkillTool(Tool):
             skill = skill_from_document(document, skill_dir, SkillSource.LEARNED)
         except SkillParseError as exc:
             return ToolOutput(success=False, error=f"Skill is invalid: {exc}")
-        if (failed := await self._selection_failures(skill, input.params)) is not None:
-            return failed
+        if near_copy := await self._near_copy(skill):
+            return ToolOutput(success=False, error=near_copy)
 
         try:
             operation = "update" if skill_file.exists() else "create"
@@ -333,7 +318,6 @@ class CreateSkillTool(Tool):
                     "status": loaded.status,
                     "updated": action == "update",
                     "frontmatter": parsed_frontmatter,
-                    **_tests_run(input.params),
                 },
             )
         except Exception as exc:
@@ -353,42 +337,34 @@ class CreateSkillTool(Tool):
             data={"name": name, "content": content, "status": skill.status},
         )
 
-    async def _selection_failures(self, skill, params: dict[str, Any]) -> ToolOutput | None:
-        """Why *skill* fails its selection tests, or None when it passes.
+    async def _near_copy(self, skill) -> str:
+        """Why *skill* is a near-copy of another live skill of its domains; "" when it is not.
 
-        It is tested as it would be live: against every other skill, in place of
-        any version of itself, before anything is written.
+        A task chooses between skills by name and description, so two skills that say the same
+        thing split its choice. Without embeddings the check is skipped: it guards against a
+        duplicate, and a skill is still found by its description.
         """
-        positives, negatives = _prompts(params, "positive_prompts"), _prompts(params, "negative_prompts")
-        if not positives or not negatives:
-            return ToolOutput(
-                success=False,
-                error="positive_prompts and negative_prompts are required: the skill is tested with them "
-                "before it is switched on.",
-            )
         if self._skill_selector is None:
-            return ToolOutput(success=False, error="Skill selection testing is unavailable.")
-        candidates = [item for item in self._registry.all() if item.name != skill.name] + [skill]
-
-        async def picked(prompt: str) -> bool:
-            chosen = await self._skill_selector.select(prompt, candidates=candidates)
-            return skill.name in {item.name for item in chosen}
-
+            return ""
+        others = [
+            other
+            for other in self._registry.all()
+            if other.name != skill.name and other.status == "active" and other.domains & skill.domains
+        ]
         try:
-            missed = [prompt for prompt in positives if not await picked(prompt)]
-            wrongly = [prompt for prompt in negatives if await picked(prompt)]
-        except Exception as exc:
-            return ToolOutput(success=False, error=f"Skill selection testing failed: {exc}")
-        if missed or wrongly:
-            return ToolOutput(
-                success=False,
-                error="Skill selection tests failed, so nothing changed.",
-                data={"positive_failures": missed, "negative_failures": wrongly},
-            )
-        return None
+            closest = await self._skill_selector.closest(skill, others)
+        except Exception:
+            logger.warning("Near-copy check skipped for skill %s: embeddings failed", skill.name, exc_info=True)
+            return ""
+        if closest is None or closest[0] < NEAR_COPY_SIMILARITY:
+            return ""
+        return (
+            f"Skill '{skill.name}' is a near-copy of the skill '{closest[1].name}' (similarity {closest[0]:.2f}), "
+            f"so nothing changed. Update '{closest[1].name}' instead, or describe what makes this procedure different."
+        )
 
     async def _activate(self, params: dict[str, Any]) -> ToolOutput:
-        """Test a draft skill as it is, and switch it on if it passes."""
+        """Check a draft skill as it is, and switch it on if it passes."""
         name = str(params.get("name") or "").strip()
         if not name:
             return ToolOutput(success=False, error="Parameter 'name' is required for activate.")
@@ -404,9 +380,8 @@ class CreateSkillTool(Tool):
             return ToolOutput(success=False, error=f"Skill '{name}' is {skill.status}, not a draft.")
         if skill.execution is not None and (contract_error := self._execution_error(skill.execution, skill.domains)):
             return ToolOutput(success=False, error=contract_error)
-        live = replace(skill, status="active")
-        if (failed := await self._selection_failures(live, params)) is not None:
-            return failed
+        if near_copy := await self._near_copy(skill):
+            return ToolOutput(success=False, error=near_copy)
 
         frontmatter, body = parse_skill_document(content)
         frontmatter["status"] = "active"
@@ -417,7 +392,7 @@ class CreateSkillTool(Tool):
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
             self._registry.reload()
-            return ToolOutput(success=True, data={"name": name, "status": "active", **_tests_run(params)})
+            return ToolOutput(success=True, data={"name": name, "status": "active"})
         except Exception as exc:
             return ToolOutput(success=False, error=f"Failed to activate skill '{name}': {exc}")
 
@@ -447,24 +422,7 @@ class CreateSkillTool(Tool):
             )
         if "content" in data:
             return str(data["content"])
-        tested = (
-            f" It was picked for {data['positive_tests']} example request(s) and none of "
-            f"{data['negative_tests']} others."
-            if "positive_tests" in data
-            else ""
-        )
         if data.get("path"):
             verb = "updated" if data.get("updated") else "created"
-            return f"Skill '{data.get('name')}' {verb} at {data.get('path')} and live.{tested}"
-        return f"Skill '{data.get('name')}' is live.{tested}"
-
-
-def _prompts(params: dict[str, Any], key: str) -> list[str]:
-    return [str(item).strip() for item in params.get(key) or [] if str(item).strip()]
-
-
-def _tests_run(params: dict[str, Any]) -> dict[str, int]:
-    return {
-        "positive_tests": len(_prompts(params, "positive_prompts")),
-        "negative_tests": len(_prompts(params, "negative_prompts")),
-    }
+            return f"Skill '{data.get('name')}' {verb} at {data.get('path')} and live."
+        return f"Skill '{data.get('name')}' is live."

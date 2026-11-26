@@ -1,4 +1,4 @@
-"""Tests for skill injection into an engineering agent's context."""
+"""Tests for the skills an agent's context lists, and the flow skills it gives in full."""
 
 from __future__ import annotations
 
@@ -31,11 +31,7 @@ class _StubAgent(Agent):
 
 
 async def _skills_block(agent: Agent, prompt: str) -> str:
-    """Select then render, the way `Agent.run()` does it.
-
-    Selection is a separate step so a run embeds the prompt once and shares the
-    result with tool ranking; these tests exercise both halves together.
-    """
+    """Select then render, the way `Agent.run()` does it."""
     return await agent._load_skills_block(
         AgentPayload(task_id="t", prompt=prompt),
         await agent._select_skills(prompt),
@@ -51,52 +47,98 @@ def _write_skill(base: Path, name: str, description: str, domains: list[str] | N
     )
 
 
-def _agent(registry: SkillRegistry, selector: SkillSelector) -> _StubAgent:
-    deps = AgentDependencies(
+class _FakeMemory:
+    """Minimal memory gateway so _load_context runs past its recall step in tests."""
+
+    async def principal_for(self, name, domain):
+        return object()
+
+    async def recall(self, principal, prompt):
+        return SimpleNamespace(render=lambda: "")
+
+
+class _RunStore:
+    def __init__(self) -> None:
+        self.skills: list[list[dict]] = []
+
+    async def set_skills(self, run_id, skills):
+        self.skills.append(skills)
+
+
+def _agent(registry: SkillRegistry, domain: str = "engineering", **deps) -> _StubAgent:
+    dependencies = AgentDependencies(
         context_store=None,
         inference_router=None,
         tool_registry=None,
         confidence_tracker=None,
         stream_manager=None,
         skill_registry=registry,
-        skill_selector=selector,
+        memory=_FakeMemory(),
+        **deps,
     )
-    return _StubAgent(SimpleNamespace(agent="coder", domain="engineering"), deps)
+    return _StubAgent(SimpleNamespace(agent=domain, domain=domain), dependencies)
 
 
-async def test_offers_the_selected_skill_by_description_not_body(tmp_path):
-    """The body is fetched with use_skill, never pasted into the prompt.
+async def test_every_skill_is_listed_by_name_and_description_not_body(tmp_path):
+    """The task model chooses its skill from the list; the body is fetched with use_skill.
 
     The opening block of an agent conversation is re-sent on every turn, so a
     pasted playbook is paid ~20 times per task whether the model uses it or not.
     """
     _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
     _write_skill(tmp_path, "add-tool", "Use when adding a tool")
-    registry = SkillRegistry(builtin_dir=tmp_path)
-    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.5)
-    agent = _agent(registry, selector)
+    agent = _agent(SkillRegistry(builtin_dir=tmp_path))
 
     block = await _skills_block(agent, "add a database migration")
 
-    assert "db-migration" in block  # the match is offered by name
-    assert "Use when adding a database migration" in block  # ...and by its description
-    assert "BODY-db-migration" not in block  # but the procedure itself is not pasted in
+    assert "- add-tool: Use when adding a tool" in block
+    assert "- db-migration: Use when adding a database migration" in block
+    assert "BODY-" not in block
     assert "use_skill" in block  # the model is told how to fetch it
     assert "advisory" in block.lower()  # framed as advisory, not authoritative
-    assert "add-tool" in block  # non-selected skills stay discoverable by name
+
+
+async def test_the_list_is_the_same_text_for_every_request(tmp_path):
+    """No per-request ranking: an unrelated request sees the same skills as a matching one."""
+    for name in ("delta", "alpha", "charlie", "bravo"):
+        _write_skill(tmp_path, name, f"Use when doing {name}")
+    agent = _agent(SkillRegistry(builtin_dir=tmp_path))
+
+    matching = await _skills_block(agent, "doing alpha")
+    unrelated = await _skills_block(agent, "totally unrelated banana")
+
+    assert matching == unrelated
+    assert [line[2:].split(":")[0] for line in matching.splitlines() if line.startswith("- ")] == [
+        "alpha",
+        "bravo",
+        "charlie",
+        "delta",
+    ]
+
+
+async def test_no_skill_is_selected_by_similarity_for_an_ordinary_task(tmp_path):
+    _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
+    agent = _agent(SkillRegistry(builtin_dir=tmp_path))
+
+    assert await agent._select_skills("add a database migration") == []
+
+
+async def test_every_skill_is_listed_however_many_there_are(tmp_path):
+    """The list is how the agent finds a skill; it used to stop at twelve of eighteen."""
+    for n in range(45):
+        _write_skill(tmp_path, f"skill-{n:02d}", f"Use for job number {n}")
+    agent = _agent(SkillRegistry(builtin_dir=tmp_path))
+
+    block = await agent._load_skills_block(AgentPayload(task_id="t", prompt="anything"), [])
+
+    assert all(f"- skill-{n:02d}: Use for job number {n}" in block for n in range(45))
 
 
 async def test_flow_required_skill_is_loaded_in_full_as_the_execution_contract(tmp_path):
     _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
     _write_skill(tmp_path, "add-tool", "Use when adding a tool")
-    registry = SkillRegistry(builtin_dir=tmp_path)
-    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.5)
-    agent = _agent(registry, selector)
-    payload = AgentPayload(
-        task_id="flow-step",
-        prompt="an unrelated prompt that semantic selection would not match",
-        skills=["db-migration"],
-    )
+    agent = _agent(SkillRegistry(builtin_dir=tmp_path))
+    payload = AgentPayload(task_id="flow-step", prompt="an unrelated prompt", skills=["db-migration"])
 
     selected = await agent._select_skills(payload.prompt, payload.skills)
     block = await agent._load_skills_block(payload, selected)
@@ -108,47 +150,20 @@ async def test_flow_required_skill_is_loaded_in_full_as_the_execution_contract(t
     assert "add-tool" not in block
 
 
-async def test_no_skills_returns_empty(tmp_path):
-    registry = SkillRegistry(builtin_dir=tmp_path)  # empty dir
-    selector = SkillSelector(registry, embed_fn=_fake_embed)
-    agent = _agent(registry, selector)
-    assert await _skills_block(agent, "anything") == ""
-
-
-async def test_nothing_selected_still_lists_available(tmp_path):
+async def test_a_flow_step_gets_its_required_skill_through_load_context(tmp_path):
+    """Called on its own, _load_context gives the step's required skill, not a list."""
+    _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
     _write_skill(tmp_path, "add-tool", "Use when adding a tool")
-    registry = SkillRegistry(builtin_dir=tmp_path)
-    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.5)
-    agent = _agent(registry, selector)
+    agent = _agent(SkillRegistry(builtin_dir=tmp_path))
 
-    block = await _skills_block(agent, "totally unrelated banana")
+    ctx = await agent._load_context(AgentPayload(task_id="t", prompt="step", skills=["db-migration"]))
 
-    assert "Other skills available" in block
-    assert "add-tool" in block
+    assert "BODY-db-migration" in ctx and "add-tool" not in ctx
 
 
-class _FakeMemory:
-    """Minimal memory gateway so _load_context runs past its recall step in tests."""
-
-    async def principal_for(self, name, domain):
-        return object()
-
-    async def recall(self, principal, prompt):
-        return SimpleNamespace(render=lambda: "")
-
-
-def _agent_for_domain(domain: str, registry: SkillRegistry, selector: SkillSelector) -> _StubAgent:
-    deps = AgentDependencies(
-        context_store=None,
-        inference_router=None,
-        tool_registry=None,
-        confidence_tracker=None,
-        stream_manager=None,
-        skill_registry=registry,
-        skill_selector=selector,
-        memory=_FakeMemory(),
-    )
-    return _StubAgent(SimpleNamespace(agent=domain, domain=domain), deps)
+async def test_no_skills_returns_empty(tmp_path):
+    agent = _agent(SkillRegistry(builtin_dir=tmp_path))  # empty dir
+    assert await _skills_block(agent, "anything") == ""
 
 
 def test_skills_enabled_domains_covers_engineering_and_general():
@@ -172,37 +187,41 @@ def test_skill_domains_default_to_engineering_and_parse_from_frontmatter(tmp_pat
 
 
 async def test_load_skills_block_filters_by_agent_domain(tmp_path):
-    # The domain-eligibility mechanism (used once non-engineering domains are enabled):
-    # _load_skills_block only considers skills whose domains include the agent's, so an
-    # engineering-only skill is never even a candidate for a general agent, and a
-    # general-eligible skill is.
+    """An engineering-only skill never reaches a general agent's list; a general one does."""
     _write_skill(tmp_path, "db-migration", "Use when adding a database migration")  # engineering (default)
-    _write_skill(tmp_path, "add-tool", "Use when adding a tool", domains=["general"])  # general-eligible
-    registry = SkillRegistry(builtin_dir=tmp_path)
-    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.4)
-    general = _agent_for_domain("general", registry, selector)
+    _write_skill(tmp_path, "add-tool", "Use when adding a tool", domains=["general"])
+    general = _agent(SkillRegistry(builtin_dir=tmp_path), domain="general")
 
-    migration_block = await _skills_block(general, "add a database migration")
-    assert "db-migration" not in migration_block  # engineering-only: not eligible, not even listed
+    block = await _skills_block(general, "add a database migration")
 
-    tool_block = await _skills_block(general, "add a tool")
-    assert "add-tool" in tool_block  # general-eligible skill is offered
-    assert "Use when adding a tool" in tool_block
+    assert "db-migration" not in block
+    assert "- add-tool: Use when adding a tool" in block
 
 
 async def test_engineering_agent_still_gets_engineering_skills(tmp_path):
     _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
-    registry = SkillRegistry(builtin_dir=tmp_path)
-    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.4)
-    ctx = await _agent_for_domain("engineering", registry, selector)._load_context(
+    ctx = await _agent(SkillRegistry(builtin_dir=tmp_path))._load_context(
         AgentPayload(task_id="t", prompt="add a database migration")
     )
     assert "db-migration" in ctx
     assert "Use when adding a database migration" in ctx
 
 
-async def test_at_most_two_distinct_skills_are_offered(tmp_path):
-    """A primary plus a distinct secondary stays focused for compound tasks."""
+async def test_a_skill_loaded_with_use_skill_is_recorded_for_the_run(tmp_path):
+    """Skill retirement and the run's skill list read this record; a suggestion used to make it."""
+    _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
+    store = _RunStore()
+    agent = _agent(SkillRegistry(builtin_dir=tmp_path), agent_run_store=store)
+    payload = AgentPayload(task_id="t", prompt="add a database migration")
+
+    await agent.record_skill_loaded(payload, "db-migration")
+    await agent.record_skill_loaded(payload, "no-such-skill")
+
+    assert [[s["name"] for s in skills] for skills in store.skills] == [["db-migration"]]
+
+
+async def test_at_most_two_distinct_skills_are_selected(tmp_path):
+    """The selector still serves the coding briefing: a primary plus a distinct secondary."""
     for name in ("db-migration", "db-schema", "db-index", "unrelated-topic"):
         _write_skill(tmp_path, name, f"Use when working on {name.replace('-', ' ')}")
     registry = SkillRegistry(builtin_dir=tmp_path)
@@ -212,54 +231,15 @@ async def test_at_most_two_distinct_skills_are_offered(tmp_path):
     assert len(selected) <= 2
 
 
-async def test_no_skill_body_ever_reaches_the_prompt(tmp_path):
-    """The saving only holds if this is true for every skill, selected or not."""
-    for name in ("alpha", "beta", "gamma", "delta"):
-        _write_skill(tmp_path, name, f"Use when doing {name}")
+async def test_closest_finds_the_most_similar_other_skill_without_caching_the_draft(tmp_path):
+    _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
+    _write_skill(tmp_path, "add-tool", "Use when adding a tool")
     registry = SkillRegistry(builtin_dir=tmp_path)
-    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.0)
-    agent = _agent(registry, selector)
+    selector = SkillSelector(registry, embed_fn=_fake_embed)
+    draft = SimpleNamespace(name="new-migration", description="Use when writing a schema migration")
 
-    block = await _skills_block(agent, "doing alpha")
+    score, skill = await selector.closest(draft, registry.all())
 
-    assert block  # something was offered
-    assert not any(f"BODY-{name}" in block for name in ("alpha", "beta", "gamma", "delta"))
-
-
-class _RecordingSelector:
-    """Records the floor the agent asks for, and returns what a loose floor would pass."""
-
-    def __init__(self, picks) -> None:
-        self.floors: list[float | None] = []
-        self._picks = picks
-
-    async def select(self, task_text, candidates=None, *, min_similarity=None):
-        self.floors.append(min_similarity)
-        return list(self._picks)
-
-
-async def test_a_skill_is_suggested_only_when_the_match_is_near_certain(tmp_path):
-    """ "Open my LinkedIn" used to be offered the job-application and flow-authoring procedures."""
-    from agents.base import _SUGGESTED_SKILL_MIN_SIMILARITY
-
-    _write_skill(tmp_path, "preparing-job-applications", "Use when applying to jobs")
-    registry = SkillRegistry(builtin_dir=tmp_path)
-    selector = _RecordingSelector([])
-    agent = _agent(registry, selector)
-
-    await agent._select_skills("Can you open my linkedin?")
-
-    assert selector.floors == [_SUGGESTED_SKILL_MIN_SIMILARITY]
-    assert _SUGGESTED_SKILL_MIN_SIMILARITY >= 0.7
-
-
-async def test_every_skill_name_is_listed_when_none_is_suggested(tmp_path):
-    """The list is how the agent finds a skill itself; it used to stop at twelve of eighteen."""
-    for n in range(18):
-        _write_skill(tmp_path, f"skill-{n:02d}", f"Use for job number {n}")
-    registry = SkillRegistry(builtin_dir=tmp_path)
-    agent = _agent(registry, _RecordingSelector([]))
-
-    block = await agent._load_skills_block(AgentPayload(task_id="t", prompt="anything"), [])
-
-    assert all(f"skill-{n:02d}" in block for n in range(18))
+    assert skill.name == "db-migration" and score > 0.99
+    assert "new-migration" not in (selector._embeddings or {})
+    assert await selector.closest(draft, []) is None

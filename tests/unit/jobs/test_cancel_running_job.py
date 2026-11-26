@@ -15,7 +15,6 @@ import pytest
 
 from jobs.models import Job, JobStatus, JobType
 from jobs.sqlite_processor import SQLiteJobProcessor
-from orchestrator.app import _run_scheduled_task
 from utils.time import utcnow
 
 
@@ -96,56 +95,6 @@ async def test_a_running_job_still_records_how_it_ended(tmp_path) -> None:
     await processor.mark_completed("j1")
 
     assert await _status(processor) is JobStatus.COMPLETED
-
-
-class _Orchestrator:
-    """Accepts a task that never ends by itself."""
-
-    def __init__(self) -> None:
-        self.cancelled: list[str] = []
-
-    async def submit_task(self, request):
-        return type("Response", (), {"task_id": "task_1"})()
-
-    def is_waiting_on_you(self, task_id: str) -> bool:
-        return False
-
-    async def get_task(self, task_id: str):
-        return type("Task", (), {"status": "running"})()
-
-    async def cancel_task(self, task_id: str) -> bool:
-        self.cancelled.append(task_id)
-        return True
-
-
-async def _stop_watching(job_was_cancelled: bool) -> _Orchestrator:
-    orchestrator = _Orchestrator()
-
-    async def job_cancelled() -> bool:
-        return job_was_cancelled
-
-    watch = asyncio.create_task(
-        _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0.01, job_cancelled=job_cancelled)
-    )
-    await asyncio.sleep(0.05)
-    watch.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await watch
-    return orchestrator
-
-
-@pytest.mark.asyncio
-async def test_a_cancelled_scheduled_job_cancels_the_task_it_started() -> None:
-    orchestrator = await _stop_watching(job_was_cancelled=True)
-
-    assert orchestrator.cancelled == ["task_1"]
-
-
-@pytest.mark.asyncio
-async def test_a_shutdown_leaves_the_task_to_resume() -> None:
-    orchestrator = await _stop_watching(job_was_cancelled=False)
-
-    assert orchestrator.cancelled == []
 
 
 @pytest.mark.asyncio

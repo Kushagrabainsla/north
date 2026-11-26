@@ -33,4 +33,5 @@ Then run `north web` for the dashboard, or `north` for the terminal interface. S
 - [Changelog](CHANGELOG.md): what changed, and why
 - [Discussions](https://github.com/Kushagrabainsla/north/discussions): ask a question, or share what you made north do
 - [Coding style](docs/CODING_STYLE.md): how north's code is written, for anyone changing it
+- [Modules](docs/MODULES.md): what each package does, with a link to its README
 - [MIT License](LICENSE)

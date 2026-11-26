@@ -14,7 +14,7 @@
 // Startup, cron ticks and recovery sweeps belong to north rather than to any
 // run, and dropping them would lose the only place they are visible.
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { post } from "../api";
 import { useResource } from "../hooks";
@@ -194,20 +194,39 @@ function TaskActivity({ taskId }: { taskId: string }) {
 
 // ── The list ─────────────────────────────────────────────────────────────────
 
-function AllEvents({ entries, query }: { entries: LedgerEntry[]; query: string }) {
-  const rows = useMemo(
-    () => entries.filter(entry => JSON.stringify(entry).toLowerCase().includes(query.toLowerCase())),
-    [entries, query],
-  );
-  if (!rows.length) return <Empty>No events match.</Empty>;
-  return <EventList entries={rows} showTask/>;
+function AllEvents({ entries }: { entries: LedgerEntry[] }) {
+  if (!entries.length) return <Empty>No events match.</Empty>;
+  return <EventList entries={entries} showTask/>;
+}
+
+// How many tasks the list loads at first, and how many more each "Show more" adds. The list asks the
+// server for whole tasks: the latest 500 events were 16 of 421 tasks, about a day and a half.
+export const TASK_PAGE = 100;
+// A search goes to the server once typing pauses this long, not on every key.
+const SEARCH_PAUSE_MS = 300;
+
+/** Where the list's data comes from: whole tasks, or for "Everything" the raw stream; searched on the server. */
+export function ledgerPath(view: string, searched: string, tasks: number): string {
+  const q = encodeURIComponent(searched);
+  if (view === "everything") return searched ? `/orchestrator/ledger/search?q=${q}&limit=200` : "/orchestrator/ledger?limit=500";
+  return `/orchestrator/ledger?tasks=${tasks}${searched ? `&q=${q}` : ""}`;
+}
+
+/** A search answers with matches that each hold their event; the stream answers with events. */
+function asEntries(data: Array<LedgerEntry | { entry: LedgerEntry }> | null): LedgerEntry[] {
+  return (data || []).map(item => ("entry" in item ? item.entry : item));
 }
 
 export function Tasks() {
   const { taskId } = useParams();
   const navigate = useNavigate();
-  const resource = useResource<LedgerEntry[]>("/orchestrator/ledger?limit=500", 7000);
   const [query, setQuery] = useState("");
+  const [searched, setSearched] = useState("");
+  const [taskCount, setTaskCount] = useState(TASK_PAGE);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearched(query.trim()), SEARCH_PAUSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [query]);
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState<"refresh" | "create" | "">("");
   // The tab is in the URL so the old /activity path can land on the stream
@@ -217,22 +236,20 @@ export function Tasks() {
   const tab: TaskView = ["active", "queued", "completed", "everything"].includes(requested || "")
     ? requested as TaskView : "all";
   const showTab = (next: TaskView) => setParams(next === "all" ? {} : { view: next }, { replace: true });
+  const resource = useResource<Array<LedgerEntry | { entry: LedgerEntry }>>(
+    taskId ? null : ledgerPath(tab, searched, taskCount), 7000);
 
   if (taskId) return <TaskActivity taskId={taskId}/>;
 
-  const entries = resource.data || [];
+  const entries = asEntries(resource.data);
   const tasks = summarise(entries);
-  const matches = query.toLowerCase();
-  const visibleByView = tasks.filter(task => {
+  const shown = tasks.filter(task => {
     if (tab === "active") return ["running", "retrying", "paused"].includes(task.status);
     if (tab === "queued") return task.status === "queued";
     if (tab === "completed") return task.status === "completed";
     return true;
   });
-  const shown = visibleByView.filter(task =>
-    !matches || task.prompt.toLowerCase().includes(matches) || task.id.toLowerCase().includes(matches)
-    || task.status.toLowerCase().includes(matches)
-    || task.agents.some(agent => agent.toLowerCase().includes(matches)));
+  const more = tab !== "everything" && tasks.length >= taskCount;
   const active = tasks.filter(task => ["running", "retrying", "paused"].includes(task.status)).length;
   const approvalsCount = tasks.filter(task => task.status === "needs_attention").length;
   const queued = tasks.filter(task => task.status === "queued").length;
@@ -278,10 +295,13 @@ export function Tasks() {
 
     <ResourceView resource={resource}>
       {() => tab !== "everything"
-        ? <EntityTable label="Tasks" columns={TASK_COLUMNS} rows={shown} rowKey={task => task.id}
-            to={task => `/tasks/${task.id}`} cell={taskCell}
-            empty={tasks.length ? "No tasks match this view." : "No task history yet."}/>
-        : <AllEvents entries={entries} query={query}/>}
+        ? <>
+            <EntityTable label="Tasks" columns={TASK_COLUMNS} rows={shown} rowKey={task => task.id}
+              to={task => `/tasks/${task.id}`} cell={taskCell}
+              empty={searched ? "No task matches this search." : tasks.length ? "No tasks match this view." : "No task history yet."}/>
+            {more && <Button onClick={() => setTaskCount(count => count + TASK_PAGE)}>Show {TASK_PAGE} more tasks</Button>}
+          </>
+        : <AllEvents entries={entries}/>}
     </ResourceView>
   </div>;
 }

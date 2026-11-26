@@ -1,0 +1,11 @@
+model turns since 2026-11-01: 2570; largest prompt: 167089 tokens
+turns over 100k tokens: 102; over 150k (75% of a 200k window): 2
+compaction and tool-summary calls by month:
+  2026-09  coder:tool-summary           132
+  2026-09  general:tool-summary         71
+  2026-09  news_briefing:tool-summary   57
+  2026-09  researcher:tool-summary      28
+  2026-09  reviewer:tool-summary        137
+  2026-10  general:tool-summary         192
+  2026-10  news_briefing:tool-summary   39
+  no ':compact' call was ever recorded

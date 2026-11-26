@@ -4,28 +4,28 @@ from __future__ import annotations
 
 from skills.registry import SkillRegistry
 from tools.models import ToolInput
-from tools.universal.create_skill import CreateSkillTool
+from tools.universal.create_skill import NEAR_COPY_SIMILARITY, CreateSkillTool
 
 
 class _Selector:
-    """Picks a skill when every word of its name is in the request."""
+    """Scores two skills by the share of description words they have in common."""
 
-    async def select(self, prompt, candidates=None):
-        words = set(prompt.lower().replace("-", " ").split())
-        return [skill for skill in candidates or [] if set(skill.name.split("-")) <= words]
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
 
-    async def unavailable(self) -> str:
-        return ""
+    async def closest(self, skill, others):
+        if self.fail:
+            raise RuntimeError("no embedding model")
+
+        def words(item) -> set[str]:
+            return set(item.description.lower().rstrip(".").split())
+
+        scored = [(len(words(skill) & words(o)) / len(words(skill) | words(o)), o) for o in others]
+        return max(scored, key=lambda pair: pair[0], default=None)
 
 
 def _tested(name: str, **params) -> dict:
-    """Params for a call that tests *name*: picked for a request naming it, not for an unrelated one."""
-    return {
-        "name": name,
-        "positive_prompts": [f"please {name.replace('-', ' ')} now"],
-        "negative_prompts": ["review this python function"],
-        **params,
-    }
+    return {"name": name, **params}
 
 
 def test_authoring_schema_exposes_exact_contract_fields_and_fixed_intents():
@@ -36,6 +36,8 @@ def test_authoring_schema_exposes_exact_contract_fields_and_fixed_intents():
     assert "agent" not in contract["properties"]
     assert contract["additionalProperties"] is False
     assert "review" in properties["intents"]["items"]["enum"]
+    # A task picks a skill by its description; there are no example requests to test it with.
+    assert "positive_prompts" not in properties and "negative_prompts" not in properties
 
 
 async def test_creates_and_reloads_skill(tmp_path):
@@ -60,7 +62,7 @@ async def test_creates_and_reloads_skill(tmp_path):
     assert out.success, out.error
     assert out.data["name"] == "deploy-docker"
 
-    # Created on disk, tested, and live in one call
+    # Created on disk, checked, and live in one call
     skill = registry.get("deploy-docker")
     assert skill.description == "Use when deploying a Docker container."
     assert "docker build" in skill.body
@@ -124,33 +126,69 @@ async def test_user_skill_update_requires_fresh_approval_and_does_not_grant_owne
     assert path.read_text() == original
 
 
-async def test_a_skill_is_live_only_once_it_passes_its_selection_tests(tmp_path):
-    """One card covers it: the call tests the skill and switches it on, or changes nothing."""
-    builtin = tmp_path / "builtin"
+async def test_a_near_copy_of_a_live_skill_is_refused_and_nothing_is_written(tmp_path):
+    """Two skills that say the same thing split a task's choice between them."""
     learned = tmp_path / "learned"
-    builtin.mkdir()
-    registry = SkillRegistry(builtin, learned)
+    registry = SkillRegistry(tmp_path / "builtin", learned)
     tool = CreateSkillTool(registry, learned, skill_selector=_Selector())
-    skill = {
-        "description": "Use when deploying a Docker container.",
-        "instructions": "1. Build the image.\n2. Run the container.\n\n## Done when\nThe service is healthy.",
-    }
+    body = "1. Build the image.\n2. Run the container.\n\n## Done when\nThe service is healthy."
+    assert (
+        await tool.run(
+            ToolInput(
+                params=_tested("deploy-docker", description="Use when deploying a Docker container.", instructions=body)
+            )
+        )
+    ).success
 
-    untested = await tool.run(ToolInput(params={"name": "deploy-docker", **skill}))
-    missed = await tool.run(
-        ToolInput(params=_tested("deploy-docker", positive_prompts=["ship the container"], **skill))
+    copy = await tool.run(
+        ToolInput(
+            params=_tested("ship-docker", description="Use when deploying a Docker container.", instructions=body)
+        )
     )
-    assert not untested.success and "positive_prompts" in untested.error
-    assert not missed.success and missed.data["positive_failures"] == ["ship the container"]
-    assert "deploy-docker" not in registry.names(), "a failing skill is never written"
+    other = await tool.run(
+        ToolInput(
+            params=_tested(
+                "weekly-status", description="Use when writing my weekly status report.", instructions="Wins."
+            )
+        )
+    )
 
-    passed = await tool.run(ToolInput(params=_tested("deploy-docker", **skill)))
+    assert not copy.success and "near-copy of the skill 'deploy-docker'" in copy.error
+    assert "ship-docker" not in registry.names() and not (learned / "ship-docker").exists()
+    assert other.success, other.error
 
-    assert passed.success, passed.error
-    assert registry.get("deploy-docker").status == "active"
+
+async def test_an_update_is_not_compared_with_the_skill_it_replaces(tmp_path):
+    learned = tmp_path / "learned"
+    registry = SkillRegistry(tmp_path / "builtin", learned)
+    tool = CreateSkillTool(registry, learned, skill_selector=_Selector())
+    base = {"description": "Use when deploying a Docker container.", "instructions": "1. Build.\n2. Run."}
+    assert (await tool.run(ToolInput(params=_tested("deploy-docker", **base)))).success
+
+    edit = await tool.run(
+        ToolInput(params=_tested("deploy-docker", action="update", **{**base, "instructions": "1. Build.\n2. Push."}))
+    )
+
+    assert edit.success, edit.error
+    assert "Push" in registry.get("deploy-docker").body
 
 
-async def test_an_edit_that_fails_its_tests_leaves_the_live_skill_as_it_was(tmp_path):
+async def test_the_near_copy_check_is_skipped_when_embeddings_fail(tmp_path):
+    learned = tmp_path / "learned"
+    registry = SkillRegistry(tmp_path / "builtin", learned)
+    tool = CreateSkillTool(registry, learned, skill_selector=_Selector(fail=True))
+    base = {"description": "Use when deploying a Docker container.", "instructions": "1. Build.\n2. Run."}
+
+    assert (await tool.run(ToolInput(params=_tested("deploy-docker", **base)))).success
+    assert (await tool.run(ToolInput(params=_tested("ship-docker", **base)))).success
+
+
+def test_the_near_copy_bar_sits_between_different_skills_and_rewordings():
+    """0.838 is the closest pair of different general skills; 0.899 the least similar rewording of one."""
+    assert 0.838 < NEAR_COPY_SIMILARITY < 0.899
+
+
+async def test_an_edit_that_fails_its_checks_leaves_the_live_skill_as_it_was(tmp_path):
     """An edit used to take the skill offline at once: the Oct 7 research briefing stopped that way."""
     learned = tmp_path / "learned"
     registry = SkillRegistry(tmp_path / "builtin", learned)
@@ -162,16 +200,12 @@ async def test_an_edit_that_fails_its_tests_leaves_the_live_skill_as_it_was(tmp_
     edit = await tool.run(
         ToolInput(
             params=_tested(
-                "deploy-docker",
-                action="update",
-                negative_prompts=["deploy docker to staging"],
-                description="Use when deploying anything.",
-                instructions="Do whatever.",
+                "deploy-docker", action="update", description="Deploys anything.", instructions="Do whatever."
             )
         )
     )
 
-    assert not edit.success
+    assert not edit.success and "Use when" in edit.error
     assert (learned / "deploy-docker" / "SKILL.md").read_text() == before
     assert registry.get("deploy-docker").status == "active"
 
@@ -213,7 +247,7 @@ async def test_creates_skill_with_flow_execution_contract(tmp_path):
     assert execution.inputs["required"] == ["item"]
 
 
-async def test_a_skill_you_edited_by_hand_can_be_tested_and_switched_on(tmp_path):
+async def test_a_skill_you_edited_by_hand_can_be_checked_and_switched_on(tmp_path):
     """With the self-edit policy on, as the server runs it.
 
     A skill edited on the dashboard is a candidate North never authored. Activation went through the
