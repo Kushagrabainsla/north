@@ -8,7 +8,7 @@ again from one prompt, with no help:
 > Add my Kasa lights: a tool to control them, and a panel on the Views page with a switch, brightness
 > and colour for each light, and music sync.
 
-Runs 4 and 5 add one sentence, so that north tests only two of the four lights: "Test it only on Upper
+Runs 4 to 6 add one sentence, so that north tests only two of the four lights: "Test it only on Upper
 desk lamp and Desk lamp."
 
 ## Method
@@ -28,26 +28,26 @@ desk lamp and Desk lamp."
 
 ## Results
 
-| | Run 1 | Run 2 (failed) | Run 2 (again) | Run 3 | Run 4 | Run 5 |
-|---|---|---|---|---|---|---|
-| Date (2026-11-) | 25 | 26 | 26 | 26 | 26 | 26 |
-| Tool made | yes | **no** | yes | yes | yes | yes |
-| Panel added, all 4 parts | yes | **no** | yes | yes | yes | yes |
-| Panel has a white control | no | - | no | no | yes | yes |
-| Ended by itself | yes | yes | yes | yes | **no** | yes |
-| Minutes | 2.8 | 1.3 | 1.1 | 1.3 | 20.2 (stopped) | 7.3 |
-| Cost (USD) | 0.70 | 0.43 | 0.46 | 0.39 | 2.25 | 1.07 |
-| Model turns | 19 | 13 | 10 | 8 | 72 | 37 |
-| `create_tool` calls | 6 | 6 | 2 | 2 | 18 | 9 |
-| Meta calls failed | 3 of 9 | 5 of 8 | 0 of 5 | 0 of 5 | 1 of 21 | 0 of 12 |
-| Cards (all auto-answered) | 8 | 7 | 4 | 5 | 58 | 27 |
-| Panel showed the lights | after a fix | - | 4 of 4 | 4 of 4 | 4 of 4, not on every read | 4 of 4 |
+| | Run 1 | Run 2 (failed) | Run 2 (again) | Run 3 | Run 4 | Run 5 | Run 6 |
+|---|---|---|---|---|---|---|---|
+| Date (2026-11-) | 25 | 26 | 26 | 26 | 26 | 26 | 26 |
+| Tool made | yes | **no** | yes | yes | yes | yes | yes |
+| Panel added, all 4 parts | yes | **no** | yes | yes | yes | yes | yes |
+| Panel has a white control | no | - | no | no | yes | yes | yes |
+| Ended by itself | yes | yes | yes | yes | **no** | yes | yes |
+| Minutes | 2.8 | 1.3 | 1.1 | 1.3 | 20.2 (stopped) | 7.3 | 2.4 |
+| Cost (USD) | 0.70 | 0.43 | 0.46 | 0.39 | 2.25 | 1.07 | 0.81 |
+| Model turns | 19 | 13 | 10 | 8 | 72 | 37 | 13 |
+| `create_tool` calls | 6 | 6 | 2 | 2 | 18 | 9 | 2 |
+| Meta calls failed | 3 of 9 | 5 of 8 | 0 of 5 | 0 of 5 | 1 of 21 | 0 of 12 | 0 of 5 |
+| Cards (all auto-answered) | 8 | 7 | 4 | 5 | 58 | 27 | 9 |
+| Panel showed the lights | after a fix | - | 4 of 4 | 4 of 4 | 4 of 4, not on every read | 4 of 4 | 4 of 4 |
 
-Model: Sonnet 5.5 in every run. Each run pinned `python-kasa==0.12.0` in the tool's own environment,
+Model: Sonnet 5.5 in runs 1 to 5, Opus 5.5 in run 6. Each run pinned `python-kasa==0.12.0` in the tool's own environment,
 used the saved Kasa secrets (no `request_secret` card) and made `list` read-only, so the panel can read
 it. Run 4 was stopped, so north saved no cost for it; its cost is the sum of its ledger rows. Files:
 `results/run1.json`, `results/run2_deleted_folder.json`, `results/run2.json`, `results/run3.json`,
-`results/run4.json`, `results/run5.json`.
+`results/run4.json`, `results/run5.json`, `results/run6.json`.
 
 ## What each run found
 
@@ -88,6 +88,19 @@ Each failure was in north, not in what the model wrote.
    the end. Its last 11 tool calls worked. It tested brightness, colour, power and white on the two desk
    lamps only, put both back to warm white at 2700 K and 100 %, and said that it did not test music
    sync or the panel in a browser. Lamp1 and Lamp2 were not changed.
+8. **Run 6: north reported the lamp stall and did not change its code.** PR #118 added one general rule
+   to the `adding-a-home-device` guide: a device that answers on some calls and not on others does not
+   have broken code; report it once, with what failed and how often. North made the tool and the panel
+   with the White slider in 2 `create_tool` calls (run 3: 2, run 5: 9), 13 model turns (run 3: 8, run
+   5: 37), 2.4 minutes (run 3: 1.3, run 5: 7.3) and $0.81 (run 3: $0.39, run 5: $1.07). 2 of its 8
+   `kasa_lights` calls failed with a login error. Its answer said that the Upper desk lamp failed 2 of 5
+   calls and worked again about 20 seconds later, that the cause looks like the lights and not the code,
+   and that it did not change the tool. It tested brightness on the Upper desk lamp and colour on the
+   Desk lamp, put both back to 100 % warm white, and said that it did not test music sync. Lamp1 and
+   Lamp2 were not changed: a read before and after the run gave the same state. No gap between the
+   task's events was 90 seconds or longer, so the `create_tool` hang fixed in #120 did not occur. The
+   model also changed: run 6 used Opus 5.5, runs 1 to 5 Sonnet 5.5. A turn cost more ($0.062 against
+   $0.029 in run 5), so the cost fell less than the turns.
 
 ## Panel click
 
@@ -117,8 +130,10 @@ reads after a change missed the changed light, so "the next good read" is the fi
 
 ## Limitations
 
-- One prompt, one user, one home network, 5 runs (6 with the failed one). The cost and turn numbers
+- One prompt, one user, one home network, 6 runs (7 with the failed one). The cost and turn numbers
   vary from run to run; they are not a benchmark.
+- Run 6 changed two things at once: the guide rule (#118) and the model (Opus 5.5, not Sonnet 5.5). One
+  run cannot show how much of the fall from 37 to 13 turns each change caused.
 - Music sync was not tested: it needs the browser microphone and music playing.
 - Runs 4 and 5 tested the guide change; run 5 tested the stale-tool fix once. Two runs show that north
   can follow the new recipe, not that it always will.
