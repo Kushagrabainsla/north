@@ -41,6 +41,10 @@ class CreateToolTool(Tool):
 
     name = "create_tool"
     is_mutating = True
+    # Its draft's test call takes the workspace lock for its own change; see `Tool.starts_runs`. Held around the
+    # whole call, a test call that changed something waited for its parent for ever. create_tool itself writes
+    # only in north's learned folder, which the lock does not guard.
+    starts_runs = True
     description = (
         "Create, update, inspect, or activate atomic executable capabilities. "
         "Use the adding-a-north-tool skill first and call action='list' before creating anything. "
