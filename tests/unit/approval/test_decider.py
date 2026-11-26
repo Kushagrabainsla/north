@@ -17,6 +17,7 @@ from approval.approval_memory import ApprovalMemory
 from approval.decider import COMPONENT, MemoryDecider
 from approval.models import ApprovalDecision, Card, CardType, MemoryKind, MemoryRef
 from approval.policy import Action, ActionKind
+from approval.session import Session
 from inference.models import CompletionRequest, CompletionResponse
 from inference.routing.parts import Order, profile_for
 from memory import ContextDocument, MemoryContext, MemoryPrincipal
@@ -267,15 +268,47 @@ def _push() -> Action:
 _PUSH_FACT = "Pushing to this repo's main is fine"
 
 
-async def test_an_action_that_leaves_the_sandbox_is_approved_when_a_fact_you_stated_covers_it() -> None:
-    decider, _ = _decider(
+async def test_a_fact_never_covers_an_action_that_leaves_the_sandbox_and_the_model_does_not_see_it() -> None:
+    """#39: a fact was extracted by a model and may be wrong or planted, so it cannot give permission.
+
+    A planted "standing approval" fact made the real approvals model allow 13 of 18 risky actions.
+    """
+    decider, model = _decider(
         {"decision": "approve", "reason": "you allow pushes here", "used": ["F1"]}, facts=(_PUSH_FACT,)
+    )
+
+    assert await decider.rule(_push()) is None
+    assert _PUSH_FACT not in model.requests[0].prompt
+
+
+async def test_your_rules_and_past_decisions_still_cover_an_action_that_leaves_the_sandbox(tmp_path: Path) -> None:
+    past = ApprovalMemory(tmp_path / "m.db")
+    past.record("coding:claude", "coding:claude shell_command cmd=git push origin main", "approved")
+    decider, model = _decider(
+        {"decision": "approve", "reason": "you allow pushes here", "used": ["D1", "R1"]},
+        facts=(_PUSH_FACT,),
+        rules="Pushing to main of my own repos is fine.",
+        approval_memory=past,
     )
 
     answer = await decider.rule(_push())
 
     assert answer.decision == ApprovalDecision.APPROVED
-    assert answer.memory_used == (MemoryRef(kind=MemoryKind.FACT, text=_PUSH_FACT),)
+    assert [ref.kind for ref in answer.memory_used] == [MemoryKind.PAST_DECISION, MemoryKind.JUDGEMENT_RULES]
+    prompt = model.requests[0].prompt
+    assert "Pushing to main of my own repos is fine." in prompt and "git push origin main" in prompt
+
+
+async def test_a_message_you_wrote_in_the_session_covers_a_send() -> None:
+    decider, model = _decider(
+        {"decision": "approve", "reason": "you asked for it", "used": ["U1"]}, facts=(_PUSH_FACT,)
+    )
+
+    answer = await decider.rule(_send(), Session(from_chat=True, messages=("Send the invitation now.",)))
+
+    assert answer.decision == ApprovalDecision.APPROVED
+    assert answer.memory_used[0].kind is MemoryKind.USER_MESSAGE
+    assert _PUSH_FACT not in model.requests[0].prompt
 
 
 async def test_an_approval_citing_nothing_for_an_action_that_leaves_the_sandbox_is_a_guess_so_the_card_waits() -> None:
