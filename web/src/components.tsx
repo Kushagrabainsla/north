@@ -8,7 +8,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import type { AgentRun, Conversation, InferenceCategory, Notice as NoticeEntry } from "./types";
-import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, Inbox, Brain, Lightbulb, Sparkles, GitBranch, Wrench, LayoutTemplate, Cpu, Settings, Search, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, Inbox, Brain, Sparkles, GitBranch, Wrench, LayoutTemplate, Cpu, Settings, Search, type LucideIcon } from "lucide-react";
 import { useInbox } from "./inbox";
 import { CommandPalette } from "./palette";
 
@@ -57,7 +57,7 @@ export function weekdayInNorthTimezone(date = new Date()) {
 // stand on their own at the top: they are where you start and where north reaches you.
 type NavItem = [string, string, LucideIcon];
 const workNav: NavItem[] = [["/sessions", "Sessions", MessagesSquare], ["/tasks", "Tasks", CheckSquare], ["/flows", "Flows", GitBranch], ["/artifacts", "Files", FileText]];
-const knowsNav: NavItem[] = [["/memory", "Memory", Brain], ["/skills", "Skills", Sparkles], ["/tools", "Tools", Wrench], ["/views", "Views", LayoutTemplate], ["/lights", "Devices", Lightbulb]];
+const knowsNav: NavItem[] = [["/memory", "Memory", Brain], ["/skills", "Skills", Sparkles], ["/tools", "Tools", Wrench], ["/views", "Views", LayoutTemplate]];
 const systemNav: NavItem[] = [["/system", "System", Cpu], ["/settings", "Settings", Settings]];
 
 function NavigationLink({ to, label, Icon, badge, dot }: { to: string; label: string; Icon: LucideIcon; badge?: ReactNode; dot?: "bad" | "warn" }) {

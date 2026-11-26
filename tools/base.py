@@ -117,6 +117,28 @@ class Tool(ABC):
             return output
         return output.model_copy(update=hidden)
 
+    async def execute_for_you(self, input: ToolInput, request: Request | None) -> ToolOutput:
+        """Run a call you made yourself, on a panel's control: no approval card, since the person deciding is you.
+
+        *input* and *request* come from `prepare`, and the caller has shown you anything
+        `approval.policy.needs_your_confirmation` says you must see. Secrets are released and hidden
+        exactly as `execute` does (CODING_STYLE §7.3, §7.6).
+        """
+        secrets = secret_store.store()
+        with secret_store.released_to(self.name, self.uses_secrets):
+            try:
+                if request is None:
+                    output = await self.run(input)
+                else:
+                    output = await self._noted_change(input.model_copy(update={"approved": request}), request)
+            except secret_store.SecretUnavailable as exc:
+                return ToolOutput(success=False, error=str(exc))
+            except Exception as exc:
+                logger.warning("%s raised on a panel's call: %s", self.name, type(exc).__name__)
+                return ToolOutput(success=False, error=f"{type(exc).__name__}: {secrets.hide(str(exc))}")
+        hidden = secrets.hide_in({"data": output.data, "error": output.error})
+        return output if hidden == {"data": output.data, "error": output.error} else output.model_copy(update=hidden)
+
     async def _decided(self, input: ToolInput) -> ToolOutput:
         """`execute` without the secrets: the call conformed, decided where it changes something, then run."""
         with span("prepare"):

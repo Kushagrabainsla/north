@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from mcp.client import McpClient, McpError
-from mcp.models import McpToolDefinition
+from mcp_client.client import McpClient, McpError
+from mcp_client.models import McpToolDefinition
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
