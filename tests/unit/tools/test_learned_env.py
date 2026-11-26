@@ -223,7 +223,7 @@ def test_its_read_only_calls_count_only_inside_the_sandbox(tmp_path: Path) -> No
     assert open_host.mutates({"action": "list"}) is True, "outside the sandbox its own word is not trusted"
 
 
-async def test_with_no_os_sandbox_the_test_call_keeps_its_word_and_the_live_tool_does_not(tmp_path: Path, token) -> None:
+async def test_with_no_os_sandbox_only_the_test_call_keeps_its_word(tmp_path: Path, token) -> None:
     """Linux has no OS sandbox yet: the draft's one test call, named on the card, runs as it says (as before);
     once live, every call is a change."""
     registry = _registry(tmp_path)
