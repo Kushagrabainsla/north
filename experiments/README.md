@@ -54,6 +54,12 @@ same primitives, but it must not import recorded results.
 - [`codex_prompt_cache/`](codex_prompt_cache/) — whether a run's first Codex
   call can reuse an earlier run's prompt cache (no, not enough to matter), and
   where calls inside a run lose it. See the section below.
+- [`memory_recall/`](memory_recall/README.md) — which recalled memory tasks use, and what to load
+  (issues #85, #86, #89, #91), from 196 replayed tasks. Tasks used 2.9% of the facts they got,
+  18% of the past-task notes and 9% of the profile sections. A Haiku 5.5 judge that must quote
+  the answer agreed with an Opus reference at kappa 0.83. Therefore north logs the use after each
+  task, ranks facts with a use rate, puts the most used profile sections first, and does not search
+  again during a task (no cue told a real change of focus from noise).
 - [`lesson_sharing/`](lesson_sharing/) — whether agents running at the same time
   should see each other's lessons sooner, and what wrong lessons cost. See the
   section below.

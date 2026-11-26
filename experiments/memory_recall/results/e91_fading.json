@@ -1,0 +1,62 @@
+{
+  "evaluated_tasks": 98,
+  "needed_facts_by_rank": {
+    "1-5": 28,
+    "16-30": 26,
+    "6-15": 23
+  },
+  "policies": {
+    "issue_91": {
+      "items_per_task": 11.09,
+      "precision": 0.062,
+      "recall": 0.661,
+      "tasks_with_needed_items": 32,
+      "tokens_per_task": 638
+    },
+    "issue_91+explore": {
+      "items_per_task": 11.91,
+      "precision": 0.055,
+      "recall": 0.661,
+      "tasks_with_needed_items": 32,
+      "tokens_per_task": 664
+    },
+    "memrl": {
+      "items_per_task": 6.01,
+      "precision": 0.09,
+      "recall": 0.658,
+      "tasks_with_needed_items": 32,
+      "tokens_per_task": 467
+    },
+    "memrl+explore": {
+      "items_per_task": 7,
+      "precision": 0.079,
+      "recall": 0.663,
+      "tasks_with_needed_items": 32,
+      "tokens_per_task": 499
+    },
+    "recency": {
+      "items_per_task": 10.86,
+      "precision": 0.06,
+      "recall": 0.634,
+      "tasks_with_needed_items": 32,
+      "tokens_per_task": 618
+    },
+    "similarity": {
+      "items_per_task": 11.13,
+      "precision": 0.057,
+      "recall": 0.623,
+      "tasks_with_needed_items": 32,
+      "tokens_per_task": 630
+    },
+    "tighter": {
+      "items_per_task": 6.47,
+      "precision": 0.068,
+      "recall": 0.522,
+      "tasks_with_needed_items": 32,
+      "tokens_per_task": 384
+    }
+  },
+  "spend_usd_this_run": 0.29,
+  "tasks": 196,
+  "tasks_needing_any_candidate": 58
+}

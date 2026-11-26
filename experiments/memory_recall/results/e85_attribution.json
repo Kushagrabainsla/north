@@ -1,0 +1,68 @@
+{
+  "cases": 120,
+  "items": 2950,
+  "methods_on_test_half": {
+    "embed": {
+      "agreement": 0.886,
+      "f1": 0.443,
+      "kappa": 0.379,
+      "precision": 0.426,
+      "recall": 0.462,
+      "threshold": 0.756
+    },
+    "haiku": {
+      "agreement": 0.923,
+      "f1": 0.624,
+      "kappa": 0.581,
+      "median_seconds": 3.43,
+      "precision": 0.6,
+      "recall": 0.65
+    },
+    "opus_again": {
+      "agreement": 0.986,
+      "cases": 30,
+      "f1": 0.923,
+      "kappa": 0.915,
+      "precision": 0.938,
+      "recall": 0.909
+    },
+    "reference": {
+      "median_seconds": 8.62
+    },
+    "sonnet": {
+      "agreement": 0.95,
+      "f1": 0.788,
+      "kappa": 0.761,
+      "median_seconds": 5.94,
+      "precision": 0.68,
+      "recall": 0.937
+    },
+    "words": {
+      "agreement": 0.888,
+      "f1": 0.469,
+      "kappa": 0.407,
+      "precision": 0.439,
+      "recall": 0.503,
+      "threshold": 0.226
+    }
+  },
+  "spend_usd_this_run": 9.05,
+  "tasks_using_any_memory": 0.742,
+  "used_share_by_kind": {
+    "episode": {
+      "loaded": 360,
+      "used": 95,
+      "used_share": 0.264
+    },
+    "fact": {
+      "loaded": 910,
+      "used": 30,
+      "used_share": 0.033
+    },
+    "profile": {
+      "loaded": 1680,
+      "used": 149,
+      "used_share": 0.089
+    }
+  }
+}

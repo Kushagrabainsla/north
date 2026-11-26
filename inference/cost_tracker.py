@@ -52,6 +52,7 @@ _MEMORY_COMPONENTS = frozenset(
         "fact_supersede",
         "fact_glossary",
         "fact_dates",
+        "memory_use",
     }
 )
 

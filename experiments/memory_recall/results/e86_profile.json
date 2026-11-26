@@ -1,0 +1,246 @@
+{
+  "chosen_core_sim": {
+    "floor": 0.55,
+    "margin": 0.05
+  },
+  "part1": {
+    "core_sim_grid": {
+      "margin=0.0,floor=0.5": {
+        "mean_profile_tokens": 1300,
+        "recall": 0.053,
+        "used_noncore_sections_given": "2/38"
+      },
+      "margin=0.0,floor=0.55": {
+        "mean_profile_tokens": 1254,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      },
+      "margin=0.0,floor=0.6": {
+        "mean_profile_tokens": 1196,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      },
+      "margin=0.0,floor=0.65": {
+        "mean_profile_tokens": 1118,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      },
+      "margin=0.0,floor=0.7": {
+        "mean_profile_tokens": 1053,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      },
+      "margin=0.02,floor=0.5": {
+        "mean_profile_tokens": 1533,
+        "recall": 0.132,
+        "used_noncore_sections_given": "5/38"
+      },
+      "margin=0.02,floor=0.55": {
+        "mean_profile_tokens": 1422,
+        "recall": 0.053,
+        "used_noncore_sections_given": "2/38"
+      },
+      "margin=0.02,floor=0.6": {
+        "mean_profile_tokens": 1315,
+        "recall": 0.053,
+        "used_noncore_sections_given": "2/38"
+      },
+      "margin=0.02,floor=0.65": {
+        "mean_profile_tokens": 1191,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      },
+      "margin=0.02,floor=0.7": {
+        "mean_profile_tokens": 1071,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      },
+      "margin=0.05,floor=0.5": {
+        "mean_profile_tokens": 1936,
+        "recall": 0.263,
+        "used_noncore_sections_given": "10/38"
+      },
+      "margin=0.05,floor=0.55": {
+        "mean_profile_tokens": 1716,
+        "recall": 0.105,
+        "used_noncore_sections_given": "4/38"
+      },
+      "margin=0.05,floor=0.6": {
+        "mean_profile_tokens": 1474,
+        "recall": 0.079,
+        "used_noncore_sections_given": "3/38"
+      },
+      "margin=0.05,floor=0.65": {
+        "mean_profile_tokens": 1253,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      },
+      "margin=0.05,floor=0.7": {
+        "mean_profile_tokens": 1074,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      },
+      "margin=0.08,floor=0.5": {
+        "mean_profile_tokens": 2272,
+        "recall": 0.368,
+        "used_noncore_sections_given": "14/38"
+      },
+      "margin=0.08,floor=0.55": {
+        "mean_profile_tokens": 1927,
+        "recall": 0.211,
+        "used_noncore_sections_given": "8/38"
+      },
+      "margin=0.08,floor=0.6": {
+        "mean_profile_tokens": 1564,
+        "recall": 0.132,
+        "used_noncore_sections_given": "5/38"
+      },
+      "margin=0.08,floor=0.65": {
+        "mean_profile_tokens": 1275,
+        "recall": 0.053,
+        "used_noncore_sections_given": "2/38"
+      },
+      "margin=0.08,floor=0.7": {
+        "mean_profile_tokens": 1074,
+        "recall": 0.026,
+        "used_noncore_sections_given": "1/38"
+      }
+    },
+    "core_tokens": 1005,
+    "full_profile_tokens": 3000,
+    "reference_used_profile_sections": {
+      "core": 111,
+      "non_core": 38
+    }
+  },
+  "part2": {
+    "all": {
+      "core": {
+        "full_marks": 0.324,
+        "invented": 18,
+        "mean_score": 1.235,
+        "tool_call_rate": 0.0
+      },
+      "core_tool": {
+        "full_marks": 0.235,
+        "invented": 16,
+        "mean_score": 1.059,
+        "tool_call_rate": 0.088
+      },
+      "full": {
+        "full_marks": 0.382,
+        "invented": 15,
+        "mean_score": 1.324,
+        "tool_call_rate": 0.0
+      }
+    },
+    "by_source": {
+      "broad": {
+        "core": {
+          "full_marks": 0.0,
+          "invented": 5,
+          "mean_score": 1,
+          "mean_start_tokens": 1206,
+          "n": 5,
+          "tool_call_rate": 0.0
+        },
+        "core_tool": {
+          "full_marks": 0.0,
+          "invented": 5,
+          "mean_score": 1,
+          "mean_start_tokens": 1206,
+          "n": 5,
+          "tool_call_rate": 0.2
+        },
+        "full": {
+          "full_marks": 0.4,
+          "invented": 4,
+          "mean_score": 1.4,
+          "mean_start_tokens": 3201,
+          "n": 5,
+          "tool_call_rate": 0.0
+        }
+      },
+      "not_about_user": {
+        "core": {
+          "full_marks": 0.3,
+          "invented": 4,
+          "mean_score": 1.2,
+          "mean_start_tokens": 1344,
+          "n": 10,
+          "tool_call_rate": 0.0
+        },
+        "core_tool": {
+          "full_marks": 0.1,
+          "invented": 3,
+          "mean_score": 0.8,
+          "mean_start_tokens": 1344,
+          "n": 10,
+          "tool_call_rate": 0.0
+        },
+        "full": {
+          "full_marks": 0.1,
+          "invented": 3,
+          "mean_score": 1.1,
+          "mean_start_tokens": 3338,
+          "n": 10,
+          "tool_call_rate": 0.0
+        }
+      },
+      "real_user": {
+        "core": {
+          "full_marks": 0.25,
+          "invented": 8,
+          "mean_score": 1.167,
+          "mean_start_tokens": 1129,
+          "n": 12,
+          "tool_call_rate": 0.0
+        },
+        "core_tool": {
+          "full_marks": 0.167,
+          "invented": 7,
+          "mean_score": 1,
+          "mean_start_tokens": 1129,
+          "n": 12,
+          "tool_call_rate": 0.083
+        },
+        "full": {
+          "full_marks": 0.417,
+          "invented": 6,
+          "mean_score": 1.333,
+          "mean_start_tokens": 3124,
+          "n": 12,
+          "tool_call_rate": 0.0
+        }
+      },
+      "section": {
+        "core": {
+          "full_marks": 0.714,
+          "invented": 1,
+          "mean_score": 1.571,
+          "mean_start_tokens": 1163,
+          "n": 7,
+          "tool_call_rate": 0.0
+        },
+        "core_tool": {
+          "full_marks": 0.714,
+          "invented": 1,
+          "mean_score": 1.571,
+          "mean_start_tokens": 1163,
+          "n": 7,
+          "tool_call_rate": 0.143
+        },
+        "full": {
+          "full_marks": 0.714,
+          "invented": 2,
+          "mean_score": 1.571,
+          "mean_start_tokens": 3158,
+          "n": 7,
+          "tool_call_rate": 0.0
+        }
+      }
+    },
+    "questions": 34
+  },
+  "spend_usd_this_run": 0.2
+}

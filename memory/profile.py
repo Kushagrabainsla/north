@@ -13,7 +13,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from memory.dedup import normalize_for_dedup
-from memory.models import ContextDocument
+from memory.models import ContextDocument, document_sections
 
 if TYPE_CHECKING:
     from memory.base import ContextStore
@@ -22,10 +22,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Identity first: a profile is read top-down, and who someone is comes before
-# what they are working on.
+# what they are working on. "user" holds what the user stated in conversation.
+#
+# The order is also what survives the 12,000-character cap in memory/gateway.py:
+# the cap cuts the end. In 120 replayed tasks (experiments/memory_recall) the
+# judgement rules were used in 58 and the goals in 31, but they came last and the
+# cap cut the rules; health, finances and other were used in 1 task each. So the
+# core topics and the two documents come first, and the rarely used topics last.
 PROFILE_TOPIC_ORDER = [
     "identity",
     "preferences",
+    "user",
     "jobs",
     "education",
     "projects",
@@ -36,6 +43,8 @@ PROFILE_TOPIC_ORDER = [
     "other",
 ]
 _ALWAYS_FULL = frozenset({"identity", "preferences"})
+# Topics placed before the goal and rule documents.
+_CORE_TOPICS = _ALWAYS_FULL | {"user"}
 
 # The documents the profile shows as written, after the facts.
 _DOCUMENT_SECTIONS = (
@@ -61,9 +70,18 @@ async def rebuild_profile(fact_store: FactStore | None, context_store: ContextSt
             if text:
                 sections.append(f"## {title}\n{text}")
         if profile or sections:
-            await context_store.write(ContextDocument.USER, "\n\n".join([profile or "# User Profile", *sections]))
+            await context_store.write(ContextDocument.USER, "\n\n".join(_core_first(profile, sections)))
     except Exception:
         logger.warning("Could not rebuild the user profile document", exc_info=True)
+
+
+def _core_first(profile: str, documents: list[str]) -> list[str]:
+    """The title and core topics, then the goal and rule documents, then the other topics."""
+    head, rest = [], []
+    for heading, text in document_sections(profile) if profile else []:
+        is_core = not text.startswith("## ") or heading.lower() in _CORE_TOPICS
+        (head if is_core else rest).append(text)
+    return [*(head or ["# User Profile"]), *documents, *rest]
 
 
 async def move_rule_and_goal_facts(fact_store: FactStore, context_store: ContextStore) -> int:

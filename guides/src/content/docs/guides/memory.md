@@ -61,6 +61,13 @@ north also keeps a profile of you. The profile is not a tab.
 north builds the profile from your facts, your **North stars** and your **Judgement rules**. It rebuilds the profile when one of them changes.
 You cannot edit the profile. To change it, change a fact or a document.
 
+A task gets the first 12,000 characters of the profile. The profile starts with who you are, your preferences, what you told north, your **North stars** and your **Judgement rules**. Topics that tasks use less, such as health and finances, come last.
+
+## Which memory a task uses
+
+When a task ends, north checks which of the facts, notes of past tasks and profile sections it was given the task used. The check runs in the background, on the model that you chose for **Background** on **Settings → Models**.
+north counts how often each fact was given to a task and how often a task used it. A fact that tasks often use ranks a little higher in later tasks. A fact that tasks never use ranks a little lower. A new fact starts in the middle.
+
 To see your profile, run `north context show user`.
 
 ## Add, correct or delete a fact
@@ -150,6 +157,7 @@ north keeps its memory in `~/.north` on your computer. If you set `NORTH_HOME`, 
 - `memory.db` holds the documents and your profile.
 - `facts.db` holds your facts. `episodic.db` holds the episodes.
 - `approval_memory.db` holds learned decisions and safe actions.
+- `memory_use.db` holds, for each fact, note and profile section, how often a task got it and used it.
 - `backups` holds up to 7 snapshots of the memory files. A snapshot is a copy, so a deleted fact can stay in an older snapshot.
 
 Some text goes to your AI provider:
@@ -159,5 +167,6 @@ Some text goes to your AI provider:
 - The text from `north context add`, to choose where it goes.
 - A new fact and older facts like it, to find older facts that the new fact makes untrue.
 - During a task: the facts that match the task, and often your profile, your **Soul** and notes of past tasks.
+- After a task: the memory that the task got, the task, its actions and its answer, to check which memory it used.
 - Before a task that acts outside north: the task and your **North stars**, for the goal check.
 - When north answers an approval card for you: your **Judgement rules** and the facts that match.

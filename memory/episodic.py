@@ -165,7 +165,19 @@ class EpisodicStore:
         project_id: str = "",
         workspace_id: str = "",
     ) -> list[str]:
-        """Return the most relevant past episode summaries for *query*.
+        """Return the most relevant past episode summaries for *query*."""
+        found = await self.search_with_ids(query, max_results, allowed_domains, project_id, workspace_id)
+        return [text for _, text in found]
+
+    async def search_with_ids(
+        self,
+        query: str,
+        max_results: int = 3,
+        allowed_domains: frozenset[str] | None = None,
+        project_id: str = "",
+        workspace_id: str = "",
+    ) -> list[tuple[str, str]]:
+        """Return (episode id, labelled summary) pairs of the most relevant past episodes for *query*.
 
         When *allowed_domains* is given, only episodes from those domains are
         considered, so a caller never receives another domain's task history.
@@ -196,7 +208,11 @@ class EpisodicStore:
         # Keyword fallback
         query_words = frozenset(w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in STOPWORDS)
         kw_scored = sorted(rows, key=lambda r: (_keyword_score(r[1], query_words), r[5]), reverse=True)
-        return [_label(summary, outcome) for _, summary, _, outcome, _, _ in kw_scored[:max_results] if summary]
+        return [
+            (episode_id, _label(summary, outcome))
+            for episode_id, summary, _, outcome, _, _ in kw_scored[:max_results]
+            if summary
+        ]
 
     def _search_vector_sync(
         self,
@@ -205,12 +221,12 @@ class EpisodicStore:
         allowed_domains: frozenset[str] | None = None,
         project_id: str = "",
         workspace_id: str = "",
-    ) -> list[str] | None:
+    ) -> list[tuple[str, str]] | None:
         """Native sqlite-vec vector search in SQLite; returns None if sqlite-vec is unavailable."""
         try:
             qvec_json = json.dumps(qvec)
             sql = (
-                "SELECT summary, outcome, workspace_id, (1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
+                "SELECT id, summary, outcome, workspace_id, (1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
                 "FROM episodes WHERE embedding IS NOT NULL AND embedding != '' AND embedding != '[]'"
             )
             params: list[object] = [qvec_json]
@@ -239,7 +255,9 @@ class EpisodicStore:
                 ),
                 reverse=True,
             )
-            return [_label(r["summary"], r["outcome"] or "success") for r in rows[:max_results] if r["summary"]]
+            return [
+                (r["id"], _label(r["summary"], r["outcome"] or "success")) for r in rows[:max_results] if r["summary"]
+            ]
         except Exception:
             return None
 
