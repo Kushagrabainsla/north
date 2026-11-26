@@ -128,7 +128,18 @@ def _stages() -> dict:
         }
         if tool.get("name") in names:
             parts = {component.get("component") for component in view.get("components", [])}
+            # A setting has a control when a part runs an action that sends it from the row.
+            used = {(c.get("action") or {}).get("event", {}).get("name") for c in view.get("components", [])}
+            controlled = {
+                name
+                for action_name, action in view.get("actions", {}).items()
+                if action_name in used
+                for name, arg in (action.get("args") or {}).items()
+                if isinstance(arg, dict) and not str(arg.get("path", "/")).startswith("/") and name != "id"
+            }
             panel = {
+                "settings_with_a_control": sorted(controlled),
+                "has_white_control": "kelvin" in controlled,
                 "added": True,
                 "id": view.get("id"),
                 "parts_present": sorted(parts & PANEL_PARTS),
