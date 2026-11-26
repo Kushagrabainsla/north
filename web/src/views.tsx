@@ -76,6 +76,30 @@ export function boundValues(bindings: Record<string, string>, scope: string, rea
   return Object.fromEntries(Object.entries(bindings).map(([argument, path]) => [argument, read(absolute(path, scope)) ?? null]));
 }
 
+/** An item's `id`, the one thing that says it is the same item when the data comes again. */
+const itemId = (item: Json): string | undefined => {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+  const id = (item as Record<string, Json>).id;
+  return typeof id === "string" || typeof id === "number" ? String(id) : undefined;
+};
+
+/** The order to draw a list's items in, and the ids to remember for the next time.
+ *
+ *  A list a tool reads can come back in a new order on each refresh (lights in the order the
+ *  network answered), so the row under your pointer became another item between look and click.
+ *  Items keep the place they had when first shown, by `id`; new ones follow in the data's order,
+ *  and one that is missing for a while gets its old place back. A list where an item has no id,
+ *  or two share one, is drawn as it comes: nothing says which item is which. */
+export function steadyOrder(items: Json[], known: string[] = []): { order: number[]; known: string[] } {
+  const ids = items.map(itemId);
+  const unique = ids.every((id): id is string => id !== undefined) && new Set(ids).size === ids.length;
+  if (!unique) return { order: items.map((_, index) => index), known };
+  const remembered = [...known, ...ids.filter((id) => !known.includes(id))];
+  const place = new Map(remembered.map((id, index) => [id, index]));
+  const order = items.map((_, index) => index).sort((a, b) => (place.get(ids[a]!) ?? 0) - (place.get(ids[b]!) ?? 0));
+  return { order, known: remembered };
+}
+
 /** An image address a view may show: https, a data: image, or a page of this dashboard. */
 export const showableImage = (src: string) => /^https:\/\//i.test(src) || /^data:image\//i.test(src) || /^\/(?!\/)/.test(src);
 
@@ -92,6 +116,8 @@ export function ViewSurface({ messages, bindings = {}, onAction, busyAction }: V
   const { components, data } = readMessages(messages);
   // What you set on this page, by absolute path. Row values give way to fresh data; the view's state stays.
   const [local, setLocal] = useState<Record<string, Json>>({});
+  // For each repeated list, by its absolute path: the ids of its items in the order they are drawn.
+  const orders = useRef<Record<string, string[]>>({});
   useEffect(() => {
     setLocal((current) => Object.fromEntries(Object.entries(current).filter(([path]) => path.startsWith("/state/"))));
   }, [messages]);
@@ -113,7 +139,11 @@ export function ViewSurface({ messages, bindings = {}, onAction, busyAction }: V
         const { path, componentId } = list as { path: string; componentId: string };
         const items = read(absolute(path, scope));
         const base = absolute(path, scope);
-        return Array.isArray(items) ? items.map((_, index) => <Frag key={index}>{draw(componentId, `${base}/${index}`, inner)}</Frag>) : [];
+        if (!Array.isArray(items)) return [];
+        // Each row still reads its own item by its place in the data; only the order drawn is steady.
+        const { order, known } = steadyOrder(items, orders.current[base]);
+        orders.current[base] = known;
+        return order.map((index) => <Frag key={itemId(items[index]) ?? index}>{draw(componentId, `${base}/${index}`, inner)}</Frag>);
       }
       return [];
     };

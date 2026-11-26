@@ -5,6 +5,7 @@ All notable changes to north are documented here.
 ## [Unreleased]
 
 ### Fixed
+- **A panel's rows stay in place when a refresh brings the items in another order** (`web/src/views.tsx`, the `authoring-a-north-view` skill). A repeated row was drawn by its place in the data, and a tool may list items in a new order each time: the Kasa tool lists lights in the order the network answers. The panel refreshes every 30 s, so the row under the pointer could become another light between look and click; in the Kasa rebuild test, a click on one lamp turned on another. Rows now keep the place they had when first shown, matched by each item's `id`; new items follow, and one missing for a refresh gets its place back. A list without unique ids is drawn as it comes. Checked on the live Lights panel: 3 refreshes in 2 orders, 1 order drawn.
 - **After an update from the dashboard, north can make a tool's environment again** (`cli/_server.py`). The dashboard's Update runs `north update` in site-packages, which `uv tool install --force` deletes and makes again. The restarted server inherited the deleted folder, so every `uv` it ran failed with "Current directory does not exist", and no tool north wrote could get its packages until north was started by hand. The server now starts in north's code folder, found again by its path. Found in run 2 of the one-prompt Kasa rebuild (`experiments/kasa_rebuild/`): 3 of 6 `create_tool` calls failed with this error, so neither the tool nor its panel was made.
 
 ### Added

@@ -17,7 +17,7 @@ domains: [general, engineering]
 ## The format: A2UI v0.9 on north's kit
 - `components` is a flat list. Each has an `id`, a `component` (a part from `parts`), and its properties. One has the id `root`; the panel starts there.
 - Containers (`Column`, `Row`, `Panel`, `StatGrid`) name their `children` by id: `["title", "runs"]`.
-- To repeat one part for each item of a list in the data, `children` is `{"path": "/lights/devices", "componentId": "light_row"}`. Inside that part, a path without the leading slash reads from the item: `{"path": "name"}`.
+- To repeat one part for each item of a list in the data, `children` is `{"path": "/lights/devices", "componentId": "light_row"}`. Inside that part, a path without the leading slash reads from the item: `{"path": "name"}`. Give each item a unique `id` in the tool's result: the panel then keeps each row in its place when a refresh returns the items in another order.
 - A property that shows data is `{"path": "/metrics/metrics/total_tasks"}`. Text that does not change is a plain string.
 - `state` holds what the panel's inputs set, with a first value for each: `"state": {"level": 50, "topic": ""}`. Read it at `/state/level`.
 - An input (`TextField`, `Select`, `Switch`, `Slider`, `ColorPicker`, `Microphone`) keeps its value at its `value` path: `/state/<name>`, or a field of its row, such as `{"path": "on"}` for a light's own switch. It shows that value and writes the user's change back.
