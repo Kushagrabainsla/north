@@ -55,18 +55,19 @@ class CreateToolTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "update", "activate", "read", "list"],
+                "enum": ["create", "update", "activate", "read", "list", "remove"],
                 "description": (
                     "list = show all tools with location and description; "
                     "read = return full source of an existing tool by name; "
                     "create = write a new tool (provide 'content' for a full implementation), test it, switch it on; "
                     "update = write improved code, test it, and replace the live tool only if the test passes; "
-                    "activate = test a draft that already exists, as it is, and switch it on"
+                    "activate = test a draft that already exists, as it is, and switch it on; "
+                    "remove = delete a tool north wrote (live or draft) with its environment and own files"
                 ),
             },
             "name": {
                 "type": "string",
-                "description": "Tool name in snake_case. Required for create, update, and read.",
+                "description": "Tool name in snake_case. Required for create, update, read and remove.",
             },
             "description": {
                 "type": "string",
@@ -181,6 +182,9 @@ class CreateToolTool(Tool):
         if action == "activate":
             return f"Tool '{data['name']}' passed its test call and is live."
 
+        if action == "remove":
+            return f"Tool '{data['name']}' is removed, with its environment and its own files."
+
         return str(data)
 
     async def run(self, input: ToolInput) -> ToolOutput:
@@ -202,11 +206,27 @@ class CreateToolTool(Tool):
                 if not written.success:
                     return written
             return await self._prove(input)
+        if action == "remove":
+            return await self._remove(str(input.params.get("name") or "").strip())
 
         return ToolOutput(
             success=False,
-            error=f"Unknown action '{action}'. Use: list, read, create, update, activate.",
+            error=f"Unknown action '{action}'. Use: list, read, create, update, activate, remove.",
         )
+
+    async def _remove(self, name: str) -> ToolOutput:
+        """Delete a tool north wrote, live or draft, and everything of it; a built-in tool stays."""
+        if not name:
+            return ToolOutput(success=False, error="Parameter 'name' is required for action=remove.")
+        if self._registry is None:
+            return ToolOutput(success=False, error="The live tool registry is unavailable.")
+        if not await self._registry.forget_learned(name):
+            if name in self._registry.all_tool_names():
+                return ToolOutput(success=False, error=f"'{name}' is built in: only a tool north wrote is removed.")
+            return ToolOutput(success=False, error=f"No tool north wrote is named '{name}'. Use action='list'.")
+        for kept in (self._validated, self._tested, self._described):
+            kept.pop(name, None)
+        return ToolOutput(success=True, data={"action": "remove", "name": name, "status": "removed"})
 
     async def _prove(self, input: ToolInput) -> ToolOutput:
         """Check the draft, call it once with test_params, and switch it on if that works.
@@ -230,6 +250,22 @@ class CreateToolTool(Tool):
         params = _named(input.params)
         action = (params.get("action") or "create").strip()
         name = params.get("name", "unknown")
+        if action == "remove":
+            return Request(
+                action=Action(
+                    agent="create_tool",
+                    kind=ActionKind.TOOL_CHANGE,
+                    summary=f"remove the {name!r} tool",
+                    operation="remove",
+                    args=str(name),
+                ),
+                title="Tool Change - Approval Required",
+                message=(
+                    f"Agent wants to remove the '{name}' tool. Approving stops it and deletes its code, its draft, "
+                    "its environment and its own folder. It cannot be undone; a panel that calls it stops working."
+                ),
+                declined="Tool remove cancelled by user.",
+            )
         tool_type = params.get("tool_type", "specialized")
         content = (params.get("content") or "").strip()
         if not content and name:

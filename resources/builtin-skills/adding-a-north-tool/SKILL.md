@@ -126,6 +126,7 @@ class GetWeatherTool(Tool):
 1. Call `create_tool` with `action='create'`, the tool's `name`, the full file as `content`, its `packages` if it needs any, and `test_params`: the smallest real input that shows it works (`{"city": "Pune"}`). The user is asked once. North then makes its environment, checks the file there, makes that one real call (anything it changes still asks), and switches the tool on if it succeeds.
 2. If it comes back as a draft, read the error, fix exactly that, and send the whole corrected file again (`create` replaces your own draft; `update` changes a live tool). A failing version never replaces the live one. If the test failed because a service could not be reached, say so instead of rewriting working code.
 3. Then use the tool for the user's original request and report the real result.
+4. If the user asks to remove a tool north wrote, call `create_tool` with `action='remove'` and its `name`. It deletes the code, the draft, the environment and the tool's own folder. A built-in tool cannot be removed.
 
 ## Common mistakes
 - Guessing how arguments arrive (`input.parameters`, `input.get(...)`): it is always `input.params`.
