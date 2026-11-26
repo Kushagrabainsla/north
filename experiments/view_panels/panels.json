@@ -1,0 +1,125 @@
+[
+ {"need": "screen brightness (5 prompts)", "view": {
+  "id": "screens", "title": "Screens",
+  "data": [{"name": "screens", "tool": "screen_brightness", "args": {"action": "get"}}],
+  "state": {"level": 50},
+  "actions": {"set_level": {"tool": "screen_brightness", "args": {"action": "set", "brightness": {"path": "/state/level"}}}},
+  "components": [
+   {"id": "root", "component": "Column", "children": ["now", "level"]},
+   {"id": "now", "component": "Panel", "title": "Now", "children": {"path": "/screens/screens", "componentId": "row"}},
+   {"id": "row", "component": "ListItem", "title": {"path": "name"}, "meta": [{"path": "brightness"}]},
+   {"id": "level", "component": "Slider", "label": "Brightness", "value": {"path": "/state/level"}, "min": 0, "max": 100, "unit": "%", "action": {"event": {"name": "set_level"}}}
+  ]}},
+ {"need": "Kasa lights (the Devices page)", "view": {
+  "id": "kasa-lights", "title": "Lights", "refresh": 30,
+  "data": [{"name": "lights", "tool": "kasa", "args": {"action": "list"}}],
+  "state": {"scene": "warm"},
+  "actions": {
+   "power": {"tool": "kasa", "args": {"action": {"path": "power_action"}, "device": {"path": "alias"}}},
+   "dim": {"tool": "kasa", "args": {"action": "brightness", "device": {"path": "alias"}, "brightness": {"path": "brightness"}}},
+   "colour": {"tool": "kasa", "args": {"action": "color", "device": {"path": "alias"}, "hue": {"path": "hue"}}},
+   "scene": {"tool": "kasa", "args": {"action": "scene", "scene": {"path": "/state/scene"}}}
+  },
+  "components": [
+   {"id": "root", "component": "Column", "children": ["scene", "list"]},
+   {"id": "scene", "component": "Select", "label": "Scene", "value": {"path": "/state/scene"}, "options": ["warm", "cool", "focus", "night"], "action": {"event": {"name": "scene"}}},
+   {"id": "list", "component": "Panel", "title": "Lights", "children": {"path": "/lights/devices", "componentId": "light"}},
+   {"id": "light", "component": "Column", "children": ["on", "brightness", "hue"]},
+   {"id": "on", "component": "Switch", "label": {"path": "alias"}, "value": {"path": "is_on"}, "action": {"event": {"name": "power"}}},
+   {"id": "brightness", "component": "Slider", "label": "Brightness", "value": {"path": "brightness"}, "min": 1, "max": 100, "unit": "%", "action": {"event": {"name": "dim"}}},
+   {"id": "hue", "component": "ColorPicker", "label": "Colour", "value": {"path": "hue"}, "action": {"event": {"name": "colour"}}}
+  ]}},
+ {"need": "music sync (the Devices page)", "view": {
+  "id": "music-sync", "title": "Music sync",
+  "state": {"sound": {}},
+  "actions": {"follow": {"tool": "kasa", "args": {"action": "color", "hue": {"path": "/state/sound/hue"}, "brightness": {"path": "/state/sound/brightness"}}}},
+  "components": [
+   {"id": "root", "component": "Panel", "title": "Music sync", "children": ["mic"]},
+   {"id": "mic", "component": "Microphone", "label": "Lights follow the music", "value": {"path": "/state/sound"}, "mode": "beat", "per_second": 5, "action": {"event": {"name": "follow"}}}
+  ]}},
+ {"need": "recent Gmail from every profile (1 prompt)", "view": {
+  "id": "gmail-recent", "title": "Recent email", "refresh": 300,
+  "data": [{"name": "mail", "tool": "gmail_search", "args": {"query": "newer_than:2d", "limit": 20}}],
+  "components": [
+   {"id": "root", "component": "Panel", "title": "Last two days", "children": ["table"]},
+   {"id": "table", "component": "Table", "rows": {"path": "/mail/threads"}, "columns": [{"key": "from", "label": "From"}, {"key": "subject", "label": "Subject"}, {"key": "date", "label": "Date"}], "empty": "No email in two days."}
+  ]}},
+ {"need": "LinkedIn job drafts (6 prompts)", "view": {
+  "id": "job-drafts", "title": "Job drafts",
+  "data": [{"name": "drafts", "tool": "flow_runs", "args": {"flow": "job-application-drafts", "limit": 20}}],
+  "actions": {
+   "fetch": {"flow": "job-application-drafts", "label": "Fetches new jobs from LinkedIn alerts"},
+   "skip": {"tool": "offered_before", "args": {"action": "mark", "key": {"path": "url"}}}
+  },
+  "components": [
+   {"id": "root", "component": "Column", "children": ["top", "list"]},
+   {"id": "top", "component": "Row", "children": ["fetch"]},
+   {"id": "fetch", "component": "Button", "label": "Fetch new jobs", "variant": "primary", "action": {"event": {"name": "fetch"}}},
+   {"id": "list", "component": "Panel", "title": "Drafts", "children": {"path": "/drafts/runs", "componentId": "job"}},
+   {"id": "job", "component": "Column", "children": ["job_item", "job_skip"]},
+   {"id": "job_item", "component": "ListItem", "title": {"path": "title"}, "description": {"path": "company"}, "status": {"path": "status"}},
+   {"id": "job_skip", "component": "Button", "label": "Skip", "action": {"event": {"name": "skip"}}}
+  ]}},
+ {"need": "research briefing on a topic (5 prompts)", "view": {
+  "id": "research-briefing", "title": "Research briefing",
+  "data": [{"name": "latest", "tool": "flow_runs", "args": {"flow": "daily-research-briefing", "limit": 1}}],
+  "state": {"topic": ""},
+  "actions": {"run": {"flow": "daily-research-briefing", "inputs": {"topics": {"path": "/state/topic"}}, "label": "Runs the briefing on your topic"}},
+  "components": [
+   {"id": "root", "component": "Column", "children": ["ask", "go", "out"]},
+   {"id": "ask", "component": "TextField", "label": "Topics", "value": {"path": "/state/topic"}, "placeholder": "world models, agent harnesses", "action": {"event": {"name": "run"}}},
+   {"id": "go", "component": "Button", "label": "Run the briefing", "variant": "primary", "action": {"event": {"name": "run"}}},
+   {"id": "out", "component": "Markdown", "text": {"path": "/latest/runs/0/output"}}
+  ]}},
+ {"need": "daily news briefing", "view": {
+  "id": "news-briefing", "title": "News",
+  "data": [{"name": "latest", "tool": "flow_runs", "args": {"flow": "daily-news-briefing", "limit": 1}}],
+  "actions": {"run": {"flow": "daily-news-briefing", "label": "Runs today's news briefing"}},
+  "components": [
+   {"id": "root", "component": "Column", "children": ["go", "out"]},
+   {"id": "go", "component": "Button", "label": "Run it now", "action": {"event": {"name": "run"}}},
+   {"id": "out", "component": "Markdown", "text": {"path": "/latest/runs/0/output"}}
+  ]}},
+ {"need": "daily photography flashcard", "view": {
+  "id": "photo-flashcard", "title": "Today's flashcard",
+  "data": [{"name": "card", "tool": "flow_runs", "args": {"flow": "daily-photography-flashcard", "limit": 1}}],
+  "actions": {"next": {"flow": "daily-photography-flashcard", "label": "Makes a new card"}},
+  "components": [
+   {"id": "root", "component": "Column", "children": ["pic", "text", "next"]},
+   {"id": "pic", "component": "Image", "src": {"path": "/card/runs/0/image"}, "alt": "Today's photograph"},
+   {"id": "text", "component": "Markdown", "text": {"path": "/card/runs/0/output"}},
+   {"id": "next", "component": "Button", "label": "Another one", "action": {"event": {"name": "next"}}}
+  ]}},
+ {"need": "form-filling loop every minute (1 prompt)", "view": {
+  "id": "form-loop", "title": "Form loop", "refresh": 10,
+  "data": [{"name": "runs", "tool": "flow_runs", "args": {"flow": "form-loop", "limit": 10}}],
+  "actions": {
+   "start": {"flow": "form-loop", "label": "Starts the loop"},
+   "stop": {"tool": "flow_runs", "args": {"action": "stop", "flow": "form-loop"}, "confirm": true}
+  },
+  "components": [
+   {"id": "root", "component": "Column", "children": ["buttons", "table"]},
+   {"id": "buttons", "component": "Row", "children": ["start", "stop"]},
+   {"id": "start", "component": "Button", "label": "Start", "variant": "primary", "action": {"event": {"name": "start"}}},
+   {"id": "stop", "component": "Button", "label": "Stop", "variant": "danger", "action": {"event": {"name": "stop"}}},
+   {"id": "table", "component": "Table", "rows": {"path": "/runs/runs"}, "columns": [{"key": "started", "label": "Started"}, {"key": "status", "label": "Status"}]}
+  ]}},
+ {"need": "a reminder in some minutes (1 prompt)", "view": {
+  "id": "reminders", "title": "Reminders", "refresh": 30,
+  "data": [{"name": "pending", "tool": "reminders", "args": {"action": "list"}}],
+  "state": {"what": "", "minutes": 5},
+  "actions": {
+   "add": {"tool": "reminders", "args": {"action": "add", "text": {"path": "/state/what"}, "minutes": {"path": "/state/minutes"}}},
+   "cancel": {"tool": "reminders", "args": {"action": "cancel", "id": {"path": "id"}}}
+  },
+  "components": [
+   {"id": "root", "component": "Column", "children": ["what", "minutes", "add", "list"]},
+   {"id": "what", "component": "TextField", "label": "Remind me about", "value": {"path": "/state/what"}},
+   {"id": "minutes", "component": "Slider", "label": "In", "value": {"path": "/state/minutes"}, "min": 1, "max": 120, "unit": " min"},
+   {"id": "add", "component": "Button", "label": "Remind me", "variant": "primary", "action": {"event": {"name": "add"}}},
+   {"id": "list", "component": "Panel", "title": "Waiting", "children": {"path": "/pending/reminders", "componentId": "one"}},
+   {"id": "one", "component": "Column", "children": ["one_item", "one_cancel"]},
+   {"id": "one_item", "component": "ListItem", "title": {"path": "text"}, "meta": [{"path": "due"}]},
+   {"id": "one_cancel", "component": "Button", "label": "Cancel", "action": {"event": {"name": "cancel"}}}
+  ]}}
+]

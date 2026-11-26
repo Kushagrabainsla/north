@@ -773,6 +773,14 @@ context stays on the original ToolInput for policy and tracing. Other unknown
 arguments are not silently dropped. Server annotations and the existing central
 approval gate still decide whether a call may run.
 
+`mcp_client/` connects through the official MCP SDK (the `mcp` package, pinned).
+It speaks both protocol eras: it asks a server with `server/discover` first and
+falls back to the `initialize` handshake. An `mcp.json` entry names a local server
+with `command`/`args`/`env`, or a hosted one with `url` (https) and `headers`, for
+example `{"url": "https://host/mcp", "headers": {"Authorization": "Bearer ..."}}`.
+A hosted server that signs in with OAuth in a browser is not built in: run it
+through `npx mcp-remote <url>` as a local `command`, which handles the sign-in.
+
 Agents are domain specialists. Each knows one domain and operates only within it. They do not talk to each other directly. All communication goes through the Task Context Object managed by the Orchestrator.
 
 ### 7.1 Agent Set
@@ -1681,7 +1689,7 @@ north/
   inference/              <- providers, routing, facts, rate limits, auth
   jobs/                   <- queue, scheduling, cron persistence
   ledger/                 <- audit models and SQLite writer
-  mcp/                    <- Model Context Protocol integration
+  mcp_client/             <- MCP servers north starts or reaches (over the official SDK)
   memory/                 <- documents, facts, episodes, embeddings
   orchestrator/           <- task lifecycle, API routes, execution pipeline
   policies/               <- binding safety and code-quality policy
@@ -2093,7 +2101,7 @@ beautifulsoup4 = ">=4.12.0"
 ddgs = ">=1.0.0"                # DuckDuckGo search (no API key required)
 
 # Smart home
-python-kasa = ">=0.7.0"         # local control of Kasa devices (kasa tool)
+packaging = ">=24.0"            # reads the pinned packages a tool north writes names
 
 # Voice input
 sounddevice = ">=0.4.6"         # push-to-talk audio capture

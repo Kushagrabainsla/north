@@ -62,6 +62,20 @@ In Telegram, tap **Approve** or **Reject** under the card.
 For a question, send your answer as a message.
 To see recent decisions, send `/decisions`.
 
+### A card that asks for a password or key
+
+When a tool needs a password, an API key or a login, north shows a card labelled **North needs a secret**.
+
+1. Type each value in its password field.
+2. Click **Save**. north keeps the values in **Settings**, **Secrets**, under the names on the card.
+
+north's model sees only the names, never the values.
+Click **Not now** to skip. north then tells you which secret is still missing.
+
+Type a secret only on the dashboard.
+In Telegram and in the terminal, the card says where to type it. If you send a secret there as an answer, north does not keep it and does not show it to its model.
+No approval mode answers this card for you, not even `yolo`.
+
 ## Make an answer a rule
 
 After you approve or reject a card, north can ask one time: **Make this a rule?**

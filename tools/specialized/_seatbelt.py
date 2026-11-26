@@ -230,6 +230,7 @@ class Seatbelt:
         scratch: str | None = None,
         repository: RepositoryLimit | None = None,
         contained: bool = False,
+        north_folders: tuple[str, ...] = (),
     ) -> list[str]:
         return wrap(
             command,
@@ -240,6 +241,7 @@ class Seatbelt:
             scratch=scratch,
             repository=repository,
             contained=contained,
+            north_folders=north_folders,
         )
 
     @staticmethod
@@ -308,6 +310,7 @@ def profile(
     scratch: str | None = None,
     repository: RepositoryLimit | None = None,
     contained: bool = False,
+    north_folders: tuple[str, ...] = (),
 ) -> str:
     """The Seatbelt profile for a command run in *workspace*.
 
@@ -322,6 +325,10 @@ def profile(
     asked: it writes only to *workspace*, *also_writable* and the temp folders -
     not the shared caches, which a later command would trust - and never reaches
     the network. What finishes there changed nothing outside those folders.
+
+    *north_folders* are folders inside north's home that this one process may read and write,
+    named by a caller north trusts: a tool north wrote gets its own environment and data folder,
+    and the rest of north's home stays closed to it.
     """
     rules = ["(version 1)", "(allow default)", "(deny file-write*)"]
     allowed = [_quote(p) for p in _TEMP_DIRS]
@@ -356,6 +363,7 @@ def profile(
     # North's home is closed above, and later rules win: a folder of north's own that this command may
     # write - its task folder, or its notes folder in the contained box - is opened again here.
     own = [folder for folder in (workspace, *(also_writable if writable else ())) if folder and _north_own(folder)]
+    own += [folder for folder in north_folders if folder not in own]
     for folder in own:
         operations = "file-read* file-write*" if writable else "file-read*"
         rules.append(f"(allow {operations} (subpath {_quote(folder)}))")
@@ -400,6 +408,7 @@ def wrap(
     scratch: str | None = None,
     repository: RepositoryLimit | None = None,
     contained: bool = False,
+    north_folders: tuple[str, ...] = (),
 ) -> list[str]:
     """The argv that runs *command* under the chosen profile."""
     argv = [
@@ -413,6 +422,7 @@ def wrap(
             scratch=scratch,
             repository=repository,
             contained=contained,
+            north_folders=north_folders,
         ),
     ]
     env = _proxy_env(proxy_port) if writable and proxy_port is not None and not contained else []
