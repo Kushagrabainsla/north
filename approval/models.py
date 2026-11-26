@@ -20,6 +20,9 @@ from utils.secrets import REDACTED, contains_secret, is_secret_field_name, redac
 
 DEFAULT_APPROVE_OPTION = "Approve"
 DEFAULT_REJECT_OPTION = "Reject"
+# What a secret card resolves to: whether the secret store holds the value, never the value.
+SECRET_SAVED = "Saved"
+SECRET_NOT_SAVED = "Not saved"
 
 
 class CardType(StrEnum):
@@ -123,6 +126,9 @@ class CardFieldType(StrEnum):
     BOOLEAN = "boolean"
     SELECT = "select"
     LINK = "link"
+    # A secret the user types on the dashboard: the field's name is the secret's name, and the value
+    # goes straight to the secret store (`request_secret`). A card never holds it.
+    SECRET = "secret"
 
 
 class CardField(BaseModel):
@@ -275,9 +281,31 @@ class Card(BaseModel):
         return bool(self.source) or not self.blocking
 
     @property
+    def secret_names(self) -> list[str]:
+        """The secrets this card asks the user to save, by name; [] for every other card."""
+        return [field.name for field in self.fields if field.type is CardFieldType.SECRET]
+
+    def secrets_saved(self) -> bool:
+        """Whether every secret this card asks for was saved after the card was raised.
+
+        Read from the secret store, never from the answer: a reply is text, and the one way a value
+        reaches north is the dashboard, which saves it under the card's names before answering.
+        """
+        saved = {item.name: item.updated_at for item in secret_store.store().saved()}
+        since = self.created_at if self.created_at.tzinfo else self.created_at.replace(tzinfo=UTC)
+        for name in self.secret_names:
+            try:
+                updated = datetime.fromisoformat(saved.get(name, ""))
+            except ValueError:
+                return False
+            if (updated if updated.tzinfo else updated.replace(tzinfo=UTC)) < since:
+                return False
+        return bool(self.secret_names)
+
+    @property
     def asks_several(self) -> bool:
         """A question card whose fields are its questions, answered together on the one card."""
-        return self.type is CardType.QUESTION and bool(self.fields)
+        return self.type is CardType.QUESTION and bool(self.fields) and not self.secret_names
 
     def answers_in(self, reply: str) -> dict[str, str]:
         """The answer *reply* gives to each of this card's questions, by field name; {} when it cannot tell.
