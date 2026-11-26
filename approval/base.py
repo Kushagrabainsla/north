@@ -13,7 +13,7 @@ from approval.models import Card
 class Notifier(ABC):
     """Abstract interface for sending alerts to the user.
 
-    Implementations: MacOSNotifier, TerminalNotifier.
+    Implementations: TerminalNotifier (the default) and TelegramNotifier, wrapped by BatchingNotifier.
     """
 
     @abstractmethod

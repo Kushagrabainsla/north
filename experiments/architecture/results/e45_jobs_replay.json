@@ -1,0 +1,11 @@
+{
+ "all_jobs_by_path": {
+  "plain prompt": 44,
+  "flow": 550
+ },
+ "last_plain_prompt_job": "2026-09-24",
+ "jobs_since_2026_09_25_by_path": {
+  "flow": 550
+ },
+ "jobs_since_2026_09_25_flow_of_raised": 0
+}

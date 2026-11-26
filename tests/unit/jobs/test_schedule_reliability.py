@@ -14,12 +14,9 @@ from datetime import UTC, datetime
 import pytest
 
 from jobs.cron_store import UserCronStore
-from jobs.exceptions import JobCancelled, JobNeedsAttention
 from jobs.models import JobStatus
 from jobs.scheduler import CronEntry, CronScheduler
 from jobs.sqlite_processor import SQLiteJobProcessor
-from ledger.models import LedgerSource
-from orchestrator.app import ScheduledTaskFailed, _run_scheduled_task
 
 MORNING = datetime(2026, 5, 22, 10, 0, tzinfo=UTC)  # the 08:00 slot was missed 2h ago
 
@@ -113,81 +110,3 @@ async def test_a_builtin_schedule_is_always_offered(tmp_path) -> None:
 
 
 # ---- the dispatcher waits to see what happened ----
-
-
-class _FakeOrchestrator:
-    """Accepts a task, then reports the statuses it was given, in order."""
-
-    def __init__(self, statuses: list[str], *, waiting_polls: int = 0) -> None:
-        self._statuses = list(statuses)
-        self._waiting_polls = waiting_polls
-        self.submitted: list[str] = []
-        self.requests = []
-
-    def is_waiting_on_you(self, task_id: str) -> bool:
-        if self._waiting_polls:
-            self._waiting_polls -= 1
-            return True
-        return False
-
-    async def submit_task(self, request):
-        self.requests.append(request)
-        self.submitted.append(request.prompt)
-        return type("Response", (), {"task_id": "task_1"})()
-
-    async def get_task(self, task_id: str):
-        status = self._statuses.pop(0) if self._statuses else "running"
-        return type("Task", (), {"status": status})()
-
-
-@pytest.mark.asyncio
-async def test_a_failed_scheduled_task_raises_so_the_job_retries() -> None:
-    """Raising is what hands the firing to the job processor's existing backoff."""
-    orchestrator = _FakeOrchestrator(["running", "failed"])
-    with pytest.raises(ScheduledTaskFailed):
-        await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)
-
-
-@pytest.mark.asyncio
-async def test_a_completed_scheduled_task_returns_quietly() -> None:
-    orchestrator = _FakeOrchestrator(["queued", "running", "completed"])
-    await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)
-    assert orchestrator.submitted == ["[scheduled] brief"]
-
-
-@pytest.mark.asyncio
-async def test_a_scheduled_task_is_submitted_as_a_schedule_s_task() -> None:
-    orchestrator = _FakeOrchestrator(["completed"])
-    await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)
-    assert orchestrator.requests[0].source is LedgerSource.CRON
-
-
-@pytest.mark.asyncio
-async def test_a_cancelled_scheduled_task_is_not_retried() -> None:
-    """Someone cancelling a task is a decision, not a fault to retry over."""
-    orchestrator = _FakeOrchestrator(["cancelled"])
-    with pytest.raises(JobCancelled):
-        await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)
-
-
-@pytest.mark.asyncio
-async def test_a_task_still_running_at_the_timeout_needs_attention() -> None:
-    """north cannot tell slow from stuck, and retrying a slow one runs it twice."""
-    orchestrator = _FakeOrchestrator(["running"] * 5)
-    with pytest.raises(JobNeedsAttention):
-        await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0, timeout_seconds=0.05)
-
-
-@pytest.mark.asyncio
-async def test_time_spent_waiting_on_you_does_not_run_out_the_deadline() -> None:
-    """Cards never expire (CODING_STYLE §13.5): the deadline counts only time spent working."""
-    orchestrator = _FakeOrchestrator(["completed"], waiting_polls=20)
-
-    await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0.01, timeout_seconds=0.05)
-
-
-@pytest.mark.asyncio
-async def test_an_exhausted_scheduled_task_needs_attention() -> None:
-    orchestrator = _FakeOrchestrator(["needs_attention"])
-    with pytest.raises(JobNeedsAttention):
-        await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)

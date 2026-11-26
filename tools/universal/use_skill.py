@@ -1,10 +1,9 @@
 """UseSkillTool - load the full instructions for a named skill on demand.
 
-The primary path is semantic pre-selection (skills are injected into context
-before the agent acts). This tool is the fallback for the long tail: when a
-listed skill fits but its body was not pre-injected, the agent can pull it in.
-It only ever reads - bundled files are returned as read-only references the agent
-reads itself with a shell command; the skill system never executes anything.
+A task's context lists every skill of its domain by name and description; the
+task model calls this tool to load the one that fits. It only ever reads -
+bundled files are returned as read-only references the agent reads itself with
+a shell command; the skill system never executes anything.
 """
 
 from __future__ import annotations
@@ -23,8 +22,8 @@ class UseSkillTool(Tool):
     name = "use_skill"
     description = (
         "Load the full step-by-step instructions for a named skill (a reusable "
-        "procedure for a recurring kind of task). Use it when a skill listed as "
-        "available fits the current task and its full body was not already provided. "
+        "procedure for a recurring kind of task). Use it when a skill in the list of "
+        "skills fits the current task, before you act. "
         "Returns the instructions plus the folder and names of any read-only reference "
         "files in the skill's folder (read those with bash, e.g. `cat <folder>/<file>`)."
     )

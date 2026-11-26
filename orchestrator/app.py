@@ -11,8 +11,7 @@ import logging
 import os
 import re
 import sys
-import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -52,7 +51,7 @@ from flows import FlowRegistry, FlowRunStore
 from gateways.telegram import TelegramGateway
 from gateways.telegram_api import bot_username as telegram_bot_username
 from gateways.telegram_outbox import TelegramOutbox
-from jobs.exceptions import JobCancelled, JobNeedsAttention, JobNeverStarted
+from jobs.exceptions import JobNeedsAttention, JobNeverStarted
 from jobs.models import Job, JobStatus, late_note
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, merge_entries, next_firing, provision_default_schedules
 from jobs.seen import SeenStore
@@ -81,7 +80,6 @@ from orchestrator.constants import WATCHDOG_POLL_INTERVAL_SECONDS
 from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.idle_update import IdleUpdate
-from orchestrator.models import TaskRequest
 from orchestrator.nightly_check import nightly_check, registered_checkout
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
@@ -635,30 +633,20 @@ def _prune_routing_decisions(deps, retention_days: int) -> int:
     return prune(retention_days) if prune is not None else 0
 
 
-# A scheduled firing is watched until the task it started actually finishes.
-# Polled rather than awaited because `submit_task` deliberately returns as soon
-# as the task is accepted; the poll is cheap and each job already runs in its own
-# asyncio task, so waiting here holds nothing else up.
-_SCHEDULED_POLL_SECONDS = 15.0
-# Comfortably inside the job processor's one-hour stale lease, so a watched task
-# is given up on by this loop rather than reaped out from under it.
-_SCHEDULED_TIMEOUT_SECONDS = 2_700.0
-_TASK_STILL_GOING = frozenset({"pending", "running", "queued", "retrying", "paused"})
+def flow_of(job: Job) -> str:
+    """The flow *job* runs. Every schedule and every one-off job is a flow (#45).
 
-
-class ScheduledTaskFailed(Exception):
-    """A scheduled firing ran and the task it started did not succeed.
-
-    Raised so the job processor's existing retry-with-backoff applies to cron
-    firings. Without it, `_dispatch_job` returned the moment a task was
-    *accepted* and every firing was recorded as a success - which is how the
-    daily briefing died at the planner one morning, was marked completed, and
-    was never attempted again that day.
+    A schedule used to run a plain prompt as a task. Nothing has made one since every way to schedule
+    became a flow, and none ran after 2026-09-24. A row left from that time is not guessed at: it needs
+    attention, with what to do, and nothing runs.
     """
-
-
-async def _not_cancelled() -> bool:
-    return False
+    flow = str((job.payload or {}).get("flow") or "").strip()
+    if not flow:
+        raise JobNeedsAttention(
+            f"The schedule '{job.task[:80]}' has no flow. An older north ran schedules as plain prompts; "
+            "north runs every schedule as a flow now. Make it again from the chat or the Schedules page."
+        )
+    return flow
 
 
 def _where_reminders_appear() -> list[str]:
@@ -685,57 +673,6 @@ async def _deliver_reminder(inputs: dict[str, Any], approvals: Approvals | None)
         title=title, message=f"{message}\n\n({late})" if late else message, source="reminder"
     )
     return f"Delivered the reminder '{title}'."
-
-
-async def _run_scheduled_task(
-    orchestrator: Orchestrator,
-    prompt: str,
-    *,
-    poll_seconds: float = _SCHEDULED_POLL_SECONDS,
-    timeout_seconds: float = _SCHEDULED_TIMEOUT_SECONDS,
-    job_cancelled: Callable[[], Awaitable[bool]] = _not_cancelled,
-) -> None:
-    """Start a scheduled task and wait to see whether it worked.
-
-    Only a clean task completion returns success. Cancellation is propagated to
-    the job as cancellation; exhausted recovery and an overlong in-flight task
-    are parked for attention so neither can be mislabeled completed or duplicated.
-    The deadline counts only time spent working: while the task waits on your
-    answer it is pushed back, because a card never expires (CODING_STYLE §13.5).
-    A job you cancel while this waits stops the task too; a shutdown leaves the
-    task to resume at the next start.
-    """
-    response = await orchestrator.submit_task(TaskRequest(prompt=prompt, source=LedgerSource.CRON))
-    try:
-        await _watch_scheduled_task(orchestrator, response.task_id, poll_seconds, timeout_seconds)
-    except asyncio.CancelledError:
-        if await job_cancelled():
-            await orchestrator.cancel_task(response.task_id)
-        raise
-
-
-async def _watch_scheduled_task(
-    orchestrator: Orchestrator, task_id: str, poll_seconds: float, timeout_seconds: float
-) -> None:
-    """Wait for *task_id* to end, and raise unless it completed."""
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        polled_at = time.monotonic()
-        await asyncio.sleep(poll_seconds)
-        if orchestrator.is_waiting_on_you(task_id):
-            deadline += time.monotonic() - polled_at
-            continue
-        task = await orchestrator.get_task(task_id)
-        if task is None or task.status in _TASK_STILL_GOING:
-            continue
-        if task.status == "completed":
-            return
-        if task.status == "cancelled":
-            raise JobCancelled(f"scheduled task {task_id} was cancelled")
-        if task.status == "needs_attention":
-            raise JobNeedsAttention(f"scheduled task {task_id} needs attention")
-        raise ScheduledTaskFailed(f"scheduled task {task_id} ended as {task.status}")
-    raise JobNeedsAttention(f"scheduled task {task_id} is still in progress after {timeout_seconds:.0f}s")
 
 
 # A task in these states is working, or about to; a paused one is safe across a restart.
@@ -898,31 +835,25 @@ def _launch_background_tasks(
             return stored is not None and stored.status is JobStatus.CANCELLED
 
         payload = job.payload or {}
-        flow = str(payload.get("flow") or "").strip()
-        if flow:
-            # A schedule's message is its flow's input: the text the reminder flow delivers.
-            message = str(payload.get("message") or "").strip()
-            inputs = (
-                {"message": message, "label": str(payload.get("label") or "Reminder"), "late": late_note(job)}
-                if message
-                else None
-            )
-            try:
-                result = await tool_registry.get("run_flow").run_scheduled(flow, job.job_id, inputs)
-            except asyncio.CancelledError:
-                if flow_runner is not None and await cancelled_by_you():
-                    flow_runner.cancel_running(job.job_id)
-                raise
-            if not result.success:
-                problem = result.error or f"scheduled flow '{flow}' failed"
-                if result.data is None:  # it never began: nothing to repeat, so the next start may try again
-                    raise JobNeverStarted(problem)
-                raise JobNeedsAttention(problem)
-            return
-        skill = str((job.payload or {}).get("skill") or "").strip()
-        skill_hint = f" Use the '{skill}' skill before acting." if skill else ""
-        scheduled_prompt = f"[scheduled]{skill_hint}\n{job.task}"
-        await _run_scheduled_task(orchestrator, scheduled_prompt, job_cancelled=cancelled_by_you)
+        flow = flow_of(job)
+        # A schedule's message is its flow's input: the text the reminder flow delivers.
+        message = str(payload.get("message") or "").strip()
+        inputs = (
+            {"message": message, "label": str(payload.get("label") or "Reminder"), "late": late_note(job)}
+            if message
+            else None
+        )
+        try:
+            result = await tool_registry.get("run_flow").run_scheduled(flow, job.job_id, inputs)
+        except asyncio.CancelledError:
+            if flow_runner is not None and await cancelled_by_you():
+                flow_runner.cancel_running(job.job_id)
+            raise
+        if not result.success:
+            problem = result.error or f"scheduled flow '{flow}' failed"
+            if result.data is None:  # it never began: nothing to repeat, so the next start may try again
+                raise JobNeverStarted(problem)
+            raise JobNeedsAttention(problem)
 
     cron_scheduler = CronScheduler(
         processor=deps.job_processor,
@@ -1149,7 +1080,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     agent_deps = _build_agent_deps(deps, tool_registry, approvals.interaction)
     agent_deps.tool_index = tool_index
     agent_deps.skill_registry = skill_registry
-    agent_deps.skill_selector = skill_selector
     agent_deps.flow_registry = flow_registry
     agent_registry = _build_agent_registry(agent_deps)
     create_skill_tool._agent_registry = agent_registry

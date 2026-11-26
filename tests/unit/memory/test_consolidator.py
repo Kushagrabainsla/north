@@ -86,7 +86,7 @@ async def test_late_approval_rebuilds_existing_task_episode(tmp_path: Path) -> N
         ]
     )
     store = EpisodicStore(tmp_path / "episodic.db")
-    consolidator = EpisodeConsolidator(ledger, store, _FailingInference(), tmp_path, poll_interval_seconds=1)
+    consolidator = EpisodeConsolidator(ledger, store, _FailingInference(), tmp_path)
 
     assert await consolidator.run_once() == 1
     ledger.entries.append(
