@@ -1,8 +1,8 @@
-"""SkillSelector - pick the most relevant skills for a task by semantic similarity.
+"""SkillSelector - pick the most relevant skills for a text by semantic similarity.
 
-The point of the whole subsystem: put the right procedural knowledge in front of
-the model *before* it acts, rather than hoping a weak model goes looking for it.
-Selection stays conservative - one primary skill and, at most, one meaningfully
+Agent tasks no longer use it: the task model chooses from the list of every skill
+(agents/base.py). It serves the coding briefing, and `closest` finds a near-copy
+for create_skill. Selection stays conservative - one primary skill and, at most, one meaningfully
 different secondary skill, only above a similarity threshold - because an
 irrelevant suggestion is worse than none. When embeddings are unavailable it
 selects nothing, and ``use_skill`` remains the fallback.
@@ -59,7 +59,7 @@ class SkillSelector:
     async def unavailable(self) -> str:
         """Why skills cannot be selected right now, found by embedding a line; "" when they can.
 
-        select() returns [] when embeddings fail, which a selection test reads as every example missed.
+        select() returns [] when embeddings fail, which a caller cannot tell from "no skill fits".
         """
         if self._embed_fn is None:
             return "no embedding model is configured"
@@ -121,6 +121,29 @@ class SkillSelector:
                 selected.append(candidate)
                 break
         return selected
+
+    async def closest(self, skill: Skill, others: list[Skill]) -> tuple[float, Skill] | None:
+        """The skill in *others* most like *skill*, by the text each is matched on, with its score.
+
+        *skill* may be a draft: it is embedded on its own and never enters the cache under its name.
+        Returns None when there are no others; raises when embeddings fail.
+        """
+        others = [other for other in others if other.name != skill.name]
+        if not others or self._embed_fn is None:
+            return None
+        embeddings = await self._skill_embeddings(others)
+        vectors = await self._embed_fn([_retrieval_key(skill)])
+        if not vectors or not vectors[0] or not embeddings:
+            return None
+        return max(
+            (
+                (cosine_similarity(vectors[0], embeddings[other.name]), other)
+                for other in others
+                if other.name in embeddings
+            ),
+            key=lambda pair: pair[0],
+            default=None,
+        )
 
     def invalidate(self) -> None:
         """Drop cached embeddings so the next select re-embeds (after the set changes)."""
