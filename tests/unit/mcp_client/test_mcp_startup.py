@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-from mcp.manager import McpManager
+from mcp_client.manager import McpManager
 from orchestrator.app import _serve_mcp
 from tools.models import ToolInput
 from tools.registry import ToolRegistry

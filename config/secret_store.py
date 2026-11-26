@@ -5,7 +5,8 @@ The model knows a secret by its name only. A tool that needs one declares it
 its own `run()` with `secret(name)`. `Tool.execute` releases only the names a tool
 declared, and takes every stored value back out of what any tool returns before
 the model reads it. You add, replace and remove secrets on the dashboard; no tool
-can. They are kept in north's home, in `secrets.json`, readable only by you, which
+can. North asks for one with `request_secret`: a card with a password field, which
+the dashboard saves here. They are kept in north's home, in `secrets.json`, readable only by you, which
 agents' file tools never reach (CODING_STYLE §16.1.1).
 """
 
@@ -283,7 +284,8 @@ def secret(name: str) -> str:
     value = store().value(name)
     if value is None:
         raise SecretUnavailable(
-            f"North has no secret named {name!r}. Ask the user to add it on the dashboard "
-            f"(Settings, Secrets) under the name {name!r}; never ask for its value in chat."
+            f"North has no secret named {name!r}. Call request_secret with name {name!r} and why it is "
+            "needed: the user types it on a card and north saves it (they can also add it in Settings, "
+            "Secrets). Never ask for its value in chat."
         )
     return value

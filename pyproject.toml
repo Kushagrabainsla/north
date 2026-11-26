@@ -54,6 +54,11 @@ dependencies = [
     # one is not hand-rolled over httpx - it uses the official SDK.
     "anthropic>=1.0.0",
     "aiogram>=3.31,<4",
+    # MCP client (mcp_client/client.py): the official SDK speaks every protocol era
+    # (the 2024-2025 handshake and the 2026-07-28 per-request form), stdio and
+    # Streamable HTTP. Pinned: 2.x renamed core names between minor releases, so
+    # raise the pin only with the tests in tests/unit/mcp_client.
+    "mcp==2.3.0",
 ]
 
 [project.scripts]

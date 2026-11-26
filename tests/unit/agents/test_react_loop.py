@@ -64,8 +64,8 @@ def _load_agent(name: str, tmp_path: Path, router: MockInferenceRouter | None = 
 
 
 async def test_mcp_dispatch_retains_north_context_without_forwarding_it_to_the_external_server(tmp_path):
-    from mcp.client import McpClient
-    from mcp.models import McpCallResult, McpToolDefinition
+    from mcp_client.client import McpClient
+    from mcp_client.models import McpCallResult, McpToolDefinition
     from tools.specialized.mcp_tool import McpTool
 
     client = AsyncMock(spec=McpClient)

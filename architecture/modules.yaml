@@ -159,12 +159,12 @@ modules:
     validation: [tests/unit/tools]
 
   integrations.gateways:
-    paths: [gateways/**, mcp/**]
+    paths: [gateways/**, mcp_client/**]
     layer: integrations
     owner: integrations
     editable_by: [coding_agent]
     public_contracts: [Telegram and MCP integrations]
-    validation: [tests/unit/gateways, tests/unit/mcp]
+    validation: [tests/unit/gateways, tests/unit/mcp_client]
 
   interfaces.cli:
     paths: [cli/**]

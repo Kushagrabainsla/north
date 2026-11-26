@@ -4,17 +4,29 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class McpServerConfig(BaseModel):
-    """Configuration for a single MCP server process."""
+    """One MCP server: a local process north starts (`command`), or a hosted server north reaches (`url`)."""
 
-    command: str
+    command: str = ""
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    # A hosted server, over Streamable HTTP. `headers` go with every request: a hosted server that
+    # takes a token reads it from here ("Authorization": "Bearer ..."), as `env` holds a local one's.
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
     disabled: bool = False
     timeout: float = 30.0
+
+    @model_validator(mode="after")
+    def _command_or_url(self) -> McpServerConfig:
+        if bool(self.command) == bool(self.url):
+            raise ValueError("an MCP server needs either a command (a local server) or a url (a hosted one)")
+        if self.url and not self.url.startswith(("https://", "http://127.0.0.1", "http://localhost")):
+            raise ValueError("a hosted MCP server's url must be https (or http on this machine)")
+        return self
 
 
 class McpConfigFile(BaseModel):

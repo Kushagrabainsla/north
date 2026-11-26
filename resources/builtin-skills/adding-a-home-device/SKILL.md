@@ -16,7 +16,7 @@ domains: [general]
 A request from the Devices page's Find devices already names the brand, its address, how it was found (mDNS, SSDP, its own discovery) and how north reaches it: start from that, and do not ask for any of it again.
 
 In one `ask_user` call with `questions`, ask only what you cannot find out: where the device or its bridge is on the network, and which login, key or pairing the brand needs.
-- A key or token is a secret. `create_tool` `action='list'` names the saved ones; use one that fits. Otherwise choose a short name (`hue_bridge`) and ask the user to add it on the dashboard, under Settings, Secrets, with that name. Never ask for its value in chat.
+- A key or token is a secret. `create_tool` `action='list'` names the saved ones; use one that fits. Otherwise choose a short name (`hue_bridge`) and call `request_secret` with it: the user types it on a card and north saves it. Never ask for its value in chat.
 - A step the user does by hand (pressing the bridge's link button, then saying done) is its own `ask_user` call with `requires_user_action=true`.
 
 ## A device Find devices could not name

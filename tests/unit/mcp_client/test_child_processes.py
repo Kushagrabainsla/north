@@ -16,7 +16,7 @@ from pathlib import Path
 
 import psutil
 
-from mcp.manager import McpManager
+from mcp_client.manager import McpManager
 from orchestrator.app import _serve_mcp
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
@@ -69,7 +69,10 @@ async def test_servers_start_together_and_one_that_never_answers_is_stopped(tmp_
     took = time.monotonic() - started
     try:
         left = [p for p in psutil.Process().children(recursive=True) if p not in before and p.is_running()]
-        assert took < 3.5, f"the two hung servers were waited for one after the other ({took:.1f}s)"
+        # Each hung server costs its 2 s timeout plus up to 2 s to stop: the MCP SDK closes the server's stdin
+        # and waits 2 s for it to exit before it terminates it, as the spec's stdio shutdown says. Together
+        # that is about 4 s; one after the other it would be about 8 s.
+        assert took < 6.0, f"the two hung servers were waited for one after the other ({took:.1f}s)"
         assert list(manager._clients) == ["files"]
         # Only the server that answered is still running.
         assert len([p for p in left if p.status() != psutil.STATUS_ZOMBIE]) == 1
