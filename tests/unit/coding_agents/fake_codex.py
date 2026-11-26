@@ -46,7 +46,16 @@ def save() -> None:
     see a half-written file."""
     temporary = Path(".fake_codex_calls.json.tmp")
     temporary.write_text(
-        json.dumps({"messages": received, "argv": args, "env": env, "cwd": os.getcwd(), "pid": os.getpid()})
+        json.dumps(
+            {
+                "messages": received,
+                "argv": args,
+                "env": env,
+                "cwd": os.getcwd(),
+                "pid": os.getpid(),
+                "tmpdir": os.environ.get("TMPDIR"),
+            }
+        )
     )
     os.replace(temporary, ".fake_codex_calls.json")
 

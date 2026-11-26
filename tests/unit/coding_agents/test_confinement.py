@@ -15,7 +15,8 @@ from coding_agents.confinement import COPIES_DIR, codex_filesystem, profile
 def home(tmp_path: Path) -> Path:
     folder = tmp_path / "home"
     for name in (
-        ".config",
+        ".config/someapp",
+        ".config/git",
         ".kube",
         ".ssh",
         "Documents",
@@ -26,6 +27,8 @@ def home(tmp_path: Path) -> Path:
     ):
         (folder / name).mkdir(parents=True)
     (folder / ".netrc").write_text("machine example login me password secret\n")
+    (folder / ".config" / "git" / "ignore").write_text(".DS_Store\n")
+    (folder / ".config" / "git" / "credentials").write_text("https://me:token@example.com\n")
     return folder
 
 
@@ -36,8 +39,19 @@ def _rules(home: Path, workspace: Path, mode: Mode = Mode.EDIT, **extra) -> dict
 def test_a_credential_nobody_listed_is_closed(home, tmp_path) -> None:
     rules = _rules(home, tmp_path / "repo")
 
-    for name in (".config", ".kube", ".netrc", "Documents"):
+    for name in (".config/someapp", ".kube", ".netrc", "Documents"):
         assert rules[str(home / name)] == "deny", name
+
+
+def test_git_reads_its_own_files_in_dot_config_and_nothing_else_there(home, tmp_path) -> None:
+    """A closed `~/.config` made every git command warn, and the user's global ignore was not used."""
+    rules = _rules(home, tmp_path / "repo")
+
+    assert rules[str(home / ".config" / "git" / "ignore")] == "read"
+    assert rules[str(home / ".config" / "git" / "config")] == "read", "listed even before it exists"
+    assert rules[str(home / ".config" / "git" / "credentials")] == "deny", "git's credential store stays closed"
+    assert rules[str(home / ".config" / "someapp")] == "deny"
+    assert str(home / ".config") not in rules and str(home / ".config" / "git") not in rules
 
 
 def test_the_home_folder_itself_is_not_denied_so_git_can_still_look_at_it(home, tmp_path) -> None:
@@ -100,8 +114,41 @@ def test_a_protected_path_wins_over_an_open_rule_for_the_same_path(home, tmp_pat
     assert rules[open_toolchain] == "deny"
 
 
-def test_other_runs_copies_are_closed_to_this_one(home, tmp_path) -> None:
-    assert _rules(home, tmp_path / "repo")[str(home / COPIES_DIR)] == "deny"
+def test_the_copies_are_closed_to_a_run_outside_them(home, tmp_path) -> None:
+    assert _rules(home, tmp_path / "repo")[str((home / COPIES_DIR).resolve())] == "deny"
+
+
+def test_in_a_copy_the_other_copies_are_closed_and_the_way_to_this_one_is_readable(home) -> None:
+    """A deny on the whole copies folder made `npm test` and a virtualenv's python fail inside a copy."""
+    copies = (home / COPIES_DIR).resolve()
+    mine = copies / "coding-worktrees" / "coding-mine"
+    other = copies / "coding-worktrees" / "coding-other"
+    for folder in (mine, other, copies / "harness-benchmark"):
+        folder.mkdir(parents=True)
+
+    rules = _rules(home, mine)
+
+    assert rules[str(copies)] == "read" and rules[str(copies / "coding-worktrees")] == "read"
+    assert rules[str(other)] == "deny" and rules[str(copies / "harness-benchmark")] == "deny"
+    assert rules[str(mine)] == "write"
+    assert rules[str(home / ".cache")] == "write", "the caches around them stay writable"
+
+
+def test_in_plan_mode_a_copy_is_read_only_too(home) -> None:
+    mine = (home / COPIES_DIR).resolve() / "coding-worktrees" / "coding-mine"
+    mine.mkdir(parents=True)
+
+    assert _rules(home, mine, Mode.PLAN)[str(mine)] == "read"
+
+
+def test_the_runs_scratch_folder_is_writable_even_in_plan_mode(home, tmp_path) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    rules = codex_filesystem(str(tmp_path / "repo"), Mode.PLAN, (), home=home, scratch=str(scratch))
+
+    writable = {path for path, access in rules.items() if access == "write"}
+    assert writable == {str(scratch.resolve()), str(home / ".codex")}
 
 
 def _linked_copy(tmp_path: Path) -> tuple[Path, Path]:
