@@ -11,7 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from config.approval_mode import ApprovalMode
-from mcp.models import McpToolDefinition
+from mcp_client.models import McpToolDefinition
 from tests.conftest import bind_approvals
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput

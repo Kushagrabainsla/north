@@ -15,7 +15,7 @@ from collections.abc import Collection
 _INPUT_FIELDS = {"params", "approved", "granted_workspace", "edit_scope", "model_copy"}
 _INSTALLED_HINT = (
     "Use the standard library or a package north already has: httpx, bs4, pydantic, yaml, numpy, psutil, "
-    "PIL, pypdf, docx. North cannot install packages for a custom tool."
+    "PIL, pypdf, docx."
 )
 # Calls that wait without letting north run anything else, and what to use instead.
 _BLOCKING = {
@@ -45,21 +45,24 @@ _CHANGING_FUNCTIONS = {
 }
 
 
-def draft_problems(source: str, saved_secrets: Collection[str] | None = None) -> list[str]:
+def draft_problems(
+    source: str, saved_secrets: Collection[str] | None = None, *, own_environment: bool = False
+) -> list[str]:
     """What must change in *source*, a tool draft, before it is worth testing; [] when nothing.
 
     With *saved_secrets*, the names of the user's secrets, a secret the draft uses that is not
-    saved yet is a problem too.
+    saved yet is a problem too. With *own_environment*, the draft runs in its own environment
+    with the packages it names, so its imports are checked there, by the runner, not here.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
         return [f"It does not parse: {exc}."]
-    problems = _imports(tree)
+    problems = [] if own_environment else _imports(tree)
     for tool in _tools(tree):
         problems += _tool_class(tool)
         problems += _secrets(tool, saved_secrets)
-    problems += _environment_and_paths(tree)
+    problems += _environment_and_paths(tree, own_environment)
     return problems
 
 
@@ -78,34 +81,12 @@ def _tools(tree: ast.Module) -> list[ast.ClassDef]:
 
 
 def _is_tool(node: ast.ClassDef) -> bool:
-    return _base(node) in {"Tool", "DeviceTool"}
-
-
-def _base(node: ast.ClassDef) -> str:
-    """The tool base class *node* names: Tool, DeviceTool, or "" for neither."""
+    """Whether *node* subclasses `Tool`, as `Tool` or `tools.base.Tool`."""
     for base in node.bases:
         name = base.id if isinstance(base, ast.Name) else base.attr if isinstance(base, ast.Attribute) else ""
-        if name in {"Tool", "DeviceTool"}:
-            return name
-    return ""
-
-
-def _device_tool(tool: ast.ClassDef, methods: dict[str, ast.FunctionDef | ast.AsyncFunctionDef]) -> list[str]:
-    """A brand of home device writes `find` and `change`; DeviceTool gives it `run` and says which calls change."""
-    problems = [
-        f"{tool.name} has no {name}: add `{signature}`."
-        for name, signature in (
-            ("find", "async def find(self) -> list[Device]"),
-            ("change", "async def change(self, device_id: str, change: LightChange) -> Device"),
-        )
-        if not isinstance(methods.get(name), ast.AsyncFunctionDef)
-    ]
-    if "run" in methods:
-        problems.append(f"{tool.name} defines run: a DeviceTool's run comes from DeviceTool; write find and change.")
-    for method in methods.values():
-        if isinstance(method, ast.AsyncFunctionDef):
-            problems += _blocking(method)
-    return problems
+        if name == "Tool":
+            return True
+    return False
 
 
 def _imports(tree: ast.Module) -> list[str]:
@@ -125,8 +106,6 @@ def _imports(tree: ast.Module) -> list[str]:
 def _tool_class(tool: ast.ClassDef) -> list[str]:
     problems: list[str] = []
     methods = {node.name: node for node in tool.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    if _base(tool) == "DeviceTool":
-        return list(dict.fromkeys(_device_tool(tool, methods)))
     run = methods.get("run")
     if run is None:
         return [f"{tool.name} has no run method: add `async def run(self, input: ToolInput) -> ToolOutput`."]
@@ -199,9 +178,10 @@ def _secrets(tool: ast.ClassDef, saved: Collection[str] | None) -> list[str]:
         for missing in [name for name in declared if name not in saved]:
             listed = f" Saved secrets: {', '.join(sorted(saved))}." if saved else " No secrets are saved yet."
             problems.append(
-                f"It uses the secret {missing!r}, which is not saved yet. Ask the user with ask_user "
-                f"(requires_user_action=true) to add it on the dashboard, Settings, Secrets, named {missing!r}; "
-                f"never ask for its value in chat. Then call create_tool again.{listed}"
+                f"It uses the secret {missing!r}, which is not saved yet. Call request_secret with "
+                f"name {missing!r} and why the tool needs it: the user types it on a card and north saves it "
+                f"(they can also add it in Settings, Secrets); never ask for its value in chat. Then call "
+                f"create_tool again.{listed}"
             )
     return list(dict.fromkeys(problems))
 
@@ -263,7 +243,7 @@ def _opens_to_write(call: ast.Call) -> bool:
     return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and any(c in mode.value for c in "wax+")
 
 
-def _environment_and_paths(tree: ast.Module) -> list[str]:
+def _environment_and_paths(tree: ast.Module, own_environment: bool = False) -> list[str]:
     problems: list[str] = []
     for node in ast.walk(tree):
         if (
@@ -271,16 +251,21 @@ def _environment_and_paths(tree: ast.Module) -> list[str]:
             and _dotted(node) == "os.environ"
             or (isinstance(node, ast.Call) and _dotted(node.func) == "os.getenv")
         ):
+            values = "" if own_environment else " Use `from config.settings import settings` for north's own values."
             problems.append(
-                "It reads environment variables, which north does not pass its settings through: use "
-                "`from config.settings import settings` for north's own values. For a key or password, declare "
-                "`uses_secrets = ('name',)` and read it with `secret('name')` from `config.secret_store`."
+                f"It reads environment variables, which north does not pass its settings through.{values} For a key "
+                "or password, declare `uses_secrets = ('name',)` and read it with `secret('name')` from "
+                "`config.secret_store`."
             )
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             text = node.value
             if "~/.north" in text or "/.north/" in text or text.startswith(("/Users/", "/home/")):
-                problems.append(
-                    f"It names a fixed path ({text!r}): build paths from `settings.north_home`, such as "
-                    "settings.north_home / 'tool-data' / '<tool name>', so it works on every install."
+                instead = (
+                    "keep its files in its own folder, its working folder, with a relative path such as "
+                    "Path('state.json')"
+                    if own_environment
+                    else "build paths from `settings.north_home`, such as settings.north_home / 'tool-data' / "
+                    "'<tool name>'"
                 )
+                problems.append(f"It names a fixed path ({text!r}): {instead}, so it works on every install.")
     return list(dict.fromkeys(problems))

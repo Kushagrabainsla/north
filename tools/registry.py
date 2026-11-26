@@ -13,10 +13,12 @@ To add a new tool:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib
 import importlib.util
 import inspect
+import json
 import logging
 import time
 from dataclasses import replace
@@ -94,13 +96,29 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
     return tools
 
 
-def _discover_external(directory: Path) -> dict[str, Tool]:
-    """Discover user-owned tools without treating their directory as a package."""
+def _discover_external(directory: Path, runtime: Any = None) -> dict[str, Tool]:
+    """Discover user-owned tools without treating their directory as a package.
+
+    A tool with what the runner said about it beside it (`<name>.json`) runs in its own process
+    (`tools.learned_remote`), and its code is never imported here. One written before that existed
+    is loaded as it always was, and every call of it is a change (`LearnedTool`).
+    """
     tools: dict[str, Tool] = {}
     if not directory.exists():
         return tools
     for path in sorted(directory.glob("*.py")):
         if path.name.startswith("_"):
+            continue
+        if runtime is not None and path.with_suffix(".json").exists():
+            from tools.learned_remote import RunnerTool
+
+            try:
+                saved = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+                tool = RunnerTool(path, saved["meta"], list(saved.get("packages") or []), runtime)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                logger.warning("learned tool discovery: cannot read what %s is: %s", path, exc)
+                continue
+            tools[tool.name] = tool
             continue
         module_name = f"north_learned_tool_{path.stem}_{abs(hash(path.resolve()))}"
         try:
@@ -144,6 +162,13 @@ def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
         param.default is inspect.Parameter.empty and param.kind in required_kinds
         for param in signature.parameters.values()
     )
+
+
+def written_by_north(tool: Tool) -> bool:
+    """A tool north wrote for itself, however it runs: in its own process, or inside north as before."""
+    from tools.learned_remote import RunnerTool
+
+    return isinstance(tool, RunnerTool) or is_learned_tool(tool)
 
 
 def is_learned_tool(tool: Tool) -> bool:
@@ -207,6 +232,7 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
         self._fallbacks: dict[str, Tool] = {}
         self._learned_dir = learned_dir
+        self._runtime: Any = None  # see learned_runtime()
         self._last_reload: float = 0.0  # monotonic timestamp of last filesystem scan
         self._dir_mtimes: dict[Path, float] = {}
         # Tools you configured that are not here, and why, by source ("mcp:crm"). A server that failed to start
@@ -230,15 +256,16 @@ class ToolRegistry:
             if directory.exists():
                 with contextlib.suppress(OSError):
                     self._dir_mtimes[directory] = _dir_fingerprint(directory)
-            for tool in _discover_external(directory).values():
+            for tool in _discover_external(directory, self.learned_runtime()).values():
                 self.register(tool)
 
     def reload(self) -> None:
-        """Re-scan tool directories for new or edited files.
+        """Re-scan tool directories for new, edited or removed files.
 
         Fast-paths when nothing in a directory has changed. Built-in tools are
         kept as the fallback, while user-owned tools replace same-name entries
-        so dashboard overrides take effect on reload.
+        so dashboard overrides take effect on reload. A tool north wrote whose
+        file is gone is dropped: north kept calling a deleted tool until a restart.
         """
         for directory, package in _TOOL_DIRS:
             dir_path = _TOOLS_ROOT / directory
@@ -248,12 +275,78 @@ class ToolRegistry:
                 if tool.name not in self._tools:
                     self._tools[tool.name] = self._bind(tool)
                     logger.info("ToolRegistry.reload: picked up new global tool %r", tool.name)
+        changed = False
         for directory in self._learned_directories():
             if not self._directory_changed(directory):
                 continue
-            for tool in _discover_external(directory).values():
+            changed = True
+            for tool in _discover_external(directory, self.learned_runtime()).values():
                 self.register(tool)
                 logger.info("ToolRegistry.reload: picked up learned tool %r", tool.name)
+        if changed:
+            for name in [name for name, tool in self._tools.items() if written_by_north(tool)]:
+                if not any(path.exists() for path in self._learned_files(name, live_code=True)):
+                    self._stop(self._tools[name])
+                    self.remove(name)
+                    logger.info("ToolRegistry.reload: dropped learned tool %r, its file is gone", name)
+
+    async def forget_learned(self, name: str) -> bool:
+        """Remove a tool north wrote, so nothing of it is left: its process, code, draft, environment and own
+        folder, and its place in the catalog. False when *name* is no tool north wrote (a built-in stays).
+
+        The one way to remove one: the dashboard deleted only the code, so the tool's process, environment and
+        folder stayed, and `create_tool` had no way at all.
+        """
+        current = self._tools.get(name)
+        if current is not None and not written_by_north(current):
+            return False
+        files = [path for path in self._learned_files(name) if path.exists()]
+        if current is None and not files:
+            return False
+        if current is not None and callable(getattr(current, "aclose", None)):
+            closing = current.aclose()
+            if inspect.isawaitable(closing):
+                await closing
+        for path in files:
+            path.unlink(missing_ok=True)
+        runtime = self.learned_runtime()
+        if runtime is not None:
+            await asyncio.to_thread(runtime.remove, name)
+        if current is not None:
+            self.remove(name)
+        logger.info("ToolRegistry: removed learned tool %r", name)
+        return True
+
+    def _learned_files(self, name: str, *, live_code: bool = False) -> list[Path]:
+        """Where tool *name*'s code and what the runner said about it may be, live or as a draft; with
+        *live_code*, only where its live code may be."""
+        if self._learned_dir is None:
+            return []
+        roots = (self._learned_dir,) if live_code else (self._learned_dir, self._learned_dir / "candidates")
+        suffixes = (".py",) if live_code else (".py", ".json")
+        kinds = ("universal", "specialized")
+        return [root / kind / f"{name}{suffix}" for root in roots for kind in kinds for suffix in suffixes]
+
+    @staticmethod
+    def _stop(tool: Tool) -> None:
+        """Stop the process of a tool north wrote that runs its own, in the background."""
+        if not callable(getattr(tool, "aclose", None)):
+            return
+        with contextlib.suppress(RuntimeError):
+            closing = tool.aclose()
+            if inspect.isawaitable(closing):
+                asyncio.get_running_loop().create_task(closing)
+
+    def learned_runtime(self) -> Any:
+        """Where the tools north wrote keep their environments and own folders, and their sandbox; None with no
+        learned folder. Made once, so every tool north wrote shares it."""
+        if self._learned_dir is None:
+            return None
+        if self._runtime is None:
+            from tools.learned_remote import LearnedRuntime
+
+            self._runtime = LearnedRuntime(self._learned_dir.parent)
+        return self._runtime
 
     def _learned_directories(self) -> tuple[Path, ...]:
         if self._learned_dir is None:
@@ -283,6 +376,8 @@ class ToolRegistry:
         if is_learned_tool(tool) and not isinstance(tool, LearnedTool):
             tool = LearnedTool(tool)
         current = self._tools.get(tool.name)
+        if current is not None and current is not tool:
+            self._stop(current)  # a tool north wrote that runs its own process: the version replaced stops it
         if current is not None and not is_learned_tool(current):
             self._fallbacks[tool.name] = current
         self._tools[tool.name] = self._bind(tool)
@@ -312,6 +407,10 @@ class ToolRegistry:
     def all_tools(self) -> list[Tool]:
         """Every tool in the global catalog that can work on this machine now."""
         return [tool for tool in self._tools.values() if not self._missing(tool.name)]
+
+    def names_written_by_north(self) -> list[str]:
+        """The names of the tools north wrote for itself: a device's tool is one, named when it was made."""
+        return [tool.name for tool in self._tools.values() if written_by_north(tool)]
 
     def note_unavailable(self, source: str, why: str) -> None:
         """Record that tools from *source* were configured but are not available, and why."""

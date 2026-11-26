@@ -389,9 +389,14 @@ def test_a_device_s_state_stated_with_nothing_that_read_it_is_flagged(answer: st
     assert "a device's state" in violation
 
 
-@pytest.mark.parametrize("evidence", ["kasa", "bash", "mcp__home__get_state"])
+@pytest.mark.parametrize("evidence", ["kasa_lights", "bash", "mcp__home__get_state"])
 def test_a_device_s_state_read_by_a_device_tool_is_not_flagged(evidence: str) -> None:
-    assert verify_claims("The bedroom fan is still on.", [evidence]) == []
+    """A device's tool is one north wrote, named when it was made; an MCP server or a command also reads one."""
+    assert verify_claims("The bedroom fan is still on.", [evidence], tools_north_wrote=["kasa_lights"]) == []
+
+
+def test_a_tool_north_did_not_write_does_not_read_a_device() -> None:
+    assert verify_claims("The bedroom fan is still on.", ["web_search"], tools_north_wrote=["kasa_lights"])
 
 
 @pytest.mark.parametrize(

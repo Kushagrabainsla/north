@@ -30,7 +30,7 @@ Architecture, safety-policy, approval, tool-mutation, and composition-root chang
 | `application.approval` | `approval/` | Application | consent and safe actions | Protected |
 | `application.jobs` | `jobs/`, `bootstrap/` | Application | schedules and onboarding | Standard |
 | `integrations.tools` | `tools/` | Integration | tool/mutation enforcement | Protected |
-| `integrations.gateways` | `gateways/`, `mcp/` | Integration | Telegram and MCP | Standard |
+| `integrations.gateways` | `gateways/`, `mcp_client/` | Integration | Telegram and MCP | Standard |
 | `interfaces.cli` | `cli/` | Interface | `north` CLI | Standard |
 | `interfaces.web` | `web/` | Interface | cockpit API and browser UI | Standard |
 | `composition.app` | `orchestrator/app.py`, `config/dependencies.py` | Composition | lifecycle and concrete wiring | Protected |

@@ -26,14 +26,14 @@ class ScreenBrightnessTool(Tool):
         "external monitors - from 0 to 100%. action='get' reads each screen's level and name; "
         "action='set' with brightness changes it. Pass screen to pick one by a name from a get; "
         'leave it out for every screen. For a relative change ("a bit brighter"), get '
-        "first, then set. Lamps and smart bulbs use the kasa tool instead. "
+        "first, then set. Lamps and smart bulbs are not screens: use their own device tool. "
         "Setting follows the approval mode; reading never asks."
     )
     # A read is asked for by name. When leaving brightness out meant "read", an
     # agent asked to make the screen "a bit brighter" read it by sending
-    # brightness=0, which set it to 0%. A brightness with no action still sets,
-    # named as the kasa tool names it: asked to "set my screen brightness to
-    # 24%", the planner sent brightness=24 and nothing else.
+    # brightness=0, which set it to 0%. A brightness with no action still sets:
+    # asked to "set my screen brightness to 24%", the planner sent
+    # brightness=24 and nothing else.
     parameters_schema = {
         "type": "object",
         "properties": {

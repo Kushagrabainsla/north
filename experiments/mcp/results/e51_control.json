@@ -1,0 +1,12 @@
+{
+  "sessions": 80,
+  "items": 2207,
+  "items_needed": 81,
+  "sessions_with_a_needed_item": 42,
+  "judge_calls": {
+    "calls": 80,
+    "cached": 0,
+    "input_tokens": 861847,
+    "output_tokens": 126551
+  }
+}

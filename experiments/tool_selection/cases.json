@@ -19,7 +19,7 @@
   {"id": "schedule-update", "prompt": "Move my morning briefing from 7am to 8am", "expected": ["create_flow"], "kind": "single"},
   {"id": "schedule-delete", "prompt": "Stop and remove my recurring Friday reminder", "expected": ["create_flow"], "kind": "single"},
   {"id": "fitness", "prompt": "Log today's workout and retrieve my recent activity data", "expected": ["fitness_api"], "kind": "single"},
-  {"id": "smart-home", "prompt": "Turn off the living room smart lights", "expected": ["kasa"], "kind": "single"},
+  {"id": "smart-home", "prompt": "Turn off the living room smart lights", "expected": ["create_tool"], "kind": "single"},
   {"id": "interview", "prompt": "Give me a coding interview question and evaluate my answer", "expected": ["interview_prep"], "kind": "single"},
   {"id": "screenshot", "prompt": "Capture what is currently visible on my desktop display", "expected": ["take_screenshot"], "kind": "single"},
   {"id": "camera", "prompt": "Take a photograph using the connected camera", "expected": ["take_photo"], "kind": "single"},

@@ -32,19 +32,6 @@ def test_a_session_s_activity_and_turns_have_their_own_cells_on_a_phone() -> Non
     assert ".kit-table-open { grid-template-columns: 1fr;" in phone
 
 
-def test_the_devices_page_lines_up_with_its_header_like_every_other_page() -> None:
-    """Its blocks were indented 26 px with margins of their own, and the Add a device panel then ran off the
-    right edge at 1080 px. A page's blocks sit on its edges and are spaced by its one gap; checked in a browser
-    at 390, 1080 and 1400 px, every block's left and right edges equal the header's."""
-    # The bar, notice and grid are kit parts now (Toolbar, Notice, CardGrid), with no margins of their own.
-    for selector in (".music-sync",):
-        body = _rule(selector)
-        assert body, selector
-        assert not re.search(r"\b(margin|padding)\s*:\s*0 \d+px", body), selector
-    assert not re.search(r"\.(lights-bar|lights-notice|music-sync|add-device)[^{]*\{[^}]*margin-(left|right)", CSS)
-    assert ".add-device {" not in CSS  # the shared Panel, as in Settings
-
-
 def _winning(selector: str, prop: str) -> str:
     """The value of *prop* in the last top-level rule for exactly *selector* that sets it: the one that applies."""
     values = [

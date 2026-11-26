@@ -5,9 +5,11 @@ components, each with an `id`, a `component` name from this catalog and its prop
 one of them `root`. Containers name their children by id, or repeat one template over a
 list in the data (`{"path": "/runs", "componentId": "run_row"}`). A property that shows
 data binds to it with `{"path": "/runs/0/status"}`; inside a template a path without the
-leading slash is read from the item. Each part here is drawn by the kit part of the same
-role (web/src/views.tsx), so a view looks like the rest of the dashboard and can use only
-what the kit has. A new kit part a view should use is added here, with its renderer.
+leading slash is read from the item. An input's `value` is bound the same way, both
+ways, as A2UI's inputs are: to `/state/<name>` (the view's own `state`) or to a field of
+its row. Each part here is drawn by the kit part of the same role (web/src/views.tsx), so
+a view looks like the rest of the dashboard and can use only what the kit has. A new kit
+part a view should use is added here, with its renderer.
 """
 
 from __future__ import annotations
@@ -49,6 +51,26 @@ CHILDREN: dict[str, Any] = {
     ]
 }
 TEXT = {"type": "string", "minLength": 1, "maxLength": 120}
+# One of the view's actions, run when a part is used: a button pressed, a switch turned, a slider let go.
+EVENT: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "event": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "pattern": ID_PATTERN}},
+            "required": ["name"],
+            "additionalProperties": False,
+        }
+    },
+    "required": ["event"],
+    "additionalProperties": False,
+}
+# Where an input keeps what you set: a path in the view's `state`, or a field of the row it is in.
+# The part shows that value and writes your change back to it; an action's args read it from there.
+VALUE: dict[str, Any] = BINDING
+
+# Parts you set a value with. Each may name an `action`, run with the new value in place.
+INPUTS = {"TextField", "Select", "Switch", "Slider", "ColorPicker", "Microphone"}
 
 # name -> (what it is for, its properties, which are required)
 COMPONENTS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
@@ -133,29 +155,74 @@ COMPONENTS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
     ),
     "Button": (
         "Runs one of the view's actions when pressed. `action.event.name` names it.",
-        {
-            "label": TEXT,
-            "variant": {"enum": ["primary", "secondary", "danger"]},
-            "action": {
-                "type": "object",
-                "properties": {
-                    "event": {
-                        "type": "object",
-                        "properties": {"name": {"type": "string", "pattern": ID_PATTERN}},
-                        "required": ["name"],
-                        "additionalProperties": False,
-                    }
-                },
-                "required": ["event"],
-                "additionalProperties": False,
-            },
-        },
+        {"label": TEXT, "variant": {"enum": ["primary", "secondary", "danger"]}, "action": EVENT},
         ["label", "action"],
     ),
     "Link": (
         "Goes to a dashboard page, such as /flows or /tasks/<id>.",
         {"label": TEXT, "to": {"type": "string", "pattern": r"^/(?!/)[^\s]{0,200}$"}},
         ["label", "to"],
+    ),
+    "Image": (
+        "A picture from the data: an https address or a data:image URI.",
+        {"src": DYNAMIC, "alt": TEXT},
+        ["src", "alt"],
+    ),
+    "TextField": (
+        "A line you type in. `value` is where it keeps the text; `action` runs when you press Enter.",
+        {"label": TEXT, "value": VALUE, "placeholder": TEXT, "action": EVENT},
+        ["label", "value"],
+    ),
+    "Select": (
+        "One choice from a short list. `action` runs when you pick one.",
+        {
+            "label": TEXT,
+            "value": VALUE,
+            "options": {
+                "anyOf": [
+                    {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "string", "maxLength": 120}},
+                    BINDING,
+                ]
+            },
+            "action": EVENT,
+        },
+        ["label", "value", "options"],
+    ),
+    "Switch": (
+        "On or off, such as a light. `action` runs when you turn it.",
+        {"label": DYNAMIC, "value": VALUE, "action": EVENT},
+        ["label", "value"],
+    ),
+    "Slider": (
+        "A number in a range, such as a brightness. `action` runs when you let go.",
+        {
+            "label": DYNAMIC,
+            "value": VALUE,
+            "min": {"type": "number"},
+            "max": {"type": "number"},
+            "step": {"type": "number", "exclusiveMinimum": 0},
+            "unit": {"type": "string", "maxLength": 8},
+            "action": EVENT,
+        },
+        ["label", "value", "min", "max"],
+    ),
+    "ColorPicker": (
+        "A colour as a hue, 0 to 360, on a rainbow slider. `action` runs when you let go.",
+        {"label": DYNAMIC, "value": VALUE, "action": EVENT},
+        ["label", "value"],
+    ),
+    "Microphone": (
+        "Listens to music in the browser while you let it, and runs `action` as it plays, several times a second "
+        "and on each beat. `value` is where it keeps what it hears: level (0-1), beat (true on a beat), and a "
+        "colour that follows the music (hue, saturation, brightness). The sound never leaves the browser.",
+        {
+            "label": TEXT,
+            "value": VALUE,
+            "mode": {"enum": ["beat", "mood"]},
+            "per_second": {"type": "integer", "minimum": 1, "maximum": 10},
+            "action": EVENT,
+        },
+        ["label", "value", "action"],
     ),
 }
 
