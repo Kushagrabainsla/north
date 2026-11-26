@@ -266,6 +266,29 @@ async def test_what_a_tool_started_stops_with_it_even_when_it_left_the_tools_pro
         unrelated.wait()
 
 
+async def test_a_draft_whose_test_call_changes_something_does_not_wait_for_its_own_create_tool(
+    tmp_path: Path, token
+) -> None:
+    """create_tool held the workspace lock for its whole call, and the draft's test call needed it for its own
+    change: the lock is not re-entrant, so the test waited for its parent for ever. A task that tested a Kasa
+    tool with a `set` on a lamp hung for 13 minutes; tests that only listed the lamps took no lock and passed."""
+    import asyncio
+
+    from config.approval_mode import ApprovalMode
+    from tests.conftest import bind_approvals
+
+    registry = _registry(tmp_path)
+    creator = bind_approvals(_creator(registry, tmp_path), ApprovalMode.YOLO)
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    params = {"action": "create", "name": "lamps", "content": TOOL, "test_params": {"action": "switch"}}
+
+    out = await asyncio.wait_for(creator.execute(ToolInput(params=params, granted_workspace=str(workspace))), 30)
+
+    assert out.success, out.error
+    await registry.get("lamps").aclose()
+
+
 # ── Read-only calls, and the sandbox that makes them safe ─────────────────────
 
 

@@ -21,6 +21,7 @@ from tests.unit.agents.test_react_loop import _load_agent
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal.create_flow import CreateFlowTool
+from tools.universal.create_tool import CreateToolTool
 from tools.universal.run_flow import RunFlowTool
 
 
@@ -99,8 +100,8 @@ async def test_a_run_a_tool_starts_can_change_the_folder_its_parent_works_in(tmp
     assert ok
 
 
-def test_the_flow_tools_say_they_start_runs() -> None:
-    assert CreateFlowTool.starts_runs and RunFlowTool.starts_runs
+def test_the_tools_that_test_or_run_what_they_make_say_they_start_runs() -> None:
+    assert CreateFlowTool.starts_runs and RunFlowTool.starts_runs and CreateToolTool.starts_runs
 
 
 async def test_two_changes_to_one_folder_still_never_overlap(tmp_path: Path) -> None:
