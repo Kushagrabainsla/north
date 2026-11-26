@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import math
+import re
 import sqlite3
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -146,6 +147,23 @@ _INSERT_COLUMNS = ", ".join(_INSERT_COLUMN_NAMES)
 _INSERT_PLACEHOLDERS = ", ".join(["?"] * len(_INSERT_COLUMN_NAMES))
 
 
+# A word as FTS5's default tokenizer (unicode61) reads one: a run of letters and digits. `_` splits too.
+_WORD = re.compile(r"[^\W_]+")
+
+
+def _fts_query(query: str, *, prefix: bool = False) -> str:
+    """*query* as an FTS5 match: each word quoted, all required; "" when it has no word.
+
+    With *prefix*, a word also matches the words it starts: a search box gets "remind" for "reminder".
+    Words are split as the index splits them, on anything but letters and digits. Deleting punctuation
+    instead turned "Don't" into "Dont" and "fizzbuzz(n)" into "fizzbuzzn", which no entry holds: 10 of
+    50 older tasks could not be found by the first words of their own prompt.
+    """
+    tokens = _WORD.findall(query)
+    star = "*" if prefix else ""
+    return " AND ".join(f'"{t}"{star}' for t in tokens)
+
+
 class SQLiteLedgerWriter(LedgerWriter):
     """Append-only ledger persisted to a single SQLite file.
 
@@ -281,6 +299,39 @@ class SQLiteLedgerWriter(LedgerWriter):
         sql, params = self._build_query(_SUMMARY_COLUMNS, filters)
         with open_db_connection(self._db_path) as conn:
             return list(conn.execute(sql, params).fetchall())
+
+    async def task_events(self, tasks: int, query: str = "") -> list[LedgerEntry]:
+        try:
+            rows = await asyncio.to_thread(self._task_events_sync, tasks, query)
+        except sqlite3.OperationalError:
+            if not query.strip():
+                raise LedgerReadError("Failed to list the newest tasks") from None
+            return await super().task_events(tasks, query)  # no FTS5 on this platform
+        except sqlite3.Error as e:
+            raise LedgerReadError(f"Failed to list the newest tasks: {e}") from e
+        return [self._row_to_entry(r) for r in rows]
+
+    def _task_events_sync(self, tasks: int, query: str) -> list[sqlite3.Row]:
+        params: list = []
+        match = ""
+        if query.strip():
+            fts_query = _fts_query(query, prefix=True)
+            if not fts_query:
+                return []
+            match = "AND rowid IN (SELECT rowid FROM ledger_fts WHERE ledger_fts MATCH ?)"
+            params.append(fts_query)
+        sql = f"""
+            WITH chosen AS (
+                SELECT task_id FROM ledger
+                WHERE task_id IS NOT NULL AND task_id <> '' {match}
+                GROUP BY task_id
+                ORDER BY MAX(timestamp) DESC
+                LIMIT ?
+            )
+            SELECT * FROM ledger WHERE task_id IN (SELECT task_id FROM chosen) ORDER BY timestamp DESC
+        """
+        with open_db_connection(self._db_path) as conn:
+            return list(conn.execute(sql, [*params, tasks]).fetchall())
 
     async def pending_task_ids(self, limit: int = 500) -> list[str]:
         try:
@@ -601,13 +652,9 @@ class SQLiteLedgerWriter(LedgerWriter):
         agent: str | None,
         source: LedgerSource | None,
     ) -> list[SearchResult]:
-        # Sanitise FTS5 query: extract non-empty tokens and wrap each in quotes
-        tokens = [
-            t for t in query.replace("'", "").replace('"', "").replace("(", "").replace(")", "").split() if t.strip()
-        ]
-        if not tokens:
+        fts_query = _fts_query(query)
+        if not fts_query:
             return []
-        fts_query = " AND ".join(f'"{t}"' for t in tokens)
 
         clauses = ["ledger_fts MATCH ?"]
         params: list = [fts_query]
