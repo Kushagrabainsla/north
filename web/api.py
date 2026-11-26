@@ -469,7 +469,7 @@ _OLDER_PROMPT_CHARS = 300
 _ACTIONS_SHOWN = 4
 _ACTION_CHARS = 120
 # The loop's own controls say nothing about what north did in a turn.
-_UNSHOWN_TOOLS = frozenset({"update_plan", "use_skill", "find_tools", "ask_user", "request_approval"})
+_UNSHOWN_TOOLS = frozenset({"update_plan", "use_skill", "find_tools", "ask_user", "request_approval", "request_secret"})
 # The input that says what a call acted on, in the order looked for.
 _ACTION_INPUTS = ("path", "url", "command", "query", "what", "fact", "action", "mode")
 

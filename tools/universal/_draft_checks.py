@@ -202,9 +202,10 @@ def _secrets(tool: ast.ClassDef, saved: Collection[str] | None) -> list[str]:
         for missing in [name for name in declared if name not in saved]:
             listed = f" Saved secrets: {', '.join(sorted(saved))}." if saved else " No secrets are saved yet."
             problems.append(
-                f"It uses the secret {missing!r}, which is not saved yet. Ask the user with ask_user "
-                f"(requires_user_action=true) to add it on the dashboard, Settings, Secrets, named {missing!r}; "
-                f"never ask for its value in chat. Then call create_tool again.{listed}"
+                f"It uses the secret {missing!r}, which is not saved yet. Call request_secret with "
+                f"name {missing!r} and why the tool needs it: the user types it on a card and north saves it "
+                f"(they can also add it in Settings, Secrets); never ask for its value in chat. Then call "
+                f"create_tool again.{listed}"
             )
     return list(dict.fromkeys(problems))
 
