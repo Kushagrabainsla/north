@@ -24,7 +24,7 @@ One `Tool` per brand (`adding-a-north-tool` has the full contract), with an `act
 - `is_mutating = True`; return an error that says what to check when a device does not answer.
 
 ## Make its panel
-A view whose data is the tool's `list`, with a row per device: a `Switch` bound to the row's `on`, a `Slider` to its `brightness` (shown only for a light that dims), a `ColorPicker` to its `hue`, each running a `set` action with the row's `id`. For music sync, add a `Microphone` whose action sets every light's `hue` and `brightness` from what it hears. `refresh` keeps the panel current. The calls run as the user, with no card, as their own switches.
+A view whose data is the tool's `list`, with a row per device. Give the row a control for every setting `set` takes, so the user can do from the panel all that the tool can: a `Switch` bound to the row's `on`, a `Slider` to its `brightness`, a `ColorPicker` to its `hue`, and a `Slider` to its `kelvin` for white, with the tool's kelvin range. Each control runs a `set` action with the row's `id`. For music sync, add a `Microphone` whose action sets every light's `hue` and `brightness` from what it hears. `refresh` keeps the panel current. The calls run as the user, with no card, as their own switches.
 
 ## A complete example (Philips Hue)
 
@@ -136,6 +136,7 @@ Its panel, with `create_view` `action='draft'`:
       "power": {"tool": "hue_lights", "args": {"action": "set", "id": {"path": "id"}, "on": {"path": "on"}}, "label": "Switches a light"},
       "dim": {"tool": "hue_lights", "args": {"action": "set", "id": {"path": "id"}, "brightness": {"path": "brightness"}}, "label": "Dims a light"},
       "colour": {"tool": "hue_lights", "args": {"action": "set", "id": {"path": "id"}, "hue": {"path": "hue"}}, "label": "Colours a light"},
+      "white": {"tool": "hue_lights", "args": {"action": "set", "id": {"path": "id"}, "kelvin": {"path": "kelvin"}}, "label": "Makes a light white"},
       "music": {"tool": "hue_lights", "args": {"action": "set", "id": "all", "hue": {"path": "/state/sound/hue"}, "brightness": {"path": "/state/sound/brightness"}}, "label": "Lights follow the music"}
     },
     "components": [
@@ -143,10 +144,11 @@ Its panel, with `create_view` `action='draft'`:
       {"id": "music_panel", "component": "Panel", "title": "Music sync", "children": ["mic"]},
       {"id": "mic", "component": "Microphone", "label": "Lights follow the music", "value": {"path": "/state/sound"}, "action": {"event": {"name": "music"}}},
       {"id": "list", "component": "Panel", "title": "Lights", "children": {"path": "/lights/devices", "componentId": "light"}},
-      {"id": "light", "component": "Column", "children": ["on", "brightness", "hue"]},
+      {"id": "light", "component": "Column", "children": ["on", "brightness", "hue", "white"]},
       {"id": "on", "component": "Switch", "label": {"path": "name"}, "value": {"path": "on"}, "action": {"event": {"name": "power"}}},
       {"id": "brightness", "component": "Slider", "label": "Brightness", "value": {"path": "brightness"}, "min": 1, "max": 100, "unit": "%", "action": {"event": {"name": "dim"}}},
-      {"id": "hue", "component": "ColorPicker", "label": "Colour", "value": {"path": "hue"}, "action": {"event": {"name": "colour"}}}
+      {"id": "hue", "component": "ColorPicker", "label": "Colour", "value": {"path": "hue"}, "action": {"event": {"name": "colour"}}},
+      {"id": "white", "component": "Slider", "label": "White", "value": {"path": "kelvin"}, "min": 2000, "max": 6500, "unit": "K", "action": {"event": {"name": "white"}}}
     ]
   }
 }
@@ -160,6 +162,7 @@ Its panel, with `create_view` `action='draft'`:
 ## Common mistakes
 - One tool per action, or one per device: one tool per brand, with `list` and `set`.
 - `list` not named in `read_only_when`: the panel cannot read it.
+- A setting `set` takes with no control on the panel, such as white: the user can make a light green there, but never white again.
 - Brightness, colour or white in the brand's own units in what `list` returns, instead of 1-100, 0-360 and kelvin.
 - A list position as the id: a light would change identity when another is added.
 - A package imported but not in `packages`, or without one exact version.

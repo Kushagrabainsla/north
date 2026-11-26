@@ -8,6 +8,9 @@ again from one prompt, with no help:
 > Add my Kasa lights: a tool to control them, and a panel on the Views page with a switch, brightness
 > and colour for each light, and music sync.
 
+Run 4 adds one sentence, so that north tests only two of the four lights: "Test it only on Upper desk
+lamp and Desk lamp."
+
 ## Method
 
 - The prompt is sent in a new dashboard session, on the live north, with real bulbs.
@@ -25,22 +28,24 @@ again from one prompt, with no help:
 
 ## Results
 
-| | Run 1 | Run 2 (failed) | Run 2 (again) | Run 3 |
-|---|---|---|---|---|
-| Date (2026-11-) | 25 | 26 | 26 | 26 |
-| Tool made | yes | **no** | yes | yes |
-| Panel added, all 4 parts | yes | **no** | yes | yes |
-| Minutes | 2.8 | 1.3 | 1.1 | 1.3 |
-| Cost (USD) | 0.70 | 0.43 | 0.46 | 0.39 |
-| Model turns | 19 | 13 | 10 | 8 |
-| Meta calls failed | 3 of 9 | 5 of 8 | 0 of 5 | 0 of 5 |
-| Cards (all auto-answered) | 8 | 7 | 4 | 5 |
-| Panel showed the lights | after a fix | - | 4 of 4 | 4 of 4 |
+| | Run 1 | Run 2 (failed) | Run 2 (again) | Run 3 | Run 4 |
+|---|---|---|---|---|---|
+| Date (2026-11-) | 25 | 26 | 26 | 26 | 26 |
+| Tool made | yes | **no** | yes | yes | yes |
+| Panel added, all 4 parts | yes | **no** | yes | yes | yes |
+| Panel has a white control | no | - | no | no | yes |
+| Minutes | 2.8 | 1.3 | 1.1 | 1.3 | 20.2 (stopped) |
+| Cost (USD) | 0.70 | 0.43 | 0.46 | 0.39 | 2.25 |
+| Model turns | 19 | 13 | 10 | 8 | 72 |
+| Meta calls failed | 3 of 9 | 5 of 8 | 0 of 5 | 0 of 5 | 1 of 21 |
+| Cards (all auto-answered) | 8 | 7 | 4 | 5 | 58 |
+| Panel showed the lights | after a fix | - | 4 of 4 | 4 of 4 | 4 of 4, not on every read |
 
 Model: Sonnet 5.5 in every run. Each run pinned `python-kasa==0.12.0` in the tool's own environment,
 used the saved Kasa secrets (no `request_secret` card) and made `list` read-only, so the panel can read
-it. Files: `results/run1.json`, `results/run2_deleted_folder.json`, `results/run2.json`,
-`results/run3.json`.
+it. Run 4 was stopped, so north saved no cost for it; its cost is the sum of its ledger rows. Files:
+`results/run1.json`, `results/run2_deleted_folder.json`, `results/run2.json`, `results/run3.json`,
+`results/run4.json`.
 
 ## What each run found
 
@@ -56,6 +61,18 @@ Each failure was in north, not in what the model wrote.
 3. **Run 2: "uv could not make the environment: Current directory does not exist."** The dashboard's
    Update runs in site-packages, which `uv tool install --force` deletes and makes again. The new
    server inherited the deleted folder. Fixed in PR #111: the server starts in north's code folder.
+4. **Runs 1 to 3: the panel had no white control.** After a colour change, the panel could not make a
+   light white again, though the tool takes `kelvin`. The `adding-a-home-device` guide caused it: its
+   panel recipe and its Hue example had no white control, and north copied the example. The guide now
+   asks for a control for every setting `set` takes, and its example has a White slider. In run 4,
+   north made the panel with a White slider (2500 to 6500 K) in the first minute.
+5. **Run 4: north did not stop testing.** A `set` on a desk lamp failed now and then ("No Kasa light
+   answered"). North rewrote the tool 18 times to fix it, added retries and pauses, and then a
+   background daemon. The run was stopped after 20 minutes. The tool it left is 395 lines (run 3: 237).
+   Two copies of its daemon ran at the same time. The desk lamps keep one login session, so each login
+   can break the other's. With one daemon, a desk lamp still gave decrypt errors for some seconds after
+   each change. The cause is not proven. Two runner processes of the tool were also alive, from 09:12
+   and 09:30, though `create_tool` closes the old runner on an update. This is not explained yet.
 
 ## Panel click
 
@@ -65,11 +82,28 @@ answered "ok" both times, and the next read showed the new state.
 The first click reached a different light than the one intended. The tool lists the lights in the order
 discovery finds them, which changes on every read, and the panel reads every 30 seconds. Three reads in
 a row gave three different orders. A list that moves under the pointer can make a person click the
-wrong light too. Discovery also missed one of the 4 lights in about 1 read of 5.
+wrong light too. Discovery also missed one of the 4 lights in about 1 read of 5. Fixed in PR #113: the
+panel keeps each row in its first place, by the item's `id`.
+
+Brightness and colour, run 3's panel, on Lamp1: brightness 40 to 81 %, then colour to hue 119 at
+saturation 100. Both calls answered "ok", and the next read showed the new values. The panel could not
+make the light white again (finding 4).
+
+Run 4's panel, on the two desk lamps only. Each click sent one call, and each call answered "ok":
+
+| Light | Control | Sent | The next good read showed |
+|---|---|---|---|
+| Upper desk lamp | Colour | hue 119 | hue 119, saturation 100 |
+| Upper desk lamp | White | 2694 K | 2694 K, white |
+| Desk lamp | Brightness | 60 %, then 100 % | 60 %, then 100 % |
+
+The first White call failed while two daemons ran (finding 5); it worked after both were stopped. Some
+reads after a change missed the changed light, so "the next good read" is the first read that had it.
 
 ## Limitations
 
-- One prompt, one user, one home network, 3 runs (4 with the failed one). The cost and turn numbers
+- One prompt, one user, one home network, 4 runs (5 with the failed one). The cost and turn numbers
   vary from run to run; they are not a benchmark.
 - Music sync was not tested: it needs the browser microphone and music playing.
-- Brightness and colour were not clicked; the switch was.
+- Run 4 tested the guide change once. One run shows that north can follow the new recipe, not that it
+  always will.

@@ -7,6 +7,7 @@ fail the same way.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -45,6 +46,28 @@ def test_the_example_panel_passes_the_view_checks_against_that_tool(tmp_path: Pa
 
     assert check_view(PANEL, tool_problem=tool_problem, action_tool_problem=action_tool_check(registry)) == []
     assert {"Switch", "Slider", "ColorPicker", "Microphone"} <= {part["component"] for part in PANEL["components"]}
+
+
+def test_the_example_panel_has_a_control_for_every_setting_the_tool_can_set() -> None:
+    # North copies this example. In the one-prompt Kasa rebuild the example had no white control,
+    # so north's panel could turn a light green but never white again.
+    schema = next(
+        ast.literal_eval(node.value)
+        for node in ast.walk(ast.parse(TOOL))
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "parameters_schema"
+    )
+    # Saturation goes with hue, as the guide says: one colour control sends both.
+    settings = set(schema["properties"]) - {"action", "id", "saturation"}
+    bound = {
+        name
+        for part in PANEL["components"]
+        if "action" in part
+        for name, arg in PANEL["actions"][part["action"]["event"]["name"]]["args"].items()
+        if isinstance(arg, dict) and not str(arg.get("path", "/")).startswith("/")
+    }
+
+    assert settings == {"on", "brightness", "hue", "kelvin"}
+    assert settings <= bound
 
 
 def test_the_guide_names_no_built_in_device_tool_or_page() -> None:
