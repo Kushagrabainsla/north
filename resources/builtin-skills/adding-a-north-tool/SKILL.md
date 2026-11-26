@@ -22,23 +22,26 @@ Prefer a service that needs no key (Open-Meteo for weather, for example). When a
 ## What north expects from the file
 North checks most of these itself before the test call, and a draft that misses one comes back with the exact fix to make.
 
+A tool runs in its own process and its own Python environment, in north's sandbox: it reaches the network, its own folder and temp, and nothing of north's home or the user's credentials. From north it imports only `tools.base` (`Tool`), `tools.models` (`ToolInput`, `ToolOutput`) and `config.secret_store` (`secret`).
+
 1. One class that subclasses `Tool` (from `tools.base`), takes no constructor arguments, and sets:
    - `name`: snake_case, specific (`get_weather`, not `weather_tool` or `helper`).
    - `description`: what it does, when to use it, and when not to. Write it for someone who has never seen the service: name the inputs, units and limits.
    - `parameters_schema`: a JSON object schema. Unambiguous names (`city`, not `q`; `user_id`, not `user`), a description for each, an `enum` for a fixed set of choices, and `required` listing only what has no sensible default.
 2. `async def run(self, input: ToolInput) -> ToolOutput`. The call's arguments are the dict `input.params`; nothing else carries them.
 3. Return, never raise: `ToolOutput(success=True, data={...})`, or `ToolOutput(success=False, error="...")` with an error that says what to change, ideally with a valid example (`"Unknown city 'Pariss'. Pass a city name such as 'Paris' or 'Paris, Texas'."`). Use `failure_kind="not_found"` when the thing asked for does not exist.
-4. Say when a call changes something. A tool that writes files, sends, posts, buys, deletes or switches a device sets `is_mutating = True`, so north asks before it runs. A tool where only some calls change things overrides `mutates(params)` instead (below). A tool that only reads sets neither.
-5. Never freeze north: it is `async`. Use `httpx.AsyncClient(timeout=...)` for the web, `await asyncio.sleep` to wait, and `await asyncio.to_thread(fn, ...)` for a blocking library call. `requests` is not installed.
-6. Only the standard library and what north already installs: `httpx`, `bs4` (BeautifulSoup), `pydantic`, `yaml`, `numpy`, `psutil`, `PIL`, `pypdf`, `docx`. North cannot install packages for a custom tool.
-7. Files the tool keeps live under `settings.north_home / "tool-data" / "<tool name>"` (`from config.settings import settings`). Never write a fixed path to north's home or a user folder (`/Users/...`) into the code: north's home can be anywhere. Never read `os.environ`: a key comes from `secret(name)`, below.
-8. Return what a person or the next step needs, by name, not raw API payloads: `"city": "Paris"`, not `"geo_id": 2988507`. Keep it small; cut long lists and say how many were left out. `format_output(data)` turns `data` into one or two readable lines.
+4. Say when a call changes something. A tool that writes files, sends, posts, buys, deletes or switches a device sets `is_mutating = True`, so north asks before it runs. A tool where only some calls change things names the ones that only read in `read_only_when` (below), so a panel can read them. A tool that only reads sets neither.
+5. Never freeze it: it is `async`. Use `httpx.AsyncClient(timeout=...)` for the web, `await asyncio.sleep` to wait, and `await asyncio.to_thread(fn, ...)` for a blocking library call.
+6. Packages: the standard library, `httpx` and `pydantic` are always there. Name every other package it imports in `create_tool`'s `packages`, each at one exact version (`["python-kasa==0.12.0"]`); north installs them in the tool's own environment, and the approval card lists them. Check the version exists on PyPI before naming it.
+7. Files the tool keeps go in its own folder, which is its working folder: use a relative path (`Path("state.json")`). Never write a fixed path to north's home or a user folder (`/Users/...`): the sandbox closes them. Never read `os.environ`: a key comes from `secret(name)`, below.
+8. A tool that runs a job between calls (music that drives lights, a watcher) sets `keeps_running = True`, so north does not stop its process when it is idle. Its `run` starts and stops the job, for example with `asyncio.create_task`.
+9. Return what a person or the next step needs, by name, not raw API payloads: `"city": "Paris"`, not `"geo_id": 2988507`. Keep it small; cut long lists and say how many were left out. `format_output(data)` turns `data` into one or two readable lines.
 
-A tool whose calls are mixed says which ones change things:
+A tool whose calls are mixed names the ones that change nothing. North trusts this because the tool runs in the sandbox; a panel can then read those calls:
 
 ```python
-    def mutates(self, params: dict | None = None) -> bool:
-        return (params or {}).get("action") != "status"  # reading the status changes nothing
+    is_mutating = True
+    read_only_when = {"action": ["status", "list"]}  # reading the status or the list changes nothing
 ```
 
 A tool that needs a key declares it, and reads it inside `run`. North gives the tool only the secrets it declares, names them on the approval card, and hides their values from anything the tool returns:
@@ -120,14 +123,16 @@ class GetWeatherTool(Tool):
 ```
 
 ## Create it and prove it
-1. Call `create_tool` with `action='create'`, the tool's `name`, the full file as `content`, and `test_params`: the smallest real input that shows it works (`{"city": "Pune"}`). The user is asked once. North then checks the file, makes that one real call (anything it changes still asks), and switches the tool on if it succeeds.
+1. Call `create_tool` with `action='create'`, the tool's `name`, the full file as `content`, its `packages` if it needs any, and `test_params`: the smallest real input that shows it works (`{"city": "Pune"}`). The user is asked once. North then makes its environment, checks the file there, makes that one real call (anything it changes still asks), and switches the tool on if it succeeds.
 2. If it comes back as a draft, read the error, fix exactly that, and send the whole corrected file again (`create` replaces your own draft; `update` changes a live tool). A failing version never replaces the live one. If the test failed because a service could not be reached, say so instead of rewriting working code.
 3. Then use the tool for the user's original request and report the real result.
 
 ## Common mistakes
 - Guessing how arguments arrive (`input.parameters`, `input.get(...)`): it is always `input.params`.
 - `raise ValueError(...)` for a bad input: return `ToolOutput(success=False, error=...)` that says how to fix it.
-- `requests.get(...)` or `time.sleep(...)`: both freeze north; use `httpx.AsyncClient` and `await asyncio.sleep`.
+- `requests.get(...)` or `time.sleep(...)`: both block; use `httpx.AsyncClient` and `await asyncio.sleep`.
+- A package imported but not named in `packages`, or named without one exact version: the check says which.
+- Importing more of north than `tools.base`, `tools.models` and `config.secret_store`: the rest is not in the tool's environment.
 - A tool that sends, writes or switches something without `is_mutating = True`: north would run it without asking.
 - Returning a whole API response: pick the fields that answer the question.
 - A key asked for in chat, written into the code, or read from `os.environ`: it is a secret the user adds on the dashboard, and the tool reads it with `secret(name)`.
