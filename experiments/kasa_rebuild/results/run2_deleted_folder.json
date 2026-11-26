@@ -1,0 +1,57 @@
+{
+ "label": "run2",
+ "task_id": "task_c00dec574940",
+ "stages": {
+  "tool": {
+   "made": false
+  },
+  "panel": {
+   "added": false
+  },
+  "panel_drafts_left": []
+ },
+ "tool_call_succeeded_in_task": false,
+ "task": {
+  "runs": 1,
+  "run_statuses": {
+   "completed": 1
+  },
+  "models": [
+   "claude-sonnet-5-5"
+  ],
+  "minutes": 1.3,
+  "model_turns": 13,
+  "input_tokens": 582332,
+  "cached_input_tokens": 479942,
+  "output_tokens": 7725,
+  "cost_usd": 0.4343,
+  "tool_calls": {
+   "create_view": 2,
+   "use_skill": 1,
+   "create_tool": 6,
+   "bash": 5,
+   "north_config": 1
+  },
+  "failed_tool_calls": {
+   "create_tool": 4,
+   "bash": 1,
+   "north_config": 1,
+   "create_view": 1
+  },
+  "meta_calls": 8,
+  "failed_meta_calls": 5,
+  "asked_in_chat_or_ask_user": 0,
+  "request_secret_calls": 0
+ },
+ "approvals": {
+  "cards": 7,
+  "cards_by_title": {
+   "Shell Command - Approval Required": 4,
+   "Tool Change - Approval Required": 3
+  },
+  "cards_by_status": {
+   "approved": 7
+  },
+  "secret_cards": 0
+ }
+}

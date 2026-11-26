@@ -102,6 +102,58 @@ ASK_USER_SCHEMA: dict = {
     },
 }
 
+REQUEST_SECRET_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "request_secret",
+        "description": (
+            "Ask the user to save a password, API key, token or login that a tool needs, and wait. The user "
+            "types it on a card on the dashboard and north keeps it in its secrets; you get back only its name, "
+            "never the value. A tool then declares the name in `uses_secrets` and reads it with "
+            "`secret(name)`. Use this for every credential: never ask for one with ask_user or in chat, and "
+            "never put one in a tool's code or parameters. A secret already saved is not asked for again "
+            "unless `replace` is true."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "secrets": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "description": "The secrets to ask for on one card, e.g. a login's email and password.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": (
+                                    "The name the tool reads it by: lowercase letters, digits and underscores, "
+                                    "e.g. kasa_password or openweather_api_key."
+                                ),
+                            },
+                            "label": {
+                                "type": "string",
+                                "description": "What the user should type, e.g. 'TP-Link account password'.",
+                            },
+                        },
+                        "required": ["name"],
+                    },
+                },
+                "why": {
+                    "type": "string",
+                    "description": "One or two sentences for the user: which tool needs it and what for.",
+                },
+                "replace": {
+                    "type": "boolean",
+                    "description": "True to ask again for a secret that is saved but stopped working.",
+                },
+            },
+            "required": ["secrets", "why"],
+        },
+    },
+}
+
 REQUEST_APPROVAL_SCHEMA: dict = {
     "type": "function",
     "function": {

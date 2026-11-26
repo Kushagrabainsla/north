@@ -1,0 +1,77 @@
+{
+ "checkout": "after",
+ "accepted": 10,
+ "of": 10,
+ "panels": [
+  {
+   "panel": "screens",
+   "need": "screen brightness (5 prompts)",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "kasa-lights",
+   "need": "Kasa lights (the Devices page)",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "music-sync",
+   "need": "music sync (the Devices page)",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "gmail-recent",
+   "need": "recent Gmail from every profile (1 prompt)",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "job-drafts",
+   "need": "LinkedIn job drafts (6 prompts)",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "research-briefing",
+   "need": "research briefing on a topic (5 prompts)",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "news-briefing",
+   "need": "daily news briefing",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "photo-flashcard",
+   "need": "daily photography flashcard",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "form-loop",
+   "need": "form-filling loop every minute (1 prompt)",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "reminders",
+   "need": "a reminder in some minutes (1 prompt)",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  }
+ ]
+}

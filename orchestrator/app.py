@@ -57,7 +57,7 @@ from jobs.models import Job, JobStatus, late_note
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, merge_entries, next_firing, provision_default_schedules
 from jobs.seen import SeenStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from mcp.manager import McpManager
+from mcp_client.manager import McpManager
 from memory.consolidator import EpisodeConsolidator
 from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
@@ -69,7 +69,6 @@ from orchestrator.api import coding_ask_router, coding_gate_router, health_route
 from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
 from orchestrator.api_context import merge as merge_services
-from orchestrator.api_context import services_of
 from orchestrator.background import BackgroundLoops
 from orchestrator.coding_ask import ApprovalsAsker
 from orchestrator.coding_briefing import MemoryBriefing
@@ -102,7 +101,6 @@ from tools.specialized._sandbox import SandboxConfig
 from tools.specialized.bash import BashTool
 from tools.specialized.coding_agent import CodingAgentTool
 from tools.specialized.coding_shell import BashShell
-from tools.specialized.kasa_devices import move_logins_to_secrets as move_kasa_logins_to_secrets
 from tools.tool_index import ToolIndex
 from tools.universal.browser_accounts import BrowserAccounts
 from tools.universal.create_flow import CreateFlowTool
@@ -265,6 +263,8 @@ def _build_tool_registry(
             tool_registry=tool_registry,
             self_edit_policy=source_edit_policy,
             tools_dir=learned_tools_dir,
+            # One runtime for every tool north wrote: their environments, own folders and sandbox.
+            runtime=tool_registry.learned_runtime(),
         )
     )
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
@@ -1073,8 +1073,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _attach_embedding_index(deps)
 
     _step("building tool registry")
-    # TP-Link logins kept in .env before they were secrets (CODING_STYLE §7.6). Remove once moved everywhere.
-    move_kasa_logins_to_secrets(settings.north_home)
     approval_memory = ApprovalMemory(settings.north_home / "approval_memory.db")
     # The safe-action list, in the same database as the learned decisions: both
     # answer "what may north do without asking me", and it saves a 16th SQLite
@@ -1333,9 +1331,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
     finally:
         remove_run_file()
-        # Lights following music go back as they were while their connections are still open.
-        if (home := services_of(app).home) is not None:
-            await home.aclose()
         await _shutdown(deps, callback_server, background_tasks, tool_registry)
 
 
