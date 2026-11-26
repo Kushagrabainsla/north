@@ -157,7 +157,7 @@ Its panel, with `create_view` `action='draft'`:
 ## Create it and prove it
 1. `create_tool` the tool. The user is asked once; north makes its environment, lists the devices as the test, and the tool is live if that works. If the test fails because a device cannot be reached (wrong address, bridge off), say so and ask the user to check it, instead of rewriting working code.
 2. `create_view` `action='draft'` the panel, fix every problem it names, give the user the preview link, then `action='add'`. The user is asked once.
-3. Change one device the user named and report what the device says it is now.
+3. Change one device the user named and report what the device says it is now. If a device answers on some calls and not on others, the code is not broken: the device is. Report it once, with what failed and how often, and do not change working code for it.
 
 ## Common mistakes
 - One tool per action, or one per device: one tool per brand, with `list` and `set`.
@@ -167,6 +167,7 @@ Its panel, with `create_view` `action='draft'`:
 - A list position as the id: a light would change identity when another is added.
 - A package imported but not in `packages`, or without one exact version.
 - A login asked for in chat or written in the code: it goes through `request_secret`.
+- Retries, pauses and new versions of a tool that already worked, for a device that answers only on some calls: each update costs turns and fixes nothing in the device.
 
 ## Done when
 - The tool is live, its panel is on the Views page, and one change was confirmed by the device itself. If either stayed a draft, say why, and what the user can do about it.
