@@ -139,7 +139,8 @@ export interface Artifact {
 export interface CardField {
   name: string;
   label: string;
-  type: "text" | "textarea" | "number" | "boolean" | "select" | "link";
+  // "secret": a password field whose value goes to north's secret store; the card never holds it.
+  type: "text" | "textarea" | "number" | "boolean" | "select" | "link" | "secret";
   value: unknown;
   editable: boolean;
   options: string[];

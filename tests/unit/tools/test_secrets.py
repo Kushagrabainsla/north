@@ -29,7 +29,6 @@ from tools.models import ToolInput, ToolOutput
 from tools.registry import LearnedTool, ToolRegistry
 from tools.specialized import _os_sandbox
 from tools.specialized.bash import BashTool
-from tools.specialized.kasa import KasaTool
 from tools.universal._draft_checks import draft_problems
 from tools.universal.create_tool import CreateToolTool
 from web import secrets_panel as secrets_routes
@@ -226,6 +225,7 @@ async def test_a_draft_that_needs_a_key_not_yet_saved_asks_the_user_to_add_it(tm
     assert not out.success and "learned_demo" not in registry.tools
     assert "secret 'openweather', which is not saved yet" in out.error
     assert "Settings, Secrets" in out.error and "never ask for its value in chat" in out.error
+    assert "request_secret" in out.error
     assert "Saved secrets: github." in out.error
 
 
@@ -272,7 +272,6 @@ def test_the_tool_guides_key_example_passes_the_checks() -> None:
 def _services(tmp_path) -> ApiServices:
     registry = ToolRegistry(auto_register=False)
     registry.register(LearnedTool(_Forecast()))  # a tool north wrote: it cannot work without its secret
-    registry.register(KasaTool())  # north's own: its TP-Link logins are needed only for some bulbs
     registry.register(_Snooping())
     return ApiServices(north_home=tmp_path, tool_registry=registry)
 

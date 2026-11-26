@@ -36,13 +36,14 @@ from agents.context_compaction import (
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.reasoning import ReasoningStreamSplitter, strip_reasoning
-from agents.schemas import ASK_USER_SCHEMA, FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA
+from agents.schemas import ASK_USER_SCHEMA, FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA, REQUEST_SECRET_SCHEMA
 from agents.tool_output_reduction import salient_excerpt
 from agents.tool_results import extract_success as _extract_success
 from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
 from approval.interaction import CardEvent
-from approval.models import Card, CardField, CardType, DecidedBy
+from approval.models import SECRET_SAVED, Card, CardField, CardFieldType, CardType, DecidedBy
+from config import secret_store
 from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import AllModelsRateLimitedError, ContextTooLargeError, is_model_unavailable_error
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
@@ -71,9 +72,14 @@ _ASK_USER_NO_ANSWER = (
 )
 
 # Agent-loop built-ins, not registry tools - excluded from tool-reliability tracking.
-_INTERNAL_TOOLS = frozenset({"request_approval", "ask_user", "find_tools"})
+_INTERNAL_TOOLS = frozenset({"request_approval", "ask_user", "request_secret", "find_tools"})
+# The built-ins that stop and wait for the user.
+_ASKS_THE_USER = frozenset({"request_approval", "ask_user", "request_secret"})
 # Questions on one ask_user card: enough for a flow's setup, few enough to answer at a glance.
 _MAX_QUESTIONS = 8
+# Secrets on one request_secret card: a login's parts, never a form.
+_MAX_SECRETS = 4
+_SECRET_NEXT = "A tool reads each by name: declare it in `uses_secrets` and call `secret(name)` inside `run()`."
 
 
 # Soft limits guide the model toward synthesis; they never terminate a run.
@@ -121,7 +127,8 @@ def _tool_schemas(tool_map: dict[str, Tool], *, allow_questions: bool = True) ->
     as text, in the reliability hints at the end of the task message where it
     costs nothing.
     """
-    internal = [FIND_TOOLS_SCHEMA, *((REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA) if allow_questions else ())]
+    asking = (REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA, REQUEST_SECRET_SCHEMA) if allow_questions else ()
+    internal = [FIND_TOOLS_SCHEMA, *asking]
     return [tool_map[name].schema() for name in sorted(tool_map)] + internal
 
 
@@ -440,7 +447,9 @@ class AgenticLLMAgent(LLMAgent):
         current_is_mutating: bool | None = None
 
         for index, call in enumerate(calls):
-            if call.name == "ask_user" and call.params.get("requires_user_action") is True:
+            if call.name == "request_secret" or (
+                call.name == "ask_user" and call.params.get("requires_user_action") is True
+            ):
                 # A human takeover is a barrier, even to read-only browser calls:
                 # do not inspect credentials or race the person while they act.
                 if current_chunk:
@@ -996,7 +1005,7 @@ class AgenticLLMAgent(LLMAgent):
     ) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
         """Execute one tool call and return (call, result_json, success, images)."""
         params = dict(call.params)
-        if call.name in {"request_approval", "ask_user"} and not payload.allow_questions:
+        if call.name in _ASKS_THE_USER and not payload.allow_questions:
             return (
                 call,
                 _failed_json("This run may not ask the user: finish with what you have, and say what is still open."),
@@ -1019,6 +1028,9 @@ class AgenticLLMAgent(LLMAgent):
             result_str = await self._ask_user(payload, params)
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
+        if call.name == "request_secret":
+            result_str = await self._request_secret(payload, params)
+            return call, result_str, json.loads(result_str).get("success", False), []
         if call.name == "find_tools":
             result_str = await self._find_tools(params, tool_map, payload.allowed_tools)
             success = json.loads(result_str).get("success", False)
@@ -1312,6 +1324,55 @@ class AgenticLLMAgent(LLMAgent):
         if not answer:
             return json.dumps({"success": False, "answered": False, "error": _ASK_USER_NO_ANSWER})
         return json.dumps({"success": True, "answered": True, "answer": answer, "answered_by": _answered_by(card)})
+
+    async def _request_secret(self, payload: AgentPayload, params: dict[str, Any]) -> str:
+        """Ask the user to save secrets on a card, and return their names once saved (CODING_STYLE §7.6).
+
+        The card has one password field per name. The dashboard saves what the user types to the secret
+        store and then answers the card; a typed reply anywhere else is dropped (`ApprovalStore.resolve`).
+        The model gets names only. A name already saved is not asked for again unless `replace` is true.
+        """
+        raw = params.get("secrets")
+        why = str(params.get("why") or "").strip()
+        if not isinstance(raw, list) or not 1 <= len(raw) <= _MAX_SECRETS:
+            return _failed_json(f"'secrets' must be a list of 1 to {_MAX_SECRETS} secrets, each with a 'name'.")
+        if not why:
+            return _failed_json("request_secret needs 'why': which tool needs the secret and what for.")
+        asked: dict[str, str] = {}
+        for item in raw:
+            name = str(item.get("name") or "").strip() if isinstance(item, dict) else ""
+            if not secret_store.NAME_RE.fullmatch(name):
+                return _failed_json(
+                    f"{name or 'A secret'!r} is not a secret name: use lowercase letters, digits and underscores, "
+                    "starting with a letter (e.g. kasa_password)."
+                )
+            asked[name] = str(item.get("label") or "").strip() or name.replace("_", " ").capitalize()
+        saved_before = await asyncio.to_thread(secret_store.store().names)
+        wanted = [name for name in asked if params.get("replace") is True or name not in saved_before]
+        if not wanted:
+            return json.dumps({"success": True, "already_saved": list(asked), "next": _SECRET_NEXT})
+        card = await self._surface_card(
+            payload,
+            card_type=CardType.QUESTION,
+            title=f"{self.name.title()} - Secret needed",
+            body=why[:1000],
+            options=["Done", "Not now"],
+            event=CardEvent.QUESTION,
+            fields=[CardField(name=name, label=asked[name], type=CardFieldType.SECRET) for name in wanted],
+            requires_user_action=True,
+        )
+        if card.chosen_option == SECRET_SAVED:
+            return json.dumps({"success": True, "saved": wanted, "next": _SECRET_NEXT})
+        return json.dumps(
+            {
+                "success": False,
+                "not_saved": wanted,
+                "error": (
+                    "The user did not save it. Never ask for its value in chat or with ask_user. Say which "
+                    "secret is missing and that they can add it on the card or in Settings, Secrets."
+                ),
+            }
+        )
 
     async def _ask_several(self, payload: AgentPayload, lead: str, raw: Any) -> str:
         """Ask several questions on one card and return every answer at once.
@@ -1673,13 +1734,20 @@ def _sync_hot_loaded_tools(
     tool_map: dict[str, Tool],
     known_registry_tools: set[str],
 ) -> None:
-    """Add any newly registered tools (e.g. created by create_tool) since execution started."""
+    """Add the tools registered since execution started (e.g. created by create_tool), and take the new version
+    of a tool this run already has when the registry holds another one (e.g. updated by create_tool).
+
+    The run kept the version it saw first: in the one-prompt Kasa rebuild, north rewrote its tool 18 times in
+    one task while its own calls still ran the second version, so no fix it made reached them.
+    """
     registry = getattr(deps, "tool_registry", None)
     if registry is None:
         return
     for tool in registry.available_tools():
         if tool.name not in known_registry_tools:
             known_registry_tools.add(tool.name)
+            tool_map[tool.name] = tool
+        elif tool.name in tool_map and tool_map[tool.name] is not tool:
             tool_map[tool.name] = tool
 
 

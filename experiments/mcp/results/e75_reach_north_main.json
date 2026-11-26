@@ -1,0 +1,135 @@
+[
+  {
+    "server": "python-sdk-2.3 (default)",
+    "start_s": 0.37,
+    "tools": 3,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "python-sdk-2.3 (2026-07-28 only)",
+    "ok": false,
+    "start_s": 0.27,
+    "error": "McpError: MCP error (-32022): connection is serving the 2026-07-28 protocol; the initialize handshake is not accepted"
+  },
+  {
+    "server": "typescript-sdk-1.32",
+    "start_s": 0.14,
+    "tools": 2,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "typescript-server-2.4",
+    "start_s": 0.12,
+    "tools": 2,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "hand-written 2024-11-05, answers unknown methods",
+    "start_s": 0.02,
+    "tools": 2,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "hand-written 2024-11-05, silent on unknown methods",
+    "start_s": 0.01,
+    "tools": 2,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "deepwiki via mcp-remote",
+    "start_s": 0.88,
+    "tools": 3,
+    "calls": [
+      {
+        "tool": "read_wiki_structure",
+        "ok": true,
+        "chars": 1843,
+        "s": 0.24
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "deepwiki by url",
+    "ok": false,
+    "start_s": 0.0,
+    "error": "ValidationError: 1 validation error for McpServerConfig"
+  },
+  {
+    "server": "configured: gmail",
+    "start_s": 1.2,
+    "tools": 8,
+    "calls": [],
+    "ok": true
+  }
+]

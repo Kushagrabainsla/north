@@ -31,7 +31,7 @@ REQUIRED_PACKAGES = (
     "inference",
     "jobs",
     "ledger",
-    "mcp",
+    "mcp_client",
     "memory",
     "orchestrator",
     "resources",
@@ -70,18 +70,14 @@ def test_every_required_package_is_present_and_not_excluded(pyproject: dict) -> 
         assert f"{package}*" not in excluded
 
 
-def test_namespace_discovery_stays_enabled(pyproject: dict) -> None:
-    """`mcp/` has no `__init__.py`, so it ships only as a namespace package.
+def test_no_north_package_is_named_like_a_dependency() -> None:
+    """north's MCP client lives in `mcp_client/`, a regular package.
 
-    Setting `namespaces = false` would silently drop it from the wheel, and the
-    failure would surface at runtime in `tools/specialized/mcp_tool.py`, on
-    whichever machine installed it.
+    The official MCP SDK is the `mcp` package. A north folder named `mcp/` hid it, or
+    was hidden by it, depending on which came first on the path.
     """
-    find = pyproject["tool"]["setuptools"]["packages"]["find"]
-
-    assert find.get("namespaces", True) is True
-    assert not (ROOT / "mcp" / "__init__.py").exists()
-    assert any((ROOT / "mcp").glob("*.py"))
+    assert not (ROOT / "mcp").exists()
+    assert (ROOT / "mcp_client" / "__init__.py").is_file()
 
 
 def test_tests_are_never_shipped(pyproject: dict) -> None:
@@ -99,7 +95,6 @@ def test_runtime_package_data_is_explicit(pyproject: dict) -> None:
         "policies/*.md",
         "builtin-skills/**/*.md",
         "builtin-flows/**/*.yaml",
-        "network-makers.json.gz",
         "taskwindow/LICENSE",
         "taskwindow/package*.json",
         "taskwindow/extension/**/*",
@@ -179,7 +174,7 @@ def _is_data(path: Path) -> bool:
 def test_the_glob_matcher_reads_patterns_the_way_setuptools_does() -> None:
     assert _glob_matches("builtin-flows/news.yaml", "builtin-flows/**/*.yaml")
     assert _glob_matches("builtin-flows/a/b/news.yaml", "builtin-flows/**/*.yaml")
-    assert _glob_matches("network-makers.json.gz", "network-makers.json.gz")
+    assert _glob_matches("taskwindow/LICENSE", "taskwindow/LICENSE")
     assert _glob_matches("taskwindow/package-lock.json", "taskwindow/package*.json")
     assert not _glob_matches("prompts/sub/x.md", "prompts/*.md")
     assert not _glob_matches("builtin-flows/news.yml", "builtin-flows/**/*.yaml")

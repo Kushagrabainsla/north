@@ -1,0 +1,77 @@
+{
+ "checkout": "before",
+ "accepted": 1,
+ "of": 10,
+ "panels": [
+  {
+   "panel": "screens",
+   "need": "screen brightness (5 prompts)",
+   "accepted": false,
+   "problems": 3,
+   "first_problem": "actions/set_level: 'flow' is a required property"
+  },
+  {
+   "panel": "kasa-lights",
+   "need": "Kasa lights (the Devices page)",
+   "accepted": false,
+   "problems": 9,
+   "first_problem": "actions/colour: 'flow' is a required property"
+  },
+  {
+   "panel": "music-sync",
+   "need": "music sync (the Devices page)",
+   "accepted": false,
+   "problems": 3,
+   "first_problem": "actions/follow: 'flow' is a required property"
+  },
+  {
+   "panel": "gmail-recent",
+   "need": "recent Gmail from every profile (1 prompt)",
+   "accepted": false,
+   "problems": 1,
+   "first_problem": "the view: Additional properties are not allowed ('refresh' was unexpected)"
+  },
+  {
+   "panel": "job-drafts",
+   "need": "LinkedIn job drafts (6 prompts)",
+   "accepted": false,
+   "problems": 2,
+   "first_problem": "actions/skip: 'flow' is a required property"
+  },
+  {
+   "panel": "research-briefing",
+   "need": "research briefing on a topic (5 prompts)",
+   "accepted": false,
+   "problems": 1,
+   "first_problem": "the view: Additional properties are not allowed ('state' was unexpected)"
+  },
+  {
+   "panel": "news-briefing",
+   "need": "daily news briefing",
+   "accepted": true,
+   "problems": 0,
+   "first_problem": ""
+  },
+  {
+   "panel": "photo-flashcard",
+   "need": "daily photography flashcard",
+   "accepted": false,
+   "problems": 1,
+   "first_problem": "components/1: no part named 'Image'; the parts are Column, Row, Panel, Heading, Text, Note, Markdown, StatGrid, Stat, Table, ListItem, Statu"
+  },
+  {
+   "panel": "form-loop",
+   "need": "form-filling loop every minute (1 prompt)",
+   "accepted": false,
+   "problems": 3,
+   "first_problem": "actions/stop: 'flow' is a required property"
+  },
+  {
+   "panel": "reminders",
+   "need": "a reminder in some minutes (1 prompt)",
+   "accepted": false,
+   "problems": 5,
+   "first_problem": "actions/add: 'flow' is a required property"
+  }
+ ]
+}

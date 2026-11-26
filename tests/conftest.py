@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -36,6 +37,26 @@ from inference.models import (
 from jobs import SQLiteJobProcessor
 from ledger import SQLiteLedgerWriter
 from memory import FileContextStore
+
+
+@pytest.fixture(autouse=True)
+def _tools_without_packages_use_this_python(monkeypatch):
+    """A tool north wrote that names no packages runs on this Python, which has the MCP SDK the runner needs.
+
+    Making its own environment would ask uv for a fresh one and the network for the SDK, in every test that
+    checks a draft. A test about environments themselves (tests/unit/tools/test_learned_env.py) makes real
+    ones, and a draft that names packages still gets its own.
+    """
+    from tools.learned_env import ToolEnvironments
+
+    real = ToolEnvironments.python_for
+
+    async def python_for(self, tool: str, packages: list[str]) -> Path:
+        if not packages and not getattr(self, "real_environments", False):
+            return Path(sys.executable)
+        return await real(self, tool, packages)
+
+    monkeypatch.setattr(ToolEnvironments, "python_for", python_for)
 
 
 @pytest.fixture(autouse=True)

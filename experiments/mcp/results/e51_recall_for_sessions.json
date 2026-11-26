@@ -1,0 +1,19 @@
+{
+  "sessions": 183,
+  "projects": 108,
+  "items_recalled": 1904,
+  "items_needed": 0,
+  "items_needed_and_new": 0,
+  "sessions_with_a_needed_item": 0,
+  "sessions_with_a_needed_new_item": 0,
+  "recall_ms_median": 42.4,
+  "recall_ms_p95": 163.3,
+  "recall_ms_max": 225.9,
+  "judge": "claude-haiku-5-5",
+  "judge_calls": {
+    "calls": 183,
+    "cached": 0,
+    "input_tokens": 1020447,
+    "output_tokens": 104094
+  }
+}

@@ -38,7 +38,15 @@ class _Registry:
         return self._items[name]
 
 
-TOOLS = _Registry({"list_schedules": _Tool(False), "create_flow": _Tool(False), "write_file": _Tool(True)})
+TOOLS = _Registry(
+    {
+        "list_schedules": _Tool(False),
+        "create_flow": _Tool(False),
+        "write_file": _Tool(True),
+        # The guide's example reads its levels with action='get', which changes nothing.
+        "screen_brightness": _Tool(False),
+    }
+)
 FLOWS = _Registry({"nightly-cleanup": object()})
 
 VIEW = {
@@ -61,10 +69,12 @@ VIEW = {
 
 
 def _check(view) -> list[str]:
-    from views.document import reference_checks
+    from views.document import action_tool_check, reference_checks
 
     tool_problem, flow_problem = reference_checks(TOOLS, FLOWS)
-    return check_view(view, tool_problem=tool_problem, flow_problem=flow_problem)
+    return check_view(
+        view, tool_problem=tool_problem, flow_problem=flow_problem, action_tool_problem=action_tool_check(TOOLS)
+    )
 
 
 def _with(change) -> dict:
