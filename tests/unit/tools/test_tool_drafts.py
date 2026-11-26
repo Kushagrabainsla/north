@@ -25,6 +25,7 @@ from tools.base import Tool
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from tools.universal._draft_checks import draft_problems
+from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool, _load_tool_file, _validate_tool_contract
 from utils.runtime_resources import builtin_skills_dir
 
@@ -206,7 +207,8 @@ def test_the_skill_guides_example_is_a_valid_create_skill_call() -> None:
     assert execution is not None
     tools = ToolRegistry(auto_register=True).all_tool_names()
     assert set(execution.tools) <= tools
-    assert len(call["positive_prompts"]) >= 3 and call["negative_prompts"]
+    # Every key is a create_skill parameter: the example teaches no field the tool would ignore.
+    assert set(call) <= set(CreateSkillTool.parameters_schema["properties"])
 
 
 def test_the_flow_guides_example_runs_the_skill_guides_example(tmp_path) -> None:
