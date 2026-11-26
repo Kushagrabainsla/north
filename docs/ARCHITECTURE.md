@@ -1203,6 +1203,14 @@ error, an unreadable reply) the card waits for you: the one case autonomous
 pauses. Prepared work (tier 4) skips tiers 5 and 6 and goes straight to it,
 because neither reads the fields.
 
+For an action that sends to a person, spends money, destroys or leaves the
+sandbox, the decider reads only what you stated: your messages in the session,
+your past decisions and `judgement_rules.md`. A yes must cite one of them. Facts,
+the profile and episodes were written by a model, so they are not shown for such
+an action and never cover it (#39). A planted fact that read like a standing
+permission made the approvals model allow 13 of 18 such actions when facts were
+shown, and 0 of 18 when they were not (`experiments/approval_trust`).
+
 Questions follow the same modes through `ApprovalPolicy.answer()`: yolo gives
 the yes answer, autonomous asks the memory decider, ask and safe always ask you.
 

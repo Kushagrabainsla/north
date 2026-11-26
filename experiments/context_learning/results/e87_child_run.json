@@ -1,0 +1,67 @@
+{
+  "arms": {
+    "child_live": {
+      "attempts": [
+        1,
+        8,
+        1,
+        8
+      ],
+      "failed_attempts": [
+        0,
+        8,
+        0,
+        8
+      ],
+      "input_tokens": 63465,
+      "output_tokens": 4466,
+      "passed": 2
+    },
+    "child_scores": {
+      "attempts": [
+        3,
+        8,
+        4,
+        8
+      ],
+      "failed_attempts": [
+        2,
+        8,
+        3,
+        8
+      ],
+      "input_tokens": 74988,
+      "output_tokens": 7142,
+      "passed": 2
+    },
+    "child_today": {
+      "attempts": [
+        5,
+        8,
+        8,
+        8
+      ],
+      "failed_attempts": [
+        4,
+        8,
+        8,
+        8
+      ],
+      "input_tokens": 79380,
+      "output_tokens": 6535,
+      "passed": 1
+    }
+  },
+  "cases": 4,
+  "effort": "high",
+  "main_run": {
+    "failed_attempts": [
+      1,
+      3,
+      1,
+      8
+    ],
+    "passed": 4
+  },
+  "model": "claude-opus-5-5"
+}

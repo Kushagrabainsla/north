@@ -1,0 +1,21 @@
+tool results since 2026-11-01: 3321; failed: 347 (10.4%)
+failure signatures: 109; in 3 or more runs: 24
+failures covered by recurring signatures: 201; of those with an agent cause: 130 in 17 signatures
+failures after a signature's 3rd run (preventable at most, agent causes): 62 of 347 failures (17.9%)
+agent-cause recurring signatures still seen in the last 7 days (from 2026-11-18): 14 of 17, failures then: 85
+top recurring signatures (runs, failures, cause, first, last, last-7-days):
+   14   14  agent       2026-11-13 2026-11-22   9  browser: Error: page script threw: SyntaxError: Illegal return statement
+   11   16  agent       2026-11-13 2026-11-23  10  browser: Another element covers this one; inspect again before clicking.
+    8   22  environment 2026-11-10 2026-11-14   0  read_file: File not found: <path>
+    8    9  environment 2026-11-17 2026-11-19   5  browser: Element was not found or was removed; inspect again.
+    8   15  environment 2026-11-05 2026-11-14   0  list_dir: Directory not found: <path>
+    7   11  agent       2026-11-17 2026-11-21   5  browser: Select profile_id from list_profiles for this browser call; ask_user if unclear.
+    6    6  agent       2026-11-05 2026-11-14   0  find_tools: No tools matched <q>.
+    5   10  agent       2026-11-13 2026-11-24   6  browser: Blocked: already done earlier in this task, and it reaches someone else or spends money, s
+    5    6  agent       2026-11-18 2026-11-23   6  bash: [Errno <n>] File name too long: <q>
+    5    5  environment 2026-11-12 2026-11-16   0  read_tool_output: Tool <q> not found. Available: [<q>, <q>, <q>, <q>, <q>]
+    5    5  agent       2026-11-14 2026-11-19   3  bash: exit code <n>
+    5    6  environment 2026-11-13 2026-11-14   0  bash: Tool <q> not found. Available: [<q>, <q>, <q>, <q>, <q>, <q>, <q>, <q>, <q>]
+    4    5  agent       2026-11-18 2026-11-19   5  browser: Error: page script threw: TypeError: Cannot read properties of null (reading <q>)
+    4   15  agent       2026-11-18 2026-11-18  15  read_tool_output: No stored output for handle <q>. The overflow store is bounded and this entry has been evi
+    4    5  agent       2026-11-17 2026-11-19   4  browser: Action <q> is not available for existing browser profiles.
