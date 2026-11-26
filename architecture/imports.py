@@ -106,7 +106,7 @@ def _import_targets(source_files: dict[Path, ModuleContract]) -> dict[str, Modul
                 "inference",
                 "jobs",
                 "ledger",
-                "mcp",
+                "mcp_client",
                 "memory",
                 "orchestrator",
                 "skills",

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
+from typing import Any
 
 from agents.base import Agent
 from agents.models import AgentPayload, AgentResult
@@ -56,11 +57,18 @@ class ResultAuditor:
         self_repair: bool = True,
         critic: bool = False,
         tracked_router: CostTracker | None = None,
+        tool_registry: Any = None,
     ) -> None:
         self._journal = journal
         self._self_repair = self_repair
         self._critic = critic
         self._tracked_router = tracked_router
+        # Which tools north wrote: a device's state can be read only through one (CODING_STYLE §7.5).
+        self._tool_registry = tool_registry
+
+    def _tools_north_wrote(self) -> list[str]:
+        registry = self._tool_registry
+        return list(registry.names_written_by_north()) if registry is not None else []
 
     async def audit(self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload | None = None) -> None:
         """Run every check over a finished agent result, annotating it in place."""
@@ -89,6 +97,7 @@ class ResultAuditor:
             workspace,
             evidence_actions=_evidence_actions(result),
             task=payload.prompt if payload is not None else "",
+            tools_north_wrote=self._tools_north_wrote(),
         )
         if payload is not None:
             violations.extend(

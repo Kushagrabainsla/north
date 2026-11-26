@@ -31,9 +31,10 @@ dependencies = [
     # found"); with 9.14.4, none of 36. Raise the pin only after re-running
     # that check.
     "ddgs==9.14.4",
-    "python-kasa>=0.12.0",
     # Checks the views north makes (A2UI JSON) against the UI kit's catalog, a JSON Schema.
     "jsonschema>=4.26.0",
+    # Reads the packages a tool north writes names (PEP 508), so each is pinned to one version.
+    "packaging>=24.0",
     # Bundled ripgrep binary: shell commands search files with `rg`, which bash
     # puts on every command's PATH. Wheels only exist for these two platforms;
     # elsewhere a command uses a system `rg` or `grep -rn`.
@@ -54,6 +55,11 @@ dependencies = [
     # one is not hand-rolled over httpx - it uses the official SDK.
     "anthropic>=1.0.0",
     "aiogram>=3.31,<4",
+    # MCP client (mcp_client/client.py): the official SDK speaks every protocol era
+    # (the 2024-2025 handshake and the 2026-07-28 per-request form), stdio and
+    # Streamable HTTP. Pinned: 2.x renamed core names between minor releases, so
+    # raise the pin only with the tests in tests/unit/mcp_client.
+    "mcp==2.3.0",
 ]
 
 [project.scripts]
@@ -98,7 +104,6 @@ resources = [
     "policies/*.md",
     "builtin-skills/**/*.md",
     "builtin-flows/**/*.yaml",
-    "network-makers.json.gz",
     # Existing-profile browser bridge: the audited TaskWindow extension, loaded
     # unpacked so it never auto-updates, and its daemon pinned by npm lockfile.
     "taskwindow/LICENSE",

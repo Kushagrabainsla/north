@@ -2592,6 +2592,11 @@ def _question_text(data: dict) -> str:
     if not fields:
         return question
     lines = [question] if question else []
+    if any(field.get("type") == "secret" for field in fields):
+        # A secret is typed on the dashboard only: an answer here is dropped, never kept or shown to the model.
+        lines.extend(f"- {field.get('label') or field.get('name')} (saved as {field.get('name')})" for field in fields)
+        lines.append("Type it on the dashboard (Inbox), not here. Then answer Done, or Not now.")
+        return "\n".join(lines)
     for number, field in enumerate(fields, 1):
         options = " / ".join(f"{index}) {option}" for index, option in enumerate(field.get("options") or [], 1))
         lines.append(f"{number}. {field.get('label') or field.get('name')}" + (f"   {options}" if options else ""))

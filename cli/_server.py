@@ -18,6 +18,8 @@ import httpx
 from utils.logging import LOG_TO_HOME_ENV
 
 CRASH_LOG_NAME = "north.log.crash"
+# The folder holding north's packages: site-packages once installed, the checkout in development.
+_CODE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _detached_process_kwargs() -> dict:
@@ -309,7 +311,17 @@ def _start_server_process(
     # logging starts, a raw print) lands here, started afresh each time so it stays small.
     # The child gets its own dup of the fd, so closing the parent's copy on the
     # way out of the with-block leaves the server's output intact.
+    # The server starts in north's own code folder, found again by its path. It inherited the folder of
+    # whatever started it: for the dashboard's update, site-packages, which the install deletes and makes
+    # again. Every uv the server then ran failed with "Current directory does not exist".
     with open(settings.north_home / CRASH_LOG_NAME, "w", encoding="utf-8") as crash_log:
-        proc = subprocess.Popen(cmd, stdout=crash_log, stderr=crash_log, env=server_env, **_detached_process_kwargs())
+        proc = subprocess.Popen(
+            cmd,
+            stdout=crash_log,
+            stderr=crash_log,
+            env=server_env,
+            cwd=_CODE_ROOT,
+            **_detached_process_kwargs(),
+        )
     (settings.north_home / "north.pid").write_text(str(proc.pid), encoding="utf-8")
     return proc

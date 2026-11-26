@@ -1,0 +1,157 @@
+[
+  {
+    "server": "python-sdk-2.3 (default)",
+    "start_s": 0.26,
+    "tools": 3,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.03
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "python-sdk-2.3 (2026-07-28 only)",
+    "start_s": 0.24,
+    "tools": 3,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "typescript-sdk-1.32",
+    "start_s": 0.13,
+    "tools": 2,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "typescript-server-2.4",
+    "start_s": 0.1,
+    "tools": 2,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "hand-written 2024-11-05, answers unknown methods",
+    "start_s": 0.02,
+    "tools": 2,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "hand-written 2024-11-05, silent on unknown methods",
+    "start_s": 10.01,
+    "tools": 2,
+    "calls": [
+      {
+        "tool": "echo",
+        "ok": true,
+        "chars": 5,
+        "s": 0.0
+      },
+      {
+        "tool": "big",
+        "ok": true,
+        "chars": 262144,
+        "s": 0.0
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "deepwiki via mcp-remote",
+    "start_s": 0.77,
+    "tools": 3,
+    "calls": [
+      {
+        "tool": "read_wiki_structure",
+        "ok": true,
+        "chars": 1843,
+        "s": 0.15
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "deepwiki by url",
+    "start_s": 0.2,
+    "tools": 3,
+    "calls": [
+      {
+        "tool": "read_wiki_structure",
+        "ok": true,
+        "chars": 1843,
+        "s": 0.34
+      }
+    ],
+    "ok": true
+  },
+  {
+    "server": "configured: gmail",
+    "start_s": 0.95,
+    "tools": 8,
+    "calls": [],
+    "ok": true
+  }
+]
