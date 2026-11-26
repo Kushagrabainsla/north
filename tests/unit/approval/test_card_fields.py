@@ -15,6 +15,7 @@ import pytest
 from approval.interaction import CardEvent, UserInteraction
 from approval.models import ApprovalDecision, Card, CardField, CardFieldType, CardType
 from approval.store import ApprovalStore
+from tests.conftest import wait_until
 
 
 def _card(**overrides) -> Card:
@@ -254,7 +255,6 @@ async def test_a_plain_approval_still_emits_empty_fields() -> None:
 async def _first_emitted(stream, request) -> dict:
     """What the card showed when it surfaced. Cards never expire, so stop waiting once it has."""
     waiting = asyncio.create_task(request)
-    while not stream.payloads:
-        await asyncio.sleep(0)
+    await wait_until(lambda: stream.payloads, what="the card reached the stream", task=waiting)
     waiting.cancel()
     return stream.payloads[0]

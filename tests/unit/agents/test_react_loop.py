@@ -20,7 +20,7 @@ import pytest
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
-from tests.conftest import MockInferenceRouter
+from tests.conftest import MockInferenceRouter, wait_until
 from tools._path import handoff_dir_for, resolve_path
 from tools.base import Tool
 from tools.confidence import ConfidenceTracker
@@ -1061,14 +1061,12 @@ async def test_browser_reads_do_not_run_while_a_human_handoff_waits(tmp_path: Pa
         agent._execute_calls_ordered(calls, AgentPayload(task_id="t1", prompt="Draft"), {"browser_read": BrowserRead()})
     )
     try:
-        async with asyncio.timeout(1):
-            while not store.pending():
-                await asyncio.sleep(0)
+        await wait_until(store.pending, what="the sign-in card", task=work)
         assert reads == ["before"]
         assert not work.done()
         [card] = store.pending()
         store.resolve(card.id, ApprovalDecision.ANSWERED, chosen_option="Done")
-        results = await asyncio.wait_for(work, timeout=1)
+        results = await asyncio.wait_for(work, timeout=5)
         assert reads == ["before", "after"]
         assert [result[0].call_id for result in results] == ["before", "login", "after"]
     finally:

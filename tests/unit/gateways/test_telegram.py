@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery, Message
 from config.settings import Settings
 from gateways.telegram import TelegramGateway, _finished_output
 from gateways.telegram_api import card_reference, tapped_label
+from tests.conftest import wait_until
 
 
 def test_parsed_telegram_allowed_chat_ids() -> None:
@@ -704,8 +705,7 @@ async def test_a_chat_still_hears_how_its_task_ended_after_north_restarts(monkey
     running = asyncio.create_task(
         before._process_message({"chat": {"id": 42}, "from": {"id": 42}, "message_id": 7, "text": "long job"})
     )
-    while not before._pending:
-        await asyncio.sleep(0)
+    await wait_until(lambda: before._pending, what="the chat's wait was recorded", task=running)
     running.cancel()  # the daemon stops
     with contextlib.suppress(asyncio.CancelledError):
         await running

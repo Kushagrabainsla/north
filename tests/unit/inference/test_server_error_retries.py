@@ -221,6 +221,22 @@ async def test_transcription_waits_out_server_errors(tmp_path, quick_dispatcher_
     assert provider.calls == 4
 
 
+async def test_a_cooldown_that_ended_before_the_check_is_tried_again(tmp_path, monkeypatch) -> None:
+    """On a slow machine the short cooldown can end before the dispatcher asks how long to wait.
+
+    The dispatcher read "no wait left" as "nothing to wait for" and failed the call, although the model
+    was ready. A first cooldown of 0 s makes that order certain. CI saw it once with a 5 ms cooldown.
+    """
+    monkeypatch.setattr("inference.cooldowns._FIRST_COOLDOWN_SECS", 0.0)
+    provider = _FlakyTranscriber(_outage, failures=2)
+    dispatcher = ModelDispatcher([provider], cooldowns_path=tmp_path / "c.json", models_db_path=tmp_path / "m.db")
+
+    response = await dispatcher.transcribe(TranscriptionRequest(audio=b"x"))
+
+    assert response.text == "heard"
+    assert provider.calls == 3
+
+
 async def test_two_server_errors_do_not_close_the_provider_for_every_call(tmp_path, quick_dispatcher_waits) -> None:
     """The breaker is shared with chat routing; it used to open after two 502s on one transcription model."""
     provider = _FlakyTranscriber(_outage, failures=2)

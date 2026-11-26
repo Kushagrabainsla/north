@@ -98,7 +98,10 @@ async def test_the_run_shows_as_waiting_only_while_nobody_has_answered() -> None
     assert log.waiting_changes == [True, False]
 
 
-async def test_in_autonomous_mode_north_answers_from_memory_and_says_why_without_asking_anyone() -> None:
+async def test_in_autonomous_mode_north_answers_from_memory_and_says_why_without_asking_anyone(monkeypatch) -> None:
+    # The real delay before a run shows as waiting. The quick 10 ms one fires when a slow machine pauses this
+    # process for 10 ms during the answer, and then an answer that came at once looks like a wait.
+    monkeypatch.setattr(coding_ask, "_WAITING_AFTER_SECONDS", 0.5)
     decider = deciding(ApprovalDecision.ANSWERED, "spaces", "you use spaces everywhere", ("uses spaces",))
     asker, store, log = _asker(ApprovalMode.AUTONOMOUS, decider)
 
