@@ -99,7 +99,29 @@ class TestHowItIsCalled:
 
         assert sandbox["enabled"] and sandbox["failIfUnavailable"] and not sandbox["allowUnsandboxedCommands"]
         assert sandbox["network"] == {"strictAllowlist": True, "allowedDomains": [], "allowLocalBinding": True}
-        assert {"~/.north", "~/.ssh", "~/.codex", "/custom/north-home"} <= set(sandbox["filesystem"]["denyRead"])
+        secrets = {str(Path.home() / name) for name in (".north", ".ssh", ".codex")} | {"/custom/north-home"}
+        assert secrets <= set(sandbox["filesystem"]["denyRead"])
+
+    async def test_the_home_folder_is_closed_to_commands_and_to_the_file_tools_alike(
+        self, make_fake_claude, workspace, tmp_path, monkeypatch
+    ) -> None:
+        """A plan run's Read tool read inside `~/.north`, and `cat` read `~/.config/<any>` (measured 2026-11-25)."""
+        home = tmp_path / "home"
+        for name in (".config/someapp", "Documents", ".local/bin"):
+            (home / name).mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setenv("HOME", str(home))
+
+        await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace))
+        argv = _call(workspace)["argv"]
+        settings = json.loads(argv[argv.index("--settings") + 1])
+
+        closed = set(settings["sandbox"]["filesystem"]["denyRead"])
+        assert {str(home / ".config" / "someapp"), str(home / "Documents"), str(home / ".north")} <= closed
+        assert str(home / ".local" / "bin") not in closed and str(workspace.resolve()) not in closed
+        deny = settings["permissions"]["deny"]
+        assert f"Read(/{home / 'Documents'})" in deny and f"Read(/{home / 'Documents'}/**)" in deny
+        assert all(rule.startswith("Read(//") for rule in deny), "`//` is an absolute path to Claude Code"
 
     async def test_the_task_goes_in_on_stdin_and_the_guidance_is_appended(self, make_fake_claude, workspace) -> None:
         await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace, guidance="Use type hints."))

@@ -84,6 +84,16 @@ def codex_filesystem(
     return rules
 
 
+def closed_paths(workspace: str, mode: Mode, protected: Iterable[str], home: Path | None = None) -> list[str]:
+    """What a run may not read: the paths `codex_filesystem` denies, for an agent whose sandbox takes a list.
+
+    Claude Code's sandbox took only north's short secret list, so a plan run read a file in `~/.config/<any>`,
+    and its Read tool read inside `~/.north` (measured 2026-11-25). Both agents now see the same closed home.
+    """
+    rules = codex_filesystem(workspace, mode, protected, home=home)
+    return sorted(path for path, access in rules.items() if access == "deny")
+
+
 def _close(home: Path, open_paths: Iterable[str]) -> dict[str, str]:
     """Deny every entry of the home folder that is not open, and is not on the way to something that is.
 
