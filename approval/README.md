@@ -23,7 +23,7 @@ This package is **Protected** in `docs/MODULES.md`. Do not change it without exp
 | `session.py` | `Session`, `NO_SESSION`, `SessionReader` | Whether a run started from chat, and your messages in that chat. |
 | `continuation.py` | `CardContinuations`, `CardOutcome` | Runs the next step after a non-blocking card is decided, by the card's `source`. |
 | `notices.py` | `NoticeStore`, `Notice` | What north delivered to you, kept on the dashboard until you dismiss it. Notices ask nothing. |
-| `base.py`, `terminal.py`, `telegram.py`, `batching.py`, `macos.py` | `Notifier` (ABC), `TerminalNotifier`, `TelegramNotifier`, `BatchingNotifier`, `MacOSNotifier` | Alert channels. `BatchingNotifier` sends one alert for a burst of non-blocking cards. `MacOSNotifier` has no caller outside the tests. |
+| `base.py`, `terminal.py`, `telegram.py`, `batching.py` | `Notifier` (ABC), `TerminalNotifier`, `TelegramNotifier`, `BatchingNotifier` | Alert channels. `BatchingNotifier` sends one alert for a burst of non-blocking cards. |
 | `callback_server.py` | `app` | A small FastAPI app on `settings.callback_port` (default 8001). It forwards a button decision to `/orchestrator/approval/respond`. |
 | `exceptions.py` | `ApprovalError` | Base error of the package. |
 
@@ -47,7 +47,7 @@ Below yolo, a change to north's own settings always asks. In every mode, north's
 - `orchestrator/orchestrator.py` resolves and overrules cards through `ApprovalStore`.
 - `orchestrator/coding_gate.py`, `coding_fetch.py` and `coding_landing.py` ask `Approvals` about coding-agent actions. `orchestrator/coding_ask.py` uses `UserInteraction`.
 - `web/views.py` calls `needs_your_confirmation()`. `web/conversations.py` makes `Session` values.
-- The public interface (`__all__`) is `ApprovalDecision`, `ApprovalError`, `Card`, `CardEvent`, `CardType`, `MemoryDecider`, `MacOSNotifier`, `Notifier`, `TerminalNotifier` and `UserInteraction`.
+- The public interface (`__all__`) is `ApprovalDecision`, `ApprovalError`, `Card`, `CardEvent`, `CardType`, `MemoryDecider`, `Notifier`, `TerminalNotifier` and `UserInteraction`.
 
 ## Data on disk (in `~/.north`)
 
