@@ -1,0 +1,89 @@
+{
+ "label": "run5",
+ "task_id": "task_690f4f48d173",
+ "stages": {
+  "tool": {
+   "made": true,
+   "name": "kasa_lights",
+   "packages": [
+    "python-kasa==0.12.0"
+   ],
+   "pinned_python_kasa": true,
+   "read_only_when": {
+    "action": [
+     "list"
+    ]
+   },
+   "uses_secrets": [
+    "kasa_email",
+    "kasa_password"
+   ],
+   "own_environment": true
+  },
+  "panel": {
+   "settings_with_a_control": [
+    "brightness",
+    "hue",
+    "kelvin",
+    "on"
+   ],
+   "has_white_control": true,
+   "added": true,
+   "id": "kasa-lights",
+   "parts_present": [
+    "ColorPicker",
+    "Microphone",
+    "Slider",
+    "Switch"
+   ],
+   "has_all_parts": true,
+   "tool_actions": 5,
+   "refresh": 30
+  },
+  "panel_drafts_left": []
+ },
+ "tool_call_succeeded_in_task": true,
+ "task": {
+  "runs": 1,
+  "run_statuses": {
+   "completed": 1
+  },
+  "models": [
+   "claude-sonnet-5-5"
+  ],
+  "minutes": 7.3,
+  "model_turns": 37,
+  "input_tokens": 2966815,
+  "cached_input_tokens": 2797630,
+  "output_tokens": 31841,
+  "cost_usd": 1.0747,
+  "tool_calls": {
+   "create_view": 3,
+   "create_tool": 9,
+   "use_skill": 1,
+   "fetch_url": 1,
+   "bash": 7,
+   "kasa_lights": 21
+  },
+  "failed_tool_calls": {
+   "kasa_lights": 6
+  },
+  "meta_calls": 12,
+  "failed_meta_calls": 0,
+  "asked_in_chat_or_ask_user": 0,
+  "request_secret_calls": 0
+ },
+ "approvals": {
+  "cards": 27,
+  "cards_by_title": {
+   "Tool Change - Approval Required": 6,
+   "Add the view 'Lights'?": 1,
+   "Run kasa_lights - Approval Required": 17,
+   "Shell Command - Approval Required": 3
+  },
+  "cards_by_status": {
+   "approved": 27
+  },
+  "secret_cards": 0
+ }
+}
