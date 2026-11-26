@@ -435,6 +435,24 @@ CREATE TABLE episodes (
 
 **Scope:** episodic search is over this table only.  The context documents and the episodic store are complementary: context documents hold durable facts about you; the episodic store holds memories of specific past interactions.
 
+### 5.10 Memory Use and the Use Score
+
+Recall returns an id with each item: `fact:<id>`, `episode:<id>`, and `profile:<heading>` for each section of the profile. The `memory_recalled` event lists the ids, never the text.
+
+When a run completes, `Agent.run` starts `memory/memory_use.py` in the background. The run does not wait for it.
+- One call, the `memory_use` part, routed as background work, gets the items, the task, the run's tool calls and the answer. It marks each item used or not used.
+- A use counts only when the judge quotes words that are in the answer or the tool calls.
+- The run gets a `memory_used` event. `memory/use_store.py` (`~/.north/memory_use.db`) adds one to each item's loaded count, and to its used count when it was used.
+
+`FactStore.search_with_ids` takes a `boost` function. `MemoryGateway` passes `0.1 × (rate − 0.5)`, where the rate is `(used + 1) / (loaded + 2)`.
+- The boost is added to the similarity before the relative cutoff (Section 5.7).
+- The search asks for twice as many candidates, so a used fact just past the top can move in.
+- A fact never loaded has a rate of 0.5 and does not move.
+
+The profile puts its core topics, the goals and the judgement rules first, because the 12,000-character cap cuts the end. Recall skips a fact that the profile already shows as a line.
+
+The evidence is in `experiments/memory_recall/README.md` (issues #85, #86, #89, #91).
+
 ---
 
 ## 6. The Orchestrator

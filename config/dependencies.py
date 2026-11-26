@@ -291,6 +291,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     from memory import LocalMemoryGateway
     from memory.episodic import EpisodicStore
     from memory.facts import FactStore
+    from memory.use_store import MemoryUseStore
     from orchestrator.agent_runs import AgentRunStore
     from orchestrator.plan_store import PlanStore
     from orchestrator.running_tasks import RunningTaskStore
@@ -331,6 +332,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         context_store=context_store,
         fact_store=fact_store,
         episodic_store=episodic_store,
+        use_store=MemoryUseStore(settings.north_home / "memory_use.db"),
     )
 
     tasks_db = settings.north_home / "tasks" / "tasks.db"

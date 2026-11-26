@@ -1,0 +1,25 @@
+{
+  "cut_by_cap": {
+    "Finances": 382,
+    "Other": 85
+  },
+  "facts_given": 1092,
+  "facts_given_that_the_profile_shows": 0,
+  "label": "after",
+  "mean_memory_tokens": 3560,
+  "profile_chars": 12467,
+  "prompts": 196,
+  "ranking": {
+    "same_pick_as_replay": 98,
+    "tasks": 98
+  },
+  "recalls_with_fact_ids": 192,
+  "use_judge": {
+    "agreement_with_reference": 0.964,
+    "items": 524,
+    "memory_used_events_recorded": 20,
+    "precision": 0.75,
+    "recall": 0.805,
+    "tasks": 20
+  }
+}

@@ -16,6 +16,7 @@ from context.repo_revision import repository_identity
 from inference.exceptions import is_model_unavailable_error
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import LocalMemoryGateway, MemoryGateway
+from memory.memory_use import judge_later
 from tools.base import Tool
 from utils.execution_context import ExecutionIdentity, bind_execution
 from utils.tools import named_tools
@@ -86,6 +87,8 @@ class Agent(ABC):
         # Class-level identity always matches config for runtime safety.
         self.name = config.agent
         self.domain = config.domain
+        # The memory each running run was given, by run id, so its use can be judged when it ends (#85).
+        self._recalled: dict[str, Any] = {}
 
     @property
     def config(self) -> AgentConfig:
@@ -133,6 +136,7 @@ class Agent(ABC):
                     result.duration_ms = int((time.monotonic() - started) * 1000)
                 if store is not None:
                     await store.complete(payload.run_id, result)
+                self._judge_memory_use(payload, result.output)
                 return result
             except asyncio.CancelledError:
                 if store is not None:
@@ -145,6 +149,25 @@ class Agent(ABC):
                     status = "paused" if is_model_unavailable_error(exc) else "failed"
                     await store.finish_with_error(payload.run_id, status, str(exc))
                 raise
+            finally:
+                self._recalled.pop(payload.run_id or "", None)
+
+    def _judge_memory_use(self, payload: AgentPayload, answer: str) -> None:
+        """Start the background check of which recalled items this run used (#85)."""
+        recalled = self._recalled.get(payload.run_id or "")
+        items_fn = getattr(recalled, "items", None)
+        if not callable(items_fn):
+            return
+        judge_later(
+            self._deps.inference_router,
+            self._deps.agent_run_store,
+            run_id=payload.run_id,
+            task_id=payload.task_id,
+            task=payload.prompt,
+            answer=answer,
+            items=items_fn(),
+            counts=getattr(self._memory(), "use_store", None),
+        )
 
     @abstractmethod
     async def _execute(
@@ -260,6 +283,8 @@ class Agent(ABC):
         else:
             principal = await principal_for(self.name, self.domain)
         recalled = await memory.recall(principal, payload.prompt)
+        if payload.run_id:
+            self._recalled[payload.run_id] = recalled
         await self._emit_memory_recall(payload, principal, recalled)
         rendered = recalled.render()
         if rendered:

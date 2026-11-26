@@ -1,0 +1,14 @@
+{
+  "cut_by_cap": {
+    "Judgement rules": 467
+  },
+  "facts_given": 1438,
+  "facts_given_that_the_profile_shows": 348,
+  "label": "before",
+  "mean_memory_tokens": 3605,
+  "profile_chars": 12467,
+  "prompts": 196,
+  "ranking": null,
+  "recalls_with_fact_ids": 0,
+  "use_judge": null
+}

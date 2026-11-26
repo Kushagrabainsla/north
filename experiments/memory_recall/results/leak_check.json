@@ -1,0 +1,27 @@
+{
+  "did_not_exist_yet": {
+    "episode": 311,
+    "fact": 292
+  },
+  "e85_used_share": {
+    "episode": {
+      "all_items": "95/360",
+      "existing_items_only": "31/173",
+      "used_share_existing_only": 0.179
+    },
+    "fact": {
+      "all_items": "30/910",
+      "existing_items_only": "21/729",
+      "used_share_existing_only": 0.029
+    },
+    "profile": {
+      "all_items": "149/1680",
+      "existing_items_only": "149/1680",
+      "used_share_existing_only": 0.089
+    }
+  },
+  "loaded": {
+    "episode": 588,
+    "fact": 1438
+  }
+}

@@ -22,6 +22,7 @@ from utils.repository import repository_identity
 if TYPE_CHECKING:
     from memory.episodic import EpisodicStore
     from memory.facts import FactStore
+    from memory.use_store import MemoryUseStore
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +77,13 @@ class LocalMemoryGateway(MemoryGateway):
         context_store: ContextStore,
         fact_store: FactStore | None = None,
         episodic_store: EpisodicStore | None = None,
+        use_store: MemoryUseStore | None = None,
     ) -> None:
         self._context_store = context_store
         self._fact_store = fact_store
         self._episodic_store = episodic_store
+        # How often tasks used each fact they were given (#85); ranks facts with similarity (#91).
+        self._use_store = use_store
 
     async def principal_for(self, name: str, domain: str | None = None, workspace: str = "") -> MemoryPrincipal:
         identity = await asyncio.to_thread(repository_identity, workspace) if workspace else None
@@ -124,7 +128,23 @@ class LocalMemoryGateway(MemoryGateway):
         # job is knowing the user.
         unrestricted = principal.allowed_fact_topics is None
         documents = await self._read_documents() if unrestricted else []
-        return MemoryContext(facts=facts, episodes=episodes, documents=documents)
+        if documents:
+            # The profile renders facts as "- <fact>" lines. A recalled fact that the
+            # profile already shows is the same text twice: 31% of recalled facts in
+            # 196 replayed tasks (experiments/memory_recall, #86).
+            shown = "\n".join(documents)
+            facts = [(fid, text) for fid, text in facts if f"- {text}" not in shown]
+        return MemoryContext(
+            facts=[text for _, text in facts],
+            episodes=[text for _, text in episodes],
+            documents=documents,
+            fact_ids=[fid for fid, _ in facts],
+            episode_ids=[eid for eid, _ in episodes],
+        )
+
+    @property
+    def use_store(self) -> MemoryUseStore | None:
+        return self._use_store
 
     async def read_document(self, doc: ContextDocument) -> str:
         return await self._safe_read(doc)
@@ -134,22 +154,37 @@ class LocalMemoryGateway(MemoryGateway):
 
     # ------------------------------------------------------------------ #
 
-    async def _recall_facts(self, query: str, limit: int, allowed_topics: frozenset[str] | None = None) -> list[str]:
+    async def _recall_facts(
+        self, query: str, limit: int, allowed_topics: frozenset[str] | None = None
+    ) -> list[tuple[str, str]]:
         if self._fact_store is None:
             return []
         try:
             # No count() pre-check: search() already returns [] on an empty store,
             # and the extra round trip ran on every agent's recall path.
-            return await self._fact_store.search(query, max_results=limit, allowed_categories=allowed_topics)
+            return await self._fact_store.search_with_ids(
+                query, max_results=limit, allowed_categories=allowed_topics, boost=self._fact_boosts
+            )
         except Exception:
             logger.warning("MemoryGateway: fact search failed", exc_info=True)
             return []
 
-    async def _recall_episodes(self, principal: MemoryPrincipal, query: str, limit: int) -> list[str]:
+    def _fact_boosts(self, fact_ids: list[str]) -> dict[str, float]:
+        """The use score of each fact, keyed by its store id; empty without a use store."""
+        if self._use_store is None:
+            return {}
+        try:
+            boosts = self._use_store.boosts(f"fact:{fid}" for fid in fact_ids)
+        except Exception:
+            logger.warning("MemoryGateway: reading memory use failed", exc_info=True)
+            return {}
+        return {key.split(":", 1)[1]: value for key, value in boosts.items()}
+
+    async def _recall_episodes(self, principal: MemoryPrincipal, query: str, limit: int) -> list[tuple[str, str]]:
         if self._episodic_store is None or not principal.allowed_domains:
             return []
         try:
-            return await self._episodic_store.search(
+            return await self._episodic_store.search_with_ids(
                 query,
                 max_results=limit,
                 allowed_domains=principal.allowed_domains,

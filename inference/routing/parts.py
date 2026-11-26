@@ -85,7 +85,7 @@ NESTED_SEPARATOR = ":"
 COMPACT_SUFFIX = "compact"
 
 _TINY_STRUCTURED_PARTS = ("critic", "north_star_checker")
-_BACKGROUND_PARTS = ("extraction_pipeline", "episode_consolidator", "skill_distiller")
+_BACKGROUND_PARTS = ("extraction_pipeline", "episode_consolidator", "skill_distiller", "memory_use")
 
 # The context a serious coding task needs before it is worth starting.
 _CODING_CONTEXT = 200_000
