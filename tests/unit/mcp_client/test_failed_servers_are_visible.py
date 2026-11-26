@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from mcp.manager import McpManager
+from mcp_client.manager import McpManager
 from orchestrator.api_context import ApiServices, bind_services
 from orchestrator.app import _serve_mcp
 from tests.unit.agents.test_react_loop import _load_agent

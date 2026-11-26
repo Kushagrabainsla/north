@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from approval.policy import ActionKind
-from mcp.client import McpClient
-from mcp.models import McpCallResult, McpToolDefinition
+from mcp_client.client import McpClient
+from mcp_client.models import McpCallResult, McpToolDefinition
 from tests.conftest import bind_approvals, rejecting_store
 from tools.models import ToolInput
 from tools.specialized.mcp_tool import McpTool

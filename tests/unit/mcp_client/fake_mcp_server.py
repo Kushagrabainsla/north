@@ -32,7 +32,11 @@ TOOLS = [
 def _answer(request: dict) -> dict:
     method = request.get("method")
     if method == "initialize":
-        return {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "fake"}}
+        return {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fake", "version": "1"},
+        }
     if method == "tools/list":
         return {"tools": TOOLS}
     if method == "tools/call":

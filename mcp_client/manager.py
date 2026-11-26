@@ -9,8 +9,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mcp.client import McpClient
-from mcp.models import McpConfigFile, McpServerConfig
+from mcp_client.client import McpClient
+from mcp_client.models import McpConfigFile, McpServerConfig
 from tools.specialized.mcp_tool import McpTool
 
 if TYPE_CHECKING:
