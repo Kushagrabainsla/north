@@ -22,6 +22,7 @@ from typing import Any
 
 from coding_agents.ask import CLAUDE_FETCH_TOOL, CLAUDE_TOOL, SERVER
 from coding_agents.base import CodingBackend, EventSink
+from coding_agents.confinement import closed_paths
 from coding_agents.constants import (
     HOOK_TIMEOUT_SECONDS,
     MAX_EVENT_TEXT_CHARS,
@@ -232,18 +233,23 @@ class ClaudeBackend(CodingBackend):
         `autoAllowBashIfSandboxed` is off because on, a hook that fails lets a sandboxed command run
         (measured): off, a broken hook means the command is denied.
         """
+        closed = closed_paths(spec.workspace, spec.mode, self._protected_paths)
         settings: dict[str, Any] = {
+            # The sandbox's list covers commands only. The Read tool (and Grep and Glob) read inside `~/.north`
+            # in a plan run until the same paths were denied to them as rules (measured 2026-11-25).
+            "permissions": {"deny": [rule for path in closed for rule in _read_rules(path)]},
             "sandbox": {
                 "enabled": True,
                 "allowUnsandboxedCommands": False,
                 "failIfUnavailable": True,
                 "autoAllowBashIfSandboxed": False,
-                "filesystem": {"denyRead": list(self._protected_paths)},
+                "filesystem": {"denyRead": closed},
                 # No host on the internet, but this machine's ports: without them an agent could not start
                 # the dev server or test server a check needs (benchmark, 2026-11-11), and the user chose to
-                # allow it knowing it can reach any local service.
+                # allow it knowing it can reach any local service. Measured 2026-11-25: it also opens this
+                # machine's own network address (10.x), though the docs say localhost only; off, both close.
                 "network": {"strictAllowlist": True, "allowedDomains": [], "allowLocalBinding": True},
-            }
+            },
         }
         if spec.gate is not None:
             command = f"{shlex.quote(sys.executable)} {shlex.quote(str(_HOOK_SCRIPT))}"
@@ -272,6 +278,11 @@ class ClaudeBackend(CodingBackend):
         finally:
             await stop_process_group(process)
         return out.decode(errors="replace")
+
+
+def _read_rules(path: str) -> list[str]:
+    """Claude Code rules that keep its file tools out of *path*: `//` starts an absolute path."""
+    return [f"Read(/{path})", f"Read(/{path}/**)"]
 
 
 class _Stream:
