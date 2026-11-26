@@ -69,7 +69,6 @@ from orchestrator.api import coding_ask_router, coding_gate_router, health_route
 from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
 from orchestrator.api_context import merge as merge_services
-from orchestrator.api_context import services_of
 from orchestrator.background import BackgroundLoops
 from orchestrator.coding_ask import ApprovalsAsker
 from orchestrator.coding_briefing import MemoryBriefing
@@ -102,7 +101,6 @@ from tools.specialized._sandbox import SandboxConfig
 from tools.specialized.bash import BashTool
 from tools.specialized.coding_agent import CodingAgentTool
 from tools.specialized.coding_shell import BashShell
-from tools.specialized.kasa_devices import move_logins_to_secrets as move_kasa_logins_to_secrets
 from tools.tool_index import ToolIndex
 from tools.universal.browser_accounts import BrowserAccounts
 from tools.universal.create_flow import CreateFlowTool
@@ -1075,8 +1073,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _attach_embedding_index(deps)
 
     _step("building tool registry")
-    # TP-Link logins kept in .env before they were secrets (CODING_STYLE §7.6). Remove once moved everywhere.
-    move_kasa_logins_to_secrets(settings.north_home)
     approval_memory = ApprovalMemory(settings.north_home / "approval_memory.db")
     # The safe-action list, in the same database as the learned decisions: both
     # answer "what may north do without asking me", and it saves a 16th SQLite
@@ -1335,9 +1331,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
     finally:
         remove_run_file()
-        # Lights following music go back as they were while their connections are still open.
-        if (home := services_of(app).home) is not None:
-            await home.aclose()
         await _shutdown(deps, callback_server, background_tasks, tool_registry)
 
 

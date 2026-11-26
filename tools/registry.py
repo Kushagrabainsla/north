@@ -164,6 +164,13 @@ def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
     )
 
 
+def written_by_north(tool: Tool) -> bool:
+    """A tool north wrote for itself, however it runs: in its own process, or inside north as before."""
+    from tools.learned_remote import RunnerTool
+
+    return isinstance(tool, RunnerTool) or is_learned_tool(tool)
+
+
 def is_learned_tool(tool: Tool) -> bool:
     """A tool north wrote for itself (or a candidate of one), wrapped or not."""
     if isinstance(tool, LearnedTool):
@@ -348,6 +355,10 @@ class ToolRegistry:
     def all_tools(self) -> list[Tool]:
         """Every tool in the global catalog that can work on this machine now."""
         return [tool for tool in self._tools.values() if not self._missing(tool.name)]
+
+    def names_written_by_north(self) -> list[str]:
+        """The names of the tools north wrote for itself: a device's tool is one, named when it was made."""
+        return [tool.name for tool in self._tools.values() if written_by_north(tool)]
 
     def note_unavailable(self, source: str, why: str) -> None:
         """Record that tools from *source* were configured but are not available, and why."""

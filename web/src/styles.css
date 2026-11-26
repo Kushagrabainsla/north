@@ -794,32 +794,6 @@ audio.artifact-media, video.artifact-sound-only { width: 100%; height: 54px; bac
 .notice-body { margin: 6px 0 2px; color: var(--text); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .notice-body summary { color: var(--muted); cursor: pointer; line-height: 1.5; }
 .notice-body[open] summary { margin-bottom: 8px; }
-.add-device .panel-content { display: grid; gap: 12px; }
-.light-swatch { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); }
-.light-slider { display: grid; gap: 6px; font-size: 10px; color: var(--muted); }
-.light-slider span { display: flex; justify-content: space-between; }
-.light-slider em { font-style: normal; color: var(--text); }
-/* Drawn by hand: the browser's own slider hides the track, and with it the colour and warmth gradients. */
-.light-slider input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; margin: 4px 0; border-radius: 4px; background: linear-gradient(90deg, #3f3f46, #e4e4e7); cursor: pointer; }
-.light-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--text); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--line); }
-.light-slider input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 2px solid var(--bg); }
-.light-slider input[type=range]:disabled { cursor: not-allowed; opacity: .4; }
-.light-slider input[type=range].light-hue { background: linear-gradient(90deg, hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%), hsl(180 100% 50%), hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%)); }
-/* Music sync: one row above the lights, wrapping on a phone. */
-.music-sync { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); }
-.music-sync-text { flex: 1 1 260px; min-width: 0; }
-.music-sync-text b { display: block; font-size: 12px; }
-.music-sync-text small { display: block; margin-top: 4px; color: var(--faint); font-size: 9px; line-height: 1.5; }
-.music-sync-mode { display: flex; flex-direction: column; gap: 5px; flex: 0 1 260px; min-width: 0; }
-.music-sync-mode small { color: var(--faint); font-size: 9px; line-height: 1.45; }
-.music-strength { flex: 0 1 170px; }
-.music-strength-ends { display: flex; justify-content: space-between; color: var(--faint); font-size: 8px; }
-.music-heard { display: flex; align-items: center; gap: 8px; }
-.music-beat { width: 10px; height: 10px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line); }
-.music-beat.on { animation: music-beat .35s ease-out; }
-@keyframes music-beat { from { background: var(--accent); box-shadow: 0 0 10px var(--accent); } to { background: var(--surface-2); box-shadow: none; } }
-.music-meter { flex: 0 0 80px; height: 8px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--line); overflow: hidden; }
-.music-meter span { display: block; height: 100%; background: var(--accent); transition: width .1s linear; }
 
 /* A turn while North works: its newest thought in grey where the answer will go, and one faint
    line under it. Steps, thinking and cost fold away behind "N steps" or "Thought for 24s".

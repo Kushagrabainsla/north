@@ -31,7 +31,6 @@ dependencies = [
     # found"); with 9.14.4, none of 36. Raise the pin only after re-running
     # that check.
     "ddgs==9.14.4",
-    "python-kasa>=0.12.0",
     # Checks the views north makes (A2UI JSON) against the UI kit's catalog, a JSON Schema.
     "jsonschema>=4.26.0",
     # Reads the packages a tool north writes names (PEP 508), so each is pinned to one version.
@@ -105,7 +104,6 @@ resources = [
     "policies/*.md",
     "builtin-skills/**/*.md",
     "builtin-flows/**/*.yaml",
-    "network-makers.json.gz",
     # Existing-profile browser bridge: the audited TaskWindow extension, loaded
     # unpacked so it never auto-updates, and its daemon pinned by npm lockfile.
     "taskwindow/LICENSE",

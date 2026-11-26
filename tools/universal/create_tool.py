@@ -249,8 +249,6 @@ class CreateToolTool(Tool):
             "It runs in its own process and environment, in north's sandbox"
             + (f", with these packages installed there: {', '.join(packages)}" if packages else "")
             + ".\n\n"
-            if runs_on_its_own(content)
-            else ""
         )
         message = (
             f"Agent wants to {action} the '{name}' tool ({tool_type}). Approving writes it, calls it once with "
@@ -419,8 +417,7 @@ class CreateToolTool(Tool):
         if path is None:
             return ToolOutput(success=False, error=f"No candidate exists for tool '{name}'.")
         source = path.read_text(encoding="utf-8")
-        own = runs_on_its_own(source)
-        if problems := draft_problems(source, secret_store.store().names(), own_environment=own):
+        if problems := draft_problems(source, secret_store.store().names(), own_environment=True):
             listed = "\n".join(f"{index}. {problem}" for index, problem in enumerate(problems, 1))
             return ToolOutput(
                 success=False,
@@ -428,20 +425,16 @@ class CreateToolTool(Tool):
                 "Fix them and call create_tool again with action='update' and the full file.",
             )
         try:
-            if own:
-                # Loaded by the runner, in the tool's own environment and sandbox: north never imports it.
-                packages = script_dependencies(source)
-                meta = await describe_file(path, name, packages, self._runtime)
-                _validate_tool_contract(SimpleNamespace(**meta), expected_name=name)
-                self._described[name] = (_tool_fingerprint(path), meta, packages)
-            else:
-                instance = _load_tool_file(path, expected_name=name)
-                _validate_tool_contract(instance)
+            # Loaded by the runner, in the tool's own environment and sandbox: north never imports it.
+            packages = script_dependencies(source)
+            meta = await describe_file(path, name, packages, self._runtime)
+            _validate_tool_contract(SimpleNamespace(**meta), expected_name=name)
+            self._described[name] = (_tool_fingerprint(path), meta, packages)
         except Exception as exc:
             hint = (
                 " A module it imports is missing from its environment: name that package, at one version, in "
                 "`packages`. From north it may import only tools.base, tools.models and config.secret_store."
-                if own and "No module named" in str(exc)
+                if "No module named" in str(exc)
                 else ""
             )
             return ToolOutput(success=False, error=f"Tool candidate validation failed: {exc}.{hint}")
@@ -576,12 +569,6 @@ def _packaged(content: str, packages: Any) -> tuple[str, str]:
     if problems := pin_problems(named):
         return content, " ".join(problems)
     return content, ""
-
-
-def runs_on_its_own(content: str) -> bool:
-    """Whether a tool runs in its own process. A home-device brand builds on north's own `tools.home`, which
-    exists only inside north, so it still runs there until that code goes."""
-    return "DeviceTool" not in content and "tools.home" not in content
 
 
 def _named(params: dict[str, Any]) -> dict[str, Any]:

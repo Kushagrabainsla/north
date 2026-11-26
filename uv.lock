@@ -263,18 +263,6 @@ wheels = [
 ]
 
 [[package]]
-name = "asyncclick"
-version = "8.3.0.7"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f9/ca/25e426d16bd0e91c1c9259112cecd17b2c2c239bdd8e5dba430f3bd5e3ef/asyncclick-8.3.0.7.tar.gz", hash = "sha256:8a80d8ac613098ee6a9a8f0248f60c66c273e22402cf3f115ed7f071acfc71d3", size = 277634, upload-time = "2025-10-11T08:35:44.841Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/d9/782ffcb4c97b889bc12d8276637d2739b99520390ee8fec77c07416c5d12/asyncclick-8.3.0.7-py3-none-any.whl", hash = "sha256:7607046de39a3f315867cad818849f973e29d350c10d92f251db3ff7600c6c7d", size = 109925, upload-time = "2025-10-11T08:35:43.378Z" },
-]
-
-[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1274,18 +1262,6 @@ linkify = [
 ]
 
 [[package]]
-name = "mashumaro"
-version = "3.22"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d1/e3/a06dcd2e6df094c5e294721926f1f76da30f50823e2ac233a9198e804891/mashumaro-3.22.tar.gz", hash = "sha256:64538cc365204402a060ebde683a86505b5a4344acf6870d79021e9fbfe57360", size = 197845, upload-time = "2026-05-26T14:39:21.859Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9b/1c/92fd926c2e7763535454683250dbdd8d10aa2f2c62f58d6abbcce4d8b3fc/mashumaro-3.22-py3-none-any.whl", hash = "sha256:17dc4d7294c33ef380a8b929dda0608577aa2141988c00a0c4932310108fe71d", size = 95916, upload-time = "2026-05-26T14:39:20.233Z" },
-]
-
-[[package]]
 name = "mcp"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1541,7 +1517,6 @@ dependencies = [
     { name = "pynput", marker = "sys_platform == 'darwin'" },
     { name = "pypdf" },
     { name = "python-docx" },
-    { name = "python-kasa" },
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -1587,7 +1562,6 @@ requires-dist = [
     { name = "pynput", marker = "sys_platform == 'darwin'", specifier = ">=1.7.6" },
     { name = "pypdf", specifier = ">=4.0.0" },
     { name = "python-docx", specifier = ">=1.0.0" },
-    { name = "python-kasa", specifier = ">=0.12.0" },
     { name = "python-multipart", specifier = ">=0.0.29" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0.0" },
@@ -2320,22 +2294,6 @@ wheels = [
 ]
 
 [[package]]
-name = "python-kasa"
-version = "0.12.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "asyncclick" },
-    { name = "cryptography" },
-    { name = "mashumaro" },
-    { name = "tzdata", marker = "sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/d6/e3ab366aa362ff4a12d5166ed648667cfe394dc2c1b450eab41bda310be8/python_kasa-0.12.0.tar.gz", hash = "sha256:92b0cd9eafc89a07a31e5652dd494a2eed0477fc1b0e517ba1b1a045d2cf3643", size = 537631, upload-time = "2026-10-25T19:37:08.479Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/65/2045880563c419c0577da4311422218ca11858a891cf89b81c7079fc2e50/python_kasa-0.12.0-py3-none-any.whl", hash = "sha256:e18adb340f359750bc5e798aa1856cdc1a28bc9307d510ad6556998545f40bbd", size = 277243, upload-time = "2026-10-25T19:37:06.57Z" },
-]
-
-[[package]]
 name = "python-multipart"
 version = "0.0.29"
 source = { registry = "https://pypi.org/simple" }
@@ -2786,15 +2744,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464", size = 75949, upload-time = "2025-10-01T02:14:41.687Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/9b/47798a6c91d8bdb567fe2698fe81e0c6b7cb7ef4d13da4114b41d239f65d/typing_inspection-0.4.2-py3-none-any.whl", hash = "sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7", size = 14611, upload-time = "2025-10-01T02:14:40.154Z" },
-]
-
-[[package]]
-name = "tzdata"
-version = "2026.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ba/19/1b9b0e29f30c6d35cb345486df41110984ea67ae69dddbc0e8a100999493/tzdata-2026.2.tar.gz", hash = "sha256:9173fde7d80d9018e02a662e168e5a2d04f87c41ea174b139fbef642eda62d10", size = 198254, upload-time = "2026-04-24T15:22:08.651Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/e4/dccd7f47c4b64213ac01ef921a1337ee6e30e8c6466046018326977efd95/tzdata-2026.2-py2.py3-none-any.whl", hash = "sha256:bbe9af844f658da81a5f95019480da3a89415801f6cc966806612cc7169bffe7", size = 349321, upload-time = "2026-04-24T15:22:05.876Z" },
 ]
 
 [[package]]

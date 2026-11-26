@@ -36,7 +36,6 @@ from ledger.models import INFERENCE_CALL, LedgerSource
 from memory.extraction import learning_status
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import Prompt, TaskRequest
-from tools.home import Home
 from tools.universal.browser import browser_availability
 from utils.reveal import reveal
 from utils.secrets import redact
@@ -54,7 +53,6 @@ from web.artifacts import (
 from web.browser_keys import BROWSER_KEY_COOKIE, BROWSER_KEY_MAX_AGE_SECONDS, known_browser, remember_browser
 
 from . import extensions as _extensions
-from . import lights as _lights
 from . import secrets_panel as _secrets
 from . import updates as _updates
 from . import views as _views
@@ -122,7 +120,6 @@ router = APIRouter(
     dependencies=[Depends(bind_request_services), Depends(verify_api_access)],
 )
 router.include_router(extensions_router)
-router.include_router(_lights.router)
 router.include_router(_secrets.router)
 router.include_router(_updates.router)
 router.include_router(_views.router)
@@ -213,7 +210,6 @@ def configure(
         flow_store=flow_store,
         flow_runner=flow_runner,
         tool_registry=tool_registry,
-        home=Home(tool_registry) if tool_registry is not None else None,
         conversation_store=ConversationStore(north_home / "web.db"),
         web_runtime=WebRuntime(),
         codex_credentials_factory=codex_credentials_factory or _default_codex_credentials_factory,

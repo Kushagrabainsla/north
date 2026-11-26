@@ -365,7 +365,7 @@ is adding a file:
 ```
 tools/
   universal/    <- general-purpose tools (write_file, web_search, scheduling, etc.)
-  specialized/  <- integration and execution tools (bash, git, gh, kasa, etc.)
+  specialized/  <- integration and execution tools (bash, gh, screen_brightness, etc.)
 ```
 
 Both directories feed one global catalog. At task start, semantic retrieval selects a
@@ -488,7 +488,7 @@ Two consequences worth keeping:
 - North's own tools do not edit files inside a git repository: `write_file` there, and shell commands that recognisably edit files there (`sed -i`, redirection or `tee` into a file), are refused and pointed at `coding_agent`, which works in an isolated copy and runs the tests. The OS sandbox holds this for every other program: a command run in a repository can write only `.git`, what git ignores, and what tools generate. Git itself is exempt, since committing and shipping are how a change leaves.
 - A step that must happen does not depend on the model remembering it. A tool states it in `before_task_ends`, and the task does not end until it has answered: in a repository, a coding agent has been asked, and a finished change has been read once by the other one.
 - A task with no chosen folder is told so, and asks which folder the user means instead of guessing a path or calling its own folder theirs.
-- **Your own controls act as you.** A device control you operate yourself on the dashboard (a light's switch, slider, colour or music sync) does what you set at once, with no approval card: the person deciding is you. It reaches the device through the module that owns it, never through an agent's tool, and north.log notes each change. A change north makes for you, from chat or a flow, still goes through `Tool.execute` and asks as your mode says.
+- **Your own controls act as you.** A control you operate yourself on the dashboard (a light's switch, slider, colour or music sync on a panel) does what you set at once, with no approval card: the person deciding is you. North.log notes each change. A change north makes for you, from chat or a flow, still goes through `Tool.execute` and asks as your mode says.
 - **A panel north made acts as you, and shows a risky call first.** A part you use on a view (`web/views.py`) calls its tool through `Tool.execute_for_you`, with no card, and north.log notes it. North wrote the panel, so a button can say one thing and do another: a call that `approval.policy.needs_your_confirmation` names (a send, a spend, a delete, a push, a command, a change to north) comes back with its exact values, and runs only when you confirm that very call. A view's own arguments stay on the server; the page sends only the values it binds.
 - **One card per requirement.** Whatever an agent needs from you to do one thing (delete a file, submit one application) is asked on one card, by the approval layer. An agent never asks on a card of its own and then has the tool ask again: it calls the tool, which asks; or, when the thing takes several calls, it asks once naming each exact call, and those calls then run without another card. A call that differs from what you approved is another requirement and asks.
 

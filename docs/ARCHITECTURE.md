@@ -2093,7 +2093,7 @@ beautifulsoup4 = ">=4.12.0"
 ddgs = ">=1.0.0"                # DuckDuckGo search (no API key required)
 
 # Smart home
-python-kasa = ">=0.7.0"         # local control of Kasa devices (kasa tool)
+packaging = ">=24.0"            # reads the pinned packages a tool north writes names
 
 # Voice input
 sounddevice = ">=0.4.6"         # push-to-talk audio capture

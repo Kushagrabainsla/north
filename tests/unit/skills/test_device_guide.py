@@ -1,0 +1,52 @@
+"""The adding-a-home-device guide's example is a tool north can make and a panel north can add, as written.
+
+North rebuilds a brand's devices (Kasa, Hue) from one prompt by following this guide. If its example did
+not pass create_tool's checks, or its panel did not pass create_view's, every model that copied it would
+fail the same way.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+from tools.learned_remote import LearnedRuntime, RunnerTool, describe_file
+from tools.registry import ToolRegistry
+from tools.universal._draft_checks import draft_problems
+from utils.runtime_resources import builtin_skills_dir
+from views import check_view
+from views.document import action_tool_check, reference_checks
+
+GUIDE = (builtin_skills_dir() / "adding-a-home-device" / "SKILL.md").read_text(encoding="utf-8")
+TOOL = re.search(r"```python\n(.*?)```", GUIDE, re.S).group(1)
+PANEL = json.loads(re.search(r"```json\n(.*?)```", GUIDE, re.S).group(1))["view"]
+
+
+def test_the_example_tool_passes_the_draft_checks() -> None:
+    assert draft_problems(TOOL, {"hue_bridge"}, own_environment=True) == []
+
+
+async def test_the_runner_loads_it_and_its_list_is_read_only(tmp_path: Path) -> None:
+    path = tmp_path / "hue_lights.py"
+    path.write_text(TOOL, encoding="utf-8")
+
+    meta = await describe_file(path, "hue_lights", [], LearnedRuntime(tmp_path, sandbox=None))
+
+    assert meta["name"] == "hue_lights" and meta["uses_secrets"] == ["hue_bridge"]
+    assert meta["read_only_when"] == {"action": ["list"]}
+
+
+def test_the_example_panel_passes_the_view_checks_against_that_tool(tmp_path: Path) -> None:
+    meta = {"name": "hue_lights", "is_mutating": True, "read_only_when": {"action": ["list"]}}
+    registry = ToolRegistry(auto_register=False)
+    registry.register(RunnerTool(tmp_path / "hue_lights.py", meta, [], LearnedRuntime(tmp_path, sandbox=object())))
+    tool_problem, _ = reference_checks(registry, None)
+
+    assert check_view(PANEL, tool_problem=tool_problem, action_tool_problem=action_tool_check(registry)) == []
+    assert {"Switch", "Slider", "ColorPicker", "Microphone"} <= {part["component"] for part in PANEL["components"]}
+
+
+def test_the_guide_names_no_built_in_device_tool_or_page() -> None:
+    assert "DeviceTool" not in GUIDE and "Devices page" not in GUIDE and "`kasa`" not in GUIDE
+    assert "request_secret" in GUIDE and "packages" in GUIDE and "read_only_when" in GUIDE

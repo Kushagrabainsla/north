@@ -95,7 +95,6 @@ def test_runtime_package_data_is_explicit(pyproject: dict) -> None:
         "policies/*.md",
         "builtin-skills/**/*.md",
         "builtin-flows/**/*.yaml",
-        "network-makers.json.gz",
         "taskwindow/LICENSE",
         "taskwindow/package*.json",
         "taskwindow/extension/**/*",
@@ -175,7 +174,7 @@ def _is_data(path: Path) -> bool:
 def test_the_glob_matcher_reads_patterns_the_way_setuptools_does() -> None:
     assert _glob_matches("builtin-flows/news.yaml", "builtin-flows/**/*.yaml")
     assert _glob_matches("builtin-flows/a/b/news.yaml", "builtin-flows/**/*.yaml")
-    assert _glob_matches("network-makers.json.gz", "network-makers.json.gz")
+    assert _glob_matches("taskwindow/LICENSE", "taskwindow/LICENSE")
     assert _glob_matches("taskwindow/package-lock.json", "taskwindow/package*.json")
     assert not _glob_matches("prompts/sub/x.md", "prompts/*.md")
     assert not _glob_matches("builtin-flows/news.yml", "builtin-flows/**/*.yaml")
