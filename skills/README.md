@@ -1,31 +1,40 @@
-# Skills
+# skills
 
-A **skill** is a reusable procedure north gives an agent *before* it acts, so the
-same model repeats a known-good approach instead of improvising. Skills are
-advisory in ordinary tasks. A flow may invoke a skill only when it also declares
-a server-enforced `execution` contract.
+A skill is a procedure that north gives an agent before the agent acts. With it, the same model
+repeats a known good method and does not make one up. In an ordinary task a skill is advice.
+A flow step can use a skill only when the skill has an `execution` contract, which north enforces.
 
-Each skill is a folder with a `SKILL.md`:
+## The skill format
+
+Each skill is a folder with a `SKILL.md` file: YAML frontmatter, then a markdown body.
 
 ```md
 ---
 name: systematic-debugging
 description: Use when a reproducible bug or test failure has an unknown cause...
+domains: [engineering]
+intents: [debug]
 ---
 # Systematic debugging
-> **Iron Law...**
 ## Use this when / ## Do NOT use for / ## Procedure / ## Done when
 ```
 
-The `description` is the retrieval key — write it as a trigger ("Use when …").
+| Field | Meaning |
+|---|---|
+| `name` | The skill's name. The default is the folder name. |
+| `description` | The retrieval key. Write it as a trigger ("Use when ..."). |
+| `domains` | Who gets the skill. The default is `[engineering]`. |
+| `intents` | Optional kinds of work, from `SkillIntent` in `models.py` (for example `debug`, `create-flow`). |
+| `status` | `active` (the default), `candidate` or `retired`. Only an active skill is offered. |
+| `version`, `provenance` | The version, and the task IDs a learned skill came from. |
+| `execution` | Optional contract for flows (see below). |
 
 An executable skill adds this frontmatter:
 
 ```yaml
 execution:
-  agent: general
   tools: [browser]
-  approval: on_mutation
+  approval: on_mutation        # never | on_mutation | before_step
   inputs:
     type: object
     properties:
@@ -34,48 +43,77 @@ execution:
   outputs:
     type: object
     properties:
-      evidence: {type: string}
-    required: [evidence]
+      file: {type: string}
+    required: [file]
   success_criteria:
     - The requested page was verified.
+  checks:
+    - saved_file: {field: file}
 ```
 
-The contract owns the executor, exact tool allowlist, I/O schemas, minimum
-approval, and success checks. A flow stores none of those choices; it references
-the skill and binds step inputs. Runtime tool discovery cannot widen the allowlist.
+The contract owns the exact tool list, the input and output schemas, the minimum approval, and
+the success criteria. `success_criteria` must have at least one item. `checks` names checks that
+north runs in code on the step's output (`checks.py`). A learned skill can ask for a check, but
+it cannot bring code of its own. The `agent` field still loads, but north does not read it.
+A flow stores none of these choices. It names the skill and binds the step inputs.
 
-## How it works
+## Main parts
 
-- **Built-in** skills ship under `resources/builtin-skills/`; **learned** skills live in `skills/` in north's home (`~/.north` unless NORTH_HOME moves it).
-- For an engineering or research task, north embeds the prompt and offers the **top ~3** most
-  similar skills (above a threshold) as one-line descriptions. The agent calls `use_skill` to
-  pull the full procedure when one matches. If none fit, it offers nothing.
-- Descriptions, not bodies, is deliberate: the opening block of an agent conversation is
-  re-sent on every turn, so a pasted playbook is paid ~20 times per task whether it is used
-  or not. A description costs ~50 tokens against ~1,500 for two bodies.
-- A skill declares which agent **domains** it serves via a `domains:` frontmatter list
-  (defaults to `[engineering]`); the general assistant only ever sees skills tagged `general`
-  (e.g. `conducting-a-literature-review`), and engineering skills never leak into ordinary chat.
-- `use_skill` is now the normal way a skill is loaded, not just the long-tail fallback -
-  the agent is told which skills fit and fetches the one it wants. Every selection is
-  logged as a `skill_selected` ledger entry.
+| File | Key names | What it does |
+|---|---|---|
+| `models.py` | `Skill`, `SkillExecution`, `SkillSource`, `SkillIntent`, `SKILL_FILENAME` | The skill types. |
+| `parser.py` | `parse_skill_document` | Splits a `SKILL.md` into frontmatter and body. |
+| `registry.py` | `SkillRegistry`, `skill_from_document`, `parse_execution_contract`, `rejection_reason` | Loads the built-in and learned folders. Skips a bad skill with a warning. |
+| `selector.py` | `SkillSelector` | Ranks skills against a task by embedding similarity. |
+| `checks.py` | `parse_checks`, `run_checks`, `CHECKS` | The code checks a contract can name: `saved_file`, `arxiv_papers`. |
+| `distiller.py` | `SkillDistiller` | Writes learned skills from recurring successful tasks. |
+| `retirement.py` | `sweep`, `skills_to_retire`, `retire` | Marks a learned skill `retired` when its tasks keep failing. |
+| `exceptions.py` | `SkillError`, `SkillParseError` | Errors for this package. |
 
-## Learned skills (procedural memory)
+## How north uses it
 
-`SkillDistiller` runs in the background: it clusters north's own **recurring successful**
-engineering tasks and distils the shared procedure into a new learned skill. It's
-idempotent (a cluster that already produced a skill is skipped) and capped.
+- Built-in skills ship in `resources/builtin-skills/`. Learned skills live in `skills/` in north's
+  home (`~/.north`). A learned skill replaces a built-in skill with the same name.
+- `agents/base.py` offers skills to north's agent. The agent's domain is `general`, so it gets
+  only skills tagged `general`. The best matches (similarity 0.70 or more) appear as one-line
+  descriptions. The agent calls `use_skill` to get a full body. The other names are listed too.
+- A description costs about 50 tokens. A body costs about 1,500, and the agent loop sends the
+  opening block again on each turn. Thus north offers descriptions, not bodies.
+- `orchestrator/coding_briefing.py` gives the installed coding agents up to 2 matching
+  `engineering` skills, with their bodies, in the brief before a coding run.
+- Each offer in `agents/base.py` writes a `skill_selected` event and ledger entry.
+- `flows/validation.py` and `tools/universal/flow_runner.py` use the `execution` contract.
+- `tools/universal/create_skill.py` creates and changes skills, through `policies/self_edit.py`.
+
+## Selection
+
+- `SkillSelector.select` returns one primary skill and at most one more skill.
+  The second skill must be different enough from the first (similarity 0.82 or less).
+- A skill must reach a minimum similarity. The default is 0.35; a caller can set its own.
+- If the task's words show an intent, only skills with that intent stay in the list.
+- The word "north" is removed from the match text, because it says nothing about the procedure.
+- If no embedding model works, the selector returns nothing.
+
+## Learned skills
+
+- `SkillDistiller` runs every 15 minutes when north's background work is on. It groups similar
+  successful `engineering` episodes. A group of 2 or more becomes a new learned skill.
+- It skips a group that already made a skill. It stops at 24 learned skills.
+- A learned body longer than 8,000 characters, or one that names a path in a home folder,
+  is refused. Built-in skills do not have these two limits.
+- The nightly cleanup in `orchestrator/app.py` calls `retirement.sweep`. Retiring only
+  changes the `status` field, so you can undo it in the file. It never deletes a skill.
 
 ## Adding a built-in skill
 
-Create `resources/builtin-skills/<name>/SKILL.md` with a trigger `description` and a short,
-**procedural** body (steps, not principles). Keep it distinct from other skills so
-selection stays crisp. Don't restate what the agent prompts already say. Add a
-`domains: [general]` frontmatter line if the skill serves the general assistant
-rather than the engineering agents (the default). Add a complete `execution`
-block only when the skill is intended for flows; malformed or incomplete
-contracts are rejected instead of degrading to advisory behavior.
+1. Create `resources/builtin-skills/<name>/SKILL.md`.
+2. Write a trigger `description` and a short body of steps, not principles.
+3. Keep it different from other skills, so that selection stays clear.
+4. Do not repeat what the agent prompts already say.
+5. If the skill is for north's own agent, add `domains: [general]`.
+6. If the skill is for flows, add a complete `execution` block. A bad or incomplete contract
+   makes the registry skip the skill.
 
 ## Measuring value
 
-Run the scoreboard with skills off vs on — see [`evals/README.md`](../evals/README.md).
+Run the scoreboard with skills off and on. See [`evals/README.md`](../evals/README.md).
