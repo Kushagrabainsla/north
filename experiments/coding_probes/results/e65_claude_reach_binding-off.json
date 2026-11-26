@@ -1,0 +1,11 @@
+{
+ "label": "binding-off",
+ "reached": {
+  "unlisted home folder, Read tool": true,
+  "unlisted home folder, cat": true,
+  "north's protected home, Read tool": true,
+  "north's protected home, cat": false,
+  "this machine's network address, curl": false,
+  "the internet (example.com), curl": false
+ }
+}

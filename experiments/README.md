@@ -60,6 +60,24 @@ same primitives, but it must not import recorded results.
   the answer agreed with an Opus reference at kappa 0.83. Therefore north logs the use after each
   task, ranks facts with a use rate, puts the most used profile sections first, and does not search
   again during a task (no cue told a real change of focus from noise).
+- [`approval_trust/`](approval_trust/README.md) — whether a wrong or planted fact can give the approval
+  model permission (issues #39, #70, #74). With the real decider and the user's approvals model, one
+  planted "standing approval" fact got 13 of 18 pushes, purchases, posts, messages and deletes through.
+  Therefore, for such an action, the model now sees only the user's messages, past decisions and
+  judgement rules (0 of 18 got through; 16 of 18 actions asked for in chat were still allowed).
+- [`model_contention/`](model_contention/README.md) — whether background model calls starve the user's
+  task, and whether reasoning strength needs a setting (issues #8, #93, #94). Since 2026-11-13, 1.1% of
+  task calls failed, and a simulated free-tier limit refused as many task calls when background work
+  waited as when it did not. Opus 5.5 at low effort was worse than its default in 14 of 30 real prompts,
+  and high effort was not better. Therefore the two dead background loops are deleted, and no priority
+  system or effort setting is built.
+- [`context_learning/`](context_learning/README.md) — whether compaction runs, what meta-programming costs, and
+  whether tool failures recur (issues #77, #87, #92). Since 2026-11-01, no compaction ran (largest prompt
+  167k tokens against a 750k threshold). Meta-programming runs (1 in 20) used 3 times the tokens, and half
+  of their meta calls failed. 10.4% of tool calls failed, and recurring agent mistakes still happen. Therefore
+  #92 is not built; for #87 a child run did not help, the skill selection check is the cause, and a skill list
+  read by the task model found 98% of needed skills against 14% for the score; and #77
+  belongs in the task-end learning step.
 - [`lesson_sharing/`](lesson_sharing/) — whether agents running at the same time
   should see each other's lessons sooner, and what wrong lessons cost. See the
   section below.

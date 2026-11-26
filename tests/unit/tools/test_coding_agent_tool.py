@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coding_agents import (
+    SANDBOX_DENIAL,
     BackendUnavailableError,
     CodingAgentError,
     Denial,
@@ -185,6 +186,17 @@ async def test_what_a_read_only_run_was_refused_is_told_to_the_model() -> None:
     text = tool.format_output(result.data)
 
     assert "Here is the plan." in text and "Bash rm -rf build" in text
+
+
+async def test_what_the_agents_sandbox_refused_is_told_apart_with_the_path() -> None:
+    refusal = "Error: EPERM: operation not permitted, lstat '/Users/me/.cache/north'"
+    outcome = RunOutcome(True, "Tests could not run.", "s", denials=(Denial(SANDBOX_DENIAL, refusal),))
+    tool = _tool(StubRunner(outcome))
+
+    text = tool.format_output((await tool.execute(_input())).data)
+
+    assert "sandbox refused 1 thing(s)" in text and refusal in text
+    assert "not allowed" not in text, "no approval was declined"
 
 
 async def test_a_task_is_required() -> None:

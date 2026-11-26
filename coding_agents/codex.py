@@ -38,6 +38,7 @@ from coding_agents.exceptions import CodingAgentError
 from coding_agents.gate import Decision
 from coding_agents.gate_client import ask_gate
 from coding_agents.models import (
+    SANDBOX_DENIAL,
     Availability,
     Denial,
     EventKind,
@@ -71,6 +72,11 @@ _NOISE = [
 _CLIENT_METHODS = ("thread/start", "thread/resume", "turn/start", "turn/interrupt")
 _SERVER_REQUESTS = ("item/commandExecution/requestApproval", "item/fileChange/requestApproval")
 _SUMMARY_CHARS = 200
+# What a kernel refusal looks like in a command's output: "cat: x: Operation not permitted",
+# "EPERM: operation not permitted, lstat '...'", "touch: x: Read-only file system".
+_REFUSAL = re.compile(r"operation not permitted|read-only file system", re.IGNORECASE)
+# A run that loops on a refused path still reports only this many.
+_MAX_SANDBOX_DENIALS = 10
 
 _RESOURCE_INFO = frozenset(
     {
@@ -127,11 +133,19 @@ class CodexBackend(CodingBackend):
     async def run(self, spec: RunSpec, on_event: EventSink) -> RunOutcome:
         if spec.mode is Mode.EDIT and spec.gate is None:
             raise CodingAgentError("an edit run needs the gate: nothing may change without it")
+        scratch = tempfile.mkdtemp(prefix="north-codex-tmp-")
+        try:
+            return await self._run(spec, on_event, scratch)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    async def _run(self, spec: RunSpec, on_event: EventSink, scratch: str) -> RunOutcome:
+        """One run, with *scratch* as its temp folder: the one place a plan run may write."""
         process = await asyncio.create_subprocess_exec(
             self._command,
             "app-server",
             cwd=spec.workspace,
-            env=in_project(self._environment, spec.workspace),
+            env={**in_project(self._environment, spec.workspace), **_temp_environment(scratch)},
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -145,7 +159,7 @@ class CodexBackend(CodingBackend):
         run = _Run(spec.session_id)
         timed_out = False
         try:
-            await asyncio.wait_for(self._drive(server, spec, run, on_event), RUN_TIMEOUT_SECONDS)
+            await asyncio.wait_for(self._drive(server, spec, run, on_event, scratch), RUN_TIMEOUT_SECONDS)
         except TimeoutError:
             timed_out = True
             await self._interrupt(server, run)
@@ -160,13 +174,13 @@ class CodexBackend(CodingBackend):
             run.stderr = await _finished(stderr)
         return run.outcome(timed_out=timed_out)
 
-    async def _drive(self, server: AppServer, spec: RunSpec, run: _Run, on_event: EventSink) -> None:
+    async def _drive(self, server: AppServer, spec: RunSpec, run: _Run, on_event: EventSink, scratch: str) -> None:
         await server.request(
             "initialize",
             {"clientInfo": {"name": "north", "version": "0"}, "capabilities": {"optOutNotificationMethods": _NOISE}},
         )
         await server.notify("initialized")
-        params = self._thread_params(spec)
+        params = self._thread_params(spec, scratch)
         method = "thread/resume" if spec.resume else "thread/start"
         started = await server.request(method, {"threadId": spec.session_id, **params} if spec.resume else params)
         run.session_id = str(started["thread"]["id"])
@@ -186,12 +200,12 @@ class CodexBackend(CodingBackend):
                     await on_event(event)
         run.failure_text = run.failure_text or "the app-server exited before the turn finished"
 
-    def _thread_params(self, spec: RunSpec) -> dict[str, Any]:
+    def _thread_params(self, spec: RunSpec, scratch: str) -> dict[str, Any]:
         """Thread settings. No `sandbox`: it would override the profile and with it the deny-read."""
         params: dict[str, Any] = {
             "cwd": spec.workspace,
             "approvalPolicy": "on-request",
-            "config": self._profile(spec),
+            "config": self._profile(spec, scratch),
         }
         if spec.guidance:
             params["developerInstructions"] = spec.guidance
@@ -199,9 +213,11 @@ class CodexBackend(CodingBackend):
             params["model"] = spec.model
         return params
 
-    def _profile(self, spec: RunSpec) -> dict[str, Any]:
+    def _profile(self, spec: RunSpec, scratch: str | None = None) -> dict[str, Any]:
         base = ":read-only" if spec.mode is Mode.PLAN else ":workspace"
-        filesystem = codex_filesystem(spec.workspace, spec.mode, self._protected_paths, self._own_dirs())
+        filesystem = codex_filesystem(
+            spec.workspace, spec.mode, self._protected_paths, self._own_dirs(), scratch=scratch
+        )
         config = profile(base, _PROFILE, filesystem)
         if spec.ask is not None:
             # north's own door, and nothing else. Its two tools are approved here because an unattended Codex
@@ -296,6 +312,14 @@ class CodexBackend(CodingBackend):
         return out.decode(errors="replace")
 
 
+def _temp_environment(scratch: str) -> dict[str, str]:
+    """Point temp files at the run's own folder. zsh writes a heredoc under TMPPREFIX, not TMPDIR.
+
+    macOS's own bash (3.2) always writes heredocs to /tmp, so a bash heredoc still fails in a plan run.
+    """
+    return {"TMPDIR": scratch, "TMPPREFIX": os.path.join(scratch, "zsh")}
+
+
 async def _finished(task: asyncio.Task[str]) -> str:
     """What a stderr reader collected, once its process has been stopped."""
     try:
@@ -317,6 +341,7 @@ class _Run:
         self.tokens_in = 0
         self.tokens_out = 0
         self.denials: list[Denial] = []
+        self._refused: set[str] = set()
         self.status = ""
         self.error: Mapping[str, Any] | None = None
         self.failure_text = ""
@@ -357,9 +382,26 @@ class _Run:
                 self.final_text = text
             self.last_text = text
             return [RunEvent(EventKind.TEXT, {"text": text[:MAX_EVENT_TEXT_CHARS]})]
+        if kind == "commandExecution" and (status in ("failed", "declined") or (item.get("exitCode") or 0) != 0):
+            self._note_refusals(str(item.get("aggregatedOutput") or ""))
         if kind in ("commandExecution", "fileChange") and status in ("failed", "declined"):
             return [RunEvent(EventKind.TOOL_RESULT, {"is_error": True, "preview": f"{kind} {status}"})]
         return []
+
+    def _note_refusals(self, output: str) -> None:
+        """Record what the sandbox refused a failed command, line by line.
+
+        A path the profile denies is never asked about: the command only fails. Without this, a refused
+        read looked like a failed task (#64). Only failed commands count: git warns about a closed folder
+        in commands that still work.
+        """
+        for line in output.splitlines():
+            if len(self._refused) >= _MAX_SANDBOX_DENIALS:
+                return
+            text = line.strip()[:_SUMMARY_CHARS]
+            if _REFUSAL.search(text) and text not in self._refused:
+                self._refused.add(text)
+                self.denials.append(Denial(SANDBOX_DENIAL, text))
 
     def what_is_asked(self, method: str, params: Mapping[str, Any]) -> list[tuple[str, str, dict[str, Any]]] | None:
         """The (tool, detail, hook-style input) of each thing an approval request asks for; None when unknown."""

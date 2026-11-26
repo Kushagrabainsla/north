@@ -1,0 +1,18 @@
+{
+  "runs": 120,
+  "runs_whose_prompt_names_an_entity": 53,
+  "facts_with_an_entity": 70,
+  "facts_labelled": 109,
+  "now": {
+    "facts_in_prompts": 910,
+    "used": 30
+  },
+  "entity_recall": {
+    "facts_in_prompts": 93,
+    "used_kept": 7,
+    "used_lost": 23,
+    "cut_share": 0.898
+  },
+  "runs_that_used_a_fact": 21,
+  "of_those_all_used_facts_kept": 5
+}

@@ -1,8 +1,10 @@
 """Episode consolidator: builds episodic memory from the ledger.
 
-Single writer for episodic.db. Runs as a background job (and once at startup),
-reads the ledger for tasks that reached a terminal state since its watermark,
-and records one episode per task with its outcome (success / failed / cancelled).
+Single writer for episodic.db. Runs when a task ends (memory/task_end_learning.py)
+and in north's hourly built-in flow, reads the ledger for tasks that reached a
+terminal state since its watermark, and records one episode per task with its
+outcome (success / failed / cancelled). It has no timer of its own: a loop that
+ran every 2 minutes was never started after the task-end path replaced it (#8).
 Because episodes are a projection of the ledger, the store can be rebuilt by
 replaying from an earlier watermark.
 """
@@ -30,7 +32,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL_SECONDS = 120
 _BATCH_SIZE = 200
 _PER_TASK_ROW_LIMIT = 500
 _WATERMARK_FILENAME = "episode_watermark.txt"
@@ -76,26 +77,13 @@ class EpisodeConsolidator:
         episodic_store: EpisodicStore,
         inference_router: InferenceRouter,
         north_home: Path,
-        poll_interval_seconds: int = _POLL_INTERVAL_SECONDS,
     ) -> None:
         self._ledger = ledger
         self._episodic_store = episodic_store
         self._inference_router = inference_router
         self._watermark_path = north_home / _WATERMARK_FILENAME
-        self._poll_interval = poll_interval_seconds
-        # Prevents the background loop and a manual run_once from overlapping.
+        # Prevents a task-end run and the hourly flow from overlapping.
         self._lock = asyncio.Lock()
-
-    async def run(self) -> None:
-        """Loop forever, consolidating on each tick. Returns only on cancellation."""
-        while True:
-            try:
-                await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("EpisodeConsolidator: batch error, continuing")
-            await asyncio.sleep(self._poll_interval)
 
     async def run_once(self) -> int:
         """Process one batch and return the number of episodes recorded."""

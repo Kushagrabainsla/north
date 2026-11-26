@@ -1,0 +1,13 @@
+{
+ "label": "after",
+ "reached": {
+  "unlisted home folder, Read tool": false,
+  "unlisted home folder, cat": false,
+  "unlisted home folder, Grep tool": false,
+  "north's protected home, Read tool": false,
+  "north's protected home, cat": false,
+  "north's protected home, Grep tool": false,
+  "this machine's network address, curl": true,
+  "the internet (example.com), curl": false
+ }
+}

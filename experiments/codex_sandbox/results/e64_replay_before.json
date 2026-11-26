@@ -1,0 +1,9 @@
+{
+ "label": "before",
+ "real_runs": 116,
+ "commands": 585,
+ "commands_failed_with_a_refusal": 17,
+ "runs_with_such_a_command": 14,
+ "refusals_recorded": 0,
+ "runs_with_a_recorded_refusal": 0
+}

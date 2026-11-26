@@ -177,6 +177,10 @@ class RunEvent:
     data: Mapping[str, Any] = field(default_factory=dict)
 
 
+# The tool a denial names when the agent's sandbox refused a command, not north's gate or plan mode.
+SANDBOX_DENIAL = "Sandbox"
+
+
 @dataclass(frozen=True)
 class Denial:
     """Something the agent tried that was refused."""

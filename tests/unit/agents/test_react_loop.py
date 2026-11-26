@@ -1220,22 +1220,25 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
     )
     skill_registry = MagicMock()
     skill_registry.all.return_value = [fake_skill]
+    skill_registry.get.return_value = fake_skill
     agent._deps.skill_registry = skill_registry
 
-    skill_selector = MagicMock()
-    skill_selector.select = AsyncMock(return_value=[fake_skill])
-    agent._deps.skill_selector = skill_selector
-
     # run() selects once and passes the result in; do the same here.
-    loaded = await agent._load_tools(
-        AgentPayload(task_id="tools", prompt="check my screen"),
-        await agent._select_skills("check my screen"),
+    required = await agent._load_tools(
+        AgentPayload(task_id="tools", prompt="check my screen", skills=["screen-inspection"]),
+        await agent._select_skills("check my screen", ["screen-inspection"]),
     )
-    loaded_names = {t.name for t, _ in loaded}
+    ordinary = await agent._load_tools(
+        AgentPayload(task_id="tools", prompt="check my screen"), await agent._select_skills("check my screen")
+    )
+    required_names = {t.name for t, _ in required}
+    ordinary_names = {t.name for t, _ in ordinary}
 
-    # The fixed set, and the tool the selected skill names; any other tool loads when it is called.
-    assert "take_screenshot" in loaded_names
-    assert "take_photo" not in loaded_names
+    # A required skill adds the tools it names; any other tool loads when it is called.
+    assert "take_screenshot" in required_names
+    assert "take_photo" not in required_names
+    # An ordinary task starts with the fixed set, so its cached prompt is the same in every task.
+    assert "take_screenshot" not in ordinary_names
 
 
 async def test_flow_skill_contract_hard_limits_tools_and_find_tools(tmp_path: Path) -> None:
