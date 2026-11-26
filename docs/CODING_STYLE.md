@@ -365,7 +365,7 @@ is adding a file:
 ```
 tools/
   universal/    <- general-purpose tools (write_file, web_search, scheduling, etc.)
-  specialized/  <- integration and execution tools (bash, git, gh, kasa, etc.)
+  specialized/  <- integration and execution tools (bash, gh, screen_brightness, etc.)
 ```
 
 Both directories feed one global catalog. At task start, semantic retrieval selects a
@@ -483,11 +483,13 @@ Two consequences worth keeping:
 
 - A remembered answer replays only the exact action: its facts as written (case and quoting kept), its folder or repository, and for a file write its content. A send, a spend, or a change to north's own autonomy or settings is never replayed, and below yolo only a person decides it.
 - A "no" holds for the rest of the task: any later action on a path the rejected action named, reads included, is refused, and the agent is told you said no.
-- A tool north wrote for itself goes through the gate on every call; its own code cannot mark it harmless.
+- A tool north wrote for itself goes through the gate on every call; its own code cannot mark it harmless. The one exception is a call it declares read-only (`read_only_when`) while it runs in its own process under the OS sandbox (`tools/learned_remote.py`): there it gets only its declared secrets and cannot reach north's home or the credential folders, so the harm M5 showed cannot happen. Without the sandbox, every call is a change.
+- A tool north writes runs in its own process and Python environment, with the packages it names, each pinned to one version (PEP 723, `tools/learned_env.py`). North never imports its code and its own environment never changes.
 - North's own tools do not edit files inside a git repository: `write_file` there, and shell commands that recognisably edit files there (`sed -i`, redirection or `tee` into a file), are refused and pointed at `coding_agent`, which works in an isolated copy and runs the tests. The OS sandbox holds this for every other program: a command run in a repository can write only `.git`, what git ignores, and what tools generate. Git itself is exempt, since committing and shipping are how a change leaves.
 - A step that must happen does not depend on the model remembering it. A tool states it in `before_task_ends`, and the task does not end until it has answered: in a repository, a coding agent has been asked, and a finished change has been read once by the other one.
 - A task with no chosen folder is told so, and asks which folder the user means instead of guessing a path or calling its own folder theirs.
-- **Your own controls act as you.** A device control you operate yourself on the dashboard (a light's switch, slider, colour or music sync) does what you set at once, with no approval card: the person deciding is you. It reaches the device through the module that owns it, never through an agent's tool, and north.log notes each change. A change north makes for you, from chat or a flow, still goes through `Tool.execute` and asks as your mode says.
+- **Your own controls act as you.** A control you operate yourself on the dashboard (a light's switch, slider, colour or music sync on a panel) does what you set at once, with no approval card: the person deciding is you. North.log notes each change. A change north makes for you, from chat or a flow, still goes through `Tool.execute` and asks as your mode says.
+- **A panel north made acts as you, and shows a risky call first.** A part you use on a view (`web/views.py`) calls its tool through `Tool.execute_for_you`, with no card, and north.log notes it. North wrote the panel, so a button can say one thing and do another: a call that `approval.policy.needs_your_confirmation` names (a send, a spend, a delete, a push, a command, a change to north) comes back with its exact values, and runs only when you confirm that very call. A view's own arguments stay on the server; the page sends only the values it binds.
 - **One card per requirement.** Whatever an agent needs from you to do one thing (delete a file, submit one application) is asked on one card, by the approval layer. An agent never asks on a card of its own and then has the tool ask again: it calls the tool, which asks; or, when the thing takes several calls, it asks once naming each exact call, and those calls then run without another card. A call that differs from what you approved is another requirement and asks.
 
 **Why:** the issue #76 test found each broken: replays covered other files, repositories and commands; north switched itself to yolo; a rejected read was done with another tool; a learned tool printed north's secret; north edited a repository with `sed`; an agent guessed a repository path; an approved "Delete old_safe.log" card was followed by bash asking again, and one delete took three cards (A14). A card for every move of a light's slider would make the control unusable in ask mode, and would ask you about your own click.
@@ -694,8 +696,10 @@ and a fix made in one copy leaves the others broken.
 A key or password you give north for its tools lives in one store,
 `config/secret_store.py`, in north's home and readable only by you. You add,
 replace and remove secrets on the dashboard (Settings, Secrets); no tool can.
-The model works with a secret's name and never sees, writes or passes its
-value. A tool that needs one declares it, and the approval card says so; it
+North asks for one with `request_secret`: a card with a password field, which
+the dashboard saves to the store. A reply typed anywhere else is dropped, and no
+approval mode answers the card for you. The model works with a secret's name
+and never sees, writes or passes its value. A tool that needs one declares it, and the approval card says so; it
 reads the value at the last step, inside its own `run()`. North releases a value
 only to a tool that declared it, and takes every stored value back out of what
 any tool returns before the model reads it.

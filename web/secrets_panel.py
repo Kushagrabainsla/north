@@ -36,13 +36,14 @@ def _store() -> SecretStore:
 def _used_by(*, wrote: bool = False) -> dict[str, list[str]]:
     """Which tools declare each secret, by secret name; with *wrote*, only tools north wrote.
 
-    A tool north wrote cannot work without its secrets. North's own may use one only when you
-    have it: Kasa needs a TP-Link login only for bulbs set up with one.
+    A tool north wrote cannot work without its secrets, so the panel lists those still missing.
     """
+    from tools.registry import written_by_north
+
     registry = current_services().tool_registry
     users: dict[str, list[str]] = {}
     for tool in registry.all_tools() if registry is not None else []:
-        if wrote and getattr(tool, "inner", None) is None:
+        if wrote and not written_by_north(tool):
             continue
         for name in tool.uses_secrets:
             users.setdefault(name, []).append(tool.name)

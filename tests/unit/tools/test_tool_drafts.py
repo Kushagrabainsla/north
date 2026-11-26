@@ -70,7 +70,8 @@ async def _create(tmp_path: Path, code: str):
         (
             "a package north does not have",
             _GOOD.replace("from tools.base", "import requests\nfrom tools.base"),
-            "imports 'requests', which north does not have. Use httpx.AsyncClient",
+            # A tool runs in its own environment: the fix is to name the package, not to do without it.
+            "No module named 'requests'. A module it imports is missing from its environment: name that package",
         ),
         (
             "a guess at how arguments arrive",
@@ -101,12 +102,12 @@ async def _create(tmp_path: Path, code: str):
             _GOOD.replace("from tools.base", "import os\nfrom tools.base").replace(
                 '"Pune")', 'os.environ.get("CITY", "Pune"))'
             ),
-            "use `from config.settings import settings`",
+            "For a key or password, declare `uses_secrets",
         ),
         (
             "a fixed path",
             _GOOD.replace('"Pune")', '"Pune")\n        notes = "~/.north/notes.json"'),
-            "build paths from `settings.north_home`",
+            "keep its files in its own folder, its working folder",
         ),
         (
             "a run that is not async",
