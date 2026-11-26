@@ -1,0 +1,29 @@
+{
+  "efforts": {
+    "high": {
+      "against_medium": {
+        "better": 7,
+        "equal": 14,
+        "worse": 9
+      },
+      "mean_output_tokens": 668,
+      "median_seconds": 4.8
+    },
+    "low": {
+      "against_medium": {
+        "better": 2,
+        "equal": 14,
+        "worse": 14
+      },
+      "mean_output_tokens": 498,
+      "median_seconds": 3.8
+    },
+    "medium": {
+      "mean_output_tokens": 583,
+      "median_seconds": 4.0
+    }
+  },
+  "judge": "claude-sonnet-5-5",
+  "model": "claude-opus-5-5",
+  "prompts": 30
+}

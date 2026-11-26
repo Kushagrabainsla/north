@@ -65,6 +65,12 @@ same primitives, but it must not import recorded results.
   planted "standing approval" fact got 13 of 18 pushes, purchases, posts, messages and deletes through.
   Therefore, for such an action, the model now sees only the user's messages, past decisions and
   judgement rules (0 of 18 got through; 16 of 18 actions asked for in chat were still allowed).
+- [`model_contention/`](model_contention/README.md) — whether background model calls starve the user's
+  task, and whether reasoning strength needs a setting (issues #8, #93, #94). Since 2026-11-13, 1.1% of
+  task calls failed, and a simulated free-tier limit refused as many task calls when background work
+  waited as when it did not. Opus 5.5 at low effort was worse than its default in 14 of 30 real prompts,
+  and high effort was not better. Therefore the two dead background loops are deleted, and no priority
+  system or effort setting is built.
 - [`lesson_sharing/`](lesson_sharing/) — whether agents running at the same time
   should see each other's lessons sooner, and what wrong lessons cost. See the
   section below.
