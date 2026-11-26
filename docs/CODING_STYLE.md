@@ -311,7 +311,7 @@ memory/base.py         ContextStore      <- FileContextStore (v1), DBContextStor
 memory/base.py         MemoryGateway     <- LocalMemoryGateway (single gated read path)
 ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
 inference/base.py      InferenceRouter   <- ModelDispatcher (multi-provider)
-approval/base.py       Notifier          <- TerminalNotifier (default), MacOSNotifier (optional)
+approval/base.py       Notifier          <- TerminalNotifier (default), TelegramNotifier
 tools/base.py          Tool              <- WebSearchTool, WriteFileTool, BashTool, GhTool, etc.
 agents/base.py         Agent             <- LLMAgent / AgenticLLMAgent <- NorthAgent (the one agent, §15)
 jobs/base.py           JobProcessor      <- SQLiteJobProcessor
@@ -564,7 +564,6 @@ approval/
   base.py             <- Notifier (ABC)
   models.py           <- Card (+ Card.new), CardField, CardType, ApprovalDecision
   exceptions.py       <- NotificationError
-  macos.py            <- MacOSNotifier (optional native macOS alerts)
   terminal.py         <- TerminalNotifier (default)
   batching.py         <- BatchingNotifier (one alert per batch of prepared work)
   interaction.py      <- UserInteraction (single path for approval/question/information cards)

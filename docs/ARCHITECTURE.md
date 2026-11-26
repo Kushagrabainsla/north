@@ -1109,7 +1109,7 @@ The Approval Layer is the primary interface between north and the user for conse
 
 ### 9.1 Notifications and Security
 
-The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. An optional `MacOSNotifier` uses the `alerter` subprocess for native macOS notification banners with action buttons - swap it in via `config/dependencies.py` if running on macOS and alerter is installed. At runtime the active notifier is wrapped by `BatchingNotifier`, which coalesces prepared work into one alert per batch (§9.8). An open dashboard or TUI does not silence it: connected is not the same as seen. A local callback server runs on `localhost:8001` and receives button taps.
+The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. With Telegram set up, `TelegramNotifier` sends each card there instead, and the terminal is its fallback. At runtime the active notifier is wrapped by `BatchingNotifier`, which coalesces prepared work into one alert per batch (§9.8). An open dashboard or TUI does not silence it: connected is not the same as seen. A local callback server runs on `localhost:8001` and receives button taps.
 
 **Security:** the notification callback server is secured with a shared secret generated at first startup and stored at `~/.north/secret.key`. Every notification payload embeds this secret in the callback URL or request body. Every callback request to `localhost:8001` must include the `X-North-Secret` header with the correct value. Requests without a valid secret are rejected with HTTP 403. This prevents any other local process from faking an approval action.
 
@@ -1118,7 +1118,7 @@ The same shared secret is required on all calls to the Orchestrator REST API (Se
 ```
 Agent completes work
 -> Approval Layer creates card payload
--> Sends notification (TerminalNotifier: stdout | MacOSNotifier: native banner)
+-> Sends notification (TerminalNotifier: stdout | TelegramNotifier: Telegram, when set up)
    (callback URL contains the shared secret)
 -> User taps action button
 -> POST to localhost:8001/callback/decision with secret
@@ -1930,14 +1930,8 @@ Every CLI command is a thin wrapper over the Orchestrator REST API via `httpx`. 
 **TerminalNotifier (default on all platforms)**
 The default `Notifier` implementation (`approval/terminal.py`) prints approval cards to stdout/logs. It works anywhere Python runs - Linux, macOS, Docker, CI.
 
-**MacOSNotifier (macOS only, optional)**
-For native macOS notification banners with action buttons, `alerter` is called as a subprocess (`approval/macos.py`).
-
-```bash
-brew install vjeantet/tap/alerter  # one-time, macOS only
-```
-
-To enable, swap `TerminalNotifier()` → `MacOSNotifier(settings.secret)` in `config/dependencies.py`. The `Notifier` ABC (see `docs/CODING_STYLE.md` Section 6.1) hides this choice from the rest of the system.
+**TelegramNotifier (when Telegram is set up)**
+Sends each card to Telegram through the outbox (`approval/telegram.py`). `BatchingNotifier` wraps it. A native macOS banner notifier was removed in 2026-11: nothing had built it since 2026-05, and its buttons answered cards outside north's approval API.
 
 ### 16.11 Environment and Configuration
 
@@ -1992,7 +1986,7 @@ dev = [
 
 ### 16.12 Getting Started
 
-north runs on any platform (Linux, macOS, Windows via Docker). All deployments use `TerminalNotifier` by default. Native macOS notification banners require alerter and a local install (see Section 16.10).
+north runs on any platform (Linux, macOS, Windows via Docker). All deployments use `TerminalNotifier` by default (see Section 16.10).
 
 #### Recommended: curl installer
 
