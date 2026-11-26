@@ -265,6 +265,8 @@ def _build_tool_registry(
             tool_registry=tool_registry,
             self_edit_policy=source_edit_policy,
             tools_dir=learned_tools_dir,
+            # One runtime for every tool north wrote: their environments, own folders and sandbox.
+            runtime=tool_registry.learned_runtime(),
         )
     )
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))

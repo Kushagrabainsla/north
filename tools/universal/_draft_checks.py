@@ -15,7 +15,7 @@ from collections.abc import Collection
 _INPUT_FIELDS = {"params", "approved", "granted_workspace", "edit_scope", "model_copy"}
 _INSTALLED_HINT = (
     "Use the standard library or a package north already has: httpx, bs4, pydantic, yaml, numpy, psutil, "
-    "PIL, pypdf, docx. North cannot install packages for a custom tool."
+    "PIL, pypdf, docx."
 )
 # Calls that wait without letting north run anything else, and what to use instead.
 _BLOCKING = {
@@ -45,21 +45,24 @@ _CHANGING_FUNCTIONS = {
 }
 
 
-def draft_problems(source: str, saved_secrets: Collection[str] | None = None) -> list[str]:
+def draft_problems(
+    source: str, saved_secrets: Collection[str] | None = None, *, own_environment: bool = False
+) -> list[str]:
     """What must change in *source*, a tool draft, before it is worth testing; [] when nothing.
 
     With *saved_secrets*, the names of the user's secrets, a secret the draft uses that is not
-    saved yet is a problem too.
+    saved yet is a problem too. With *own_environment*, the draft runs in its own environment
+    with the packages it names, so its imports are checked there, by the runner, not here.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
         return [f"It does not parse: {exc}."]
-    problems = _imports(tree)
+    problems = [] if own_environment else _imports(tree)
     for tool in _tools(tree):
         problems += _tool_class(tool)
         problems += _secrets(tool, saved_secrets)
-    problems += _environment_and_paths(tree)
+    problems += _environment_and_paths(tree, own_environment)
     return problems
 
 
@@ -264,7 +267,7 @@ def _opens_to_write(call: ast.Call) -> bool:
     return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and any(c in mode.value for c in "wax+")
 
 
-def _environment_and_paths(tree: ast.Module) -> list[str]:
+def _environment_and_paths(tree: ast.Module, own_environment: bool = False) -> list[str]:
     problems: list[str] = []
     for node in ast.walk(tree):
         if (
@@ -272,16 +275,21 @@ def _environment_and_paths(tree: ast.Module) -> list[str]:
             and _dotted(node) == "os.environ"
             or (isinstance(node, ast.Call) and _dotted(node.func) == "os.getenv")
         ):
+            values = "" if own_environment else " Use `from config.settings import settings` for north's own values."
             problems.append(
-                "It reads environment variables, which north does not pass its settings through: use "
-                "`from config.settings import settings` for north's own values. For a key or password, declare "
-                "`uses_secrets = ('name',)` and read it with `secret('name')` from `config.secret_store`."
+                f"It reads environment variables, which north does not pass its settings through.{values} For a key "
+                "or password, declare `uses_secrets = ('name',)` and read it with `secret('name')` from "
+                "`config.secret_store`."
             )
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             text = node.value
             if "~/.north" in text or "/.north/" in text or text.startswith(("/Users/", "/home/")):
-                problems.append(
-                    f"It names a fixed path ({text!r}): build paths from `settings.north_home`, such as "
-                    "settings.north_home / 'tool-data' / '<tool name>', so it works on every install."
+                instead = (
+                    "keep its files in its own folder, its working folder, with a relative path such as "
+                    "Path('state.json')"
+                    if own_environment
+                    else "build paths from `settings.north_home`, such as settings.north_home / 'tool-data' / "
+                    "'<tool name>'"
                 )
+                problems.append(f"It names a fixed path ({text!r}): {instead}, so it works on every install.")
     return list(dict.fromkeys(problems))

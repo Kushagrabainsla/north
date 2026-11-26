@@ -13,10 +13,12 @@ To add a new tool:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib
 import importlib.util
 import inspect
+import json
 import logging
 import time
 from dataclasses import replace
@@ -94,13 +96,29 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
     return tools
 
 
-def _discover_external(directory: Path) -> dict[str, Tool]:
-    """Discover user-owned tools without treating their directory as a package."""
+def _discover_external(directory: Path, runtime: Any = None) -> dict[str, Tool]:
+    """Discover user-owned tools without treating their directory as a package.
+
+    A tool with what the runner said about it beside it (`<name>.json`) runs in its own process
+    (`tools.learned_remote`), and its code is never imported here. One written before that existed
+    is loaded as it always was, and every call of it is a change (`LearnedTool`).
+    """
     tools: dict[str, Tool] = {}
     if not directory.exists():
         return tools
     for path in sorted(directory.glob("*.py")):
         if path.name.startswith("_"):
+            continue
+        if runtime is not None and path.with_suffix(".json").exists():
+            from tools.learned_remote import RunnerTool
+
+            try:
+                saved = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+                tool = RunnerTool(path, saved["meta"], list(saved.get("packages") or []), runtime)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                logger.warning("learned tool discovery: cannot read what %s is: %s", path, exc)
+                continue
+            tools[tool.name] = tool
             continue
         module_name = f"north_learned_tool_{path.stem}_{abs(hash(path.resolve()))}"
         try:
@@ -207,6 +225,7 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
         self._fallbacks: dict[str, Tool] = {}
         self._learned_dir = learned_dir
+        self._runtime: Any = None  # see learned_runtime()
         self._last_reload: float = 0.0  # monotonic timestamp of last filesystem scan
         self._dir_mtimes: dict[Path, float] = {}
         # Tools you configured that are not here, and why, by source ("mcp:crm"). A server that failed to start
@@ -230,7 +249,7 @@ class ToolRegistry:
             if directory.exists():
                 with contextlib.suppress(OSError):
                     self._dir_mtimes[directory] = _dir_fingerprint(directory)
-            for tool in _discover_external(directory).values():
+            for tool in _discover_external(directory, self.learned_runtime()).values():
                 self.register(tool)
 
     def reload(self) -> None:
@@ -251,9 +270,20 @@ class ToolRegistry:
         for directory in self._learned_directories():
             if not self._directory_changed(directory):
                 continue
-            for tool in _discover_external(directory).values():
+            for tool in _discover_external(directory, self.learned_runtime()).values():
                 self.register(tool)
                 logger.info("ToolRegistry.reload: picked up learned tool %r", tool.name)
+
+    def learned_runtime(self) -> Any:
+        """Where the tools north wrote keep their environments and own folders, and their sandbox; None with no
+        learned folder. Made once, so every tool north wrote shares it."""
+        if self._learned_dir is None:
+            return None
+        if self._runtime is None:
+            from tools.learned_remote import LearnedRuntime
+
+            self._runtime = LearnedRuntime(self._learned_dir.parent)
+        return self._runtime
 
     def _learned_directories(self) -> tuple[Path, ...]:
         if self._learned_dir is None:
@@ -283,6 +313,12 @@ class ToolRegistry:
         if is_learned_tool(tool) and not isinstance(tool, LearnedTool):
             tool = LearnedTool(tool)
         current = self._tools.get(tool.name)
+        if current is not None and current is not tool and callable(getattr(current, "aclose", None)):
+            # A tool north wrote that runs its own process: the version replaced stops it.
+            with contextlib.suppress(RuntimeError):
+                closing = current.aclose()
+                if inspect.isawaitable(closing):
+                    asyncio.get_running_loop().create_task(closing)
         if current is not None and not is_learned_tool(current):
             self._fallbacks[tool.name] = current
         self._tools[tool.name] = self._bind(tool)

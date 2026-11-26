@@ -10,13 +10,17 @@ import json
 import re
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from config import secret_store
+from config.settings import settings
 from policies.self_edit import SelfEditPolicy
 from tools.base import Tool
+from tools.learned_env import pin_problems, script_dependencies, with_dependencies
+from tools.learned_remote import LearnedRuntime, RunnerTool, describe_file, metadata_path
 from tools.models import ToolInput, ToolOutput
 from tools.universal._draft_checks import declared_secrets, draft_problems
 
@@ -42,7 +46,9 @@ class CreateToolTool(Tool):
         "Use the adding-a-north-tool skill first and call action='list' before creating anything. "
         "create, update and activate each take test_params and are asked about once: the tool is then "
         "checked, called once with test_params (a real call: anything it does still asks as usual), and is "
-        "live if that call succeeds. A failing version stays a draft and the live tool is unchanged."
+        "live if that call succeeds. A failing version stays a draft and the live tool is unchanged. "
+        "A tool runs in its own process and environment: name any package it needs from PyPI in `packages`, "
+        "each at one exact version, and north installs it there."
     )
     parameters_schema = {
         "type": "object",
@@ -87,6 +93,16 @@ class CreateToolTool(Tool):
                     "        if not city:\n"
                     "            return ToolOutput(success=False, error=\"Pass a city, such as 'Pune'.\")\n"
                     "        return ToolOutput(success=True, data={'city': city})"
+                ),
+            },
+            "packages": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 20,
+                "description": (
+                    "create and update: the PyPI packages the tool imports that are not in Python's standard "
+                    "library, each pinned to one version, e.g. ['python-kasa==0.12.0']. North installs them in "
+                    "the tool's own environment, never its own. Omit to keep the packages the file names."
                 ),
             },
             "tool_type": {
@@ -134,12 +150,17 @@ class CreateToolTool(Tool):
         tool_registry: ToolRegistry | None = None,
         self_edit_policy: SelfEditPolicy | None = None,
         tools_dir: Path | None = None,
+        runtime: LearnedRuntime | None = None,
     ) -> None:
         self._registry = tool_registry
         self._self_edit_policy = self_edit_policy
         self._tools_dir = tools_dir or _TOOLS_ROOT
+        # Where each tool's environment and own folder live: beside the learned tools, in north's home.
+        self._runtime = runtime or LearnedRuntime((tools_dir or settings.north_home / "learned" / "tools").parent)
         self._validated: dict[str, str] = {}
         self._tested: dict[str, str] = {}
+        # What the runner said each checked draft is, by name, with the draft's fingerprint and packages.
+        self._described: dict[str, tuple[str, dict[str, Any], list[str]]] = {}
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
         return str((params or {}).get("action") or "create").strip().lower() not in {"list", "read"}
@@ -194,14 +215,14 @@ class CreateToolTool(Tool):
         version, if there is one, is unchanged.
         """
         params = input.params
-        for step in (self._validate(params), await self._test(params, input)):
+        for step in (await self._validate(params), await self._test(params, input)):
             if not step.success:
                 return ToolOutput(
                     success=False,
                     error=f"{step.error} It stays a draft; the live tool, if any, is unchanged.",
                     data=step.data,
                 )
-        return self._activate(params)
+        return await self._activate(params)
 
     async def describe(self, input: ToolInput) -> Request:
         """Show the proposed code. Model-authored code may be imported or hot-loaded,
@@ -215,12 +236,26 @@ class CreateToolTool(Tool):
             candidate = _find_candidate_path(str(name), self._tools_dir)
             if candidate is not None:
                 content = candidate.read_text(encoding="utf-8")
+        # The file as it will be written, packages included: they are part of what you approve, and of its key.
+        content, _ = _packaged(content, params.get("packages"))
         preview = (content[:_PREVIEW_CHARS] + "\n…") if len(content) > _PREVIEW_CHARS else content
         test = json.dumps(params.get("test_params") or {}, sort_keys=True, default=str)
         uses = declared_secrets(content)
+        try:
+            packages = script_dependencies(content)
+        except ValueError:
+            packages = []
+        where = (
+            "It runs in its own process and environment, in north's sandbox"
+            + (f", with these packages installed there: {', '.join(packages)}" if packages else "")
+            + ".\n\n"
+            if runs_on_its_own(content)
+            else ""
+        )
         message = (
             f"Agent wants to {action} the '{name}' tool ({tool_type}). Approving writes it, calls it once with "
             f"`{test}` (anything that call does still asks), and switches it on if that works.\n\n"
+            + where
             + (f"It uses your secrets: {', '.join(uses)}. North gives it only those.\n\n" if uses else "")
             + (f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)")
         )
@@ -283,6 +318,9 @@ class CreateToolTool(Tool):
                 parameters=parameters,
                 notes=notes,
             )
+        content, problem = _packaged(content, params.get("packages"))
+        if problem:
+            return ToolOutput(success=False, error=problem)
 
         safe, reason = _check_code_safety(content)
         if not safe:
@@ -337,6 +375,9 @@ class CreateToolTool(Tool):
                 success=False,
                 error=f"Updated content must keep 'name = \"{tool_name}\"' - tool name cannot change.",
             )
+        content, problem = _packaged(content, params.get("packages"))
+        if problem:
+            return ToolOutput(success=False, error=problem)
 
         safe, reason = _check_code_safety(content)
         if not safe:
@@ -370,14 +411,16 @@ class CreateToolTool(Tool):
             },
         )
 
-    def _validate(self, params: dict) -> ToolOutput:
+    async def _validate(self, params: dict) -> ToolOutput:
         name = str(params.get("name") or "").strip()
         if not name:
             return ToolOutput(success=False, error="Parameter 'name' is required for action=validate.")
         path = _find_candidate_path(name, self._tools_dir)
         if path is None:
             return ToolOutput(success=False, error=f"No candidate exists for tool '{name}'.")
-        if problems := draft_problems(path.read_text(encoding="utf-8"), secret_store.store().names()):
+        source = path.read_text(encoding="utf-8")
+        own = runs_on_its_own(source)
+        if problems := draft_problems(source, secret_store.store().names(), own_environment=own):
             listed = "\n".join(f"{index}. {problem}" for index, problem in enumerate(problems, 1))
             return ToolOutput(
                 success=False,
@@ -385,10 +428,23 @@ class CreateToolTool(Tool):
                 "Fix them and call create_tool again with action='update' and the full file.",
             )
         try:
-            instance = _load_tool_file(path, expected_name=name)
-            _validate_tool_contract(instance)
+            if own:
+                # Loaded by the runner, in the tool's own environment and sandbox: north never imports it.
+                packages = script_dependencies(source)
+                meta = await describe_file(path, name, packages, self._runtime)
+                _validate_tool_contract(SimpleNamespace(**meta), expected_name=name)
+                self._described[name] = (_tool_fingerprint(path), meta, packages)
+            else:
+                instance = _load_tool_file(path, expected_name=name)
+                _validate_tool_contract(instance)
         except Exception as exc:
-            return ToolOutput(success=False, error=f"Tool candidate validation failed: {exc}")
+            hint = (
+                " A module it imports is missing from its environment: name that package, at one version, in "
+                "`packages`. From north it may import only tools.base, tools.models and config.secret_store."
+                if own and "No module named" in str(exc)
+                else ""
+            )
+            return ToolOutput(success=False, error=f"Tool candidate validation failed: {exc}.{hint}")
         fingerprint = _tool_fingerprint(path)
         self._validated[name] = fingerprint
         self._tested.pop(name, None)
@@ -410,9 +466,9 @@ class CreateToolTool(Tool):
         fingerprint = _tool_fingerprint(path)
         if self._validated.get(name) != fingerprint:
             return ToolOutput(success=False, error="Validate the current tool candidate before testing it.")
+        instance: Tool | None = None
         try:
-            instance = _load_tool_file(path, expected_name=name)
-            _validate_tool_contract(instance)
+            instance = self._candidate(name, path)
             # Through the approval layer like any call: the card for this tool covered
             # writing and testing it, not what the test call itself does.
             instance.approvals = self.approvals
@@ -422,6 +478,9 @@ class CreateToolTool(Tool):
             result = await instance.execute(ToolInput(params=call, granted_workspace=granted))
         except Exception as exc:
             return ToolOutput(success=False, error=f"Tool candidate test raised an exception: {exc}")
+        finally:
+            if isinstance(instance, RunnerTool):
+                await instance.aclose()
         if not isinstance(result, ToolOutput):
             return ToolOutput(success=False, error="Tool candidate test did not return ToolOutput.")
         if not result.success:
@@ -441,7 +500,17 @@ class CreateToolTool(Tool):
             },
         )
 
-    def _activate(self, params: dict) -> ToolOutput:
+    def _candidate(self, name: str, path: Path) -> Tool:
+        """The draft as a tool to call: in its own process when the runner checked it, else loaded here."""
+        described = self._described.get(name)
+        if described is not None and described[0] == _tool_fingerprint(path):
+            _, meta, packages = described
+            return RunnerTool(path, meta, packages, self._runtime, test_call=True)
+        instance = _load_tool_file(path, expected_name=name)
+        _validate_tool_contract(instance)
+        return instance
+
+    async def _activate(self, params: dict) -> ToolOutput:
         name = str(params.get("name") or "").strip()
         if not name:
             return ToolOutput(success=False, error="Parameter 'name' is required for action=activate.")
@@ -454,8 +523,6 @@ class CreateToolTool(Tool):
         if self._tested.get(name) != fingerprint:
             return ToolOutput(success=False, error="Test the current tool candidate successfully before activation.")
         try:
-            instance = _load_tool_file(candidate, expected_name=name)
-            _validate_tool_contract(instance)
             tool_type = candidate.parent.name
             target = self._tools_dir / tool_type / f"{name}.py"
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -467,7 +534,21 @@ class CreateToolTool(Tool):
             target.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
+            described = self._described.get(name)
+            sidecar = metadata_path(target)
+            if described is not None and described[0] == fingerprint:
+                # What the runner said it is, kept beside it: north starts it from this, never by importing it.
+                _, meta, packages = described
+                sidecar.write_text(json.dumps({"meta": meta, "packages": packages}, indent=1), encoding="utf-8")
+                instance: Tool = RunnerTool(target, meta, packages, self._runtime)
+            else:
+                sidecar.unlink(missing_ok=True)
+                instance = _load_tool_file(candidate, expected_name=name)
+                _validate_tool_contract(instance)
+            previous = self._registry.get(name) if name in self._registry.all_tool_names() else None
             self._registry.register(instance)
+            if isinstance(previous, RunnerTool):
+                await previous.aclose()  # the old version's process: the next call starts the new one
             candidate.unlink()
         except Exception as exc:
             return ToolOutput(success=False, error=f"Failed to activate tool '{name}': {exc}")
@@ -477,6 +558,30 @@ class CreateToolTool(Tool):
             success=True,
             data={"action": "activate", "name": name, "path": str(target), "status": "active"},
         )
+
+
+def _packaged(content: str, packages: Any) -> tuple[str, str]:
+    """*content* with the packages it names in its `# /// script` block, and why not ("" when fine).
+
+    *packages* None keeps the block the file has. Each package must be pinned to one version.
+    """
+    if packages is not None and (not isinstance(packages, list) or not all(isinstance(p, str) for p in packages)):
+        return content, "'packages' must be a list of strings, such as ['python-kasa==0.12.0']."
+    if packages is not None:
+        content = with_dependencies(content, [p.strip() for p in packages if p.strip()])
+    try:
+        named = script_dependencies(content)
+    except ValueError as exc:
+        return content, str(exc)
+    if problems := pin_problems(named):
+        return content, " ".join(problems)
+    return content, ""
+
+
+def runs_on_its_own(content: str) -> bool:
+    """Whether a tool runs in its own process. A home-device brand builds on north's own `tools.home`, which
+    exists only inside north, so it still runs there until that code goes."""
+    return "DeviceTool" not in content and "tools.home" not in content
 
 
 def _named(params: dict[str, Any]) -> dict[str, Any]:
@@ -640,9 +745,11 @@ def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
     )
 
 
-def _validate_tool_contract(tool: Tool) -> None:
+def _validate_tool_contract(tool: Any, expected_name: str | None = None) -> None:
     if not tool.name or not re.fullmatch(r"[a-z][a-z0-9_]*", tool.name):
         raise ValueError("tool name must use snake_case")
+    if expected_name is not None and tool.name != expected_name:
+        raise ValueError(f"the tool's name is {tool.name!r}, not {expected_name!r}")
     if not isinstance(tool.description, str) or not tool.description.strip():
         raise ValueError("tool description must be non-empty")
     schema = tool.parameters_schema

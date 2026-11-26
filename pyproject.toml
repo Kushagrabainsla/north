@@ -34,6 +34,8 @@ dependencies = [
     "python-kasa>=0.12.0",
     # Checks the views north makes (A2UI JSON) against the UI kit's catalog, a JSON Schema.
     "jsonschema>=4.26.0",
+    # Reads the packages a tool north writes names (PEP 508), so each is pinned to one version.
+    "packaging>=24.0",
     # Bundled ripgrep binary: shell commands search files with `rg`, which bash
     # puts on every command's PATH. Wheels only exist for these two platforms;
     # elsewhere a command uses a system `rg` or `grep -rn`.
